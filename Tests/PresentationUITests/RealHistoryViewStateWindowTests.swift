@@ -9,6 +9,74 @@ import Testing
 @MainActor
 struct RealHistoryViewStateWindowTests {
     @Test(arguments: [false, true])
+    func filterFindsOlderUnloadedItemsAndCountsBeyondTheResidentWindow(searching: Bool) async throws {
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
+        )
+        var links: [HistoryItemReference] = []
+        for index in 0..<17 {
+            var representations = [CapturedRepresentation(
+                typeIdentifier: "public.utf8-plain-text", bytes: Data("filter needle \(index)".utf8)
+            )]
+            if index < 9 {
+                representations.append(CapturedRepresentation(
+                    typeIdentifier: "public.url", bytes: Data("https://example.invalid/needle/\(index)".utf8)
+                ))
+            }
+            let receipt = try await history.perform(.capture(ClipboardCapture(
+                representations: representations,
+                origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
+                observedAt: Date(timeIntervalSinceReferenceDate: 700_620_000 + Double(index))
+            )))
+            guard case .committed(let commit) = receipt,
+                  case .inserted(let item) = commit.outcome else {
+                Issue.record("Distinct filter fixtures must insert")
+                return
+            }
+            if index < 9 { links.append(item) }
+        }
+        let state = HistoryViewState(history: history, pageLimit: 2)
+        if searching {
+            state.searchMode = .exact
+            state.searchText = "needle"
+        }
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 2 })
+        #expect(state.rows.allSatisfy { !links.contains($0.item) })
+
+        // Every matching link is older than the entire initially resident page.
+        state.typeFilter = .links
+        #expect(state.rows.isEmpty)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.count == 2)
+        #expect(state.rows.allSatisfy { links.contains($0.item) })
+        #expect(state.displayedCountIsLowerBound)
+        var seen = state.rows.map(\.item)
+        for _ in 0..<4 {
+            state.loadNextPage()
+            try #require(await pollUntil { !state.isLoadingPage })
+            for row in state.rows where !seen.contains(row.item) { seen.append(row.item) }
+            #expect(state.rows.count <= 6)
+            #expect(state.failure == nil)
+        }
+        #expect(Set(seen) == Set(links))
+        #expect(!state.hasNextPage)
+        #expect(state.hasPreviousPage)
+        #expect(state.displayedCount == 9)
+        #expect(!state.displayedCountIsLowerBound)
+
+        _ = try await history.perform(.placePinned(links[0].id, at: .last))
+        state.showsPinnedOnly = true
+        try #require(await pollUntil {
+            state.hasAuthoritativeFirstPage && state.rows.map(\.item) == [links[0]]
+        })
+        #expect(state.displayedCount == 1)
+        #expect(!state.hasNextPage)
+        #expect(!state.displayedCountIsLowerBound)
+    }
+
+    @Test(arguments: [false, true])
     func adjacentCursorsRoundTripAcrossBothLanesAndAShortSearchTail(searching: Bool) async throws {
         let history = try await SQLiteHistory.open(
             configuration: HistoryConfiguration(persistence: .temporary)

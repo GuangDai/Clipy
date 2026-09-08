@@ -240,6 +240,10 @@ private actor ReceiptPageDelivery {
 /// Only observation delivery is controlled here. Other public requests use
 /// the existing view-state script; no alternative storage semantics are added.
 private actor ReceiptOrderedHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        try await backing.backup(to: directory)
+    }
+
     let backing: ScriptedHistory
     private(set) var observations: [ReceiptPageDelivery] = []
 

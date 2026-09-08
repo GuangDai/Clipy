@@ -368,12 +368,14 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
             case .recent:
                 return try await authority.recentPage(
                     limit: request.limit,
-                    cursor: request.cursor
+                    cursor: request.cursor,
+                    filter: request.filter
                 )
             case .search(let text, _) where text.isEmpty:
                 return try await authority.recentPage(
                     limit: request.limit,
-                    cursor: request.cursor
+                    cursor: request.cursor,
+                    filter: request.filter
                 )
             case .search:
                 return try await searchWorker.page(
@@ -537,6 +539,10 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         }
     }
 
+    public func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        try await authority.backup(to: directory)
+    }
+
     /// The authoritative configured retention state (docs/v2/V2-07-ux.md
     /// §5.2/§6.3 — the settings panel-open read; audit SPEC-IMPL-003): the
     /// Authority reads both durable singletons inside one serialized,
@@ -614,7 +620,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     private func firstPage(
         for request: HistoryObservationRequest
     ) async throws -> HistoryPage {
-        let browseRequest = HistoryBrowseRequest(kind: request.kind, limit: request.limit)
+        let browseRequest = HistoryBrowseRequest(kind: request.kind, limit: request.limit, filter: request.filter)
         while true {
             try Task.checkCancellation()
             let page = try await browse(browseRequest)

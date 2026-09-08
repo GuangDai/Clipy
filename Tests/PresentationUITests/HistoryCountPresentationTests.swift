@@ -1,4 +1,4 @@
-/// Visible counts follow client filtering and disclose remaining pages.
+/// Counts follow authoritative filtered pages and disclose remaining pages.
 import Foundation
 import HistoryCore
 import Testing
@@ -61,7 +61,7 @@ struct HistoryCountPresentationTests {
         ]
         let history = ScriptedHistory(observedFirstPage: fixturePage(
             rows: rows, next: hasNextPage ? "remaining" : nil
-        ))
+        ), repeatsObservedFirstPage: false)
         let state = HistoryViewState(history: history)
         state.activate()
         defer { state.deactivate() }
@@ -71,23 +71,39 @@ struct HistoryCountPresentationTests {
         expectCaptions(state, items: "4\(suffix) items", results: "4\(suffix) results", bundle: english)
 
         state.typeFilter = .text
-        #expect(state.rows.count == 4)
+        #expect(state.rows.isEmpty)
+        try await publish([rows[0], rows[2]], filter: .init(type: .text), hasNextPage: hasNextPage,
+                          to: state, history: history)
         expectCaptions(state, items: "2\(suffix) items", results: "2\(suffix) results", bundle: english)
 
         state.showsPinnedOnly = true
+        try await publish([rows[0]], filter: .init(type: .text, pinnedOnly: true), hasNextPage: hasNextPage,
+                          to: state, history: history)
         expectCaptions(
             state, items: hasNextPage ? "1+ items" : "1 item",
             results: hasNextPage ? "1+ results" : "1 result", bundle: english
         )
 
         state.typeFilter = .links
-        expectCaptions(state, items: "0\(suffix) items", results: "0\(suffix) results", bundle: english)
-        #expect(state.hasNextPage == hasNextPage)
+        try await publish([], filter: .init(type: .links, pinnedOnly: true), hasNextPage: false,
+                          to: state, history: history)
+        expectCaptions(state, items: "0 items", results: "0 results", bundle: english)
+        #expect(!state.hasNextPage)
 
         state.typeFilter = .all
         state.showsPinnedOnly = false
+        try await publish(rows, filter: .all, hasNextPage: hasNextPage, to: state, history: history)
         expectCaptions(state, items: "4\(suffix) items", results: "4\(suffix) results", bundle: english)
         await history.finishObservation()
+    }
+
+    private func publish(
+        _ rows: [HistoryRow], filter: HistoryFilter, hasNextPage: Bool,
+        to state: HistoryViewState, history: ScriptedHistory
+    ) async throws {
+        try #require(await pollUntil { await history.observeRequests.last?.filter == filter })
+        await history.emitObservedPage(fixturePage(rows: rows, next: hasNextPage ? "remaining" : nil))
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage && state.rows == rows })
     }
 
     private func expectCaptions(

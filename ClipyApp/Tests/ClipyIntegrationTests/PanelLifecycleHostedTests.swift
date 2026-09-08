@@ -672,6 +672,10 @@ struct PanelLifecycleHostedTests {
 /// open until the view-state cancels them, so each count is one live panel
 /// observation rather than a loop that immediately completes and restarts.
 actor LifecycleObservationHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        throw HistoryBackupFailure.writeFailed
+    }
+
     private(set) var observationCount = 0
     private(set) var terminationCount = 0
     private(set) var captureAttemptCount = 0

@@ -1,4 +1,4 @@
-/// First-page PDF rasterization from an already-selected in-memory source.
+/// Requested-page PDF rasterization from an already-selected in-memory source.
 /// The caller owns the existing native rendering slot; no framework object
 /// leaves this synchronous operation. This code supplies only Data, never a
 /// URL, and invokes page drawing rather than document actions (01 §5/§6).
@@ -10,7 +10,8 @@ internal enum PreviewPDFRenderer {
         _ bytes: Data,
         maximumInputBytes: Int,
         maximumPixelExtent: Int,
-        maximumOutputBytes: Int
+        maximumOutputBytes: Int,
+        pdfPage: Int = 1
     ) -> PreviewOutcome {
         guard bytes.count <= maximumInputBytes,
               maximumPixelExtent > 0,
@@ -26,8 +27,15 @@ internal enum PreviewPDFRenderer {
         // Password protection is an unsupported capability, not corrupt data.
         // Do not attempt passwords or discard the original copyable document.
         guard !document.isEncrypted else { return .unavailable(.unsupported) }
-        guard document.numberOfPages > 0,
-              let page = document.page(at: 1) else {
+        guard document.numberOfPages > 0 else {
+            return .failed(.malformedRepresentation)
+        }
+        // Navigation outside this document is unavailable, not evidence that
+        // the retained PDF is corrupt. Only the requested page is decoded.
+        guard pdfPage >= 1, pdfPage <= document.numberOfPages else {
+            return .unavailable(.pageUnavailable)
+        }
+        guard let page = document.page(at: pdfPage) else {
             return .failed(.malformedRepresentation)
         }
 
@@ -97,7 +105,7 @@ internal enum PreviewPDFRenderer {
         guard rendered else { return .failed(.renderer) }
         return .content(.pdf(PreviewPDF(
             raster: PreviewRaster(pixels: pixels, width: width, height: height, rowBytes: rowBytes),
-            pageCount: document.numberOfPages
+            pageCount: document.numberOfPages, pageNumber: pdfPage
         )))
     }
 

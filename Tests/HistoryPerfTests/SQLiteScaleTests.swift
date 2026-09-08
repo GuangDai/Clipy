@@ -30,6 +30,26 @@ struct SQLiteScaleTests {
         #expect(disk.allocatedBytes >= 0)
     }
 
+    @Test func representativeSearchCasesMatchIndependentRecentPages() async throws {
+        let history = try await openMemoryStore()
+        _ = try await history.seedPerformanceFixture(rowCount: 120) { index in
+            deterministicTextCapture(index: index, bodyBytes: 128)
+        }
+        let corpus = try await traverseSQLiteScale(history: history, expectedCount: 120)
+        let position = try await history.usage().position
+        var samples: [SQLiteScaleSample] = []
+        try await exerciseSQLiteScaleSearches(
+            history: history, corpus: corpus, position: position, samples: &samples
+        )
+        #expect(samples.count == 13)
+        #expect(samples.allSatisfy { $0.failure == nil })
+        let sparse = try #require(samples.first { $0.phase == "search-exact-oldest-page1" })
+        #expect(sparse.rowsVisited == 1)
+        let typoSecond = try #require(samples.first { $0.phase == "search-fuzzy-typo-page2" })
+        #expect(typoSecond.rowsVisited == 50)
+        #expect(typoSecond.query?.expectedTotalMatches == 120)
+    }
+
     @Test func failedOperationRetainsCompletedAndFailedPhaseEvidence() async throws {
         var samples: [SQLiteScaleSample] = []
         _ = try await measureSQLiteScale(phase: "complete", samples: &samples) { 37 }

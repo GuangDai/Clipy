@@ -1,5 +1,5 @@
 /// Card 8B: row appearance drives the real view-state pagination owner,
-/// including when a filter hides the last authoritative row. These tests
+/// including continuation of an authoritative filtered query. These tests
 /// observe browse requests and appended rows rather than repeat a Boolean
 /// predicate with precomputed last-row identities.
 import Foundation
@@ -40,13 +40,13 @@ struct HistoryListPaginationTriggerTests {
     }
 
     @Test(arguments: [false, true])
-    func hiddenLastRowDoesNotStrandPagination(pinnedOnly: Bool) async throws {
+    func filteredQueryPrefetchUsesItsLastMatchingRow(pinnedOnly: Bool) async throws {
         let visible = row(4, pinned: 0)
         let hidden = row(5, type: "public.png")
-        let continuation = row(6)
+        let continuation = row(6, pinned: pinnedOnly ? 1 : nil)
         let cursor = fixtureCursor("after-filtered")
         let history = ScriptedHistory(
-            observedFirstPage: fixturePage(rows: [visible, hidden], next: "after-filtered"),
+            observedFirstPage: fixturePage(rows: [visible], next: "after-filtered"),
             browseScript: [cursor: .page(fixturePage(rows: [continuation], next: nil))]
         )
         let state = HistoryViewState(history: history)
@@ -61,21 +61,20 @@ struct HistoryListPaginationTriggerTests {
         state.prefetchNextPageIfNeeded(appearingRowID: hidden.item.id)
         #expect(!state.isLoadingPage)
         state.prefetchNextPageIfNeeded(appearingRowID: visible.item.id)
-        try #require(await pollUntil { state.rows.count == 3 && !state.isLoadingPage })
+        try #require(await pollUntil { state.rows == [visible, continuation] && !state.isLoadingPage })
         #expect(await history.browseRequests.count == 1)
+        #expect(await history.browseRequests.last?.filter == HistoryFilter(type: pinnedOnly ? .all : .text, pinnedOnly: pinnedOnly))
         #expect(!state.hasNextPage)
     }
 
     @Test func emptyFilteredPageCanContinueUntilAMatchingRowArrives() async throws {
-        let hidden = row(7, type: "public.png")
-        let alsoHidden = row(8, type: "public.url")
         let visible = row(9)
         let firstCursor = fixtureCursor("hidden-page")
         let secondCursor = fixtureCursor("matching-page")
         let history = ScriptedHistory(
-            observedFirstPage: fixturePage(rows: [hidden], next: "hidden-page"),
+            observedFirstPage: fixturePage(rows: [], next: "hidden-page"),
             browseScript: [
-                firstCursor: .page(fixturePage(rows: [alsoHidden], next: "matching-page")),
+                firstCursor: .page(fixturePage(rows: [], next: "matching-page")),
                 secondCursor: .page(fixturePage(rows: [visible], next: nil)),
             ]
         )
@@ -90,15 +89,19 @@ struct HistoryListPaginationTriggerTests {
         // Same entry point as the visible Load More control. A page with
         // no matching rows preserves the cursor for another explicit load.
         state.loadNextPage()
-        try #require(await pollUntil { state.rows.count == 2 && !state.isLoadingPage })
+        try #require(await pollUntil {
+            await history.browseRequests.count == 1 && !state.isLoadingPage
+        })
+        #expect(state.rows.isEmpty)
         #expect(state.displayedUnpinnedRows.isEmpty)
         #expect(state.hasNextPage)
         state.loadNextPage()
-        try #require(await pollUntil { state.rows.count == 3 && !state.isLoadingPage })
+        try #require(await pollUntil { state.rows == [visible] && !state.isLoadingPage })
         #expect(state.displayedUnpinnedRows == [visible])
         #expect(!state.hasNextPage)
         #expect(await history.observeRequests.count == 1)
         #expect(await history.browseRequests.count == 2)
+        #expect(await history.browseRequests.allSatisfy { $0.filter == HistoryFilter(type: .text) })
     }
 
     private func row(

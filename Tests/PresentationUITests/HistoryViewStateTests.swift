@@ -1826,6 +1826,10 @@ struct HistoryViewStateTests {
 /// One-operation-at-a-time public History boundary used to place the Card 9B
 /// assertion exactly before or after the real receipt, without timing sleeps.
 private actor PausableMutationHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        throw HistoryBackupFailure.writeFailed
+    }
+
     func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
         Issue.record("Mutation receipt tests must not read representation bytes")
         throw HistoryFailure.notFound(request.item.id)

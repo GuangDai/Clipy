@@ -577,6 +577,10 @@ struct AppPasteOrchestrationTests {
 /// suspended. This is not a second writer or a scripted History substitute;
 /// it makes the production copy-lane race reproducible without sleeps.
 private actor PausingPastePayloadHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        try await base.backup(to: directory)
+    }
+
     private let base: SQLiteHistory
     private var didPause = false
     private var pauseContinuation: CheckedContinuation<Void, Never>?

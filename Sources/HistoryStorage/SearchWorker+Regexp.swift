@@ -60,6 +60,13 @@ extension SearchWorker {
         let engineDeadline = sharedEngineDeadline ?? ContinuousClock().now.advanced(
             by: regexpEngineDeadline
         )
+        // A pattern with no regexp syntax has exactly the literal UTF-16
+        // matching semantics of NSString's .literal search. Avoid entering
+        // ICU's progress iterator twice per row for this common case; complex
+        // expressions keep the existing interruptible engine and deadline.
+        let literalPattern = regex.options.isEmpty
+            && NSRegularExpression.escapedPattern(for: regex.pattern) == regex.pattern
+            ? regex.pattern : nil
 
         var evaluated: [EvaluatedRow] = []
         var scanTracker = OrderPreservingScanTracker(directive: directive)
@@ -119,6 +126,7 @@ extension SearchWorker {
             if let match = try Self.firstInterruptibleMatch(
                 of: regex,
                 in: titlePrefix,
+                literalPattern: literalPattern,
                 deadline: engineDeadline
             ) {
                 // Title match: `NSRegularExpression` already reports
@@ -131,8 +139,8 @@ extension SearchWorker {
                         search: .ready(SearchPresentation(
                             snippet: nil,
                             matchedRanges: [UTF16TextRange(
-                                location: match.range.location,
-                                length: match.range.length
+                                location: match.location,
+                                length: match.length
                             )]
                         )),
                         anchor: Self.defaultOrderAnchor(for: row)
@@ -165,6 +173,7 @@ extension SearchWorker {
             guard let match = try Self.firstInterruptibleMatch(
                 of: regex,
                 in: bodyPrefix,
+                literalPattern: literalPattern,
                 deadline: engineDeadline
             ) else {
 #if DEBUG
@@ -185,8 +194,8 @@ extension SearchWorker {
                             .maximumRegexpTitleBodyPrefixCharacters,
                         bodySuffixWasOmitted: bodyScan.suffixWasOmitted,
                         utf16Range: UTF16TextRange(
-                            location: match.range.location,
-                            length: match.range.length
+                            location: match.location,
+                            length: match.length
                         )
                     ),
                     anchor: Self.defaultOrderAnchor(for: row)
@@ -260,9 +269,22 @@ extension SearchWorker {
     private static func firstInterruptibleMatch(
         of regex: NSRegularExpression,
         in text: String,
+        literalPattern: String?,
         deadline: ContinuousClock.Instant
-    ) throws -> NSTextCheckingResult? {
-        var match: NSTextCheckingResult?
+    ) throws -> NSRange? {
+        if let literalPattern {
+            try Task.checkCancellation()
+            guard ContinuousClock().now < deadline else {
+                throw HistoryFailure.temporarilyUnavailable(.searchEngineDeadline)
+            }
+            let range = (text as NSString).range(of: literalPattern, options: .literal)
+            try Task.checkCancellation()
+            guard ContinuousClock().now < deadline else {
+                throw HistoryFailure.temporarilyUnavailable(.searchEngineDeadline)
+            }
+            return range.location == NSNotFound ? nil : range
+        }
+        var match: NSRange?
         var stopReason: RegexpEngineStop?
         let clock = ContinuousClock()
         regex.enumerateMatches(
@@ -271,7 +293,7 @@ extension SearchWorker {
             range: NSRange(text.startIndex..<text.endIndex, in: text)
         ) { result, flags, stop in
             if let result {
-                match = result
+                match = result.range
                 stop.pointee = true
                 return
             }

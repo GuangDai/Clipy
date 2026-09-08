@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -40,6 +41,35 @@ final class LocalAutomationController {
             revoke: { [self] in try await revoke() },
             setCapability: { [self] capability, enabled in
                 try await setCapability(capability, enabled: enabled)
+            },
+            commandLine: Self.commandLineSettings()
+        )
+    }
+
+    /// Resolve the tool beside this running app, including renamed/moved app
+    /// bundles. Finder and pasteboard writes only follow explicit user actions.
+    static func commandLineURL(in bundle: Bundle = .main) -> URL? {
+        guard let appExecutable = bundle.executableURL else { return nil }
+        let tool = appExecutable.deletingLastPathComponent().appendingPathComponent("clipyctl")
+        return FileManager.default.isExecutableFile(atPath: tool.path) ? tool : nil
+    }
+
+    static func helpCommand(executableURL: URL) -> String {
+        // POSIX shell single quoting keeps spaces, quotes and shell metacharacters
+        // in a moved application's path literal when pasted into Terminal.
+        "'" + executableURL.path.replacingOccurrences(of: "'", with: "'\"'\"'") + "' --help"
+    }
+
+    private static func commandLineSettings() -> LocalAutomationCommandLine? {
+        guard let executable = commandLineURL() else { return nil }
+        let command = helpCommand(executableURL: executable)
+        return LocalAutomationCommandLine(
+            executablePath: executable.path,
+            helpCommand: command,
+            reveal: { NSWorkspace.shared.activateFileViewerSelecting([executable]) },
+            copyHelpCommand: {
+                NSPasteboard.general.clearContents()
+                return NSPasteboard.general.setString(command, forType: .string)
             }
         )
     }

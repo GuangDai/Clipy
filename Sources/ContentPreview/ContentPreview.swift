@@ -43,7 +43,7 @@ package struct PreviewSource: Sendable {
     fileprivate let kind: Kind
 
     fileprivate enum Kind: Sendable {
-        case image, text(PreviewTextCodec), rtf, html, pdf, reference
+        case image, text(PreviewTextCodec), rtf, rtfd, html, pdf, reference
     }
 
     package var preflightFailure: PreviewOutcome? {
@@ -88,15 +88,17 @@ package struct PreviewRaster: Equatable, Sendable {
     }
 }
 
-/// A static first-page PDF preview, not an interactive document or a promise
-/// that copying the item is limited to the displayed page.
+/// One requested PDF page, rasterized for display. Copying the item retains
+/// the original document; this artifact never carries interactive PDF actions.
 package struct PreviewPDF: Equatable, Sendable {
     package let raster: PreviewRaster
     package let pageCount: Int
+    package let pageNumber: Int
 
-    internal init(raster: PreviewRaster, pageCount: Int) {
+    internal init(raster: PreviewRaster, pageCount: Int, pageNumber: Int) {
         self.raster = raster
         self.pageCount = pageCount
+        self.pageNumber = pageNumber
     }
 }
 
@@ -109,6 +111,7 @@ package enum PreviewArtifact: Equatable, Sendable {
 
 package enum PreviewUnavailability: Equatable, Sendable {
     case unsupported
+    case pageUnavailable
 }
 
 package enum PreviewFailure: Equatable, Sendable {
@@ -183,6 +186,8 @@ package actor ContentPreview {
         }
         if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.rtf.rawValue }) {
             candidates.append(source(index, .rtf, maximum: 1_048_576))
+        } else if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.flatRTFD.rawValue }) {
+            candidates.append(source(index, .rtfd, maximum: 1_048_576))
         } else if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.html.rawValue }) {
             candidates.append(source(index, .html, maximum: 1_048_576))
         } else if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.pdf.rawValue }) {
@@ -199,7 +204,9 @@ package actor ContentPreview {
     /// In-memory convenience for explicitly loaded files and direct fixtures.
     /// It uses exactly the same metadata preparation and selected renderer as
     /// History's lazy representation reader; it owns no second source policy.
-    package func renderHistoryPane(_ representations: [PreviewRepresentation]) async -> PreviewOutcome {
+    package func renderHistoryPane(
+        _ representations: [PreviewRepresentation], pdfPage: Int = 1
+    ) async -> PreviewOutcome {
         guard !Task.isCancelled else { return .failed(.cancelled) }
         // Unlike metadata-only preparation, this call already owns every
         // supplied payload throughout the candidate loop (01 §6).
@@ -222,20 +229,23 @@ package actor ContentPreview {
             debugRetainedSourceBytes += siblingBytes
             defer { debugRetainedSourceBytes -= siblingBytes }
             #endif
-            outcome = await renderSelectedHistoryPane(source, representation: representations[source.representationIndex])
+            outcome = await renderSelectedHistoryPane(
+                source, representation: representations[source.representationIndex], pdfPage: pdfPage
+            )
             if !source.permitsFallback(after: outcome) { return outcome }
         }
         return outcome
     }
 
     package func renderSelectedHistoryPane(
-        _ source: PreviewSource, representation: PreviewRepresentation
+        _ source: PreviewSource, representation: PreviewRepresentation, pdfPage: Int = 1
     ) async -> PreviewOutcome {
         if let failure = source.preflightFailure { return failure }
         guard representation.typeIdentifier.utf8.elementsEqual(source.typeIdentifier.utf8),
               representation.bytes.count == source.byteCount else { return .failed(.malformedRepresentation) }
         return await renderRepresentation(
-            representation, kind: source.kind, maximumInputBytes: source.maximumInputBytes, profile: .historyPane
+            representation, kind: source.kind, maximumInputBytes: source.maximumInputBytes,
+            profile: .historyPane, pdfPage: pdfPage
         )
     }
 
@@ -250,7 +260,7 @@ package actor ContentPreview {
 
     private func renderRepresentation(
         _ representation: PreviewRepresentation, kind: PreviewSource.Kind,
-        maximumInputBytes: Int, profile: ResourceProfile
+        maximumInputBytes: Int, profile: ResourceProfile, pdfPage: Int = 1
     ) async -> PreviewOutcome {
         guard representation.bytes.count <= maximumInputBytes else { return .failed(.resourceLimit) }
         #if DEBUG
@@ -264,7 +274,7 @@ package actor ContentPreview {
         guard !Task.isCancelled else { return .failed(.cancelled) }
         switch kind {
         case .image, .pdf:
-            return await renderRasterOffActor(representation, profile: profile)
+            return await renderRasterOffActor(representation, profile: profile, pdfPage: pdfPage)
         case .text(let codec):
             guard let decoded = codec.decode(representation.bytes), !decoded.isEmpty else {
                 return .failed(.malformedRepresentation)
@@ -276,6 +286,8 @@ package actor ContentPreview {
             )))
         case .rtf:
             return PreviewRTFRenderer.render(representation.bytes)
+        case .rtfd:
+            return PreviewRTFDRenderer.render(representation.bytes)
         case .html:
             return PreviewHTMLRenderer.render(
                 representation.bytes, maximumInputBytes: maximumInputBytes, maximumOutputBytes: 1_048_576
@@ -297,7 +309,7 @@ package actor ContentPreview {
     /// while a single native slot preserves bounded decode concurrency.
     private func renderRasterOffActor(
         _ representation: PreviewRepresentation,
-        profile: ResourceProfile
+        profile: ResourceProfile, pdfPage: Int
     ) async -> PreviewOutcome {
         guard await acquireRasterizationSlot() else { return .failed(.cancelled) }
         defer { releaseRasterizationSlot() }
@@ -320,7 +332,8 @@ package actor ContentPreview {
                     representation.bytes,
                     maximumInputBytes: profile.maximumInputBytes,
                     maximumPixelExtent: profile.maximumPixelExtent,
-                    maximumOutputBytes: profile.maximumOutputBytes
+                    maximumOutputBytes: profile.maximumOutputBytes,
+                    pdfPage: pdfPage
                 )
             } else {
                 outcome = Self.renderRaster(representation, profile: profile)

@@ -10,6 +10,55 @@ import XCTest
 final class CLIStandardStreamsProcessTests: XCTestCase {
     private let requestID = "12345678-1234-1234-1234-123456789abc"
 
+    func testHelpAndVersionFinishWithoutReadingOpenStdin() async throws {
+        for arguments in [["--help"], ["-h"], ["--version"]] {
+            let invocation = try Invocation(arguments: arguments)
+            defer { invocation.close() }
+            // An open empty pipe would block the ordinary request path for
+            // ten seconds. Informational flags must finish independently.
+            let result = try await invocation.finish(timeout: 5)
+            XCTAssertEqual(result.status, 0)
+            XCTAssertTrue(result.stderr.isEmpty)
+            let text = String(decoding: result.stdout, as: UTF8.self)
+            if arguments == ["--version"] {
+                let version = try XCTUnwrap(Bundle.main.object(
+                    forInfoDictionaryKey: "CFBundleShortVersionString"
+                ) as? String)
+                XCTAssertEqual(text, "clipyctl \(version) (protocol 1)\n")
+            } else {
+                XCTAssertTrue(text.contains("--raw --type TYPE"))
+                XCTAssertTrue(text.contains("browsePreview"))
+                XCTAssertTrue(text.contains("Settings > Automation"))
+            }
+        }
+    }
+
+    func testRawModeRejectsMutationsBeforeEnrollmentAndLeavesStdoutEmpty() async throws {
+        for operation in ["pin", "unpin", "delete"] {
+            let invocation = try Invocation(arguments: ["--raw", "--type", "public.utf8-plain-text"])
+            defer { invocation.close() }
+            let request = try JSONSerialization.data(withJSONObject: [
+                "protocolVersion": 1, "requestID": requestID,
+                "operation": operation, "arguments": ["locator": "opaque-locator"],
+            ])
+            try await invocation.writeInput(request)
+            try invocation.input.fileHandleForWriting.close()
+            let result = try await invocation.finish()
+            XCTAssertEqual(result.status, 2)
+            XCTAssertTrue(result.stdout.isEmpty)
+            XCTAssertEqual(result.stderr, Data("clipyctl: invalid_request\n".utf8))
+        }
+    }
+
+    func testIncompleteRawFlagsFailWithoutReadingStdin() async throws {
+        let invocation = try Invocation(arguments: ["--raw"])
+        defer { invocation.close() }
+        let result = try await invocation.finish(timeout: 5)
+        XCTAssertEqual(result.status, 2)
+        XCTAssertTrue(result.stdout.isEmpty)
+        XCTAssertEqual(result.stderr, Data("clipyctl: invalid_request\n".utf8))
+    }
+
     func testExactStdinLimitIsDecodedAfterEOF() async throws {
         let invocation = try Invocation()
         defer { invocation.close() }
@@ -118,8 +167,9 @@ final class CLIStandardStreamsProcessTests: XCTestCase {
         private let error = Pipe()
         private let closesOutputReader: Bool
 
-        init(closeOutputReader: Bool = false, keepInputReader: Bool = false) throws {
+        init(arguments: [String] = [], closeOutputReader: Bool = false, keepInputReader: Bool = false) throws {
             closesOutputReader = closeOutputReader
+            process.arguments = arguments
             process.executableURL = try XCTUnwrap(Bundle.main.executableURL)
                 .deletingLastPathComponent().appendingPathComponent("clipyctl")
             // Only the fragmented-input case retains a parent read handle
@@ -198,8 +248,8 @@ final class CLIStandardStreamsProcessTests: XCTestCase {
             return descriptor.revents & Int16(POLLIN) != 0
         }
 
-        func finish() async throws -> Output {
-            let exited = await ComposedSupport.waitFor(timeout: 20) { !self.process.isRunning }
+        func finish(timeout: TimeInterval = 20) async throws -> Output {
+            let exited = await ComposedSupport.waitFor(timeout: timeout) { !self.process.isRunning }
             guard exited else {
                 throw ProcessFailure.didNotExit
             }

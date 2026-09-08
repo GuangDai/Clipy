@@ -13,8 +13,8 @@
 "Only the reference is shown. Its destination has not been opened." = "仅显示引用信息，未打开其指向的目标。";
 "Preview truncated. Copying the item keeps its complete content." = "预览已截断，复制历史条目仍保留完整内容。";
 "Showing one image from a multi-image item. Copying the item keeps its complete content." = "仅显示多图条目中的一张图像，复制历史条目仍保留完整内容。";
-"Showing PDF page 1 of %@. Copying the item keeps its complete content." = "正在显示 PDF 的第 1 页，共 %@ 页。复制历史条目仍保留完整内容。";
-"PDF preview, page 1 of %@" = "PDF 预览，第 1 页，共 %@ 页";
+"Showing PDF page %@ of %@. Copying the item keeps its complete content." = "正在显示 PDF 的第 %@ 页，共 %@ 页。复制历史条目仍保留完整内容。";
+"PDF preview, page %@ of %@" = "PDF 预览，第 %@ 页，共 %@ 页";
 "Preview File Contents…" = "预览文件内容…";
 "Load File Contents?" = "加载文件内容？";
 "Load File" = "加载文件";
@@ -28,3 +28,6 @@
 "The file is too large to preview." = "文件过大，无法预览。";
 "This file type cannot be previewed." = "无法预览此文件类型。";
 "Only the reference is shown. Loading its contents requires confirmation." = "当前仅显示文件引用。加载文件内容需要确认。";
+"Previous PDF Page" = "上一页 PDF";
+"Next PDF Page" = "下一页 PDF";
+"Page %@ of %@" = "第 %@ 页，共 %@ 页";

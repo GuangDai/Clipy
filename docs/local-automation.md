@@ -28,6 +28,12 @@ client file has disappeared; cleanup must succeed before creating a new
 connection. Revoked connections retain their server verifier so previously
 issued credentials continue to receive an explicit revoked response.
 
+Settings → Automation shows the actual bundled executable path. Show in Finder
+reveals it; Copy Help Command copies a quoted command that works even when the
+app path contains spaces. These actions do not enable access or grant permissions.
+`clipyctl --help` (also `-h`) and `clipyctl --version` return without reading
+stdin, credentials, or clipboard history.
+
 The client is bundled at `Clipy.app/Contents/MacOS/clipyctl`. It accepts one
 UTF-8 JSON request on stdin and returns one JSON reply on stdout. For a Clipy
 installation in `/Applications`, list recent items with:
@@ -66,6 +72,14 @@ exactly, including NUL, line endings, and Unicode spelling. Base64 must use its
 standard alphabet and padding, without whitespace. Empty payloads, duplicate
 types, and types absent from the item's original content are rejected. Omitted
 original types become hidden from Effective content.
+
+For binary pipelines, `clipyctl --raw --type TYPE` accepts the same JSON stdin
+request but only for `detailsEffective` or `pasteEffective`. It writes exactly
+the selected representation bytes, without a newline, JSON, or Base64 wrapper.
+NUL bytes and original text encodings are preserved. A missing representation,
+denied read, invalid command, or other failure writes only the bounded error
+diagnostic to stderr and exits nonzero; it never writes an error JSON object
+into a binary stdout stream. Raw mode rejects mutation requests.
 
 The whole request, including Base64 and JSON, must fit within 65,536 UTF-8
 bytes. This limits this initial CLI revision operation to slightly less than

@@ -12,10 +12,32 @@ public struct LocalAutomationSettingsState: Sendable, Equatable {
     }
 }
 
+/// Discoverable bundled tool and explicit desktop actions; no enrollment or
+/// credentials are needed to display its location or request command help.
+@MainActor
+public struct LocalAutomationCommandLine {
+    let executablePath: String
+    let helpCommand: String
+    let reveal: @MainActor () -> Void
+    let copyHelpCommand: @MainActor () -> Bool
+
+    public init(
+        executablePath: String, helpCommand: String,
+        reveal: @escaping @MainActor () -> Void,
+        copyHelpCommand: @escaping @MainActor () -> Bool
+    ) {
+        self.executablePath = executablePath
+        self.helpCommand = helpCommand
+        self.reveal = reveal
+        self.copyHelpCommand = copyHelpCommand
+    }
+}
+
 /// App-owned enrollment and service lifecycle enter Settings as user actions;
-/// credential custody, paths and Storage never enter the UI (V2-05 §0.3).
+/// credential custody and Storage never enter the UI (V2-05 §0.3).
 @MainActor
 public struct LocalAutomationSettings {
+    let commandLine: LocalAutomationCommandLine?
     let load: @MainActor () async throws -> LocalAutomationSettingsState
     let enable: @MainActor () async throws -> LocalAutomationSettingsState
     let revoke: @MainActor () async throws -> LocalAutomationSettingsState
@@ -25,8 +47,10 @@ public struct LocalAutomationSettings {
         load: @escaping @MainActor () async throws -> LocalAutomationSettingsState,
         enable: @escaping @MainActor () async throws -> LocalAutomationSettingsState,
         revoke: @escaping @MainActor () async throws -> LocalAutomationSettingsState,
-        setCapability: @escaping @MainActor (ExternalCapability, Bool) async throws -> LocalAutomationSettingsState
+        setCapability: @escaping @MainActor (ExternalCapability, Bool) async throws -> LocalAutomationSettingsState,
+        commandLine: LocalAutomationCommandLine? = nil
     ) {
+        self.commandLine = commandLine
         self.load = load
         self.enable = enable
         self.revoke = revoke
@@ -96,6 +120,41 @@ struct LocalAutomationSettingsView: View {
                         "Permissions are independent. Enabling Local Automation grants none. All programs using your account share these permissions."
                     ))
                 }
+            }
+            Section {
+                if let commandLine = model.commandLine {
+                    Text(commandLine.executablePath)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .accessibilityIdentifier("clipy.settings.automation.cli.path")
+                    Text(commandLine.helpCommand)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                    HStack {
+                        Button(LocalAutomationSettingsCopy.text("Reveal in Finder")) {
+                            model.revealCommandLine()
+                        }
+                        .accessibilityIdentifier("clipy.settings.automation.cli.reveal")
+                        Button(LocalAutomationSettingsCopy.text("Copy Help Command")) {
+                            model.copyHelpCommand()
+                        }
+                        .accessibilityIdentifier("clipy.settings.automation.cli.copyHelp")
+                    }
+                    Text(LocalAutomationSettingsCopy.text(
+                        "Paste the help command into Terminal for request examples and raw content output. Help works before enabling access."
+                    ))
+                    Text(LocalAutomationSettingsCopy.text(
+                        "To list history, enable Local Automation, grant Browse Previews, then use the browsePreview example from help. Keep Clipy running while using the command line."
+                    ))
+                    if let notice = model.commandLineNotice {
+                        Text(LocalAutomationSettingsCopy.text(notice))
+                            .accessibilityIdentifier("clipy.settings.automation.cli.notice")
+                    }
+                } else {
+                    Text(LocalAutomationSettingsCopy.text("The bundled command-line tool is unavailable."))
+                }
+            } header: {
+                Text(LocalAutomationSettingsCopy.text("Command Line"))
             }
             if model.failed {
                 Section {

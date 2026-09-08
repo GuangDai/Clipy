@@ -57,6 +57,7 @@ private struct Parser {
         var unicodeAlternative = false
         var alternativeChildren = 0
         var expectsUnicodeDestination = false
+        var nextGraphicMarker = false
         var isVisible: Bool { !skipped && !hidden && !deleted }
     }
 
@@ -79,6 +80,7 @@ private struct Parser {
             switch byte {
             case 123: // {
                 try flushEncodedRun()
+                state.nextGraphicMarker = false
                 guard stack.count < 128 else { throw ParseFailure.resource }
                 guard !state.expectsUnicodeDestination else { throw ParseFailure.malformed }
                 if state.unicodeAlternative {
@@ -190,6 +192,12 @@ private struct Parser {
                 guard attachmentCount <= 128 else { throw ParseFailure.resource }
             }
             try appendUnits(Array("[Attachment]".utf16))
+            // Apple's attachment form is {{\NeXTGraphic ...}<0xAC>}.
+            // Its outer group's one marker byte is not document body text.
+            // Require that outer group so an unrelated following ¬ survives.
+            if word == "NeXTGraphic", stack.count >= 3 {
+                stack[stack.count - 1].nextGraphicMarker = true
+            }
             state.skipped = true
         }
         if state.ignorableDestination {
@@ -257,6 +265,10 @@ private struct Parser {
         if fallbackRemaining > 0 { fallbackRemaining -= 1; return }
         guard !state.expectsUnicodeDestination else { throw ParseFailure.malformed }
         guard state.isVisible else { return }
+        if state.nextGraphicMarker {
+            state.nextGraphicMarker = false
+            if byte == 0xAC { return }
+        }
         encodedRun.append(byte)
     }
 
@@ -283,6 +295,7 @@ private struct Parser {
 
     private mutating func appendUnits(_ units: [UInt16]) throws {
         guard state.isVisible else { return }
+        state.nextGraphicMarker = false
         guard units.count <= 1_048_576 - output.count else { throw ParseFailure.resource }
         output.append(contentsOf: units)
     }

@@ -45,6 +45,7 @@ struct HistoryViewStateWindowTests {
     ) async throws {
         let (history, allRows) = fixture(rowCount: rowCount)
         let state = HistoryViewState(history: history, pageLimit: 2)
+        state.typeFilter = .text
         if searching {
             state.searchMode = .exact
             state.searchText = "row "
@@ -69,12 +70,6 @@ struct HistoryViewStateWindowTests {
         #expect(!state.displayedCountIsLowerBound)
         #expect(HistoryPanelView.itemCountText(for: state, locale: Locale(identifier: "en_US")) == "\(rowCount) items")
         #expect(SearchHeaderView.resultCountText(for: state, locale: Locale(identifier: "en_US")) == "\(rowCount) results")
-        state.typeFilter = .text
-        let tailCount = rowCount.isMultiple(of: 2) ? 6 : 5
-        #expect(state.displayedCount == tailCount)
-        #expect(state.displayedCountIsLowerBound)
-        #expect(HistoryPanelView.itemCountText(for: state, locale: Locale(identifier: "en_US")) == "\(tailCount)+ items")
-        state.typeFilter = .all
         for firstPage in stride(from: pageCount - 4, through: 0, by: -1) {
             state.loadPreviousPage()
             try #require(await pollUntil { !state.isLoadingPage })
@@ -96,7 +91,7 @@ struct HistoryViewStateWindowTests {
         }
         #expect(state.displayedCount == rowCount)
         let expectedKind: HistoryBrowseKind = searching ? .search(text: "row ", mode: .exact) : .recent
-        #expect(await history.browseRequests.allSatisfy { $0.kind == expectedKind && $0.limit == 2 })
+        #expect(await history.browseRequests.allSatisfy { $0.kind == expectedKind && $0.limit == 2 && $0.filter == HistoryFilter(type: .text) })
         #expect(state.surfacePurge == nil, "DTO eviction is not a History deletion")
         _ = state.acceptCommittedExternalRemoval(allRows[rowCount - 1].item.id)
         #expect(state.displayedCountIsLowerBound,
@@ -275,6 +270,7 @@ struct HistoryViewStateWindowTests {
         #expect(await history.browseRequests.last?.cursor == fixtureCursor("newer-0"))
         #expect(await history.observeRequests.last?.kind == .search(text: "row ", mode: .exact))
         #expect(state.typeFilter == .text)
+        #expect(await history.observeRequests.last?.filter == HistoryFilter(type: .text))
         #expect(state.loadedPageCount == 1)
         #expect(!state.hasPreviousPage)
         #expect(!state.hasWindowedPages)

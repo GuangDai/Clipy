@@ -1217,7 +1217,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             directoryPath: directory.path,
             allocatedBytes: { try await usage.allocatedBytes() },
             processMemory: { try await memory.read() },
-            reveal: { [weak self] in self?.revealStoreLocation() }
+            reveal: { [weak self] in self?.revealStoreLocation() },
+            chooseBackupDirectory: { await HistoryBackupDestination.choose() },
+            revealBackup: { HistoryBackupDestination.reveal($0) }
         )
     }
 

@@ -106,6 +106,12 @@ unpinned rows: lastCopiedAt descending, HistoryItemID bytes ascending
 
 Search behavior is frozen as follows:
 
+`HistoryFilter` applies to all retained items before recent/search pagination,
+not just rows loaded by the UI. It combines a pinned-only switch with one of
+all, text, images, or links. Families use exact Effective representation facts
+with image-before-link-before-text precedence; unknown types remain visible in
+all. The filter is part of both observation and opaque cursor query identity.
+
 - An empty term is equivalent to `.recent` and carries no search presentation.
 - Every non-empty mode first enforces the Part VI 4,096-UTF-8-byte search-term
   bound. An over-bound value returns `invalidInput(.invalidSearchTerm)` before
@@ -128,6 +134,15 @@ Regexp admission rejects, returning `invalidInput(.invalidRegularExpression)` in
 Adjudicated (REVIEW Card 11C): the frozen rejection grammar above is unchanged — a top-level ambiguous-quantifier chain (e.g. `a*a*a*…*b`) stays admissible, because recognizing it conservatively requires an operand-overlap grammar that §8 refuses to add. The scan operation is instead Apple's documented interruptible iterator `enumerateMatches(…, .reportProgress, .reportCompletion)`: the first result wins with identical UTF-16 ranges; a fixed per-request engine deadline (2,000 ms, internal to HistoryStorage) and cooperative cancellation are enforced inside the periodic progress callback via `stop`; a deadline stop or the engine's own `internalError` abandonment fails the whole search `temporarilyUnavailable(.searchEngineDeadline)` (§10) with no partial results. This bounds the demonstrated non-preemptible hazard family; it is not a general preemption or total-time guarantee (total scan cost remains the Part VI §9 envelope).
 
 Search scores and Fuse objects remain internal. Fixture tests own Unicode conversion, unsafe-regexp rejection, title-before-body behavior, tie-breakers, and excerpt/range stability.
+
+Plain regexp literals use equivalent case-sensitive literal UTF-16 matching
+without entering ICU's progress iterator for each row. General expressions
+retain the interruptible iterator. Fuzzy can reject impossible ASCII prefixes
+using the fixed Fuse location/distance/error limits; surviving candidates still
+use the original Fuse scores and ranges. Persistent necessary-condition gram
+postings and provable ranked-page completion reduce the rows needing matching;
+neither optimization changes those semantics or promises a bound for every
+admitted pathological expression.
 
 ### 9. Detail, paste, and thumbnail DTOs
 

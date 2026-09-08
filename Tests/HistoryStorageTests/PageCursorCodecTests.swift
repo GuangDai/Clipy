@@ -181,7 +181,7 @@ func cursorDecodeRequiresKnownDirection(removeField: Bool) throws {
 @Test func cursorWireStrategiesProduceStableBytes() throws {
     let cursor = try encodedCursor()
     let expected = Data(
-        #"{"anchor":{"id":"00000000-0000-0000-0000-0000000000C3","kind":"defaultOrder","lastCopiedAt":123456.5},"direction":"forward","formatVersion":2,"processMarker":"00000000-0000-0000-0000-0000000000C1","queryShape":{"kind":"recent","limit":3},"rawValue":42}"#.utf8
+        #"{"anchor":{"id":"00000000-0000-0000-0000-0000000000C3","kind":"defaultOrder","lastCopiedAt":123456.5},"direction":"forward","formatVersion":3,"processMarker":"00000000-0000-0000-0000-0000000000C1","queryShape":{"contentType":"all","kind":"recent","limit":3,"pinnedOnly":false},"rawValue":42}"#.utf8
     )
     #expect(cursor.payload == expected)
     #expect(try encodedCursor().payload == expected)

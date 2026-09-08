@@ -1,26 +1,12 @@
-/// HistoryRowFiltering.swift — the panel's client-side row-filter vocabulary
-/// (type families + pinned-only), the single UTI classification source shared
-/// by the filter and the row's fallback SF Symbol, and the composition-root
-/// seam that loads source-application icons.
-///
-/// Filtering is a FRONT-END narrowing over the already-loaded rows (product
-/// decision: no storage-level type query in v1). It never restarts search,
-/// observation, or pagination — docs/04-coherence.md §5's replacement pages
-/// remain the only row source, and pagination keeps walking the unfiltered
-/// stream. The exact UTI vocabulary below is shared by
-/// `HistoryRowKind.classify` and `HistoryRowView.typeSymbol` so the filter
-/// and the row's type fallback always agree on a row's family.
+/// Panel filter labels, row symbols, and the source-application icon seam.
+/// Filters are passed to History before ranking/pagination; row classification
+/// here keeps the visible family and fallback symbol in agreement.
 import ClipboardFormats
 import CoreGraphics
 import Foundation
 import HistoryCore
 
-/// The user-facing type filter in the panel header (All/Text/Images/Links).
-/// Front-end only: it narrows which loaded rows render without touching the
-/// History query. Raw values are stable strings so a future preference can
-/// persist the selection without a migration. Package (GOV-3): panel-header
-/// vocabulary only — the header control, the view state it binds, and owner
-/// tests are all in-package; ClipyApp never names the filter.
+/// The user-facing header selection maps directly to the History query.
 package enum HistoryTypeFilter: String, CaseIterable, Sendable {
     case all
     case text
@@ -94,6 +80,15 @@ package enum HistoryRowKind: Sendable, Equatable {
 }
 
 package extension HistoryTypeFilter {
+    var contentType: HistoryContentType {
+        switch self {
+        case .all: .all
+        case .text: .text
+        case .images: .images
+        case .links: .links
+        }
+    }
+
     /// Whether one loaded row passes this filter. The families are the
     /// user-recognizable clipboard kinds, not an exhaustive partition:
     /// `.other` rows (PDFs, files, app-specific types) pass only `.all`.

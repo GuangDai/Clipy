@@ -181,6 +181,9 @@ public final class HistoryPanelSurfaceState {
     /// synchronously. This one-shot bit distinguishes that empty bootstrap
     /// from an intentional nil selection after a selected row is retired.
     private var isAwaitingInitialSelection = false
+    /// The last authoritative filter distinguishes user navigation from a
+    /// selected row disappearing in a later commit under the same query.
+    private var selectionFilter = HistoryFilter.all
 
     package init(
         history: any ClipboardHistory,
@@ -270,6 +273,7 @@ public final class HistoryPanelSurfaceState {
     public func beginSession(rows: [HistoryRow]) {
         sessionGeneration += 1
         isSessionActive = true
+        selectionFilter = .all
         thumbnails.isSurfaceActive = true
         detailsPath.removeAll()
         quickLookReference = nil
@@ -312,7 +316,8 @@ public final class HistoryPanelSurfaceState {
     package func reconcileSessionSelection(
         rows: [HistoryRow],
         hasAuthoritativeFirstPage: Bool = true,
-        selectsVisibleWindow: Bool = false
+        selectsVisibleWindow: Bool = false,
+        filter: HistoryFilter = .all
     ) {
         guard isSessionActive else { return }
         // Query restart synchronously clears `HistoryViewState.rows` before
@@ -323,9 +328,11 @@ public final class HistoryPanelSurfaceState {
         // page) actually arrives. Merely ending loading with a failure is not
         // authoritative removal evidence (review Card 8A/8C).
         guard hasAuthoritativeFirstPage else { return }
+        let filterChanged = selectionFilter != filter
+        selectionFilter = filter
         quickLookReference = resolvedQuickLookReference(in: rows)
         guard let selection else {
-            guard isAwaitingInitialSelection else { return }
+            guard isAwaitingInitialSelection || filterChanged else { return }
             self.selection = PanelSessionSelection.preparedSelection(in: rows)
             if self.selection != nil {
                 isAwaitingInitialSelection = false
@@ -334,9 +341,9 @@ public final class HistoryPanelSurfaceState {
         }
         guard rows.contains(where: { $0.item.id == selection }) else {
             isAwaitingInitialSelection = false
-            // Moving a bounded page window is navigation, not deletion.
-            // Keep a visible keyboard target without executing the evicted ID.
-            self.selection = selectsVisibleWindow
+            // Filter changes and page navigation keep a visible keyboard
+            // target. A deletion within the same query still clears it.
+            self.selection = selectsVisibleWindow || filterChanged
                 ? PanelSessionSelection.preparedSelection(in: rows) : nil
             return
         }
@@ -356,20 +363,10 @@ public final class HistoryPanelSurfaceState {
         )
     }
 
-    /// Wave-2 filter consistency: the client-side type/pinned filter narrows
-    /// which loaded rows RENDER, and a selection naming an invisible row
-    /// could be Return-pasted blindly. The panel applies this after every
-    /// authoritative reconciliation and after every filter change: a
-    /// rendered selection is kept untouched, while a filter-hidden selection
-    /// retargets to the newest DISPLAYED row — the same newest-row default
-    /// `beginSession` picks, so the open-session default can never land on a
-    /// filtered-out row. A nil selection is never re-picked here (an
-    /// intentional clear after authoritative removal stays clear;
-    /// `reconcileSessionSelection` owns the initial pick), and the caller
-    /// gates on `hasAuthoritativeFirstPage` so the query-restart loading gap
-    /// (`rows == []` before the replacement page) cannot clear a selection
-    /// either. With no filter active the displayed lanes ARE the
-    /// authoritative rows, so this never fires.
+    /// Retarget a selected row absent from the rendered lanes. The caller
+    /// supplies an authoritative page; nil selections remain intentionally
+    /// clear. Query replacement uses `reconcileSessionSelection` first so it
+    /// can distinguish a changed filter from a same-query deletion.
     package func retargetHiddenSelectionToDisplayedDefault(
         displayedRows: [HistoryRow]
     ) {
@@ -653,12 +650,10 @@ public struct HistoryPanelView: View {
                     // an otherwise valid selection; Return remains disabled by
                     // the exact-reference check until authoritative rows return.
                     guard viewState.hasAuthoritativeFirstPage else { return }
-                    if viewState.hasWindowedPages {
-                        reconcileSelectionWithDisplayedDefault()
-                        return
-                    }
-                    surfaceState.selection = nil
-                    previewState.handleSelectionChange(nil)
+                    // The same reconciliation owns filter replacement,
+                    // page navigation, and deletion; callback order must not
+                    // clear a filter-hidden selection before it can retarget.
+                    reconcileSelectionWithDisplayedDefault()
                     return
                 }
                 // Preserve cross-ID dwell and manual-close suppression. Only an
@@ -679,14 +674,14 @@ public struct HistoryPanelView: View {
             .onChange(of: viewState.hasAuthoritativeFirstPage) { _, _ in
                 reconcileSelectionWithDisplayedDefault()
             }
-            // The client-side filters never restart the query, so no rows
-            // signal fires for them; a filter change that hides the current
-            // selection retargets it to the newest displayed row directly.
+            // A changed filter may settle before this render. Reconcile
+            // with the complete query shape regardless of callback order;
+            // loading placeholders preserve the previous selection.
             .onChange(of: viewState.typeFilter) { _, _ in
-                retargetHiddenSelectionToDisplayedDefault()
+                reconcileSelectionWithDisplayedDefault()
             }
             .onChange(of: viewState.showsPinnedOnly) { _, _ in
-                retargetHiddenSelectionToDisplayedDefault()
+                reconcileSelectionWithDisplayedDefault()
             }
             .onChange(of: resolvedPreviewTarget) { _, target in
                 guard previewState.isOpen else { return }
@@ -720,6 +715,7 @@ public struct HistoryPanelView: View {
             } message: {
                 Text(clearConfirmationMessage)
             }
+            .disabled(surfaceState.quickLookReference != nil)
 
             // The quick-look overlay layers above the whole panel (browsing
             // and preview columns alike); it renders only while the surface
@@ -1060,26 +1056,23 @@ public struct HistoryPanelView: View {
         )
     }
 
-    /// The ordering keyboard selection walks: the pinned displayed lane
-    /// then the unpinned displayed lane — the same arrays HistoryListView
-    /// renders (docs/03b-instruction-set.md §8). Observation already merges
-    /// the lanes pinned-first, so with no client-side filter active this is
-    /// exactly `viewState.rows` and the pre-filter walk is byte-identical;
-    /// with an active filter, arrows can never land on an invisible row and
-    /// Return can never paste one blindly.
+    /// Keyboard navigation follows the same authoritative filtered lanes
+    /// as HistoryListView, with pinned rows first.
     private var displayedSelectionRows: [HistoryRow] {
         viewState.displayedRows
     }
 
-    /// Authoritative reconciliation plus the wave-2 displayed-default
-    /// retarget in one place: membership evidence stays authoritative (the
-    /// query-restart loading gap never clears a selection), then a
-    /// filter-hidden selection retargets to the newest displayed row.
+    /// Reconcile the selected item against this authoritative filtered page,
+    /// retaining the selection through loading and retargeting filter changes.
     private func reconcileSelectionWithDisplayedDefault() {
         surfaceState.reconcileSessionSelection(
             rows: viewState.rows,
             hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage,
-            selectsVisibleWindow: viewState.hasWindowedPages
+            selectsVisibleWindow: viewState.hasWindowedPages,
+            filter: HistoryFilter(
+                type: viewState.typeFilter.contentType,
+                pinnedOnly: viewState.showsPinnedOnly
+            )
         )
         retargetHiddenSelectionToDisplayedDefault()
     }

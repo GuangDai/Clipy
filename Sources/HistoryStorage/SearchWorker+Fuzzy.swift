@@ -8,6 +8,70 @@ import Fuse
 extension SearchWorker {
     // MARK: - Fuzzy mode (03b §8)
 
+    /// A necessary condition for the pinned Fuse 1.4 Bitap loop. With its
+    /// frozen location 0, distance 100 and threshold .7, `finish` cannot
+    /// exceed 70 + pattern length. Each pattern position whose Character
+    /// is absent from that prefix costs at least one substitution/deletion;
+    /// Fuse never reaches an error level whose error/length exceeds .7.
+    ///
+    /// This only rejects proven misses. Survivors still use Fuse unchanged,
+    /// including its exact-match prepass and score/range behavior. ASCII
+    /// permits inspecting this short prefix before lowercasing or counting
+    /// a 5,000-Character body. Non-ASCII prefixes use the original matcher.
+    internal struct FuzzyASCIIRejection {
+        private let masks: [Int]
+        private let crlfMask: Int
+        private let prefixCharacters: Int
+        private let requiredPositions: Int
+
+        internal init(pattern: Fuse.Pattern) {
+            var masks = [Int](repeating: 0, count: 128)
+            for (character, mask) in pattern.alphabet {
+                if let ascii = character.asciiValue {
+                    masks[Int(ascii)] = mask
+                }
+            }
+            self.masks = masks
+            self.crlfMask = pattern.alphabet["\r\n"] ?? 0
+            self.prefixCharacters = 70 + pattern.len
+            // Use the same division as Fuse's error-level stopping test,
+            // avoiding a separate floating-point rounding convention.
+            let maximumErrors = (0..<pattern.len).last {
+                Double($0) / Double(pattern.len) <= 0.7
+            } ?? 0
+            self.requiredPositions = pattern.len - maximumErrors
+        }
+
+        internal func rejects(_ text: String) -> Bool {
+            text.utf8.withContiguousStorageIfAvailable { bytes in
+                var offset = 0
+                var characters = 0
+                var positions = 0
+                while offset < bytes.count, characters < prefixCharacters {
+                    let byte = bytes[offset]
+                    guard byte < 128 else { return false }
+                    if byte == 13, offset + 1 < bytes.count, bytes[offset + 1] == 10 {
+                        // CRLF is one Character; neither standalone control
+                        // character occurs at this position in Fuse's input.
+                        positions |= crlfMask
+                        offset += 2
+                    } else {
+                        let lowercase = (65...90).contains(byte) ? byte + 32 : byte
+                        positions |= masks[Int(lowercase)]
+                        offset += 1
+                    }
+                    characters += 1
+                    if positions.nonzeroBitCount >= requiredPositions { return false }
+                }
+                // A following non-ASCII scalar may extend the last ASCII
+                // byte into an EGC, e.g. e + COMBINING ACUTE. Defer to Fuse
+                // instead of treating that partial Character as plain e.
+                if offset < bytes.count, bytes[offset] >= 128 { return false }
+                return positions.nonzeroBitCount < requiredPositions
+            } ?? false
+        }
+    }
+
     /// Per-request top-K selection. The root is the worst retained hit, so
     /// a better candidate replaces it in O(log(limit)); prior-page hits
     /// never occupy the heap. Keep the exact anchor separately for `page`'s
@@ -85,6 +149,31 @@ extension SearchWorker {
                 return directive.direction == .forward ? [anchorRow] + ordered : ordered + [anchorRow]
             }
             return ordered
+        }
+
+        /// The caller has consumed complete batches in the default
+        /// pin/date/ID order. Once the forward page plus lookahead is full,
+        /// later rows cannot outrank an all-pinned window, or an unpinned
+        /// worst hit already at the query's proven global score minimum.
+        /// Equal-score later rows lose the same date/ID tie break. A cursor
+        /// must first be confirmed by its actual matching row (04 §6).
+        ///
+        /// Zero is Fuse's absolute lower bound. A larger value is permitted
+        /// only when query facts prove it for every row in this snapshot;
+        /// a score merely observed in the current batch is not such a fact.
+        internal func cannotBeImprovedByLaterDefaultOrderedRows(
+            lowestPossibleScore: Double = 0
+        ) -> Bool {
+            guard directive.direction == .forward,
+                  hits.count == directive.maximumSurvivors,
+                  directive.continuationAnchor == nil || anchorRow != nil,
+                  let worst = hits.first else { return false }
+            switch worst.anchor {
+            case .defaultOrder(let pinOrdinal, _, _):
+                return pinOrdinal != nil
+            case .fuzzyUnpinned(let score, _, _):
+                return score == lowestPossibleScore
+            }
         }
 
         /// Forward keeps the earliest successors; backward keeps the latest
@@ -168,6 +257,7 @@ extension SearchWorker {
 #endif
         }
 
+        let rejection = FuzzyASCIIRejection(pattern: pattern)
         var selection = FuzzyPageSelection(directive: directive)
 #if DEBUG
         let debugClock = ContinuousClock()
@@ -224,10 +314,9 @@ extension SearchWorker {
             // 5,000-Character scan prefix, so the whole title is always
             // the scanned prefix (03b §8; 06 §2) — no per-row prefix copy.
             let hit: FuzzyHit?
-            let lowercasedTitle = row.title.lowercased()
-            if let titleMatch = fuzzyMatch(
+            if !rejection.rejects(row.title), let titleMatch = fuzzyMatch(
                 pattern: pattern,
-                lowercased: lowercasedTitle,
+                lowercased: row.title.lowercased(),
                 characterCount: row.title.count
             ) {
                 // Title match: `snippet == nil`, UTF-16 ranges relative to
@@ -247,28 +336,32 @@ extension SearchWorker {
 #if DEBUG
                 debugBodyUTF8Bytes += row.debugSearchBodyUTF8Bytes
 #endif
-                let bodyScan = Self.boundedCharacterPrefix(
-                    of: row.searchBody,
-                    maximumCharacters: limits.maximumFuzzyTitleBodyPrefixCharacters
-                )
-                let lowercasedBody = bodyScan.text.lowercased()
-                if let bodyMatch = fuzzyMatch(
-                    pattern: pattern,
-                    lowercased: lowercasedBody,
-                    characterCount: bodyScan.characterCount
-                ) {
-                    hit = FuzzyHit(
-                        corpusRow: row,
-                        score: bodyMatch.score,
-                        search: .bodyExcerpt(
-                            characterRanges: bodyMatch.characterRanges,
-                            maximumCharacters: limits
-                                .maximumFuzzyTitleBodyPrefixCharacters,
-                            bodySuffixWasOmitted: bodyScan.suffixWasOmitted
-                        )
-                    )
-                } else {
+                if rejection.rejects(row.searchBody) {
                     hit = nil
+                } else {
+                    let bodyScan = Self.boundedCharacterPrefix(
+                        of: row.searchBody,
+                        maximumCharacters: limits.maximumFuzzyTitleBodyPrefixCharacters
+                    )
+                    let lowercasedBody = bodyScan.text.lowercased()
+                    if let bodyMatch = fuzzyMatch(
+                        pattern: pattern,
+                        lowercased: lowercasedBody,
+                        characterCount: bodyScan.characterCount
+                    ) {
+                        hit = FuzzyHit(
+                            corpusRow: row,
+                            score: bodyMatch.score,
+                            search: .bodyExcerpt(
+                                characterRanges: bodyMatch.characterRanges,
+                                maximumCharacters: limits
+                                    .maximumFuzzyTitleBodyPrefixCharacters,
+                                bodySuffixWasOmitted: bodyScan.suffixWasOmitted
+                            )
+                        )
+                    } else {
+                        hit = nil
+                    }
                 }
             }
 #if DEBUG

@@ -10,6 +10,7 @@ final class LocalAutomationSettingsModel {
     private(set) var state: LocalAutomationSettingsState?
     private(set) var isWorking = false
     private(set) var failed = false
+    private(set) var commandLineNotice: String?
     var confirmsDeletionGrant = false
     var confirmsRevisionGrant = false
 
@@ -18,6 +19,16 @@ final class LocalAutomationSettingsModel {
     var statusText: String {
         if let state { return state.enabled ? "Enabled" : "Disabled" }
         return failed ? "Unavailable" : "Loading…"
+    }
+
+    var commandLine: LocalAutomationCommandLine? { settings.commandLine }
+
+    func revealCommandLine() { settings.commandLine?.reveal() }
+
+    func copyHelpCommand() {
+        guard let commandLine = settings.commandLine else { return }
+        commandLineNotice = commandLine.copyHelpCommand()
+            ? "Help command copied." : "Could not copy the help command. Try again."
     }
 
     func load() async { await perform(settings.load) }

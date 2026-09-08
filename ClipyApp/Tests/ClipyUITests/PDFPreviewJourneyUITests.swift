@@ -1,4 +1,4 @@
-/// A PDF-only General pasteboard item reaches the real first-page preview,
+/// A PDF-only General pasteboard item supports explicit page navigation,
 /// while Return copies the complete original two-page document.
 import AppKit
 import CoreGraphics
@@ -11,7 +11,7 @@ final class PDFPreviewJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    func testPDFDwellAndQuickLookDiscloseFirstPageWhileCopyKeepsBothPages() throws {
+    func testPDFPagesNavigateInDwellAndQuickLookWhileCopyKeepsBothPages() throws {
         let original = try twoPagePDF()
         let item = NSPasteboardItem()
         XCTAssertTrue(item.setData(original, forType: .pdf))
@@ -70,7 +70,13 @@ final class PDFPreviewJourneyUITests: XCTestCase {
 
         let preview = panel.descendants(matching: .any)["clipy.preview.root"]
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
-        expectFirstPage(in: preview)
+        expectPage(1, in: preview)
+        XCTAssertFalse(preview.buttons["clipy.preview.pdf.previous"].isEnabled)
+        preview.buttons["clipy.preview.pdf.next"].click()
+        expectPage(2, in: preview)
+        XCTAssertFalse(preview.buttons["clipy.preview.pdf.next"].isEnabled)
+        app.typeKey(.leftArrow, modifierFlags: [.option, .command])
+        expectPage(1, in: preview)
 
         let row = rows.matching(NSPredicate(
             format: "identifier == %@", capturedRowIdentifier
@@ -83,12 +89,14 @@ final class PDFPreviewJourneyUITests: XCTestCase {
         XCTAssertTrue(quickLook.waitForExistence(timeout: 10), app.debugDescription)
         // Scope both identifiers below the overlay. The still-present dwell
         // pane cannot satisfy the Quick Look assertions.
-        expectFirstPage(in: quickLook)
+        expectPage(1, in: quickLook)
+        quickLook.buttons["clipy.preview.pdf.next"].click()
+        expectPage(2, in: quickLook)
         let dismiss = quickLook.buttons["clipy.panel.quicklook.dismiss"]
         XCTAssertTrue(dismiss.exists && dismiss.isHittable)
         dismiss.click()
         XCTAssertTrue(waitUntil(timeout: 10) { !quickLook.exists })
-        expectFirstPage(in: preview)
+        expectPage(1, in: preview)
         XCTAssertEqual(rows.count, 1)
         row.click()
 
@@ -115,14 +123,16 @@ final class PDFPreviewJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    private func expectFirstPage(in surface: XCUIElement) {
+    private func expectPage(_ page: Int, in surface: XCUIElement) {
         let notice = surface.descendants(matching: .any)["clipy.preview.pdf-page-notice"]
         let image = surface.descendants(matching: .any)["clipy.preview.image"]
+        let caption = surface.descendants(matching: .any)["clipy.preview.pdf.page"]
         XCTAssertTrue(waitUntil(timeout: 10) {
             notice.exists && notice.isHittable && image.exists && image.isHittable
                 && self.text(of: notice)
-                    == "Showing PDF page 1 of 2. Copying the item keeps its complete content."
-                && image.label == "PDF preview, page 1 of 2"
+                    == "Showing PDF page \(page) of 2. Copying the item keeps its complete content."
+                && image.label == "PDF preview, page \(page) of 2"
+                && caption.exists && self.text(of: caption) == "Page \(page) of 2"
         }, surface.debugDescription)
     }
 

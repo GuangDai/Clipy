@@ -21,6 +21,28 @@ public enum HistoryBrowseKind: Sendable, Hashable {
     case search(text: String, mode: SearchMode)
 }
 
+/// The panel's recognizable content families. A row with several families
+/// belongs to images before links before text; unknown formats remain in all.
+public enum HistoryContentType: String, CaseIterable, Sendable, Hashable {
+    case all
+    case text
+    case images
+    case links
+}
+
+/// Narrows the complete retained history before ranking and pagination.
+public struct HistoryFilter: Sendable, Hashable {
+    public let type: HistoryContentType
+    public let pinnedOnly: Bool
+
+    public init(type: HistoryContentType = .all, pinnedOnly: Bool = false) {
+        self.type = type
+        self.pinnedOnly = pinnedOnly
+    }
+
+    public static let all = HistoryFilter()
+}
+
 /// An opaque pagination cursor. It is bound to the complete query shape
 /// and snapshot position, and has process-local validity.
 /// Minted by the implementation, never by callers.
@@ -42,15 +64,18 @@ public struct HistoryPageCursor: Sendable, Hashable {
 public struct HistoryBrowseRequest: Sendable, Hashable {
     public let kind: HistoryBrowseKind
     public let limit: Int
+    public let filter: HistoryFilter
     public let cursor: HistoryPageCursor?
 
     public init(
         kind: HistoryBrowseKind,
         limit: Int,
-        cursor: HistoryPageCursor? = nil
+        cursor: HistoryPageCursor? = nil,
+        filter: HistoryFilter = .all
     ) {
         self.kind = kind
         self.limit = limit
+        self.filter = filter
         self.cursor = cursor
     }
 }
@@ -62,9 +87,11 @@ public struct HistoryBrowseRequest: Sendable, Hashable {
 public struct HistoryObservationRequest: Sendable, Hashable {
     public let kind: HistoryBrowseKind
     public let limit: Int
+    public let filter: HistoryFilter
 
-    public init(kind: HistoryBrowseKind, limit: Int) {
+    public init(kind: HistoryBrowseKind, limit: Int, filter: HistoryFilter = .all) {
         self.kind = kind
         self.limit = limit
+        self.filter = filter
     }
 }

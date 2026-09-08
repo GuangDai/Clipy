@@ -6,7 +6,7 @@ on:
       rows:
         description: Retained rows per disposable store
         type: choice
-        default: '10000'
+        default: '1000000'
         options: ['10000', '100000', '1000000', 'all']
       body_bytes:
         description: UTF-8 bytes per synthetic clipboard value
@@ -36,14 +36,12 @@ jobs:
       - uses: actions/checkout@v6
       - name: Verify macOS runner
         run: bash scripts/ci/verify_macos_runner.sh
-      - name: Test measurement helpers
-        run: swift test --filter 'HistoryPerfTests.SQLiteScaleTests'
-      - name: Build Release measurement runner
+      - name: Build Release runner and test measurement helpers
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p sqlite-scale-logs
-          swift build -c release --product HistoryPerfRunner 2>&1 | tee sqlite-scale-logs/build.log
+          swift test -c release --filter 'HistoryPerfTests.SQLiteScaleTests' 2>&1 | tee sqlite-scale-logs/build.log
           swift build -c release --show-bin-path > sqlite-scale-logs/bin-path.log
           python3 scripts/diagnostic_scan.py --profile strict sqlite-scale-logs/build.log
       - name: Seed disposable SQLite store

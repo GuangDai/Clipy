@@ -108,6 +108,8 @@ package final class PreviewContentLoader {
     /// PDF uses the same bitmap surface, but its page count must not be
     /// mistaken for an image source's frame count. Other formats keep nil.
     package private(set) var pdfPageCount: Int?
+    package private(set) var pdfPageNumber: Int?
+    package private(set) var requestedPDFPage = 1
 
     /// The applied image's pixel dimensions — the package-observable proof
     /// of a decode without exposing the image itself.
@@ -124,16 +126,16 @@ package final class PreviewContentLoader {
 
     package func imageAccessibilityLabel(locale: Locale) -> String? {
         guard let raster else { return nil }
-        if let pdfPageCount {
-            return PreviewCopy.pdfPageAccessibilityLabel(pageCount: pdfPageCount, locale: locale)
+        if let pdfPageCount, let pdfPageNumber {
+            return PreviewCopy.pdfPageAccessibilityLabel(pageNumber: pdfPageNumber, pageCount: pdfPageCount, locale: locale)
         }
         return PreviewCopy.imageDimensions(width: raster.width, height: raster.height, locale: locale)
     }
 
     package func appliedRasterNotice(locale: Locale = .current) -> String? {
         guard phase == .content(.image), let raster else { return nil }
-        if let pdfPageCount {
-            return PreviewCopy.pdfPageDisclosure(pageCount: pdfPageCount, locale: locale)
+        if let pdfPageCount, let pdfPageNumber {
+            return PreviewCopy.pdfPageDisclosure(pageNumber: pdfPageNumber, pageCount: pdfPageCount, locale: locale)
         }
         return raster.sourceImageCount > 1 ? PreviewCopy.multiImageDisclosure() : nil
     }
@@ -176,7 +178,7 @@ package final class PreviewContentLoader {
               canRetryFailure,
               let requestedItem
         else { return }
-        await load(item: requestedItem)
+        await load(item: requestedItem, pdfPage: requestedPDFPage)
     }
 
     /// View disappearance releases applied content immediately, including
@@ -187,18 +189,20 @@ package final class PreviewContentLoader {
         retireFileLoad()
         requestGeneration += 1
         requestedItem = nil
+        requestedPDFPage = 1
         raster = nil
         pdfPageCount = nil
+        pdfPageNumber = nil
         canRetryFailure = false
         phase = .unsupported
     }
 
-    /// Loads the preview content for `item` (`nil` clears the pane's
-    /// content state). Driven by the view's reference/retry-keyed task: a
+    /// Loads one requested PDF page, or the ordinary preview for other types.
+    /// `nil` clears the pane. Driven by the view's reference/page/retry task: a
     /// retarget cancels the previous load's task, and the fence covers the
     /// case where cancellation arrives late or the awaited work does not
     /// throw on cancellation.
-    package func load(item: HistoryItemReference?) async {
+    package func load(item: HistoryItemReference?, pdfPage: Int = 1) async {
         guard !Task.isCancelled else { return }
         guard let item else {
             clear()
@@ -208,8 +212,10 @@ package final class PreviewContentLoader {
         requestGeneration += 1
         let generation = requestGeneration
         requestedItem = item
+        requestedPDFPage = pdfPage
         raster = nil
         pdfPageCount = nil
+        pdfPageNumber = nil
         canRetryFailure = false
         phase = .loading
         do {
@@ -220,7 +226,7 @@ package final class PreviewContentLoader {
             }
 #endif
             let outcome = try await Self.renderPayload(
-                for: item, history: history, renderer: renderer,
+                for: item, pdfPage: pdfPage, history: history, renderer: renderer,
                 isCurrent: { [weak self] in
                     self?.requestGeneration == generation && self?.requestedItem == item
                 }
@@ -268,6 +274,7 @@ package final class PreviewContentLoader {
     private func apply(_ outcome: PreviewOutcome) {
         raster = nil
         pdfPageCount = nil
+        pdfPageNumber = nil
         canRetryFailure = false
         switch outcome {
         case .content(.raster(let artifact)):
@@ -276,6 +283,7 @@ package final class PreviewContentLoader {
         case .content(.pdf(let artifact)):
             raster = artifact.raster
             pdfPageCount = artifact.pageCount
+            pdfPageNumber = artifact.pageNumber
             phase = .content(.image)
         case .content(.text(let artifact)):
             phase = .content(.text(artifact.text, wasTruncated: artifact.wasTruncated))
@@ -342,15 +350,20 @@ package final class PreviewContentLoader {
         retireFileLoad()
         raster = nil
         pdfPageCount = nil
+        pdfPageNumber = nil
         canRetryFailure = false
         phase = .content(.reference(reference))
     }
 
-    package func purgeFilePreview(_ scope: HistorySurfacePurge.Scope) {
-        guard loadedFileReference != nil || fileLoadConfirmation != nil,
-              let requestedItem else { return }
+    /// A removal also retires an in-flight PDF page request. Pinned captured
+    /// previews survive Clear Unpinned; file reads retain their existing
+    /// conservative retirement behavior.
+    package func purgePreview(_ scope: HistorySurfacePurge.Scope, isPinned: Bool = false) {
+        guard let requestedItem else { return }
         switch scope {
-        case .all, .unpinned: clear()
+        case .all: clear()
+        case .unpinned:
+            if !isPinned || loadedFileReference != nil || fileLoadConfirmation != nil { clear() }
         case .item(let id):
             if requestedItem.id == id { clear() }
         case .revision(let old, _):
@@ -373,6 +386,7 @@ package final class PreviewContentLoader {
     @concurrent
     private static func renderPayload(
         for item: HistoryItemReference,
+        pdfPage: Int,
         history: any ClipboardHistory,
         renderer: ContentPreview,
         isCurrent: @MainActor @Sendable () -> Bool
@@ -395,7 +409,7 @@ package final class PreviewContentLoader {
             guard await isCurrent() else { return nil }
             outcome = await renderer.renderSelectedHistoryPane(source, representation: PreviewRepresentation(
                 typeIdentifier: representation.typeIdentifier, bytes: representation.bytes
-            ))
+            ), pdfPage: pdfPage)
             try Task.checkCancellation()
             guard await isCurrent() else { return nil }
             if !source.permitsFallback(after: outcome) { return outcome }
@@ -432,6 +446,18 @@ struct HistoryPreviewView: View {
     @State private var loader: PreviewContentLoader
     @State private var retryGeneration = 0
     @State private var fileConfirmationPresented = false
+    @State private var pdfPageSelection: PDFPageSelection?
+
+    /// Page selection belongs to this exact content version, including when
+    /// the observed target changes before SwiftUI invokes onChange.
+    private struct PDFPageSelection {
+        let item: HistoryItemReference
+        let number: Int
+    }
+
+    private var requestedPDFPage: Int {
+        pdfPageSelection?.item == targetItem ? (pdfPageSelection?.number ?? 1) : 1
+    }
     @Environment(\.locale) private var locale
 
     /// Retargets and retries share SwiftUI's view-owned task, so either a
@@ -439,6 +465,7 @@ struct HistoryPreviewView: View {
     private struct LoadRequest: Equatable {
         let item: HistoryItemReference?
         let retryGeneration: Int
+        let pdfPage: Int
     }
 
     /// Standalone entry point: PreviewPaneState owns the exact target.
@@ -538,22 +565,24 @@ struct HistoryPreviewView: View {
                 .padding(.horizontal, PanelTheme.spacingMedium)
                 .padding(.vertical, PanelTheme.spacingSmall)
         }
-        // One load per exact observed reference or explicit retry; the loader's fence
+        // One load per exact reference, explicit page choice, or retry; the loader's fence
         // discards a late result, so a superseded selection never renders
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
-        .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration)) {
-            await loader.load(item: targetItem)
+        .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration, pdfPage: requestedPDFPage)) {
+            await loader.load(item: targetItem, pdfPage: requestedPDFPage)
         }
         .onChange(of: targetItem) { _, target in
             fileConfirmationPresented = false
+            pdfPageSelection = nil
             if loader.requestedItem != target { loader.clear() }
         }
         .onChange(of: viewState.surfacePurge) { _, purge in
             guard let purge else { return }
-            loader.purgeFilePreview(purge.scope)
+            loader.purgePreview(purge.scope, isPinned: observedRow?.pinnedPosition != nil)
             if loader.fileLoadConfirmation == nil { fileConfirmationPresented = false }
         }
         .onDisappear {
+            pdfPageSelection = nil
             fileConfirmationPresented = false
             loader.clear()
         }
@@ -574,13 +603,58 @@ struct HistoryPreviewView: View {
         .accessibilityIdentifier("clipy.preview.root")
     }
 
+    /// One explicit page choice starts one view-owned request. Clearing here
+    /// immediately retires the old raster and any superseded publication;
+    /// the task ID handles cancellation of the preceding load.
+    private func selectPDFPage(_ page: Int) {
+        guard let item = targetItem, loader.requestedItem == item,
+              loader.loadedFileReference == nil,
+              let count = loader.pdfPageCount, (1...count).contains(page),
+              page != loader.pdfPageNumber else { return }
+        pdfPageSelection = PDFPageSelection(item: item, number: page)
+        loader.clear()
+    }
+
+    private func pdfNavigation(page: Int, count: Int) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                selectPDFPage(page - 1)
+            } label: {
+                Image(systemName: "chevron.backward")
+            }
+            .disabled(page <= 1)
+            .keyboardShortcut(.leftArrow, modifiers: [.option, .command])
+            .help(PreviewCopy.text("Previous PDF Page"))
+            .accessibilityLabel(PreviewCopy.text("Previous PDF Page"))
+            .accessibilityIdentifier("clipy.preview.pdf.previous")
+
+            Text(PreviewCopy.pdfPageCaption(pageNumber: page, pageCount: count, locale: locale))
+                .font(.caption)
+                .monospacedDigit()
+                .accessibilityIdentifier("clipy.preview.pdf.page")
+
+            Button {
+                selectPDFPage(page + 1)
+            } label: {
+                Image(systemName: "chevron.forward")
+            }
+            .disabled(page >= count)
+            .keyboardShortcut(.rightArrow, modifiers: [.option, .command])
+            .help(PreviewCopy.text("Next PDF Page"))
+            .accessibilityLabel(PreviewCopy.text("Next PDF Page"))
+            .accessibilityIdentifier("clipy.preview.pdf.next")
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+    }
+
     // MARK: - Content
 
     @ViewBuilder
     private var previewBody: some View {
         if targetItem == nil {
             unavailableBody
-        } else if loader.requestedItem != targetItem {
+        } else if loader.requestedItem != targetItem || loader.requestedPDFPage != requestedPDFPage {
             ProgressView()
                 .accessibilityLabel(PreviewCopy.text("Loading preview"))
         } else {
@@ -606,6 +680,11 @@ struct HistoryPreviewView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .padding(8)
                             .accessibilityIdentifier("clipy.preview.image")
+                        if loader.loadedFileReference == nil,
+                           let page = loader.pdfPageNumber,
+                           let count = loader.pdfPageCount {
+                            pdfNavigation(page: page, count: count)
+                        }
                         if let notice = loader.appliedRasterNotice(locale: locale) {
                             Text(notice)
                                 .font(.caption)

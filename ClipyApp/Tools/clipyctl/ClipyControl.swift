@@ -30,10 +30,24 @@ struct ClipyControl {
         }
     }
 
-    private static func run() async -> LocalAutomationOutput {
-        guard CommandLine.arguments.count == 1 else {
-            return LocalAutomationClient.failure(.invalidRequest)
+    private static func run() async -> CLIOutput {
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["--help"] || arguments == ["-h"] {
+            let help = CLIArguments.help(executablePath: Bundle.main.executableURL?.path ?? CommandLine.arguments[0])
+            return .init(exitCode: 0, stdout: Data(help.utf8), stderr: Data())
         }
+        if arguments == ["--version"] {
+            let bundle = containingApplicationURL.flatMap { Bundle(url: $0) }
+            let version = bundle?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+            return .init(exitCode: 0, stdout: Data("clipyctl \(version) (protocol 1)\n".utf8), stderr: Data())
+        }
+        guard let mode = CLIArguments(arguments) else {
+            return CLIOutput.failure(.invalidRequest, raw: arguments.contains("--raw"))
+        }
+        return mode.output(await request(mode: mode))
+    }
+
+    private static func request(mode: CLIArguments) async -> LocalAutomationOutput {
         let request: Data
         do {
             request = try await CLIStandardStreams.readRequest()
@@ -46,6 +60,9 @@ struct ClipyControl {
         }
         if let failure = LocalAutomationClient.validateRequest(request) {
             return failure
+        }
+        guard mode.accepts(request) else {
+            return LocalAutomationClient.failure(.invalidRequest, request: request)
         }
         let credential: Data
         do {
@@ -80,17 +97,21 @@ struct ClipyControl {
         return LocalAutomationClient.failure(.notReady, request: request)
     }
 
+    private static var containingApplicationURL: URL? {
+        guard let executable = Bundle.main.executableURL else { return nil }
+        let url = executable.resolvingSymlinksInPath()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return url.pathExtension == "app" ? url : nil
+    }
+
     @MainActor
     private static func launchContainingApplication() async -> Bool {
         // The bundled executable lives beside Clipy in Contents/MacOS.
         // Resolve a user-created symlink without consulting PATH or bundle-ID
         // registration, which could select a different installed Clipy copy.
-        guard let executable = Bundle.main.executableURL else { return false }
-        let appURL = executable.resolvingSymlinksInPath()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        guard appURL.pathExtension == "app" else { return false }
+        guard let appURL = containingApplicationURL else { return false }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         do {

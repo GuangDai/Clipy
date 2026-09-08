@@ -19,6 +19,7 @@ struct PreviewPDFRendererTests {
             let outcome = await ContentPreview().renderHistoryPane(representations)
             let pdf = try Self.artifact(outcome)
             #expect(pdf.pageCount == 1)
+            #expect(pdf.pageNumber == 1)
             #expect(pdf.raster.width == 40 && pdf.raster.height == 20)
             #expect(pdf.raster.pixels == Self.solidPixels(gray: 0, count: 40 * 20))
         }
@@ -63,22 +64,45 @@ struct PreviewPDFRendererTests {
         }
     }
 
-    @Test func firstPageIsRenderedAndFullPageCountIsReported() throws {
-        let bytes = Self.document([
-            "<< /Type /Catalog /Pages 2 0 R >>",
-            "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>",
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Resources << >> /Contents 4 0 R >>",
-            Self.stream("0 g\n0 0 40 20 re f\n"),
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Resources << >> /Contents 6 0 R >>",
-            Self.stream("1 g\n0 0 40 20 re f\n"),
-        ])
-        let pdf = try Self.artifact(Self.render(bytes))
-        #expect(pdf.pageCount == 2)
-        #expect(pdf.raster.width == 40)
-        #expect(pdf.raster.height == 20)
-        #expect(pdf.raster.rowBytes == 160)
-        // Page one is black; selecting page two would instead yield white.
-        #expect(pdf.raster.pixels == Self.solidPixels(gray: 0, count: 40 * 20))
+    @Test func defaultPageAndRequestedPageCarryTheirOwnPixelsAndPosition() async throws {
+        let representation = PreviewRepresentation(typeIdentifier: "com.adobe.pdf", bytes: Self.twoPages())
+        let renderer = ContentPreview()
+        let first = try Self.artifact(await renderer.renderHistoryPane([representation]))
+        #expect(first.pageCount == 2)
+        #expect(first.pageNumber == 1)
+        #expect(first.raster.width == 40 && first.raster.height == 20)
+        #expect(first.raster.pixels == Self.solidPixels(gray: 0, count: 40 * 20))
+
+        let second = try Self.artifact(await renderer.renderHistoryPane([representation], pdfPage: 2))
+        #expect(second.pageCount == 2)
+        #expect(second.pageNumber == 2)
+        #expect(second.raster.width == 20 && second.raster.height == 40)
+        #expect(second.raster.pixels == Self.solidPixels(gray: 255, count: 20 * 40))
+
+        let source = try #require(ContentPreview.prepareHistoryPane([
+            PreviewRepresentationMetadata(typeIdentifier: representation.typeIdentifier, byteCount: representation.bytes.count),
+        ]).first)
+        #expect(await renderer.renderSelectedHistoryPane(source, representation: representation, pdfPage: 2)
+            == .content(.pdf(second)))
+        // Returning to page one must not reuse the most recent page's pixels.
+        #expect(await renderer.renderSelectedHistoryPane(source, representation: representation, pdfPage: 1)
+            == .content(.pdf(first)))
+    }
+
+    @Test(arguments: [Int.min, -1, 0, 3, Int.max])
+    func missingPageIsUnavailableWithoutMarkingThePDFCorrupt(_ page: Int) async throws {
+        let representation = PreviewRepresentation(typeIdentifier: "com.adobe.pdf", bytes: Self.twoPages())
+        let renderer = ContentPreview()
+        #expect(await renderer.renderHistoryPane([representation], pdfPage: page) == .unavailable(.pageUnavailable))
+        let valid = try Self.artifact(await renderer.renderHistoryPane([representation], pdfPage: 2))
+        #expect(valid.pageNumber == 2)
+    }
+
+    @Test func pageRequestDoesNotChangeNonPDFSourceSelection() async {
+        #expect(await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "com.adobe.pdf", bytes: Self.twoPages()),
+            PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("plain sibling".utf8)),
+        ], pdfPage: Int.max) == .content(.text(PreviewText(text: "plain sibling", wasTruncated: false))))
     }
 
     @Test func blankPageHasAnOpaqueWhiteBackground() throws {
@@ -180,7 +204,7 @@ struct PreviewPDFRendererTests {
 
     private static func artifact(_ outcome: PreviewOutcome) throws -> PreviewPDF {
         guard case .content(.pdf(let pdf)) = outcome else {
-            Issue.record("expected a PDF first-page artifact, got \(outcome)")
+            Issue.record("expected a PDF page artifact, got \(outcome)")
             throw FixtureFailure.missingPDF
         }
         return pdf
@@ -190,6 +214,17 @@ struct PreviewPDFRendererTests {
 
     private static func solidPixels(gray: UInt8, count: Int) -> Data {
         Data((0..<count).flatMap { _ in [gray, gray, gray, UInt8(255)] })
+    }
+
+    private static func twoPages() -> Data {
+        document([
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Resources << >> /Contents 4 0 R >>",
+            stream("0 g\n0 0 40 20 re f\n"),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 40 20] /Rotate 90 /Resources << >> /Contents 6 0 R >>",
+            stream("1 g\n0 0 40 20 re f\n"),
+        ])
     }
 
     private static func page(

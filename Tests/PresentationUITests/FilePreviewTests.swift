@@ -94,13 +94,13 @@ struct FilePreviewTests {
         switch retirement {
         case .selection: await loader.load(item: other)
         case .close: loader.clear()
-        case .removal: loader.purgeFilePreview(.item(item.id))
+        case .removal: loader.purgePreview(.item(item.id))
         case .revision:
-            loader.purgeFilePreview(.revision(old: item, new: HistoryItemReference(
+            loader.purgePreview(.revision(old: item, new: HistoryItemReference(
                 id: item.id, contentVersion: ContentVersion(rawValue: 2)
             )))
-        case .clearAll: loader.purgeFilePreview(.all)
-        case .clearUnpinned: loader.purgeFilePreview(.unpinned)
+        case .clearAll: loader.purgePreview(.all)
+        case .clearUnpinned: loader.purgePreview(.unpinned)
         case .back: loader.showFileReference()
         }
         let expectedPhase = loader.phase
@@ -140,7 +140,7 @@ struct FilePreviewTests {
         loader.requestFilePreview()
         let task = try #require(loader.confirmFilePreview())
         let started = await probe.waitUntilReadStarts()
-        loader.purgeFilePreview(.item(other.id))
+        loader.purgePreview(.item(other.id))
         await probe.complete()
         await task.value
         #expect(started)

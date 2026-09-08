@@ -160,7 +160,7 @@ public final class HistoryViewState {
 
     /// Content-free accessibility handoff for one settled search intent.
     /// Only the current query generation's first authoritative observation
-    /// page invokes this callback with the client-filtered visible count.
+    /// page invokes this callback with the filtered visible count.
     /// Debounce drafts, stale completions,
     /// replacement snapshots, and pagination never do (REVIEW UI-16/Card
     /// 15D). `hasNextPage` keeps the app shell from presenting this bounded
@@ -209,15 +209,11 @@ public final class HistoryViewState {
     package private(set) var hasWindowedPages = false
     package var traversedRowCount: Int { rowsBeforeWindow + rows.count }
 
-    /// Unfiltered counts include rows traversed before this window. A local
-    /// filter cannot classify evicted rows, so its displayed count stays a
-    /// lower bound even at the final older page.
-    package var displayedCount: Int {
-        typeFilter == .all && !showsPinnedOnly ? traversedRowCount : displayedRows.count
-    }
+    /// Counts belong to the complete filtered query, including rows already
+    /// traversed before this bounded window.
+    package var displayedCount: Int { traversedRowCount }
     package var displayedCountIsLowerBound: Bool {
-        hasNextPage || ((typeFilter != .all || showsPinnedOnly) && hasPreviousPage)
-            || (observedPosition == nil && !rows.isEmpty)
+        hasNextPage || (observedPosition == nil && !rows.isEmpty)
     }
 
     /// Position of the latest authoritative first page. A receipt may return
@@ -292,25 +288,34 @@ public final class HistoryViewState {
         rows.filter { $0.pinnedPosition == nil }
     }
 
-    /// The in-memory type filter over the already-loaded rows. A plain
-    /// observable var with no `didSet`: a filter change must NOT restart
-    /// search or observation — it narrows the rendered rows in memory only.
-    /// Package (GOV-3): panel-header vocabulary only; ClipyApp never names
-    /// the filter.
-    package var typeFilter: HistoryTypeFilter = .all
+    /// Each filter is part of the History query: changing it immediately
+    /// retires the previous page/cursors and observes matching retained rows.
+    package var typeFilter: HistoryTypeFilter = .all {
+        didSet {
+            guard typeFilter != oldValue else { return }
+            advanceSearchQueryGeneration()
+            replaceObservationImmediately()
+        }
+    }
 
-    /// When true, the Recent lane renders empty and only pinned rows remain.
-    /// Same client-side posture as `typeFilter`.
-    package var showsPinnedOnly = false
+    package var showsPinnedOnly = false {
+        didSet {
+            guard showsPinnedOnly != oldValue else { return }
+            advanceSearchQueryGeneration()
+            replaceObservationImmediately()
+        }
+    }
 
-    /// The pinned lane after the client-side filter. Filtering is over the
-    /// loaded pages by design; pagination still walks the unfiltered stream
-    /// (`rows`/page cursors are untouched by both filters).
+    private var historyFilter: HistoryFilter {
+        HistoryFilter(type: typeFilter.contentType, pinnedOnly: showsPinnedOnly)
+    }
+
+    /// The pinned lane of the current filtered query.
     package var displayedPinnedRows: [HistoryRow] {
         rows.filter { $0.pinnedPosition != nil && isDisplayed($0) }
     }
 
-    /// The recency lane after the client-side filter; empty while
+    /// The recency lane of the current query; empty while
     /// `showsPinnedOnly` is set.
     package var displayedUnpinnedRows: [HistoryRow] {
         guard !showsPinnedOnly else { return [] }
@@ -340,9 +345,8 @@ public final class HistoryViewState {
         loadedPages.last?.next != nil
     }
 
-    /// Prefetch follows the last row the list actually renders. A type or
-    /// pinned-only filter may hide the authoritative page's final row;
-    /// waiting for that hidden row's appearance would strand its cursor
+    /// Prefetch follows the final visible row in the filtered query. The
+    /// three-page window then switches to explicit older/newer navigation
     /// (review Card 8B; 04 §6).
     package func prefetchNextPageIfNeeded(appearingRowID: HistoryItemID) {
         // Once the three-page window is full, navigation becomes explicit.
@@ -457,6 +461,7 @@ public final class HistoryViewState {
         // the await, and the cursor must travel with the kind it was minted
         // under or storage will (correctly) fail it as `.snapshotExpired`.
         let kind = admittedKind
+        let filter = historyFilter
         let limit = pageLimit
         let generation = observationGeneration
         let history = self.history
@@ -464,7 +469,7 @@ public final class HistoryViewState {
         paginationTask = Task { [weak self] in
             do {
                 let page = try await history.browse(
-                    HistoryBrowseRequest(kind: kind, limit: limit, cursor: cursor)
+                    HistoryBrowseRequest(kind: kind, limit: limit, cursor: cursor, filter: filter)
                 )
                 guard let self,
                       self.paginationRequestToken == requestToken,
@@ -853,13 +858,15 @@ public final class HistoryViewState {
     /// Starts observation for the already-invalidated current intent.
     private func startObservation() {
         let kind = admittedKind
+        let filter = historyFilter
         let limit = pageLimit
         let history = self.history
         let queryGeneration = searchQueryGeneration
 
         observationTask = Task { [weak self] in
+            guard !Task.isCancelled else { return }
             let stream = await history.observe(
-                HistoryObservationRequest(kind: kind, limit: limit)
+                HistoryObservationRequest(kind: kind, limit: limit, filter: filter)
             )
             do {
                 for try await page in stream {

@@ -114,6 +114,14 @@ public protocol ClipboardHistory: Sendable {
     /// The read-after-commit guarantee applies as for other History reads.
     func usage() async throws -> HistoryUsage
 
+    /// Creates a consistent backup in a new directory, containing
+    /// `history.sqlite` and `history.sqlite-content`. The parent must exist;
+    /// an existing destination is never overwritten. A failed or cancelled
+    /// operation removes only the directory that operation created.
+    /// The sole writer serializes the complete metadata/file copy so the
+    /// receipt identifies exactly the exported snapshot.
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt
+
     /// The authoritative configured retention state: the v1 maximum-unpinned
     /// count plus the V2-02 age/storage/revision dimensions, exactly as
     /// persisted.

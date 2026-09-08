@@ -270,6 +270,10 @@ enum ComposedSupport {
 /// tests share this deterministic commit-receipt/observation gap instead of
 /// creating a second storage implementation.
 actor PostInitialObservationSuspendingHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        try await base.backup(to: directory)
+    }
+
     private let base: SQLiteHistory
     private var heldObservationContinuation: CheckedContinuation<Void, Never>?
     private var holdWaiters: [CheckedContinuation<Void, Never>] = []

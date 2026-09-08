@@ -29,6 +29,22 @@ struct PreviewCopyTests {
         }
     }
 
+    @Test func pdfNavigationUsesCurrentPageAndLocalizedControls() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        #expect(PreviewCopy.pdfPageCaption(pageNumber: 2, pageCount: 10,
+            bundle: english, locale: Locale(identifier: "en_US")) == "Page 2 of 10")
+        #expect(PreviewCopy.pdfPageCaption(pageNumber: 2, pageCount: 10,
+            bundle: chinese, locale: Locale(identifier: "zh_Hans_CN")) == "第 2 页，共 10 页")
+        #expect(PreviewCopy.pdfPageAccessibilityLabel(pageNumber: 2, pageCount: 10,
+            bundle: chinese, locale: Locale(identifier: "zh_Hans_CN")) == "PDF 预览，第 2 页，共 10 页")
+        #expect(PreviewCopy.pdfPageDisclosure(pageNumber: 2, pageCount: 10,
+            bundle: english, locale: Locale(identifier: "en_US")) ==
+            "Showing PDF page 2 of 10. Copying the item keeps its complete content.")
+        #expect(PreviewCopy.text("Previous PDF Page", bundle: chinese) == "上一页 PDF")
+        #expect(PreviewCopy.text("Next PDF Page", bundle: chinese) == "下一页 PDF")
+    }
+
     @Test func copyCountsKeepTheirFullUnsignedValueAndLocalizedGrouping() throws {
         let english = try bundle("en")
         let chinese = try bundle("zh-Hans")
