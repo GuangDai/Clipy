@@ -3,8 +3,7 @@
 /// unpinned item retires the oldest eligible unpinned item INSIDE the third
 /// insert's own History Commit — an insert and its retention victims are one
 /// commit (docs/02-domain.md §12), so Change Position advances exactly once
-/// for the combined plan (docs/02-domain.md §13, D6) — plus the hard-bound
-/// capacity failure proved at the Domain planner seam.
+/// for the combined plan (docs/02-domain.md §13, D6).
 ///
 /// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS9's
 /// public-read clause (the retained set as reported by the step-7 `browse`
@@ -14,14 +13,6 @@
 /// surviving unpinned rows as seen through an INDEPENDENT second
 /// `SQLite connection` over the same on-disk store (see `WSSupport`).
 ///
-/// PLANNER-SEAM CAPACITY PROOF (06 §8 WS9's own note): the fixed 5,000-item
-/// `HistoryLimits.standard` hard retained-item bound makes a full end-to-end
-/// all-pinned-at-hard-bound store impractical to construct, so the
-/// `.capacityExceeded(.retainedItems)` path is proved at the Domain planner
-/// seam, where the bound is a parameter — `planCapture` with
-/// `hardMaximumRetainedItems` equal to the current retained count and every
-/// retained item pinned must throw rather than retire a pinned item (D13) or
-/// the primary itself (docs/02-domain.md §12, D19).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -139,63 +130,32 @@ struct WS9RetentionPrimaryCommitTests {
     #expect(position.rawValue == 3)
 }
 
-/// WS9 (docs/06-cross-cutting.md §8, planner seam): with
-/// `hardMaximumRetainedItems` equal to the current retained count and EVERY
-/// retained item pinned, capture planning throws
-/// `.capacityExceeded(.retainedItems)` — pinned items are exempt (D13) and
-/// the primary is never its own victim (docs/02-domain.md §12), so no
-/// eligible victim can restore the bound (D19). See the file header for why
-/// this path is proved at the planner seam instead of end-to-end.
-@Test func allPinnedInventoryAtTheHardBoundRejectsCaptureAtThePlannerSeam() throws {
-    // The complete retained inventory: three pinned items with contiguous
-    // ordinals (D12), so after projection the only unpinned item would be
-    // the primary itself.
-    let pinnedSummaries = (0..<3).map { index in
-        RetainedItemSummary(
-            id: HistoryItemID(rawValue: UUID()),
-            lastCopiedAt: Date(timeIntervalSinceReferenceDate: 700_040_000 + Double(index) * 100),
-            pinOrdinal: PinOrdinal(rawValue: index)
-        )
+/// V2-09 §9: pinned history does not consume the user's unpinned allowance.
+@Test func allPinnedInventoryStillPermitsANewUnpinnedCapture() async throws {
+    let history = try await WSSupport.makeHistory(maximumUnpinned: 1)
+    for index in 0..<3 {
+        let receipt = try await history.perform(.capture(WSSupport.textCapture(
+            "pinned retention \(index)",
+            observedAt: Date(timeIntervalSinceReferenceDate: Double(index))
+        )))
+        guard case .committed(let commit) = receipt,
+              case .inserted(let item) = commit.outcome else {
+            Issue.record("Expected a new retained item")
+            return
+        }
+        _ = try await history.perform(.placePinned(item.id, at: .last))
     }
-    let facts = IngestFacts(
-        confirmedMatch: nil,
-        candidateIDExists: false,
-        retention: CaptureRetentionFacts(
-            retainedCount: pinnedSummaries.count,
-            unpinnedCount: 0,
-            retirementPrefix: nil
-        )
-    )
-
-    // A valid one-representation prepared capture; with no hint and no
-    // candidates it can only take the insert lane (docs/02-domain.md §9.3).
-    let capture = PreparedCapture(
-        candidateID: HistoryItemID(rawValue: UUID()),
-        canonical: try CanonicalContent(representations: [
-            CanonicalRepresentation(
-                content: ContentRepresentation(
-                    typeIdentifier: "public.utf8-plain-text",
-                    bytes: Data("ws9 capacity probe".utf8)
-                ),
-                fingerprint: ContentFingerprint(rawValue: 0x0009_0001)
-            ),
-        ]),
-        origin: CopyOrigin(lineageHint: nil, sourceApplication: "com.example.ws9"),
-        observedAt: Date(timeIntervalSinceReferenceDate: 700_040_300)
-    )
-
-    // WS9: the insert would push the retained total to 4 against a hard
-    // bound of 3 (the current retained count), and the eligible victim set
-    // is EMPTY — every retained item is pinned and the primary is exempt —
-    // so planning fails closed (docs/02-domain.md §12, D19). The user policy
-    // alone (at least one unpinned slot) can never force this failure.
-    #expect(throws: DomainRejection.capacityExceeded(.retainedItems)) {
-        try planCapture(
-            capture,
-            facts: facts,
-            retention: RetentionPolicy(maximumUnpinnedItems: 1),
-            hardMaximumRetainedItems: pinnedSummaries.count
-        )
+    let before = try await history.usage()
+    let receipt = try await history.perform(.capture(WSSupport.textCapture(
+        "one unpinned slot", observedAt: Date(timeIntervalSinceReferenceDate: 4)
+    )))
+    guard case .committed(let commit) = receipt, case .inserted = commit.outcome else {
+        Issue.record("Pinned history unexpectedly rejected capture")
+        return
     }
+    #expect(!commit.hasDestructiveRetentionEffects)
+    let after = try await history.usage()
+    #expect(after.itemCount == 4 && after.pinnedItemCount == 3)
+    #expect(after.position.rawValue == before.position.rawValue + 1)
 }
 }

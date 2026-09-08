@@ -272,6 +272,14 @@ completed-cache bytes 不包括 source buffers、临时拷贝和系统 decoder w
 ## 9. 保留策略与磁盘空间
 
 用户可关闭条目数限制；保留额度优先按内容 bytes 表达，现有 count 限制可作为可选项。
+`maximumUnpinnedItems` 使用可选正整数：`nil` 明确关闭按条数删除，SQLite 保存 NULL；
+正整数表示用户选择的未置顶额度，默认仍为 200。公开打开配置、修改 action、配置读回
+与 Domain 使用同一语义，没有 999/5,000 的产品条数上限，也没有另一个总 retained
+count hard cap。关闭条数限制不关闭 age/storage/revision 策略或单次输入资源限制。
+关闭后重开保持 nil；重新启用额度时最旧未置顶项的退休与配置、ChangePosition/HCR
+一起提交，失败时全部回滚。整数表示溢出仍是明确容量失败，不能悄悄绕回负数。
+旧的 `maximumUnpinnedItems NOT NULL` 布局不能表达关闭状态，打开时明确拒绝；
+不迁移、不补写、不删除原文件。
 自动删除的首版顺序保持可解释：最旧未置顶项优先。置顶保护不因内存压力或磁盘紧张
 偷偷失效。文本永久保留若加入，必须是用户看得见的分类策略，不能暗藏在猜测的
 reuseProbability/权重分数里。
@@ -297,8 +305,10 @@ APFS 共享块和备份会使物理大小不同；不能把近似目录 allocate
    搜索、当前/旧内容 Copy、revision/prune、pressure 后恢复。记录 owned bytes、RSS、
    footprint、耗时及磁盘增长，区分 idle 与活动峰值。规模不是新的仓库 gate/证书，
    这些是产品行为和资源表现的证据。
-6. 上述路径可用且数据支持结论后，取消 5,000 hard cap 和 count-only 产品上限。
-   不先改成 Int.max 再让旧全量路径承受百万条数据。
+6. 条数限制使用 §9 的公开可选策略；规模 fixture 与产品使用同一个 HistoryLimits，
+   不再创建仅供 fixture 使用的更高容量配置。直接测试覆盖普通公开 store 在 5,000
+   条真实 SQLite fixture 之上的 capture/coalesce/pin/读取，以及 5,001/百万用户额度。
+   这证明产品路径不再拒绝大历史，不替代步骤 5 的百万条资源与性能测量。
 
 手动 `SQLite storage measurements` 工作流提供 10k、100k、1m 或三档并行选择，
 使用 Release `HistoryPerfRunner --sqlite-scale`。seed 和 measure 分属独立进程，

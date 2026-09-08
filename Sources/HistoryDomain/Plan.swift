@@ -46,7 +46,7 @@ package enum HistoryMutation: Sendable {
     /// Deletes the complete eligible oldest prefix. The primary exclusion
     /// and unpinned requirement are part of its semantic predicate (02 §12).
     case retirePrefix(RetentionRetirementPrefix)
-    case setRetentionPolicy(maximumUnpinnedItems: Int)
+    case setRetentionPolicy(maximumUnpinnedItems: Int?)
     /// R3 revision pruning (V2-02 §5.3): `removedRevisionIDs` is non-empty
     /// (a no-op prune returns `.unchanged` before planning), lists inactive
     /// revision IDs oldest-first in append order, never contains the active

@@ -4,6 +4,7 @@
 /// capture. Preview and search must still show the reference, never the
 /// file's marker contents.
 import AppKit
+import CoreGraphics
 import XCTest
 
 final class FileReferencePreviewJourneyUITests: XCTestCase {
@@ -281,6 +282,111 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) {
             pasteboard.pasteboardItems?.first?.data(forType: fileType) == Data(originalAddress.utf8)
                 && !panel.exists
+        }, app.debugDescription)
+    }
+
+    @MainActor
+    func testConfirmedFilePDFNavigatesItsLoadedPagesWithoutReadingAReplacement() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("explicit PDF preview.pdf")
+        let output = try XCTUnwrap(CFDataCreateMutable(kCFAllocatorDefault, 0))
+        let consumer = try XCTUnwrap(CGDataConsumer(data: output))
+        var box = CGRect(x: 0, y: 0, width: 120, height: 80)
+        let writer = try XCTUnwrap(CGContext(consumer: consumer, mediaBox: &box, nil))
+        for gray in [CGFloat(0), CGFloat(1)] {
+            writer.beginPDFPage(nil)
+            writer.setFillColor(gray: gray, alpha: 1)
+            writer.fill(box)
+            writer.endPDFPage()
+        }
+        writer.closePDF()
+        try (output as Data).write(to: file)
+        let fileType = NSPasteboard.PasteboardType("public.file-url")
+        let referenceBytes = Data(file.absoluteString.utf8)
+        let item = NSPasteboardItem()
+        XCTAssertTrue(item.setData(referenceBytes, forType: fileType))
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        defer { pasteboard.clearContents() }
+        XCTAssertTrue(pasteboard.writeObjects([item]))
+
+        let app = XCUIApplication()
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
+        app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
+        app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.store").path
+        app.launch()
+        defer { app.terminate() }
+        let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
+        let rows = panel.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "clipy.history.row.")
+        )
+        XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 }, app.debugDescription)
+        let preview = panel.descendants(matching: .any)["clipy.preview.root"]
+        if !preview.waitForExistence(timeout: 3) {
+            app.typeKey(.space, modifierFlags: .control)
+        }
+        let request = preview.buttons["clipy.preview.file.request"]
+        XCTAssertTrue(request.waitForExistence(timeout: 10), app.debugDescription)
+        let image = preview.descendants(matching: .any)["clipy.preview.image"]
+        let caption = preview.descendants(matching: .any)["clipy.preview.pdf.page"]
+        XCTAssertFalse(image.exists)
+        XCTAssertFalse(caption.exists)
+        request.click()
+        let confirmation = app.sheets.containing(
+            .button, identifier: "clipy.preview.file.confirm"
+        ).firstMatch
+        let confirm = confirmation.buttons["clipy.preview.file.confirm"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        confirm.click()
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            image.exists && image.label == "PDF preview, page 1 of 2"
+                && caption.exists && self.text(of: caption) == "Page 1 of 2"
+        }, app.debugDescription)
+
+        // A later explicit page action must use the already loaded PDF.
+        // Reopening this replaced file would fail decoding, exposing rereads.
+        try Data("This replacement is not a PDF".utf8).write(to: file)
+        let next = preview.buttons["clipy.preview.pdf.next"]
+        XCTAssertTrue(next.exists && next.isEnabled && next.isHittable)
+        next.click()
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            image.exists && image.label == "PDF preview, page 2 of 2"
+                && caption.exists && self.text(of: caption) == "Page 2 of 2"
+        }, app.debugDescription)
+        XCTAssertFalse(next.isEnabled)
+        app.typeKey(.leftArrow, modifierFlags: [.option, .command])
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            image.exists && image.label == "PDF preview, page 1 of 2"
+        }, app.debugDescription)
+        preview.buttons["clipy.preview.file.back"].click()
+        XCTAssertTrue(request.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(image.exists)
+        XCTAssertFalse(caption.exists)
+
+        // Retiring the preview discarded its document. A new confirmation
+        // now reads the changed file and reports its actual decoding failure.
+        request.click()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        confirm.click()
+        let failure = preview.descendants(matching: .any)["clipy.preview.failed"]
+        XCTAssertTrue(failure.waitForExistence(timeout: 10), app.debugDescription)
+        preview.buttons["clipy.preview.file.back"].click()
+        XCTAssertTrue(request.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(rows.count, 1)
+
+        let sentinel = NSPasteboardItem()
+        XCTAssertTrue(sentinel.setString("before-original-file-reference-copy", forType: .string))
+        XCTAssertTrue(sentinel.setData(Data(), forType: .init("org.nspasteboard.TransientType")))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([sentinel]))
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            !panel.exists && pasteboard.pasteboardItems?.first?.data(forType: fileType) == referenceBytes
         }, app.debugDescription)
     }
 

@@ -6,7 +6,7 @@ import HistoryDomain
 
 internal struct SQLitePositionRow: Sendable {
     internal let rawValue: UInt64
-    internal let maximumUnpinnedItems: Int
+    internal let maximumUnpinnedItems: Int?
 }
 
 extension HistoryAuthority {
@@ -27,9 +27,7 @@ extension HistoryAuthority {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
             let position = try sqliteUInt64(statement.blob(at: 0))
-            guard let maximum = try Int(exactly: statement.integer(at: 1)) else {
-                throw HistoryFailure.persistence(.corruptStoredValue)
-            }
+            let maximum = try statement.isNull(at: 1) ? nil : HistoryItemRowHydration.integer(statement, 1)
             guard try !statement.step() else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
@@ -45,7 +43,7 @@ extension HistoryAuthority {
         _ row: SQLitePositionRow,
         limits: HistoryLimits
     ) throws -> (position: ChangePosition, retention: RetentionPolicy) {
-        guard limits.userMaximumUnpinnedRange.contains(row.maximumUnpinnedItems) else {
+        guard row.maximumUnpinnedItems.map(limits.userMaximumUnpinnedRange.contains) ?? true else {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
         return (

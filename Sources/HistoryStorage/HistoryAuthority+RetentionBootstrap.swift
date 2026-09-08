@@ -7,8 +7,8 @@ import HistoryCore
 
 /// The `V2-02` §8.3 retention-policy bounds, enforced at every boundary that
 /// accepts or validates persisted policies. These are the package-internal
-/// constants the config validation below uses; user thresholds are always at
-/// or below the `06` §2 hard bounds the ranges are derived from.
+/// constants for configured thresholds. Per-item resource bounds remain
+/// separate from the optional overall count policy (V2-09 §9).
 internal enum RetentionPolicyBounds {
     /// R1 `maxAge`: `1 s <= maxAge <= 3,650 d` (10 years; a practical upper
     /// bound — a value above it is a misconfigured sentinel, not an
@@ -16,12 +16,10 @@ internal enum RetentionPolicyBounds {
     /// firing). 3,650 d × 86,400 s/d = 315,360,000 s. (`V2-02` §8.3)
     internal static let ageSeconds: ClosedRange<TimeInterval> = 1 ... 3_650 * 86_400
 
-    /// R2 `maxTotalBytes`: `1 <= maxTotalBytes <= 5,000 × 384 MiB` — the
-    /// worst-case store footprint: 5,000 items × (≤128 MiB Canonical +
-    /// 256 MiB revisions) (`06` §2); a budget above the worst case is
-    /// meaningless. 5,000 × 384 × 1,048,576 = 2,013,265,920,000 bytes.
-    /// (`V2-02` §8.3)
-    internal static let totalBytes: ClosedRange<Int> = 1 ... 5_000 * 384 * 1_048_576
+    /// R2 accepts configured budgets up to 2,013,265,920,000 bytes
+    /// (V2-02 §8.3). This is an independent policy-input upper bound, not
+    /// a maximum store size or retained-item count; R2 may be disabled.
+    internal static let totalBytes: ClosedRange<Int> = 1 ... 2_013_265_920_000
 
     /// R3 `maxRevisionsPerItem`: `1 <= maxRevisionsPerItem <= 100` — the
     /// active revision must survive (`>= 1`); `<= 100` is the `06` §2 hard

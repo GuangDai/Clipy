@@ -23,8 +23,7 @@ import Testing
     #expect(limits.maximumProposedRevisionBytes == 64 * 1_048_576) // 64 MiB
     #expect(limits.maximumRevisionsPerItem == 100)
     #expect(limits.maximumTotalRevisionBytesPerItem == 256 * 1_048_576) // 256 MiB
-    #expect(limits.hardMaximumRetainedItems == 5_000)
-    #expect(limits.userMaximumUnpinnedRange == (1...5_000))
+    #expect(limits.userMaximumUnpinnedRange == (1...Int.max))
     #expect(limits.defaultMaximumUnpinnedItems == 200)
     #expect(limits.maximumSourceApplicationObservationUTF8Bytes == 1_024)
     #expect(limits.maximumStoredTitleUTF8Bytes == 1_024)
@@ -52,9 +51,6 @@ import Testing
         maximumProposedRevisionBytes: 64 * 1_048_576,
         maximumRevisionsPerItem: 100,
         maximumTotalRevisionBytesPerItem: 256 * 1_048_576,
-        hardMaximumRetainedItems: 5_000,
-        userMaximumUnpinnedLowerBound: 1,
-        userMaximumUnpinnedUpperBound: 5_000,
         defaultMaximumUnpinnedItems: 200,
         maximumSourceApplicationObservationUTF8Bytes: 1_024,
         maximumStoredTitleUTF8Bytes: 1_024,

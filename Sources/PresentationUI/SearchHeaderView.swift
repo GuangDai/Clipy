@@ -10,16 +10,18 @@ import HistoryCore
 import SwiftUI
 
 /// The header above the history list. Edits funnel through
-/// `HistoryViewState.searchText`, which restarts observation; the header adds
-/// no state of its own beyond the focus binding the panel uses to keep the
-/// bare-key shortcuts away from the text field (01 §6: selection and keyboard
-/// behavior are main-actor UI concerns).
+/// `HistoryViewState.searchText`, which restarts observation. Local geometry
+/// selects the control layout; the panel's focus binding keeps bare-key
+/// shortcuts away from the text field (01 §6: selection and keyboard behavior
+/// are main-actor UI concerns).
 ///
 /// The field always preserves the user's raw draft. `HistoryViewState` owns
 /// mode-specific admission, including fuzzy's 64-character execution view,
 /// so switching modes never truncates clipboard syntax typed by the user.
 package struct SearchHeaderView: View {
     @Environment(\.locale) private var locale
+    @State private var availableWidth: CGFloat = 0
+    @State private var controlsWidth: CGFloat = 0
 
     private let viewState: HistoryViewState
     private let searchFieldFocused: FocusState<Bool>.Binding
@@ -39,13 +41,33 @@ package struct SearchHeaderView: View {
     }
 
     package var body: some View {
-        HStack(spacing: PanelTheme.spacingSmall) {
+        // Keep one search-field identity while its controls move below it.
+        // Replacing whole header branches with ViewThatFits would recreate
+        // the focused field precisely when typing adds the result caption.
+        // Reserve space for the editor as well as its icon and Clear button.
+        let stacked = availableWidth > 0
+            && controlsWidth + 220 + PanelTheme.spacingSmall > availableWidth
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: PanelTheme.spacingSmall))
+            : AnyLayout(HStackLayout(spacing: PanelTheme.spacingSmall))
+        layout {
             searchField
-            if viewState.isSearchActive {
-                resultCountCaption
+                .frame(maxWidth: .infinity)
+            HStack(spacing: PanelTheme.spacingSmall) {
+                if viewState.isSearchActive {
+                    resultCountCaption
+                }
+                modeMenu
+                filterMenu
             }
-            modeMenu
-            filterMenu
+            .fixedSize()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+                controlsWidth = $0
+            }
+            .frame(maxWidth: stacked ? .infinity : nil, alignment: .trailing)
+        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: {
+            availableWidth = $0
         }
         .background { modeShortcuts }
     }
@@ -143,6 +165,7 @@ package struct SearchHeaderView: View {
             )
         }
         .fixedSize()
+        .accessibilityIdentifier("clipy.search.mode")
         .accessibilityLabel(PanelActionsCopy.text("Search Mode", bundle: copyBundle))
         .accessibilityValue(modeName(viewState.searchMode))
     }

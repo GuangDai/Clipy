@@ -20,7 +20,7 @@
 "Load File" = "Load File";
 "Cancel" = "Cancel";
 "Back to File Reference" = "Back to File Reference";
-"Showing the file’s current contents. Copying still copies the original file reference." = "Showing the file’s current contents. Copying still copies the original file reference.";
+"Showing the file contents loaded for this preview. Copying still copies the original file reference." = "Showing the file contents loaded for this preview. Copying still copies the original file reference.";
 "Clipy will read this local file once to show a preview. Its current contents are not added to clipboard history. No website will be opened." = "Clipy will read this local file once to show a preview. Its current contents are not added to clipboard history. No website will be opened.";
 "This is not a local file reference." = "This is not a local file reference.";
 "The file could not be read. It may have moved or been deleted." = "The file could not be read. It may have moved or been deleted.";

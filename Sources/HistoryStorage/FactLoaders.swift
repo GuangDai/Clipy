@@ -257,7 +257,7 @@ internal enum IngestFactLoader {
         guard try state.step() else { throw HistoryFailure.persistence(.invariantViolation) }
         let retained = try HistoryItemRowHydration.integer(state, 0)
         let pinned = try HistoryItemRowHydration.integer(state, 1)
-        guard retained >= 0, retained <= limits.hardMaximumRetainedItems, pinned >= 0, pinned <= retained else {
+        guard retained >= 0, pinned >= 0, pinned <= retained else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
         let unpinned = retained - pinned
@@ -276,7 +276,7 @@ internal enum IngestFactLoader {
         do {
             victimCount = try captureRetirementCount(
                 confirmedMatch: match, retainedCount: retained, unpinnedCount: unpinned,
-                retention: retention, hardMaximumRetainedItems: limits.hardMaximumRetainedItems
+                retention: retention
             )
         } catch let rejection as DomainRejection {
             throw rejection.historyFailure

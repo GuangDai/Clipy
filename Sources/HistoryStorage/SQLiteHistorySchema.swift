@@ -26,6 +26,15 @@ internal enum SQLiteHistorySchema {
                 """)
             defer { pinIndex.finalize() }
             guard try pinIndex.step() else { throw HistoryFailure.persistence(.openStore) }
+            // Disabled count retention is stored as NULL. An older NOT NULL
+            // layout cannot implement that operation; reject it at open
+            // without rewriting the existing user's database (V2-09 §9).
+            let countPolicy = try database.prepare("""
+                SELECT 1 FROM pragma_table_info('history_state')
+                WHERE name='maximumUnpinnedItems' AND "notnull"=0 LIMIT 1
+                """)
+            defer { countPolicy.finalize() }
+            guard try countPolicy.step() else { throw HistoryFailure.persistence(.openStore) }
             return
         }
 
@@ -46,7 +55,7 @@ internal enum SQLiteHistorySchema {
         CREATE TABLE history_state (
             key TEXT PRIMARY KEY NOT NULL CHECK (key = 'retained-history'),
             changePosition BLOB NOT NULL CHECK (length(changePosition) = 8),
-            maximumUnpinnedItems INTEGER NOT NULL CHECK (maximumUnpinnedItems > 0),
+            maximumUnpinnedItems INTEGER CHECK (maximumUnpinnedItems > 0),
             retainedItemCount INTEGER NOT NULL DEFAULT 0 CHECK (retainedItemCount >= 0),
             pinnedItemCount INTEGER NOT NULL DEFAULT 0 CHECK (pinnedItemCount >= 0),
             canonicalBytes INTEGER NOT NULL DEFAULT 0 CHECK (canonicalBytes >= 0),

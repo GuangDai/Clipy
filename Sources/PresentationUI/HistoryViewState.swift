@@ -765,8 +765,8 @@ public final class HistoryViewState {
     }
 #endif
 
-    /// Applies the v1 count-dimension retention cap.
-    public func applyMaximumUnpinnedItems(_ count: Int) async throws -> HistoryReceipt {
+    /// Applies the optional count limit; nil turns off count-based removal.
+    public func applyMaximumUnpinnedItems(_ count: Int?) async throws -> HistoryReceipt {
         let action = HistoryAction.setRetentionPolicy(maximumUnpinnedItems: count)
         let receipt = try await history.perform(action)
         publishSurfacePurge(for: action, receipt: receipt)

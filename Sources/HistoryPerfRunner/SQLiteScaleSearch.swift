@@ -39,17 +39,37 @@ func sqliteScaleSearchCases(corpus: SQLiteScaleBrowseEvidence) -> [SQLiteScaleSe
     return [
         SQLiteScaleSearchCase(name: "exact-no-hit", text: "ZZZZZZZZ", mode: .exact,
                               expectedRows: [], expectedTotalMatches: 0),
+        // At the one-million-row scale, indices are 0...999999. Every
+        // trigram exists, but no at-most-six-digit index contains all five
+        // trigrams of this seven-digit query.
+        SQLiteScaleSearchCase(name: "exact-common-grams-no-intersection", text: "1234567", mode: .exact,
+                              expectedRows: [], expectedTotalMatches: 0),
+        // Repeating a gram cannot prove the full needle occurs. Rows such as
+        // 111 remain candidates and must fail the exact byte/string check.
+        SQLiteScaleSearchCase(name: "exact-repeated-gram-no-hit", text: "1111111", mode: .exact,
+                              expectedRows: [], expectedTotalMatches: 0),
         SQLiteScaleSearchCase(name: "exact-oldest", text: "perf-item-0-", mode: .exact,
                               expectedRows: oldest, expectedTotalMatches: oldest.count),
         SQLiteScaleSearchCase(name: "exact-dense", text: "perf-item-", mode: .exact,
                               expectedRows: corpus.leadingRows, expectedTotalMatches: corpus.count),
         SQLiteScaleSearchCase(name: "regexp-no-hit", text: "ZZZZZZZZ", mode: .regexp,
                               expectedRows: [], expectedTotalMatches: 0),
+        SQLiteScaleSearchCase(name: "regexp-common-grams-no-intersection", text: "1234567", mode: .regexp,
+                              expectedRows: [], expectedTotalMatches: 0),
+        // Structural regexp misses cannot rely on dense first-page success:
+        // every real index has fewer than seven digits.
+        SQLiteScaleSearchCase(name: "regexp-structural-no-hit", text: "^perf-item-[0-9]{7}-", mode: .regexp,
+                              expectedRows: [], expectedTotalMatches: 0),
         SQLiteScaleSearchCase(name: "regexp-oldest", text: "^perf-item-0-", mode: .regexp,
                               expectedRows: oldest, expectedTotalMatches: oldest.count),
         SQLiteScaleSearchCase(name: "regexp-structural-dense", text: "^perf-item-[0-9]+-", mode: .regexp,
                               expectedRows: corpus.leadingRows, expectedTotalMatches: corpus.count),
         SQLiteScaleSearchCase(name: "fuzzy-no-hit", text: "ZZZZZZZZ", mode: .fuzzy,
+                              expectedRows: [], expectedTotalMatches: 0),
+        // The corpus contains 'a'; seven missing 'z' characters still require
+        // more edits than Fuse's threshold. An any-character-presence filter
+        // alone cannot reject this query.
+        SQLiteScaleSearchCase(name: "fuzzy-mixed-presence-no-hit", text: "aZZZZZZZ", mode: .fuzzy,
                               expectedRows: [], expectedTotalMatches: 0),
         SQLiteScaleSearchCase(name: "fuzzy-dense", text: "perf-item-", mode: .fuzzy,
                               expectedRows: corpus.leadingRows, expectedTotalMatches: corpus.count),

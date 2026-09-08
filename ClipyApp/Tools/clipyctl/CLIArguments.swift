@@ -1,20 +1,76 @@
 import Foundation
 import LocalAutomation
 
-/// Process presentation only: raw output uses the existing content-read JSON
-/// request and its permission. It never sends a mutation or selects a transport.
+/// Shell commands build the existing JSON request; no arguments retains the
+/// one-request stdin interface. Both use the same validation and single send.
 struct CLIArguments {
     let rawType: String?
+    let requestJSON: Data?
 
     init?(_ arguments: [String]) {
-        if arguments.isEmpty {
+        guard let command = arguments.first else {
             rawType = nil
-        } else if arguments.count == 3, arguments[0] == "--raw", arguments[1] == "--type",
-                  !arguments[2].isEmpty, arguments[2].utf8.count <= 512 {
-            rawType = arguments[2]
-        } else {
-            return nil
+            requestJSON = nil
+            return
         }
+        switch command {
+        case "--raw":
+            guard arguments.count == 3, arguments[1] == "--type",
+                  !arguments[2].isEmpty, arguments[2].utf8.count <= 512 else { return nil }
+            rawType = arguments[2]
+            requestJSON = nil
+        case "read":
+            guard arguments.count == 2 || arguments.count == 5 else { return nil }
+            if arguments.count == 5 {
+                guard arguments[2] == "--raw", arguments[3] == "--type",
+                      !arguments[4].isEmpty, arguments[4].utf8.count <= 512 else { return nil }
+                rawType = arguments[4]
+            } else { rawType = nil }
+            guard let json = Self.json(operation: "detailsEffective", arguments: ["locator": arguments[1]]) else {
+                return nil
+            }
+            requestJSON = json
+        case "pin", "unpin", "delete":
+            guard arguments.count == 2,
+                  let json = Self.json(operation: command, arguments: ["locator": arguments[1]]) else { return nil }
+            rawType = nil
+            requestJSON = json
+        case "recent", "search":
+            var fields: [String: Any] = ["limit": 20]
+            var offset = 1
+            if command == "search" {
+                guard arguments.count >= 2 else { return nil }
+                fields["query"] = arguments[1]
+                fields["mode"] = "exact"
+                offset = 2
+            }
+            var supplied: Set<String> = []
+            while offset < arguments.count {
+                let option = arguments[offset]
+                guard offset + 1 < arguments.count, supplied.insert(option).inserted else { return nil }
+                let value = arguments[offset + 1]
+                switch option {
+                case "--limit":
+                    guard let limit = Int(value) else { return nil }
+                    fields["limit"] = limit
+                case "--cursor": fields["cursor"] = value
+                case "--mode" where command == "search": fields["mode"] = value
+                default: return nil
+                }
+                offset += 2
+            }
+            guard let json = Self.json(operation: "browsePreview", arguments: fields) else { return nil }
+            rawType = nil
+            requestJSON = json
+        default: return nil
+        }
+    }
+
+    private static func json(operation: String, arguments: [String: Any]) -> Data? {
+        try? JSONSerialization.data(withJSONObject: [
+            "protocolVersion": 1, "requestID": UUID().uuidString.lowercased(),
+            "operation": operation, "arguments": arguments,
+        ])
     }
 
     /// Called after the authoritative wire decoder has accepted the request.
@@ -54,17 +110,32 @@ struct CLIArguments {
     static func help(executablePath: String) -> String {
         let executable = "'" + executablePath.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
         return """
-        Usage: clipyctl [--raw --type TYPE]
-               clipyctl --help | -h
-               clipyctl --version
+        Usage: clipyctl recent [--limit N] [--cursor CURSOR]
+               clipyctl search QUERY [--mode exact|fuzzy|regexp] [--limit N] [--cursor CURSOR]
+               clipyctl read LOCATOR [--raw --type TYPE]
+               clipyctl pin|unpin|delete LOCATOR
+               clipyctl [--raw --type TYPE] < request.json
+               clipyctl --help | -h | --version
 
-        Send one UTF-8 JSON request on stdin; receive one JSON reply on stdout.
         Enable Local Automation in Clipy Settings > Automation and grant permissions.
+        Commands return one JSON reply on stdout and do not read stdin.
+        recent/search default to 20 items; N is 1...500. Search defaults to exact.
+        Quote QUERY as one shell argument, including spaces or regexp characters.
+        Pass nextCursor with the same command, query, mode and limit to continue.
+        read/pin/unpin/delete use an item's opaque locator from recent/search.
+        read returns current representations and contentVersion, without pasting.
 
-        Operations: browsePreview, detailsEffective, pasteEffective, pin, unpin,
-                    delete, reviseContent.
-        Example command (recent history; executable bundled inside Clipy.app):
-        printf '%s\\n' '{"protocolVersion":1,"requestID":"12345678-1234-1234-1234-123456789abc","operation":"browsePreview","arguments":{"limit":20}}' | \(executable)
+        Examples (executable bundled inside Clipy.app):
+        \(executable) recent --limit 20
+        \(executable) search 'meeting notes' --mode exact
+        \(executable) read '<locator>' --raw --type public.utf8-plain-text > clipboard.txt
+        \(executable) pin '<locator>'
+
+        Without a command, send one UTF-8 JSON request on stdin.
+        JSON operations: browsePreview, detailsEffective, pasteEffective, pin, unpin,
+                         delete, reviseContent. Revisions use complete JSON input.
+        Example JSON request:
+        {"protocolVersion":1,"requestID":"12345678-1234-1234-1234-123456789abc","operation":"browsePreview","arguments":{"limit":20}}
 
         --raw --type TYPE  For detailsEffective or pasteEffective only: write exactly
                            one representation's bytes, with no newline or JSON.

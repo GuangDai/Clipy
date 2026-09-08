@@ -81,7 +81,7 @@ extension HistoryAuthority {
 #endif
             let fetched: [ScalarReadRow]
             if let ordinal = anchor?.ordinal {
-                guard ordinal >= 0, ordinal < limits.hardMaximumRetainedItems else {
+                guard ordinal >= 0 else {
                     throw HistoryFailure.snapshotExpired(current: currentPosition)
                 }
                 fetched = try fetchRecentScalars(

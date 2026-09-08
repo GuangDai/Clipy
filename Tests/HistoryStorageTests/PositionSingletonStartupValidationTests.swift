@@ -5,7 +5,7 @@ import Testing
 @testable import HistoryStorage
 
 struct PositionSingletonStartupValidationTests {
-    @Test(arguments: [0, 5_001])
+    @Test(arguments: [0, -1])
     func existingOutOfRangeRetentionFailsClosedWithoutRepair(storedMaximum: Int) async throws {
         let url = WSSupport.tempStoreURL("sqlite-position-corrupt-\(storedMaximum)")
         defer { WSSupport.removeStore(url) }

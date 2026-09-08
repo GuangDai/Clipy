@@ -45,3 +45,6 @@
 "settings.retention.storage.toggle" = "Limit storage budget";
 "settings.retention.storage.toggle-hint" = "Retire the oldest unpinned items until history fits the budget.";
 "settings.retention.tab-title" = "Retention";
+"settings.retention.items.toggle" = "Limit unpinned item count";
+"settings.retention.items.input-hint" = "Enter a positive whole number.";
+"settings.retention.items.enforcement-note" = "Turn off to keep unpinned items without a count limit. Age, storage and revision limits still apply when enabled. Pinned items are not removed by the count limit.";

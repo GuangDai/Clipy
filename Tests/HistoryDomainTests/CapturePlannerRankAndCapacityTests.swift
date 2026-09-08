@@ -1,4 +1,4 @@
-/// Capture-planner ranking, tie-breaking, and hard-capacity invariants.
+/// Capture-planner ranking, tie-breaking, and count-retention invariants.
 /// Split out of CapturePlannerInvariantTests.swift (file-size hygiene); same target, unchanged semantics.
 import Foundation
 import HistoryCore
@@ -165,8 +165,7 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
             source: "older.source"
         ),
         facts: captureFacts(incoming: incoming, candidates: [winner]),
-        retention: RetentionPolicy(maximumUnpinnedItems: 10),
-        hardMaximumRetainedItems: 10
+        retention: RetentionPolicy(maximumUnpinnedItems: 10)
     )
 
     guard case .commit(let plan) = result,
@@ -196,13 +195,12 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
         try planCapture(
             preparedCapture(canonical: incoming, observedAt: 200),
             facts: captureFacts(incoming: incoming, candidates: [saturated]),
-            retention: RetentionPolicy(maximumUnpinnedItems: 10),
-            hardMaximumRetainedItems: 10
+            retention: RetentionPolicy(maximumUnpinnedItems: 10)
         )
     }
 }
 
-@Test func hardCapacityUsesOnlyEligibleVictimsAndFailsWhenNoneExist() throws {
+@Test func countPolicyRetiresOnlyEligibleItemsAndPreservesPinnedItems() throws {
     let incoming = try captureCanonical([
         ("public.utf8-plain-text", "incoming", 1),
     ])
@@ -222,9 +220,8 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
             candidateID: candidateID
         ),
         facts: captureFacts(incoming: incoming, candidates: [], retained: [eligible],
-            candidateID: candidateID, maximumUnpinnedItems: 1, hardMaximumRetainedItems: 1),
-        retention: RetentionPolicy(maximumUnpinnedItems: 1),
-        hardMaximumRetainedItems: 1
+            candidateID: candidateID, maximumUnpinnedItems: 1),
+        retention: RetentionPolicy(maximumUnpinnedItems: 1)
     )
 
     guard case .commit(let boundaryPlan) = boundaryResult,
@@ -232,7 +229,7 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
           case .create(let created) = boundaryPlan.mutations[0],
           case .retirePrefix(let prefix) = boundaryPlan.mutations[1]
     else {
-        Issue.record("The just-satisfiable hard-cap boundary did not insert and retire")
+        Issue.record("The enabled count policy did not insert and retire")
         return
     }
     #expect(created.id == candidateID)
@@ -246,21 +243,23 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
         lastCopiedAt: 1,
         pinOrdinal: PinOrdinal(rawValue: 0)
     )
-    #expect(throws: DomainRejection.capacityExceeded(.retainedItems)) {
-        try planCapture(
-            preparedCapture(
-                canonical: incoming,
-                observedAt: 200,
-                candidateID: candidateID
-            ),
-            facts: captureFacts(incoming: incoming, candidates: [], retained: [pinned]),
-            retention: RetentionPolicy(maximumUnpinnedItems: 1),
-            hardMaximumRetainedItems: 1
-        )
+    let pinnedResult = try planCapture(
+        preparedCapture(canonical: incoming, observedAt: 200, candidateID: candidateID),
+        facts: captureFacts(incoming: incoming, candidates: [], retained: [pinned],
+            candidateID: candidateID, maximumUnpinnedItems: 1),
+        retention: RetentionPolicy(maximumUnpinnedItems: 1)
+    )
+    guard case .commit(let pinnedPlan) = pinnedResult,
+          pinnedPlan.mutations.count == 1,
+          case .create(let inserted) = pinnedPlan.mutations[0] else {
+        Issue.record("Pinned items must not prevent inserting the first unpinned item")
+        return
     }
+    #expect(inserted.id == candidateID)
+    #expect(inserted.id != pinned.id)
 }
 
-@Test func coalescingAtTheHardCapacityDoesNotRequireARetirement() throws {
+@Test func coalescingAtTheCountPolicyDoesNotRequireARetirement() throws {
     let incoming = try captureCanonical([
         ("public.utf8-plain-text", "incoming", 1),
     ])
@@ -272,8 +271,7 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
     let result = try planCapture(
         preparedCapture(canonical: incoming, observedAt: 200),
         facts: captureFacts(incoming: incoming, candidates: [winner], retained: [winner]),
-        retention: RetentionPolicy(maximumUnpinnedItems: 1),
-        hardMaximumRetainedItems: 1
+        retention: RetentionPolicy(maximumUnpinnedItems: 1)
     )
 
     guard case .commit(let plan) = result,
@@ -281,7 +279,7 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
           plan.mutations.count == 1,
           case .recordCopy(let mutatedID, _) = plan.mutations[0]
     else {
-        Issue.record("A coalesce at the hard bound unexpectedly required retention")
+        Issue.record("A coalesce at the count policy unexpectedly required retention")
         return
     }
     #expect(winnerID == winner.id)
@@ -319,10 +317,9 @@ func equivalentTypeSpellingsKeepExactCanonicalRank(_ useDecomposedIncoming: Bool
             incoming: incoming,
             candidates: [primary],
             retained: [primary, nextOldest, newest, pinnedOldest],
-            maximumUnpinnedItems: 2, hardMaximumRetainedItems: 10
+            maximumUnpinnedItems: 2
         ),
-        retention: RetentionPolicy(maximumUnpinnedItems: 2),
-        hardMaximumRetainedItems: 10
+        retention: RetentionPolicy(maximumUnpinnedItems: 2)
     )
 
     guard case .commit(let plan) = result,

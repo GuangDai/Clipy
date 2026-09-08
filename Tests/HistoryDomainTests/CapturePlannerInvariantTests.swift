@@ -109,8 +109,7 @@ internal func captureFacts(
     retained: [HistoryItemState]? = nil,
     additionalSummaries: [RetainedItemSummary] = [],
     candidateID: HistoryItemID = capturePlannerID(250),
-    maximumUnpinnedItems: Int = 100,
-    hardMaximumRetainedItems: Int = 100
+    maximumUnpinnedItems: Int? = 100
 ) throws -> IngestFacts {
     var confirmedMatch: CaptureMatch?
     if let hintedItem {
@@ -145,8 +144,7 @@ internal func captureFacts(
     let count = try captureRetirementCount(
         confirmedMatch: confirmedMatch, retainedCount: summaries.count,
         unpinnedCount: unpinned.count,
-        retention: RetentionPolicy(maximumUnpinnedItems: maximumUnpinnedItems),
-        hardMaximumRetainedItems: hardMaximumRetainedItems
+        retention: RetentionPolicy(maximumUnpinnedItems: maximumUnpinnedItems)
     )
     let primaryID = confirmedMatch?.id ?? candidateID
     let victims = Array(unpinned.filter { $0.id != primaryID }.prefix(count))
@@ -185,8 +183,7 @@ internal func capturePlan(
     let result = try planCapture(
         preparedCapture(canonical: incoming, observedAt: observedAt),
         facts: captureFacts(incoming: incoming, candidates: candidates),
-        retention: RetentionPolicy(maximumUnpinnedItems: 100),
-        hardMaximumRetainedItems: 100
+        retention: RetentionPolicy(maximumUnpinnedItems: 100)
     )
     guard case .commit(let plan) = result else {
         throw CapturePlannerTestError.expectedCommit
@@ -293,8 +290,7 @@ internal func coalescedWinner(
             candidateID: candidateID
         ),
         facts: captureFacts(incoming: incoming, candidates: [existing]),
-        retention: RetentionPolicy(maximumUnpinnedItems: 10),
-        hardMaximumRetainedItems: 10
+        retention: RetentionPolicy(maximumUnpinnedItems: 10)
     )
 
     guard case .commit(let plan) = result,
@@ -335,8 +331,7 @@ internal func coalescedWinner(
                 retained: [retained],
                 candidateID: occupiedID
             ),
-            retention: RetentionPolicy(maximumUnpinnedItems: 10),
-            hardMaximumRetainedItems: 10
+            retention: RetentionPolicy(maximumUnpinnedItems: 10)
         )
     }
 }
@@ -369,8 +364,7 @@ internal func coalescedWinner(
             retained: [existing, occupiedCandidate],
             candidateID: occupiedCandidate.id
         ),
-        retention: RetentionPolicy(maximumUnpinnedItems: 10),
-        hardMaximumRetainedItems: 10
+        retention: RetentionPolicy(maximumUnpinnedItems: 10)
     )
 
     guard case .commit(let plan) = result,
@@ -402,8 +396,7 @@ internal func coalescedWinner(
             observedAt: observedAt
         ),
         facts: captureFacts(incoming: canonical, candidates: [], retained: []),
-        retention: RetentionPolicy(maximumUnpinnedItems: 1),
-        hardMaximumRetainedItems: 1
+        retention: RetentionPolicy(maximumUnpinnedItems: 1)
     )
 
     guard case .commit(let plan) = result,
@@ -463,8 +456,7 @@ internal func coalescedWinner(
             candidates: [canonicalCandidate],
             retained: [hinted, canonicalCandidate]
         ),
-        retention: RetentionPolicy(maximumUnpinnedItems: 10),
-        hardMaximumRetainedItems: 10
+        retention: RetentionPolicy(maximumUnpinnedItems: 10)
     )
 
     guard case .commit(let plan) = result,
@@ -508,8 +500,7 @@ internal func coalescedWinner(
             candidates: [confirmed],
             retained: [hinted, confirmed]
         ),
-        retention: RetentionPolicy(maximumUnpinnedItems: 10),
-        hardMaximumRetainedItems: 10
+        retention: RetentionPolicy(maximumUnpinnedItems: 10)
     )
 
     guard case .commit(let plan) = result,

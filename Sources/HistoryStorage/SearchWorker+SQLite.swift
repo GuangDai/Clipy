@@ -118,12 +118,22 @@ extension SearchWorker {
                 ? try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: admitted.term, in: database) : 0
             let reversesOrderedRows = direction == .backward && !isRankedFuzzy
             let scanDirection: HistoryPageDirection = reversesOrderedRows ? .forward : direction
-            let reader = try SQLiteSearchRows(
-                database: database, limits: limits, filter: request.filter,
-                candidateExpression: SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
-                orderedAnchor: isRankedFuzzy ? nil : anchor, reversesOrder: reversesOrderedRows
-            )
-            defer { reader.finish() }
+            let reader: SQLiteSearchRows?
+            if isRankedFuzzy, lowestPossibleFuzzyScore > 0.7 {
+                // Every possible match needs more edits than the frozen
+                // Fuse loop ever attempts. Skip candidate selection as well
+                // as row reads; the ordinary empty-page path below still
+                // rejects an unconfirmed cursor anchor and checks deadline/
+                // cancellation before publishing the snapshot's position.
+                reader = nil
+            } else {
+                reader = try SQLiteSearchRows(
+                    database: database, limits: limits, filter: request.filter,
+                    candidateExpression: SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
+                    orderedAnchor: isRankedFuzzy ? nil : anchor, reversesOrder: reversesOrderedRows
+                )
+            }
+            defer { reader?.finish() }
             let directive = ScanDirective(continuationAnchor: anchor, maximumSurvivors: request.limit + 1,
                                           direction: scanDirection)
             var tracker = OrderPreservingScanTracker(directive: directive)
@@ -142,7 +152,7 @@ extension SearchWorker {
                 phaseElapsed: .zero, totalElapsed: startedAt.duration(to: clock.now)
             )
 #endif
-            while true {
+            while let reader {
                 try checkSnapshotDeadline(lifetimeDeadline)
                 let fetchStarted = clock.now
                 let batch = try reader.nextBatch(includesRevisionCounts: includesRevisionCounts)

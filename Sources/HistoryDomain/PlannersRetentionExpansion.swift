@@ -153,13 +153,10 @@ package func planRevisionRetentionExpansion(
 
 // MARK: - File-private helpers
 
-/// Checked byte-total accumulation (`06` §2: no byte-count calculation may
-/// wrap). Overflow is impossible within the validated `Int64` / 5,000 ×
-/// 384 MiB worst case (`V2-02` §4.2/§8.3) but enforced defensively: the
-/// running total saturates at `Int.max` — never wraps, never under-retires —
-/// while the typed `.persistence(.invariantViolation)` fail-closed mapping
-/// stays at the Storage pipeline boundary, because §6.5 keeps the planner
-/// signatures non-throwing.
+/// Checked per-item revision-byte accumulation (`06` §2: no calculation may
+/// wrap). Validated revision summaries fit the per-item byte bounds, well
+/// inside Int64. Saturation keeps this non-throwing planner from wrapping on
+/// invalid facts; Storage owns persisted-byte validation and typed failure.
 private func checkedByteAdd(_ lhs: Int, _ rhs: Int) -> Int {
     let (sum, overflow) = lhs.addingReportingOverflow(rhs)
     return overflow ? Int.max : sum

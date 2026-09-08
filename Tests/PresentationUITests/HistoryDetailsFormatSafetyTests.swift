@@ -293,7 +293,7 @@ struct HistoryDetailsFormatSafetyTests {
                     typeIdentifier: "public.utf16-external-plain-text",
                     bytes: bytes
                 )
-            ) == .plainText(String(repeating: "🦊", count: 500))
+            ) == .plainText(String(repeating: "🦊", count: 500), wasTruncated: true)
         )
     }
 
@@ -343,7 +343,7 @@ struct HistoryDetailsFormatSafetyTests {
 
         #expect(
             DetailsRepresentationPresentation.resolve(representation)
-                == .plainText(String(repeating: "x", count: 500))
+                == .plainText(String(repeating: "x", count: 500), wasTruncated: true)
         )
     }
 }

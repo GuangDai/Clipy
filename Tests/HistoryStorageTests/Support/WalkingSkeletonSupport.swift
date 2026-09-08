@@ -116,7 +116,7 @@ enum WSSupport {
     struct PositionState: Equatable, Sendable {
         let key: String
         let rawValue: UInt64
-        let maximumUnpinnedItems: Int
+        let maximumUnpinnedItems: Int?
         let retainedItemCount: Int
         let pinnedItemCount: Int
         let canonicalBytes: Int
@@ -128,7 +128,7 @@ enum WSSupport {
         #expect(try row.step())
         let result = try PositionState(
             key: row.text(at: 0), rawValue: sqliteUInt64(row.blob(at: 1)),
-            maximumUnpinnedItems: Int(row.integer(at: 2)), retainedItemCount: Int(row.integer(at: 3)),
+            maximumUnpinnedItems: row.isNull(at: 2) ? nil : Int(row.integer(at: 2)), retainedItemCount: Int(row.integer(at: 3)),
             pinnedItemCount: Int(row.integer(at: 4)), canonicalBytes: Int(row.integer(at: 5)),
             revisionBytes: Int(row.integer(at: 6))
         )

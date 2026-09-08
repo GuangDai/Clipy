@@ -103,14 +103,12 @@ package func confirmLineageCapture(
 /// the projected post-insert / post-coalesce inventory (D14): pinned items
 /// are exempt (D13), the primary item is never its own victim, and eviction
 /// follows `lastCopiedAt` ascending, then `HistoryItemID` bytes ascending.
-/// Only the global hard retained-item bound can fail capture, throwing
-/// `.capacityExceeded(.retainedItems)` when too few eligible victims remain
-/// (D19).
+/// An optional user count policy is the only count-based retirement trigger
+/// (V2-09 §9); pinned items never consume that allowance.
 package func planCapture(
     _ capture: PreparedCapture,
     facts: IngestFacts,
-    retention: RetentionPolicy,
-    hardMaximumRetainedItems: Int
+    retention: RetentionPolicy
 ) throws -> PlanningResult {
     let winner = facts.confirmedMatch
 
@@ -172,8 +170,7 @@ package func planCapture(
         confirmedMatch: winner,
         retainedCount: facts.retention.retainedCount,
         unpinnedCount: facts.retention.unpinnedCount,
-        retention: retention,
-        hardMaximumRetainedItems: hardMaximumRetainedItems
+        retention: retention
     )
     var mutations: [HistoryMutation] = [primaryMutation]
     if victimCount == 0 {
@@ -194,18 +191,17 @@ package func planCapture(
 
 /// Computes the exact excess before Storage selects its SQL eviction prefix.
 /// Coalescing changes no counts, and neither pins nor the primary may be
-/// retired. Only insertion can exceed the global retained-item bound (02 §12).
+/// retired. Nil disables count retirement; integer overflow still rejects an
+/// unrepresentable count (V2-09 §9).
 package func captureRetirementCount(
     confirmedMatch: CaptureMatch?,
     retainedCount: Int,
     unpinnedCount: Int,
-    retention: RetentionPolicy,
-    hardMaximumRetainedItems: Int
+    retention: RetentionPolicy
 ) throws -> Int {
     guard retainedCount >= 0, unpinnedCount >= 0,
           unpinnedCount <= retainedCount,
-          retention.maximumUnpinnedItems > 0,
-          hardMaximumRetainedItems > 0 else {
+          retention.maximumUnpinnedItems.map({ $0 > 0 }) ?? true else {
         throw DomainRejection.corruptLineage
     }
     if let confirmedMatch {
@@ -216,7 +212,7 @@ package func captureRetirementCount(
     }
     let isInsert = confirmedMatch == nil
     let increment = isInsert ? 1 : 0
-    let (projectedRetained, retainedOverflow) = retainedCount.addingReportingOverflow(increment)
+    let (_, retainedOverflow) = retainedCount.addingReportingOverflow(increment)
     let (projectedUnpinned, unpinnedOverflow) = unpinnedCount.addingReportingOverflow(increment)
     guard !retainedOverflow, !unpinnedOverflow else {
         throw DomainRejection.capacityExceeded(.retainedItems)
@@ -224,9 +220,7 @@ package func captureRetirementCount(
     let eligibleCount = unpinnedCount
         - (confirmedMatch != nil && confirmedMatch?.pinOrdinal == nil ? 1 : 0)
     guard eligibleCount >= 0 else { throw DomainRejection.corruptLineage }
-    let policyVictims = max(0, projectedUnpinned - retention.maximumUnpinnedItems)
-    let hardVictims = isInsert ? max(0, projectedRetained - hardMaximumRetainedItems) : 0
-    let victimCount = max(policyVictims, hardVictims)
+    let victimCount = retention.maximumUnpinnedItems.map { max(0, projectedUnpinned - $0) } ?? 0
     guard victimCount <= eligibleCount else {
         throw DomainRejection.capacityExceeded(.retainedItems)
     }

@@ -22,8 +22,7 @@ struct CaptureRetentionPrefixTests {
             facts: IngestFacts(confirmedMatch: nil, candidateIDExists: false,
                 retention: CaptureRetentionFacts(
                     retainedCount: 1_000, unpinnedCount: 1_000, retirementPrefix: expected)),
-            retention: RetentionPolicy(maximumUnpinnedItems: 1_000),
-            hardMaximumRetainedItems: 1_000
+            retention: RetentionPolicy(maximumUnpinnedItems: 1_000)
         )
         guard case .commit(let plan) = result, plan.mutations.count == 2,
               case .retirePrefix(let selected) = plan.mutations[1] else {
@@ -43,8 +42,7 @@ struct CaptureRetentionPrefixTests {
             facts: IngestFacts(confirmedMatch: match, candidateIDExists: false,
                 retention: CaptureRetentionFacts(
                     retainedCount: 1_001, unpinnedCount: 1_001, retirementPrefix: expected)),
-            retention: RetentionPolicy(maximumUnpinnedItems: 1_000),
-            hardMaximumRetainedItems: 2_000
+            retention: RetentionPolicy(maximumUnpinnedItems: 1_000)
         )
         guard case .commit(let plan) = result, plan.mutations.count == 2,
               case .coalesced(let id) = plan.outcome,
@@ -72,8 +70,7 @@ struct CaptureRetentionPrefixTests {
                     facts: IngestFacts(confirmedMatch: nil, candidateIDExists: false,
                         retention: CaptureRetentionFacts(
                             retainedCount: 10, unpinnedCount: 10, retirementPrefix: selected)),
-                    retention: RetentionPolicy(maximumUnpinnedItems: 10),
-                    hardMaximumRetainedItems: 10
+                    retention: RetentionPolicy(maximumUnpinnedItems: 10)
                 )
             }
         }
@@ -88,8 +85,7 @@ struct CaptureRetentionPrefixTests {
                     retention: CaptureRetentionFacts(retainedCount: 1, unpinnedCount: 1,
                         retirementPrefix: prefix(through: capturePlannerID(1),
                             count: 1, excluding: capture.candidateID))),
-                retention: RetentionPolicy(maximumUnpinnedItems: 10),
-                hardMaximumRetainedItems: 10
+                retention: RetentionPolicy(maximumUnpinnedItems: 10)
             )
         }
     }
@@ -109,8 +105,7 @@ struct CaptureRetentionPrefixTests {
                 try captureRetirementCount(
                     confirmedMatch: match, retainedCount: scenario.retained,
                     unpinnedCount: scenario.unpinned,
-                    retention: RetentionPolicy(maximumUnpinnedItems: 10),
-                    hardMaximumRetainedItems: 10
+                    retention: RetentionPolicy(maximumUnpinnedItems: 10)
                 )
             }
         }
@@ -123,13 +118,31 @@ struct CaptureRetentionPrefixTests {
         let match = CaptureMatch(id: winner.id, occurrence: winner.occurrence, pinOrdinal: winner.pinOrdinal)
         #expect(try captureRetirementCount(confirmedMatch: match,
             retainedCount: 11, unpinnedCount: 10,
-            retention: RetentionPolicy(maximumUnpinnedItems: 9),
-            hardMaximumRetainedItems: 11) == 1)
-        #expect(throws: DomainRejection.capacityExceeded(.retainedItems)) {
-            try captureRetirementCount(confirmedMatch: nil,
-                retainedCount: Int.max, unpinnedCount: Int.max,
-                retention: RetentionPolicy(maximumUnpinnedItems: 1),
-                hardMaximumRetainedItems: Int.max)
+            retention: RetentionPolicy(maximumUnpinnedItems: 9)) == 1)
+        let policies: [Int?] = [1, nil]
+        for maximum in policies {
+            #expect(throws: DomainRejection.capacityExceeded(.retainedItems)) {
+                try captureRetirementCount(confirmedMatch: nil,
+                    retainedCount: Int.max, unpinnedCount: Int.max,
+                    retention: RetentionPolicy(maximumUnpinnedItems: maximum))
+            }
         }
+    }
+
+    @Test func disabledCountRetentionDoesNotRetireAtLargeRetainedCounts() throws {
+        let canonical = try captureCanonical([("public.utf8-plain-text", "incoming", 1)])
+        let capture = preparedCapture(canonical: canonical, observedAt: 500)
+        let result = try planCapture(capture,
+            facts: IngestFacts(confirmedMatch: nil, candidateIDExists: false,
+                retention: CaptureRetentionFacts(retainedCount: 1_000_000,
+                    unpinnedCount: 1_000_000, retirementPrefix: nil)),
+            retention: RetentionPolicy(maximumUnpinnedItems: nil))
+        guard case .commit(let plan) = result,
+              plan.mutations.count == 1,
+              case .create(let inserted) = plan.mutations[0] else {
+            Issue.record("Disabled count retention must append without removing history")
+            return
+        }
+        #expect(inserted.id == capture.candidateID)
     }
 }

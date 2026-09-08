@@ -41,13 +41,25 @@ struct SQLiteScaleTests {
         try await exerciseSQLiteScaleSearches(
             history: history, corpus: corpus, position: position, samples: &samples
         )
-        #expect(samples.count == 13)
+        #expect(samples.count == 18)
         #expect(samples.allSatisfy { $0.failure == nil })
         let sparse = try #require(samples.first { $0.phase == "search-exact-oldest-page1" })
         #expect(sparse.rowsVisited == 1)
         let typoSecond = try #require(samples.first { $0.phase == "search-fuzzy-typo-page2" })
         #expect(typoSecond.rowsVisited == 50)
         #expect(typoSecond.query?.expectedTotalMatches == 120)
+        for phase in [
+            "search-exact-common-grams-no-intersection-page1",
+            "search-exact-repeated-gram-no-hit-page1",
+            "search-regexp-common-grams-no-intersection-page1",
+            "search-regexp-structural-no-hit-page1",
+            "search-fuzzy-mixed-presence-no-hit-page1",
+        ] {
+            let measured = try #require(samples.first { $0.phase == phase })
+            #expect(measured.failure == nil)
+            #expect(measured.rowsVisited == 0)
+            #expect(measured.query?.expectedTotalMatches == 0)
+        }
     }
 
     @Test func failedOperationRetainsCompletedAndFailedPhaseEvidence() async throws {

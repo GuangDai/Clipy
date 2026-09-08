@@ -1,4 +1,4 @@
-/// App-owned ServiceManagement boundary and generation-fenced state owner
+/// App-owned ServiceManagement boundary and single-operation state owner
 /// (REVIEW Card 10C). PresentationUI sees only `LaunchAtLoginSettings`.
 import Foundation
 import PresentationUI
@@ -136,15 +136,11 @@ private final class RunningUITestLaunchAtLoginState {
 #endif
 
 /// Main-actor owner for authoritative status refresh and register/unregister
-/// attempts. A reference token fences noncooperative stale completions; no
-/// wrapping generation counter or global service state is introduced.
+/// attempts. Appearance/activation refreshes observe the system without
+/// cancelling an explicit user request or admitting a second operation.
 @MainActor
 final class LaunchAtLoginController {
-    private final class OperationGeneration {}
-
     private let operations: LaunchAtLoginOperations
-    private var generation = OperationGeneration()
-    private var operationTask: Task<Void, Never>?
 
     private(set) var presentation: LaunchAtLoginSettings
 
@@ -160,24 +156,21 @@ final class LaunchAtLoginController {
         )
     }
 
-    /// External state changes (Settings appearance/app activation) supersede
-    /// every older operation completion and clear its episode-level error.
+    /// Card 10C: external changes refresh the displayed system status and
+    /// clear a settled error. An outstanding registration change remains
+    /// pending: cancellation cannot undo its external side effect, and its
+    /// completion must still publish a fresh authoritative status.
     func refresh() {
-        generation = OperationGeneration()
-        operationTask?.cancel()
-        operationTask = nil
         publish(
             state: Self.presentationState(for: operations.status()),
-            operationFailed: false
+            operationFailed: false,
+            operationPending: presentation.operationPending
         )
     }
 
     func setEnabled(_ enabled: Bool) {
         guard !presentation.operationPending,
               presentation.state != .unavailable else { return }
-        let operationGeneration = OperationGeneration()
-        generation = operationGeneration
-        operationTask?.cancel()
         // Card 10C: preserve authoritative status while the system operation
         // runs, clear the previous attempt's error, and disable repeat input.
         publish(
@@ -186,27 +179,20 @@ final class LaunchAtLoginController {
             operationPending: true
         )
         let operations = self.operations
-        operationTask = Task { [weak self] in
-            // An appearance/activation refresh may supersede the request
-            // before this main-actor task has started its external operation.
-            guard !Task.isCancelled else { return }
+        Task { [weak self] in
             do {
                 if enabled {
                     try await operations.register()
                 } else {
                     try await operations.unregister()
                 }
-                guard let self,
-                      generation === operationGeneration else { return }
-                operationTask = nil
+                guard let self else { return }
                 publish(
                     state: Self.presentationState(for: operations.status()),
                     operationFailed: false
                 )
             } catch {
-                guard let self,
-                      generation === operationGeneration else { return }
-                operationTask = nil
+                guard let self else { return }
                 // Preserve only the fresh authoritative status plus a
                 // content-free episode bit; framework errors never cross.
                 publish(

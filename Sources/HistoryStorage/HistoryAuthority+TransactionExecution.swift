@@ -292,7 +292,7 @@ extension HistoryAuthority {
         case .setRetentionPolicy(let maximum):
             try database.execute(
                 "UPDATE history_state SET maximumUnpinnedItems = ? WHERE key = ?",
-                bindings: [.integer(Int64(maximum)), .text(Self.positionSingletonKey)]
+                bindings: [maximum.map { .integer(Int64($0)) } ?? .null, .text(Self.positionSingletonKey)]
             )
 
         case .pruneRevisions(let itemID, let removedRevisionIDs, let scalars):
@@ -401,7 +401,7 @@ extension HistoryAuthority {
         let revisions = try statement.integer(at: 2)
         let ordinal = try statement.isNull(at: 3) ? nil : statement.integer(at: 3)
         guard canonical >= 0, revisions >= 0,
-              ordinal.map({ $0 >= 0 && $0 < Int64(limits.hardMaximumRetainedItems) }) ?? true else {
+              ordinal.map({ $0 >= 0 }) ?? true else {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
         return (

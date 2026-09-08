@@ -215,9 +215,9 @@ extension HistoryAuthority {
     }
 
     internal func commitRetentionPolicy(
-        _ maximumUnpinnedItems: Int
+        _ maximumUnpinnedItems: Int?
     ) async throws -> HistoryReceipt {
-        guard limits.userMaximumUnpinnedRange.contains(maximumUnpinnedItems) else {
+        guard maximumUnpinnedItems.map(limits.userMaximumUnpinnedRange.contains) ?? true else {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
 
@@ -243,7 +243,7 @@ extension HistoryAuthority {
               pinnedCount >= 0, pinnedCount <= retainedCount else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        let victimCount = max(0, retainedCount - pinnedCount - maximumUnpinnedItems)
+        let victimCount = maximumUnpinnedItems.map { max(0, retainedCount - pinnedCount - $0) } ?? 0
         state.finalize()
         let prefix = try RetentionConfigLoading.retirementPrefix(
             in: database,

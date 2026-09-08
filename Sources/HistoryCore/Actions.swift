@@ -36,9 +36,9 @@ public enum HistoryAction: Sendable {
     /// timestamp.
     case revise(RevisionRequest)
 
-    /// Sets the retention cap on unpinned items (v1, unchanged — the count
-    /// dimension stays here; `V2-02` §1 never redefines it).
-    case setRetentionPolicy(maximumUnpinnedItems: Int)
+    /// Sets the optional unpinned-count policy (V2-09 §9). Nil disables
+    /// count-based retirement; positive counts limit unpinned items only.
+    case setRetentionPolicy(maximumUnpinnedItems: Int?)
 
     /// Sets the V2 retention policies: the R1 age / R2 storage-byte / R3
     /// revision-threshold dimensions of one `HistoryRetentionPolicies`
