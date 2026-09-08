@@ -31,6 +31,10 @@ struct SQLiteSearchSnapshotTests {
         }
         let fixture = try await makeFixture(bodies)
         let worker = SearchWorker()
+        let (events, eventContinuation) = AsyncStream<SearchDebugEvent>.makeStream()
+        await worker.setSearchDebugProbe(SearchDebugProbe(isEnabled: true) {
+            _ = eventContinuation.yield($0)
+        })
         let rows = fixture.recent.rows.map { row in
             SearchCorpusRow(
                 id: row.item.id, contentVersion: row.item.contentVersion, title: row.title,
@@ -95,6 +99,14 @@ struct SQLiteSearchSnapshotTests {
             current = page
         }
         #expect(current.previous == nil)
+        eventContinuation.finish()
+        if mode != .fuzzy {
+            // Dense ordered pages start at their keyset anchor in either
+            // direction. Previously a deep page decoded all earlier rows.
+            for await event in events where event.phase == "sqlite-batch" {
+                #expect(event.rowsTotal <= SearchWorker.maximumBatchRows)
+            }
+        }
     }
 
     @Test func emptySearchBackwardAtSQLBatchEdgesKeepsAllPredecessors() async throws {
@@ -212,7 +224,7 @@ struct SQLiteSearchSnapshotTests {
         #expect(!current.rows.contains { $0.item == removed })
     }
 
-    @Test func largeBodiesRespectBothBatchBoundsAfterThePageAlreadyFilled() async throws {
+    @Test func largeBodiesStopAfterTheBoundedBatchContainingPageAndLookahead() async throws {
         let fixture = try await makeFixture((0..<10).map {
             "\($0)\nneedle " + String(repeating: "x", count: 262_000)
         })
@@ -230,8 +242,8 @@ struct SQLiteSearchSnapshotTests {
         #expect(page.next != nil)
         var batches: [SearchDebugEvent] = []
         for await event in events where event.phase == "sqlite-batch" { batches.append(event) }
-        #expect(batches.count > 1)
-        #expect(batches.reduce(0) { $0 + $1.rowsProcessed } == 10)
+        #expect(batches.count == 1)
+        #expect(batches.reduce(0) { $0 + $1.rowsProcessed } < 10)
         #expect(batches.allSatisfy {
             $0.rowsProcessed <= SearchWorker.maximumBatchRows
                 && $0.sourceUTF8Bytes <= SearchWorker.maximumBatchUTF8Bytes
@@ -290,33 +302,38 @@ struct SQLiteSearchSnapshotTests {
         #expect(try await inspector.checkpointIsUnblocked())
     }
 
-    @Test func corruptTailStillFailsAfterEnoughEarlierMatches() async throws {
+    @Test func boundedPagesRejectCorruptionOnlyWhenTheCandidateIsRead() async throws {
         let fixture = try await makeFixture((0..<40).map { "\($0)\nneedle \($0)" })
         let oldest = try #require(fixture.recent.rows.last?.item.id)
         let inspector = Inspector(location: fixture.location)
-        var previousCursors: [(SearchMode, HistoryPageCursor)] = []
-        for mode in [SearchMode.exact, .regexp, .fuzzy] {
+        var firstPages: [(SearchMode, HistoryPage, HistoryPageCursor)] = []
+        for mode in [SearchMode.exact, .regexp] {
             let kind = HistoryBrowseKind.search(text: "needle", mode: mode)
             let first = try await fixture.history.browse(HistoryBrowseRequest(kind: kind, limit: 1))
             let next = try #require(first.next)
             let second = try await fixture.history.browse(HistoryBrowseRequest(kind: kind, limit: 1, cursor: next))
-            previousCursors.append((mode, try #require(second.previous)))
+            firstPages.append((mode, first, try #require(second.previous)))
         }
         try await fixture.history.authority.withTestDatabase { authority in
             try authority.database.execute("UPDATE history_items SET searchBodyUTF8 = ? WHERE id = ?",
                                            bindings: [.blob(Data([0xFF])), .text(oldest.rawValue.uuidString)])
         }
-        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-            _ = try await fixture.history.browse(HistoryBrowseRequest(
-                kind: .search(text: "needle", mode: .exact), limit: 1
-            ))
-        }
-        for (mode, previous) in previousCursors {
+        for (mode, first, previous) in firstPages {
+            let kind = HistoryBrowseKind.search(text: "needle", mode: mode)
+            #expect(try await fixture.history.browse(.init(kind: kind, limit: 1)) == first)
+            #expect(try await fixture.history.browse(.init(kind: kind, limit: 1, cursor: previous)) == first)
+            // Reading through the damaged candidate still fails closed.
             await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
-                _ = try await fixture.history.browse(HistoryBrowseRequest(
-                    kind: .search(text: "needle", mode: mode), limit: 1, cursor: previous
-                ))
+                _ = try await fixture.history.browse(.init(kind: kind, limit: 100))
             }
+        }
+        // The first fuzzy page and lookahead are already pinned, so no
+        // later candidate can improve that page. A full request reads the tail.
+        let fuzzyFirst = try await fixture.history.browse(.init(kind: .search(text: "needle", mode: .fuzzy), limit: 1))
+        #expect(fuzzyFirst.rows.count == 1)
+        #expect(fuzzyFirst.rows.first?.pinnedPosition == 0)
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            _ = try await fixture.history.browse(.init(kind: .search(text: "needle", mode: .fuzzy), limit: 100))
         }
         #expect(try await inspector.checkpointIsUnblocked())
     }

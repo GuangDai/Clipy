@@ -1,8 +1,8 @@
 import Foundation
 
 /// Counts of the rows the panel displays (Card 8C / V2-07 §10).
-/// A remaining cursor keeps the count a lower bound after client filtering:
-/// unloaded rows may still contain matches for the selected filter.
+/// A remaining cursor keeps the count a lower bound: older matching rows
+/// in the filtered query have not yet been traversed.
 internal enum HistoryCountCopy {
     internal static var bundle: Bundle { .module }
 

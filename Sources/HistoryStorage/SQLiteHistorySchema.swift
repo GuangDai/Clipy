@@ -10,13 +10,14 @@ internal enum SQLiteHistorySchema {
             SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN (
                 'history_state', 'history_items', 'contents', 'representations',
                 'retention_policies', 'connections', 'grants', 'operation_records',
-                'gateway_config', 'history_change_records', 'journal_config'
+                'gateway_config', 'history_change_records', 'journal_config', 'history_search',
+                'history_search_terms'
             )
             """)
         guard try existing.step() else { throw HistoryFailure.persistence(.openStore) }
         let currentTableCount = try existing.integer(at: 0)
         existing.finalize()
-        if currentTableCount == 11 {
+        if currentTableCount == 13 {
             // The aggregate density proof relies on this actual constraint,
             // not merely a familiar table/name in an older database file.
             let pinIndex = try database.prepare("""
@@ -71,6 +72,20 @@ internal enum SQLiteHistorySchema {
             revisionCount INTEGER NOT NULL CHECK (revisionCount >= 0),
             revisionBytes INTEGER NOT NULL CHECK (revisionBytes >= 0)
         )
+        """,
+        // System FTS5 stores compressed postings for our reversible Unicode
+        // scalar grams, not word-tokenized clipboard text or a second corpus.
+        // Contentless-delete supports atomic replace and ordinary item DELETE.
+        """
+        CREATE VIRTUAL TABLE history_search USING fts5(
+            grams, content='', contentless_delete=1, detail=none, tokenize='ascii'
+        )
+        """,
+        "CREATE VIRTUAL TABLE history_search_terms USING fts5vocab(history_search, 'row')",
+        """
+        CREATE TRIGGER history_items_search_delete AFTER DELETE ON history_items BEGIN
+            DELETE FROM history_search WHERE rowid = old.rowid;
+        END
         """,
         """
         CREATE TABLE contents (

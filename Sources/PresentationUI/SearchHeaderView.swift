@@ -1,5 +1,5 @@
 /// SearchHeaderView.swift — the panel's query surface: the rounded search
-/// field, the three-mode search picker (⌘1/⌘2/⌘3), the client-side row
+/// field, the three-mode search picker (⌘1/⌘2/⌘3), the history-wide row
 /// filter menu, and the active-search result-count caption.
 /// Owning spec: docs/01-architecture.md §5.4 (browse/search flow);
 /// docs/03a-instruction-set.md §7 (search modes);
@@ -112,8 +112,8 @@ package struct SearchHeaderView: View {
             .foregroundStyle(.secondary)
     }
 
-    /// Match the list's client-side type/pinned filter. A cursor still makes
-    /// this a lower bound, since later pages may contain more visible matches.
+    /// Counts include traversed rows in the complete filtered query. A
+    /// remaining cursor means older matching rows have not yet been counted.
     internal static func resultCountText(
         for viewState: HistoryViewState,
         locale: Locale = .current,
@@ -157,9 +157,8 @@ package struct SearchHeaderView: View {
 
     // MARK: Row filter menu
 
-    /// The client-side type/pinned filter over the already-loaded rows. It
-    /// narrows what the list renders in memory only — a change never
-    /// restarts the History query (see `HistoryViewState.typeFilter`).
+    /// Each type/pinned change starts a new History query so older matches
+    /// remain reachable even when no current window row belongs to the family.
     private var filterMenu: some View {
         Menu {
             Picker(PanelActionsCopy.text("Filter", bundle: copyBundle), selection: typeFilterBinding) {

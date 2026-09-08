@@ -14,3 +14,14 @@
 "Kernel readings for the whole Clipy process. RSS is currently resident memory; footprint is memory charged to the process. Peak RSS is since launch. These values include app and framework work, not just clipboard content or caches." = "Kernel readings for the whole Clipy process. RSS is currently resident memory; footprint is memory charged to the process. Peak RSS is since launch. These values include app and framework work, not just clipboard content or caches.";
 "Originals and retained revisions, excluding database and filesystem overhead." = "Originals and retained revisions, excluding database and filesystem overhead.";
 "Approximate allocated size of all files in this folder, including hidden files and any other data stored here. Linked files and folders are excluded. Live writes and shared disk blocks can affect this estimate." = "Approximate allocated size of all files in this folder, including hidden files and any other data stored here. Linked files and folders are excluded. Live writes and shared disk blocks can affect this estimate.";
+"Back Up History…" = "Back Up History…";
+"Backing up history…" = "Backing up history…";
+"Cancel" = "Cancel";
+"Show Backup in Finder" = "Show Backup in Finder";
+"Backups contain all retained history, including original content and revisions. They may contain passwords and other sensitive information and are not encrypted. Choose a private location. This version does not restore backups." = "Backups contain all retained history, including original content and revisions. They may contain passwords and other sensitive information and are not encrypted. Choose a private location. This version does not restore backups.";
+"Backup cancelled." = "Backup cancelled.";
+"Backup complete. Retained items: %lld." = "Backup complete. Retained items: %lld.";
+"Choose a new backup folder. Existing files and folders cannot be replaced." = "Choose a new backup folder. Existing files and folders cannot be replaced.";
+"The backup location is unavailable. Choose another location and try again." = "The backup location is unavailable. Choose another location and try again.";
+"Backup could not be saved. Check available disk space and folder permissions, then try again." = "Backup could not be saved. Check available disk space and folder permissions, then try again.";
+"History could not be read for backup. Try again after reopening Clipy." = "History could not be read for backup. Try again after reopening Clipy.";

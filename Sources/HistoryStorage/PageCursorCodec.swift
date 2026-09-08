@@ -58,12 +58,12 @@ internal struct ResolvedPageCursor: Sendable, Hashable {
 
 /// The complete normalized query shape a cursor binds to (§6 step 1: "the
 /// request shape matches the cursor"). Same kind, same term+mode for search,
-/// same limit.
+/// same limit and filter.
 internal enum StoredQueryShape: Sendable, Hashable {
-    /// Recent browse: the limit alone distinguishes the shape.
-    case recent(limit: Int)
-    /// Search browse: the normalized term, the evaluation mode, and the limit.
-    case search(text: String, mode: SearchMode, limit: Int)
+    /// Recent browse: page limit and the complete filter.
+    case recent(limit: Int, filter: HistoryFilter = .all)
+    /// Search browse: term, evaluation mode, page limit, and filter.
+    case search(text: String, mode: SearchMode, limit: Int, filter: HistoryFilter = .all)
 
     // MARK: Request correspondence (§6 step 1)
 
@@ -72,9 +72,9 @@ internal enum StoredQueryShape: Sendable, Hashable {
     internal init(request: HistoryBrowseRequest) {
         switch request.kind {
         case .recent:
-            self = .recent(limit: request.limit)
+            self = .recent(limit: request.limit, filter: request.filter)
         case .search(let text, let mode):
-            self = .search(text: text, mode: mode, limit: request.limit)
+            self = .search(text: text, mode: mode, limit: request.limit, filter: request.filter)
         }
     }
 
@@ -82,10 +82,10 @@ internal enum StoredQueryShape: Sendable, Hashable {
     /// term+mode for search, same limit (§6 step 1).
     internal func matches(_ request: HistoryBrowseRequest) -> Bool {
         switch self {
-        case .recent(let limit):
+        case .recent(let limit, let filter):
             guard case .recent = request.kind else { return false }
-            return request.limit == limit
-        case .search(let text, let mode, let limit):
+            return request.limit == limit && request.filter == filter
+        case .search(let text, let mode, let limit, let filter):
             guard case .search(let requestText, let requestMode) = request.kind else {
                 return false
             }
@@ -95,6 +95,7 @@ internal enum StoredQueryShape: Sendable, Hashable {
             return text.utf8.elementsEqual(requestText.utf8)
                 && mode == requestMode
                 && request.limit == limit
+                && request.filter == filter
         }
     }
 }
@@ -123,7 +124,7 @@ internal enum PageCursorRejection: Error, Sendable, Equatable {
     /// The payload is not a decodable current container at all — foreign bytes,
     /// truncation, or a well-formed container of the wrong shape.
     case malformedCursor
-    /// `formatVersion` is not exactly 2.
+    /// `formatVersion` is not exactly 3.
     case unknownCursorVersion(found: UInt16)
     /// The process-instance marker does not match this Authority.
     case processMarkerMismatch
@@ -142,6 +143,8 @@ private struct StoredQueryShapeWire: Codable {
     let limit: Int
     let text: String?
     let mode: String?
+    let contentType: String
+    let pinnedOnly: Bool
 }
 
 /// The Codable wire form of a `StoredOrderingAnchor`. `HistoryItemID` is not
@@ -157,16 +160,18 @@ private struct StoredOrderingAnchorWire: Codable {
 private extension StoredQueryShape {
     var wire: StoredQueryShapeWire {
         switch self {
-        case .recent(let limit):
+        case .recent(let limit, let filter):
             return StoredQueryShapeWire(
-                kind: "recent", limit: limit, text: nil, mode: nil
+                kind: "recent", limit: limit, text: nil, mode: nil,
+                contentType: filter.type.rawValue, pinnedOnly: filter.pinnedOnly
             )
-        case .search(let text, let mode, let limit):
+        case .search(let text, let mode, let limit, let filter):
             return StoredQueryShapeWire(
                 kind: "search",
                 limit: limit,
                 text: text,
-                mode: StoredQueryShape.modeTag(mode)
+                mode: StoredQueryShape.modeTag(mode),
+                contentType: filter.type.rawValue, pinnedOnly: filter.pinnedOnly
             )
         }
     }
@@ -176,12 +181,16 @@ private extension StoredQueryShape {
         guard limits.pageRowLimitRange.contains(wire.limit) else {
             throw PageCursorRejection.malformedCursor
         }
+        guard let type = HistoryContentType(rawValue: wire.contentType) else {
+            throw PageCursorRejection.malformedCursor
+        }
+        let filter = HistoryFilter(type: type, pinnedOnly: wire.pinnedOnly)
         switch wire.kind {
         case "recent":
             guard wire.text == nil, wire.mode == nil else {
                 throw PageCursorRejection.malformedCursor
             }
-            self = .recent(limit: wire.limit)
+            self = .recent(limit: wire.limit, filter: filter)
         case "search":
             guard let text = wire.text, let modeTag = wire.mode else {
                 throw PageCursorRejection.malformedCursor
@@ -190,7 +199,7 @@ private extension StoredQueryShape {
                 throw PageCursorRejection.malformedCursor
             }
             let mode = try StoredQueryShape.mode(fromTag: modeTag)
-            self = .search(text: text, mode: mode, limit: wire.limit)
+            self = .search(text: text, mode: mode, limit: wire.limit, filter: filter)
         default:
             throw PageCursorRejection.malformedCursor
         }
@@ -276,11 +285,11 @@ private extension StoredOrderingAnchor {
 // MARK: - Wire value (docs/05-authority-kernel.md §4 style)
 
 /// Versioned wire value of the opaque cursor payload. `formatVersion` is
-/// exactly 2 for every cursor `PageCursorCodec` writes; decode rejects any
+/// exactly 3 for every cursor `PageCursorCodec` writes; decode rejects any
 /// other version. The `processMarker` is the Authority's process-instance
 /// marker (04 §6). The query shape and anchor are carried as their Codable
 /// wire forms.
-private struct PageCursorBlobV2: Codable, Sendable {
+private struct PageCursorBlobV3: Codable, Sendable {
     let formatVersion: UInt16
     let processMarker: UUID
     let rawValue: UInt64
@@ -296,7 +305,7 @@ private struct PageCursorBlobV2: Codable, Sendable {
 /// exactly. docs/04-coherence.md §6
 internal enum PageCursorCodec {
     /// The only cursor version this codec reads or writes.
-    private static let formatVersion: UInt16 = 2
+    private static let formatVersion: UInt16 = 3
 
     /// Pre-parse cursor envelope. A valid search term may consume 4,096 UTF-8
     /// bytes and JSON escaping can expand one input byte to six ASCII bytes;
@@ -315,7 +324,7 @@ internal enum PageCursorCodec {
         _ resolved: ResolvedPageCursor,
         processMarker: UUID
     ) throws -> HistoryPageCursor {
-        let blob = PageCursorBlobV2(
+        let blob = PageCursorBlobV3(
             formatVersion: formatVersion,
             processMarker: processMarker,
             rawValue: resolved.position.rawValue,
@@ -347,10 +356,10 @@ internal enum PageCursorCodec {
         guard cursor.payload.count <= maximumPayloadBytes else {
             throw PageCursorRejection.malformedCursor
         }
-        let blob: PageCursorBlobV2
+        let blob: PageCursorBlobV3
         do {
             blob = try CodecWireFormat.makeDecoder().decode(
-                PageCursorBlobV2.self,
+                PageCursorBlobV3.self,
                 from: cursor.payload
             )
         } catch {

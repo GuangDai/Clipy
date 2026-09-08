@@ -1,10 +1,6 @@
-/// HistoryRowFilteringTests — the panel's client-side row filter: the UTI
-/// classification families, filter admission over the loaded lanes,
-/// pinned-only narrowing, the guarantee that filter edits never restart
-/// observation (front-end narrowing over already-loaded pages; docs/
-/// 04-coherence.md §5's replacement pages stay the only row source), and
-/// the drag provider's registered-representation choice. Driven through the
-/// scripted `ClipboardHistory` double exactly like `HistoryViewStateTests`.
+/// HistoryRowFilteringTests — classification and the panel's authoritative
+/// filter query replacement. Scripted pages verify UI request/lifecycle
+/// behavior; real storage coverage lives in RealHistoryViewStateWindowTests.
 import Foundation
 import HistoryCore
 import PresentationUI
@@ -149,125 +145,103 @@ struct HistoryRowFilteringTests {
         #expect(!HistoryTypeFilter.links.admits(pdf))
     }
 
-    // MARK: - Displayed-row filtering (client-side; 04 §5 pages untouched)
+    // MARK: - Authoritative filtered pages
 
-    /// Defaults pass every loaded row through to the displayed lanes.
-    @Test func defaultsPassAllRowsThrough() async {
-        let (state, history) = activatedMixedState()
-        #expect(await pollUntil { state.rows.count == 5 })
-
-        #expect(state.typeFilter == .all)
-        #expect(!state.showsPinnedOnly)
-        #expect(state.displayedPinnedRows == state.pinnedRows)
-        #expect(state.displayedUnpinnedRows == state.unpinnedRows)
-
-        state.deactivate()
-        await history.finishObservation()
-    }
-
-    /// The type filter narrows both displayed lanes; the raw `pinnedRows`/
-    /// `unpinnedRows` accessors stay untouched (existing tests pin them).
-    @Test func textAndImageFiltersNarrowDisplayedLanesOnly() async {
-        let (state, history) = activatedMixedState()
-        #expect(await pollUntil { state.rows.count == 5 })
-
-        state.typeFilter = .text
-        #expect(state.displayedPinnedRows.map(\.title) == ["pinned-text"])
-        #expect(state.displayedUnpinnedRows.map(\.title) == ["recent-text"])
-
-        state.typeFilter = .images
-        #expect(state.displayedPinnedRows.isEmpty)
-        #expect(state.displayedUnpinnedRows.map(\.title) == ["recent-image"])
-
-        state.typeFilter = .links
-        #expect(state.displayedPinnedRows.map(\.title) == ["pinned-link"])
-        #expect(state.displayedUnpinnedRows.isEmpty)
-
-        // The unfiltered lanes never changed.
-        #expect(state.pinnedRows.count == 2)
-        #expect(state.unpinnedRows.count == 3)
-        #expect(state.rows.count == 5)
-
-        state.deactivate()
-        await history.finishObservation()
-    }
-
-    /// Pinned Only empties the Recent lane and leaves the pinned lane —
-    /// still type-filtered — intact.
-    @Test func pinnedOnlyEmptiesOnlyTheRecentLane() async {
-        let (state, history) = activatedMixedState()
-        #expect(await pollUntil { state.rows.count == 5 })
-
-        state.showsPinnedOnly = true
-        #expect(state.displayedUnpinnedRows.isEmpty)
-        #expect(
-            state.displayedPinnedRows.map(\.title)
-                == ["pinned-text", "pinned-link"]
-        )
-        #expect(state.unpinnedRows.count == 3)
-
-        state.typeFilter = .links
-        #expect(state.displayedPinnedRows.map(\.title) == ["pinned-link"])
-
-        state.deactivate()
-        await history.finishObservation()
-    }
-
-    /// A filter matching nothing empties both displayed lanes while the raw
-    /// rows stay loaded (the list then reuses the "No Results" empty state).
-    @Test func unmatchedFilterEmptiesDisplayedLanesOnly() async {
-        let (state, history) = activatedMixedState()
-        #expect(await pollUntil { state.rows.count == 5 })
-
-        // No pinned image exists in the fixture.
-        state.typeFilter = .images
-        state.showsPinnedOnly = true
-
-        #expect(state.displayedPinnedRows.isEmpty)
-        #expect(state.displayedUnpinnedRows.isEmpty)
-        #expect(state.rows.count == 5)
-
-        state.deactivate()
-        await history.finishObservation()
-    }
-
-    /// Filter edits are pure in-memory narrowing: no new observe request, no
-    /// debounce — the History query is untouched.
-    @Test func filterEditsNeverRestartObservation() async throws {
+    @Test func defaultsPassAllRowsThrough() async throws {
         let (state, history) = activatedMixedState()
         defer { state.deactivate() }
-        try #require(await pollUntil { state.rows.count == 5 && state.hasAuthoritativeFirstPage })
-        #expect(await history.observeRequests.count == 1)
-        let loadedRows = state.rows
+        try #require(await pollUntil { state.rows.count == 5 })
+        #expect(state.typeFilter == .all)
+        #expect(!state.showsPinnedOnly)
+        #expect(await history.observeRequests.last?.filter == .all)
+        #expect(state.displayedPinnedRows == state.pinnedRows)
+        #expect(state.displayedUnpinnedRows == state.unpinnedRows)
+        await history.finishObservation()
+    }
 
+    @Test func typeFilterReplacesBothLanesWithAuthoritativeRows() async throws {
+        let (state, history) = activatedMixedState()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 5 })
+        let original = state.rows
+        for (filter, type, indexes) in [
+            (HistoryTypeFilter.text, HistoryContentType.text, [0, 2]),
+            (.images, .images, [3]),
+            (.links, .links, [1]),
+        ] {
+            let count = await history.observeRequests.count
+            state.typeFilter = filter
+            #expect(state.rows.isEmpty)
+            #expect(state.isLoadingFirstPage)
+            #expect(!state.hasAuthoritativeFirstPage)
+            try #require(await pollUntil { await history.observeRequests.count == count + 1 })
+            #expect(await history.observeRequests.last?.filter == HistoryFilter(type: type))
+            let replacement = indexes.map { original[$0] }
+            await history.emitObservedPage(fixturePage(rows: replacement, next: nil))
+            try #require(await pollUntil { state.rows == replacement })
+            #expect(state.displayedRows == replacement)
+            #expect(state.hasAuthoritativeFirstPage)
+        }
+        await history.finishObservation()
+    }
+
+    @Test func pinnedOnlyCombinesWithTypeInTheHistoryRequest() async throws {
+        let (state, history) = activatedMixedState()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 5 })
+        let pinned = Array(state.rows.prefix(2))
+        state.showsPinnedOnly = true
+        #expect(state.rows.isEmpty)
+        try #require(await pollUntil { await history.observeRequests.count == 2 })
+        #expect(await history.observeRequests.last?.filter == HistoryFilter(pinnedOnly: true))
+        await history.emitObservedPage(fixturePage(rows: pinned, next: nil))
+        try #require(await pollUntil { state.rows == pinned })
+        #expect(state.displayedUnpinnedRows.isEmpty)
+        state.typeFilter = .links
+        try #require(await pollUntil { await history.observeRequests.count == 3 })
+        #expect(await history.observeRequests.last?.filter == HistoryFilter(type: .links, pinnedOnly: true))
+        await history.emitObservedPage(fixturePage(rows: [pinned[1]], next: nil))
+        try #require(await pollUntil { state.rows == [pinned[1]] })
+        #expect(state.displayedPinnedRows == [pinned[1]])
+        await history.finishObservation()
+    }
+
+    @Test func emptyFilteredSnapshotCompletesLoadingAndRetiresOldRows() async throws {
+        let (state, history) = activatedMixedState()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 5 })
         state.typeFilter = .images
         state.showsPinnedOnly = true
-        state.typeFilter = .links
-        state.showsPinnedOnly = false
-
-        // Both immediate and debounced query restarts synchronously clear
-        // first-page authority and rows. Filter changes must preserve them
-        // before any scheduled task can repopulate a replacement page.
-        #expect(state.hasAuthoritativeFirstPage)
+        #expect(state.rows.isEmpty)
+        try #require(await pollUntil {
+            await history.observeRequests.last?.filter == HistoryFilter(type: .images, pinnedOnly: true)
+        })
+        await history.emitObservedPage(fixturePage(rows: [], next: nil))
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
         #expect(!state.isLoadingFirstPage)
-        #expect(state.rows == loadedRows)
-        #expect(state.displayedRows.map(\.title) == ["pinned-link"])
+        #expect(state.rows.isEmpty)
+        #expect(state.displayedRows.isEmpty)
+        await history.finishObservation()
+    }
 
-        // A distinct snapshot delivered to the ORIGINAL subscription is the
-        // completion event: it must still update the filtered display. A
-        // cancelled/restarted subscription cannot satisfy this assertion.
-        let replacement = loadedRows + [filterFixtureRow(
-            id: "00000000-0000-0000-0000-00000000F108",
-            title: "new-link",
-            typeIdentifiers: ["public.url"]
-        )]
-        await history.emitObservedPage(
-            fixturePage(rows: replacement, next: nil), observationIndex: 0
-        )
+    @Test func filterReplacementIgnoresTheSupersededObservation() async throws {
+        let (state, history) = activatedMixedState()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 5 })
+        let oldRows = state.rows
+        state.typeFilter = .links
+        try #require(await pollUntil { await history.observeRequests.count == 2 })
+        #expect(await history.observeRequests.last?.filter == HistoryFilter(type: .links))
+        await history.emitObservedPage(fixturePage(rows: oldRows, next: nil), observationIndex: 0)
+        let replacement = [oldRows[1]]
+        await history.emitObservedPage(fixturePage(rows: replacement, next: nil), observationIndex: 1)
         try #require(await pollUntil { state.rows == replacement })
-        #expect(state.displayedRows.map(\.title) == ["pinned-link", "new-link"])
-        #expect(await history.observeRequests.count == 1)
-
+        #expect(state.displayedRows == replacement)
+        #expect(state.hasAuthoritativeFirstPage)
+        // Reassigning the current filter preserves the authoritative page.
+        state.typeFilter = .links
+        #expect(state.rows == replacement)
+        #expect(state.hasAuthoritativeFirstPage)
         await history.finishObservation()
     }
 
@@ -351,7 +325,8 @@ struct HistoryRowFilteringTests {
                     ),
                 ],
                 next: nil
-            )
+            ),
+            repeatsObservedFirstPage: false
         )
         let state = HistoryViewState(history: history)
         state.activate()

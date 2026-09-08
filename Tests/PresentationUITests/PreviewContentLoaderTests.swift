@@ -693,6 +693,10 @@ private actor PreviewRenderGate {
 /// resumed explicitly by request order, making generation ordering observable
 /// without sleeps or a second storage implementation.
 private actor OverlappingPreviewHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        throw HistoryBackupFailure.writeFailed
+    }
+
     func usage() async throws -> HistoryUsage {
         // Overlapping payload completions do not establish a store total.
         throw HistoryFailure.temporarilyUnavailable(.factProof)

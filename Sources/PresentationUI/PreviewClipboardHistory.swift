@@ -19,6 +19,10 @@ import HistoryCore
 /// `details` and `pastePayload` throw `.notFound`; `thumbnail` returns
 /// `nil`; `retentionConfiguration` returns the new-store defaults.
 package struct PreviewClipboardHistory: ClipboardHistory, Sendable {
+    package func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        throw HistoryBackupFailure.writeFailed
+    }
+
 
     /// 2 pinned + 8 recent rows — realistic titles, types, timestamps,
     /// sources, and copy counts; one row carries a `SearchPresentation`

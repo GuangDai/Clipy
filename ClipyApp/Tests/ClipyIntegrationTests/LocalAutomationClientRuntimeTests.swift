@@ -119,12 +119,13 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             guard initialVisible else { throw ProcessFailure.initialPageUnavailable }
             preview.togglePreview(for: displayed)
             XCTAssertEqual(preview.previewedItem, displayed)
+            let exactAuthoredBytes = Data("cli-authored\0\r\ne\u{301}".utf8)
             let replacement = try request(operation: "reviseContent", arguments: [
                 "locator": locator,
                 "expectedContentVersion": 2,
                 "representations": [[
                     "typeIdentifier": "public.utf8-plain-text",
-                    "bytesBase64": Data("cli-authored".utf8).base64EncodedString(),
+                    "bytesBase64": exactAuthoredBytes.base64EncodedString(),
                 ]],
             ])
             let deniedRevision = try await runClient(replacement)
@@ -150,7 +151,7 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
                 "expectedContentVersion": 3,
                 "representations": [[
                     "typeIdentifier": "public.utf8-plain-text",
-                    "bytesBase64": Data("cli-authored".utf8).base64EncodedString(),
+                    "bytesBase64": exactAuthoredBytes.base64EncodedString(),
                 ]],
             ])))
             XCTAssertEqual(unchanged["changed"] as? Bool, false)
@@ -161,7 +162,18 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             XCTAssertEqual(authored["contentVersion"] as? UInt64, 3)
             let authoredRepresentations = try XCTUnwrap(authored["representations"] as? [[String: Any]])
             let authoredBytes = try XCTUnwrap(authoredRepresentations.first?["bytesBase64"] as? String)
-            XCTAssertEqual(Data(base64Encoded: authoredBytes), Data("cli-authored".utf8))
+            XCTAssertEqual(Data(base64Encoded: authoredBytes), exactAuthoredBytes)
+            for operation in ["detailsEffective", "pasteEffective"] {
+                let read = try request(operation: operation, arguments: ["locator": locator])
+                let raw = try await runClient(read, arguments: ["--raw", "--type", "public.utf8-plain-text"])
+                XCTAssertEqual(raw.exitCode, 0)
+                XCTAssertEqual(raw.stdout, exactAuthoredBytes, "Raw stdout must preserve NUL, CRLF and decomposed UTF-8")
+                XCTAssertTrue(raw.stderr.isEmpty)
+                let missing = try await runClient(read, arguments: ["--raw", "--type", "public.png"])
+                XCTAssertEqual(missing.exitCode, 4)
+                XCTAssertTrue(missing.stdout.isEmpty)
+                XCTAssertEqual(missing.stderr, Data("clipyctl: not_found\n".utf8))
+            }
             await observedHistory.releasePostInitialObservation()
             let replacementVisible = await ComposedSupport.waitFor {
                 viewState.rows.first?.item == committedReference
@@ -176,6 +188,25 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             }
             let remaining = try await history.browse(.init(kind: .recent, limit: 10))
             XCTAssertTrue(remaining.rows.isEmpty)
+
+            let binary = Data([0, 0xFF, 0x80, 0x0A, 0])
+            _ = try await history.perform(.capture(ComposedSupport.textCapture(
+                "binary-companion", observedAt: Date(timeIntervalSinceReferenceDate: 13),
+                extra: [(typeIdentifier: "org.clipy.test-binary", bytes: Array(binary))]
+            )))
+            let binaryPage = try result(await runClient(browse))
+            let binaryItems = try XCTUnwrap(binaryPage["items"] as? [[String: Any]])
+            let binaryLocator = try XCTUnwrap(binaryItems.first?["locator"] as? String)
+            let binaryRead = try request(operation: "detailsEffective", arguments: ["locator": binaryLocator])
+            let binaryOutput = try await runClient(binaryRead, arguments: ["--raw", "--type", "org.clipy.test-binary"])
+            XCTAssertEqual(binaryOutput.exitCode, 0)
+            XCTAssertEqual(binaryOutput.stdout, binary, "Select one representation without decoding it as text")
+            XCTAssertTrue(binaryOutput.stderr.isEmpty)
+            _ = try await ingress.setCapability(.readEffectiveContent, enabled: false, clientDirectory: clientDirectory)
+            let deniedRaw = try await runClient(binaryRead, arguments: ["--raw", "--type", "org.clipy.test-binary"])
+            XCTAssertEqual(deniedRaw.exitCode, 3)
+            XCTAssertTrue(deniedRaw.stdout.isEmpty)
+            XCTAssertEqual(deniedRaw.stderr, Data("clipyctl: not_granted\n".utf8))
 
             _ = try await ingress.setCapability(.browsePreview, enabled: false, clientDirectory: clientDirectory)
             let grantRevoked = try await runClient(browse)
@@ -247,12 +278,13 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
     }
 
     private func runClient(
-        _ request: Data, holdInputOpen: Bool = false, fillOutput: Bool = false
+        _ request: Data, arguments: [String] = [], holdInputOpen: Bool = false, fillOutput: Bool = false
     ) async throws -> ProcessOutput {
         let executable = try XCTUnwrap(Bundle.main.executableURL)
             .deletingLastPathComponent().appendingPathComponent("clipyctl")
         let process = Process()
         process.executableURL = executable
+        process.arguments = arguments
         let input = Pipe()
         let output = Pipe()
         let error = Pipe()

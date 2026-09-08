@@ -163,6 +163,10 @@ extension HistoryAuthority {
                     item.occurrence.lastSource.map(SQLiteValue.text) ?? .null,
                     .integer(Int64(canonicalBytes)),
                 ])
+            try SQLiteSearchIndex.replace(
+                itemID: item.id, title: item.projection.title, body: item.projection.searchBody,
+                in: database
+            )
             try insertContent(
                 published, itemID: item.id, ordinal: 0,
                 createdAt: item.occurrence.firstCopiedAt, title: item.projection.title,
@@ -220,6 +224,10 @@ extension HistoryAuthority {
                     .integer(update.effectiveMatchesCanonical ? 1 : 0),
                     .text(update.itemID.rawValue.uuidString),
                 ])
+            try SQLiteSearchIndex.replace(
+                itemID: update.itemID, title: update.projection.title, body: update.projection.searchBody,
+                in: database
+            )
             try deleteRevisions(update.removedRevisionIDs, itemID: update.itemID, in: database)
             try updateRevisionAccounting(
                 itemID: update.itemID, oldBytes: old.revisionBytes,

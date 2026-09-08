@@ -106,6 +106,40 @@ internal final class SQLiteDatabase {
         readDeadline = nil
     }
 
+    /// SQLite's backup API includes committed WAL pages. The destination is
+    /// private to the Authority's newly created export directory; finish and
+    /// close it as a standalone database before exporting referenced files.
+    internal func backup(to url: URL) throws {
+        let source = try openHandle()
+        var destination: OpaquePointer?
+        let opened = sqlite3_open_v2(
+            url.path, &destination,
+            SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX, nil
+        )
+        guard opened == SQLITE_OK, let destination else {
+            if let destination { sqlite3_close_v2(destination) }
+            throw SQLiteFailure(code: opened)
+        }
+        defer { sqlite3_close_v2(destination) }
+        guard let backup = sqlite3_backup_init(destination, "main", source, "main") else {
+            throw SQLiteFailure(code: sqlite3_errcode(destination))
+        }
+        var finished = false
+        defer { if !finished { sqlite3_backup_finish(backup) } }
+        while true {
+            try Task.checkCancellation()
+            let result = sqlite3_backup_step(backup, 256)
+            if result == SQLITE_DONE { break }
+            guard result == SQLITE_OK else { throw SQLiteFailure(code: result) }
+        }
+        let result = sqlite3_backup_finish(backup)
+        finished = true
+        guard result == SQLITE_OK else { throw SQLiteFailure(code: result) }
+        let journalResult = sqlite3_exec(destination, "PRAGMA journal_mode = DELETE", nil, nil, nil)
+        guard journalResult == SQLITE_OK else { throw SQLiteFailure(code: journalResult) }
+        try Task.checkCancellation()
+    }
+
     /// V2-09 §4: a bounded search batch can still spend substantial time
     /// inside one sqlite3_step/prepare call. SQLite invokes this callback
     /// synchronously on this connection's owner; it never touches the

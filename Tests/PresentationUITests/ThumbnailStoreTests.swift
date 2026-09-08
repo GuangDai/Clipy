@@ -957,6 +957,10 @@ struct ThumbnailStoreTests {
 /// unstructured-task scheduling order. Target-internal (not file-private) so
 /// the ThumbnailMeasurement suite can drive the same parked boundary.
 actor PausableThumbnailHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        throw HistoryBackupFailure.writeFailed
+    }
+
     func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
         Issue.record("Thumbnail flight tests must not read representation bytes")
         throw HistoryFailure.notFound(request.item.id)

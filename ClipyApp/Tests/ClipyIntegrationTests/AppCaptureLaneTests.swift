@@ -632,6 +632,10 @@ struct AppCaptureLaneTests {
 /// capture, returns History's public low-disk failure when released, then
 /// forwards every later operation and every read to the same real store.
 private actor FirstCaptureLowDiskFailingHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        try await base.backup(to: directory)
+    }
+
     private let base: SQLiteHistory
     private var captureAttempts = 0
     private var firstCaptureContinuation: CheckedContinuation<Void, Never>?
@@ -781,6 +785,10 @@ private final class CaptureHealthProbe {
 /// detached forward makes capture 1 intentionally non-cooperative with the
 /// caller's cancellation so the stop fence is observable deterministically.
 actor FirstCaptureSuspendingHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        try await base.backup(to: directory)
+    }
+
     private let base: SQLiteHistory
     private var captureCount = 0
     private var didCompleteSecondCapture = false

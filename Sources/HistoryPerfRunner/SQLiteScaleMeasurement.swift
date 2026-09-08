@@ -38,6 +38,7 @@ struct SQLiteScaleSample: Codable, Sendable {
     /// neither total process-owned memory nor retained logical store bytes.
     let returnedContentBytes: Int?
     let failure: String?
+    let query: SQLiteScaleQuery?
 }
 
 struct SQLiteScaleDisk: Codable, Sendable {
@@ -103,6 +104,7 @@ struct SQLiteScaleReport: Codable, Sendable {
 func measureSQLiteScale<T>(
     phase: String,
     samples: inout [SQLiteScaleSample],
+    query: SQLiteScaleQuery? = nil,
     operation: () async throws -> T,
     facts: (T) -> (rows: Int, contentBytes: Int) = { _ in (0, 0) }
 ) async throws -> T {
@@ -118,7 +120,7 @@ func measureSQLiteScale<T>(
             phase: phase, elapsedMilliseconds: elapsed,
             before: before, after: after,
             rowsVisited: resultFacts.rows, returnedContentBytes: resultFacts.contentBytes,
-            failure: nil
+            failure: nil, query: query
         ))
         print("sqlite-scale phase=\(phase) elapsedMs=\(elapsed) rss=\(after.residentBytes)")
         return result
@@ -130,7 +132,7 @@ func measureSQLiteScale<T>(
             phase: phase, elapsedMilliseconds: elapsed,
             before: before, after: try? SQLiteScaleMemory.read(),
             rowsVisited: nil, returnedContentBytes: nil,
-            failure: String(describing: error)
+            failure: String(describing: error), query: query
         ))
         print("sqlite-scale phase=\(phase) failed=\(error)")
         throw error

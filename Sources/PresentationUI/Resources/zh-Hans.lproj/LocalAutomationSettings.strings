@@ -23,3 +23,11 @@
 "Allow Revisions" = "允许修订";
 "Programs using your account will be able to change an item's current content without asking again. Each change appends an immutable revision. Original content and older revisions remain retained until removed by retention or item deletion; revision is not erasure. This permission does not grant content reading or deletion." = "使用你账户的程序将能够更改条目的当前内容，不再逐次询问。每次更改都会追加一个不可变的修订版本。原始内容和旧修订仍会保留，直到保留策略移除旧修订或条目被删除；修订并不等于擦除。此权限不会授予读取内容或删除条目的权限。";
 "Programs using your account will be able to permanently delete individual clipboard items without asking again. This cannot be undone." = "使用你账户的程序将能够永久删除单个剪贴板条目，不再逐次询问。此操作无法撤销。";
+"Command Line" = "命令行";
+"Reveal in Finder" = "在访达中显示";
+"Copy Help Command" = "复制帮助命令";
+"Paste the help command into Terminal for request examples and raw content output. Help works before enabling access." = "将帮助命令粘贴到终端，查看请求示例和原始内容输出用法。无需启用访问即可查看帮助。";
+"To list history, enable Local Automation, grant Browse Previews, then use the browsePreview example from help. Keep Clipy running while using the command line." = "要列出历史记录，请启用本机自动化并授予“浏览预览”权限，然后使用帮助中的 browsePreview 示例。使用命令行时请保持 Clipy 运行。";
+"The bundled command-line tool is unavailable." = "内置命令行工具不可用。";
+"Help command copied." = "已复制帮助命令。";
+"Could not copy the help command. Try again." = "无法复制帮助命令。请重试。";

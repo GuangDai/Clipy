@@ -26,9 +26,7 @@ struct FilteredSearchAnnouncementTests {
 
         let rows = [
             row(1, type: "public.png", pinned: 0),
-            row(2, type: "public.png"),
-            row(3, type: "public.utf8-plain-text"),
-        ]
+        ] + (pinnedOnly ? [] : [row(2, type: "public.png")])
         // Offer the cancelled query a different count before publishing the
         // current query. Only the current generation may consume its intent.
         await history.emitObservedPage(
@@ -39,33 +37,40 @@ struct FilteredSearchAnnouncementTests {
         #expect(announcements[0].count == (pinnedOnly ? 1 : 2))
         #expect(announcements[0].count == state.displayedRows.count)
         #expect(announcements[0].hasNextPage)
-        #expect(state.rows.count == 3)
+        #expect(state.rows.count == (pinnedOnly ? 1 : 2))
+        #expect(await history.observeRequests.last?.filter == HistoryFilter(type: .images, pinnedOnly: pinnedOnly))
 
         // A copy-count-only replacement is a real observed state change,
         // but the same query's result count must not be announced again.
         let metadataRows = [
             row(1, type: "public.png", pinned: 0, copyCount: 2),
-            rows[1], rows[2],
-        ]
+        ] + Array(rows.dropFirst())
         await history.emitObservedPage(fixturePage(rows: metadataRows, next: "more"))
         try #require(await pollUntil { state.rows == metadataRows })
         #expect(announcements.count == 1)
 
-        // Filtering itself doesn't re-arm search announcements. A new query
-        // with zero visible results still announces zero, even with raw hits.
+        // A filter is part of the authoritative query. Its settled page
+        // announces once, just as a newly entered search does.
         state.typeFilter = .links
         #expect(state.displayedRows.isEmpty)
         #expect(announcements.count == 1)
-        state.searchText = "latest"
         try #require(await pollUntil { await history.observeRequests.count == 4 })
-        await history.emitObservedPage(
-            fixturePage(rows: rows, next: "stale-more"), observationIndex: 2
-        )
-        await history.emitObservedPage(fixturePage(rows: metadataRows, next: nil))
+        #expect(await history.observeRequests.last?.filter == HistoryFilter(type: .links, pinnedOnly: pinnedOnly))
+        await history.emitObservedPage(fixturePage(rows: [], next: nil))
         try #require(await pollUntil { state.hasAuthoritativeFirstPage && announcements.count == 2 })
         #expect(announcements[1].count == 0)
         #expect(!announcements[1].hasNextPage)
-        #expect(state.rows == metadataRows)
+
+        state.searchText = "latest"
+        try #require(await pollUntil { await history.observeRequests.count == 5 })
+        await history.emitObservedPage(
+            fixturePage(rows: rows, next: "stale-more"), observationIndex: 2
+        )
+        await history.emitObservedPage(fixturePage(rows: [], next: nil))
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage && announcements.count == 3 })
+        #expect(announcements[2].count == 0)
+        #expect(!announcements[2].hasNextPage)
+        #expect(state.rows.isEmpty)
         await history.finishObservation()
     }
 

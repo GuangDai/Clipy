@@ -36,6 +36,10 @@ import Testing
 /// - `retentionConfiguration` returns the scripted configured-policy value
 ///   and records the request count (V2-07 §6.3's panel-open read).
 actor ScriptedHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        throw HistoryBackupFailure.writeFailed
+    }
+
 
     /// One scripted browse outcome (docs/03a-instruction-set.md §7).
     enum BrowseOutcome {
@@ -299,6 +303,10 @@ actor ScriptedHistory: ClipboardHistory {
 /// unscripted references, or throws a scripted failure — and records every
 /// request so prefetch idempotence and negative caching are observable.
 actor ThumbnailScriptHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        throw HistoryBackupFailure.writeFailed
+    }
+
 
     func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
         Issue.record("Thumbnail scripts must not read representation bytes")
@@ -398,6 +406,10 @@ actor ThumbnailScriptHistory: ClipboardHistory {
 /// already suspended would replace the first continuation (leaking it), so
 /// tests keep one selection per ID.
 actor PausablePreviewHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        throw HistoryBackupFailure.writeFailed
+    }
+
 
     func usage() async throws -> HistoryUsage {
         // Individual scripted payloads do not establish a whole-store total.

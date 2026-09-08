@@ -47,6 +47,26 @@ struct MaintenanceSettingsCopyTests {
             == "内核报告的整个 Clipy 进程用量。RSS 表示当前驻留内存，进程内存占用表示系统记入此进程的内存，峰值为本次启动以来的最高驻留用量。这些值包括应用和框架的运行开销，并非仅剪贴板内容或缓存。")
     }
 
+    @Test("Backup explains sensitive retained content and reports distinct recoveries")
+    func backupCopy() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        #expect(MaintenanceSettingsCopy.text("Back Up History…", bundle: chinese) == "备份历史记录…")
+        #expect(MaintenanceSettingsCopy.backupDisclosure(bundle: english).contains("original content and revisions"))
+        #expect(MaintenanceSettingsCopy.backupDisclosure(bundle: english).contains("not encrypted"))
+        #expect(MaintenanceSettingsCopy.backupDisclosure(bundle: chinese).contains("未经加密"))
+        #expect(MaintenanceSettingsCopy.backupDisclosure(bundle: chinese).contains("不支持恢复备份"))
+        #expect(MaintenanceSettingsCopy.backupStatus(.completed(itemCount: 3), bundle: english)
+            == "Backup complete. Retained items: 3.")
+        #expect(MaintenanceSettingsCopy.backupStatus(.completed(itemCount: 3), bundle: chinese)
+            == "备份完成，已保留 3 条记录。")
+        #expect(MaintenanceSettingsCopy.backupStatus(.cancelled, bundle: chinese) == "备份已取消。")
+        #expect(MaintenanceSettingsCopy.backupStatus(.failed(.destinationAlreadyExists), bundle: chinese)
+            == "请选择新的备份文件夹。不能替换已有文件或文件夹。")
+        #expect(MaintenanceSettingsCopy.backupStatus(.failed(.writeFailed), bundle: chinese)
+            == "无法保存备份。请检查可用磁盘空间和文件夹权限后重试。")
+    }
+
     private func bundle(_ language: String) throws -> Bundle {
         let resources = MaintenanceSettingsCopy.bundle
         let localization = try #require(resources.localizations.first {

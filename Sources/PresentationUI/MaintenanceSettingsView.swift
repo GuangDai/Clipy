@@ -8,6 +8,8 @@ struct MaintenanceSettingsView: View {
     let location: StorageLocationSettings
 
     @Environment(\.locale) private var locale
+    @State private var backup = HistoryBackupSettingsModel()
+    @State private var backupTask: Task<Void, Never>?
     @State private var refreshGeneration = 0
     @State private var logicalBytes: Int?
     @State private var logicalFailed = false
@@ -18,6 +20,7 @@ struct MaintenanceSettingsView: View {
 
     var body: some View {
         Form {
+            backupSection
             Section {
                 LabeledContent(MaintenanceSettingsCopy.text("Logical Content Size")) {
                     byteValue(logicalBytes, failed: logicalFailed)
@@ -78,6 +81,43 @@ struct MaintenanceSettingsView: View {
         .task(id: refreshGeneration) { await refreshLogicalBytes() }
         .task(id: refreshGeneration) { await refreshAllocatedBytes() }
         .task(id: refreshGeneration) { await refreshProcessMemory() }
+        .onDisappear { backupTask?.cancel() }
+    }
+
+    private var backupSection: some View {
+        Section {
+            HStack {
+                Button(MaintenanceSettingsCopy.text("Back Up History…")) {
+                    guard backupTask == nil else { return }
+                    backupTask = Task {
+                        await backup.backUp(history: history, location: location)
+                        backupTask = nil
+                    }
+                }
+                .disabled(backupTask != nil)
+                .accessibilityIdentifier("clipy.settings.maintenance.backup")
+                if backup.isWorking {
+                    ProgressView().controlSize(.small)
+                        .accessibilityLabel(MaintenanceSettingsCopy.text("Backing up history…"))
+                    Button(MaintenanceSettingsCopy.text("Cancel")) { backupTask?.cancel() }
+                        .accessibilityIdentifier("clipy.settings.maintenance.backup-cancel")
+                }
+            }
+            if let outcome = backup.outcome {
+                Text(MaintenanceSettingsCopy.backupStatus(outcome))
+                    .font(.callout)
+                    .accessibilityIdentifier("clipy.settings.maintenance.backup-status")
+            }
+            if backup.completedDirectory != nil {
+                Button(MaintenanceSettingsCopy.text("Show Backup in Finder")) {
+                    backup.reveal(using: location)
+                }
+                .accessibilityIdentifier("clipy.settings.maintenance.backup-reveal")
+            }
+        } footer: {
+            Text(MaintenanceSettingsCopy.backupDisclosure())
+                .accessibilityIdentifier("clipy.settings.maintenance.backup-disclosure")
+        }
     }
 
     @ViewBuilder

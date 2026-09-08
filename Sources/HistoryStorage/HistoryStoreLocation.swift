@@ -10,6 +10,10 @@ internal final class HistoryStoreLocation: Sendable {
     internal let rootURL: URL
     private let disposableRoot: URL?
 
+    /// Files below this directory can be removed by blob cleanup or by a
+    /// temporary store's lifetime. Independent backups must live elsewhere.
+    internal var ownedDirectoryURL: URL { disposableRoot ?? rootURL }
+
     internal init(persistence: HistoryPersistence) throws {
         switch persistence {
         case .persistent(let storeURL):

@@ -1,8 +1,7 @@
 /// HistoryListView.swift — the panel's two-section list (Pinned, Recent)
 /// with single selection, last-row pagination prefetch, the panel keyboard
 /// surface, and the empty states. Rows render the view state's DISPLAYED
-/// lanes: the client-side type/pinned filter narrows them in memory while
-/// pagination keeps walking the unfiltered stream. One list-level width
+/// lanes: History applies type/pinned filters before pagination. One list-level width
 /// measurement (`onGeometryChange`, the `HistoryPanelView` body's idiom)
 /// drives every row's wide-presentation decision — rows carry no geometry
 /// observers of their own.
@@ -104,9 +103,8 @@ struct HistoryListView: View {
             emptyState
         } else if viewState.displayedPinnedRows.isEmpty,
                   viewState.displayedUnpinnedRows.isEmpty {
-            // Rows exist but the client-side filter hides every one of them:
-            // reuse the search miss state byte-identically rather than
-            // gaining filter-specific copy.
+            // Keep the displayed-row fallback consistent with the current
+            // query while presentation reconciles its loaded lanes.
             filteredEmptyState
         } else {
             list(now: now)
@@ -230,6 +228,8 @@ struct HistoryListView: View {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .accessibilityLabel(HistoryListCopy.text("Loading clipboard history"))
+        } else if viewState.typeFilter != .all || viewState.showsPinnedOnly {
+            filteredEmptyState
         } else if viewState.isSearchActive {
             ContentUnavailableView(
                 HistoryListCopy.text("No Results"),

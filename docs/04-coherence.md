@@ -126,7 +126,7 @@ hash. A schema deployment necessarily replaces the process and its
 `HistoryAuthority`, which mints a new random marker, so process binding already
 invalidates every pre-deployment cursor. V1 has no in-process schema transition.
 
-The current opaque v2 JSON payload requires direction and is deterministically encoded with sorted keys,
+The current opaque v3 JSON payload requires direction and a complete history filter and is deterministically encoded with sorted keys,
 explicit base64-`Data` and deferred-to-`Date` strategies. Decode applies a
 pre-parse envelope of `6 × maximumSearchTermUTF8Bytes + 2 KiB` (the sixfold
 term allowance covers worst-case JSON escaping), then validates every known
@@ -134,7 +134,7 @@ shape/anchor field: page limit, term byte bound, mutually exclusive optional
 slots, non-negative pin ordinal, and finite dates/scores. Unknown JSON keys are
 ignored for metadata only; they cannot alter the current semantics,
 and any evolution that relies on one must increment the cursor format version.
-There is one current decoder, with no v1 compatibility path.
+There is one current decoder, with no older-format compatibility path.
 
 Observation is limited to the first page. Additional pages are explicit one-shot browse calls and restart from page one after expiration.
 
@@ -144,12 +144,20 @@ Search uses a two-step value pipeline:
 
 ```text
 SearchWorker opens one bounded-lifetime SQLite read transaction
-→ reads scalar batches under one ChangePosition
+→ selects indexed candidates and reads scalar batches under one ChangePosition
 → evaluates exact / fuzzy / regexp with bounded page selection
 → bounded HistoryPage(position, ordered rows)
 ```
 
-Each source batch contains only scalar projection data required for search and row display. It does not contain Canonical Content, revision blobs, model instances, or dedup ranks. Backward exact/regexp retains only a page-sized rolling predecessor window; fuzzy retains only the nearest page-sized ranked candidates. Both directions validate later stored projections even after matching is complete, preserving corrupt-tail rejection without retaining the full corpus.
+Each source batch contains only scalar projection data required for search and row display. It does not contain Canonical Content, revision blobs, model instances, or dedup ranks. Type and pinned filters select current Effective metadata before projection. Exact/regexp use directional keysets and stop after the requested page plus lookahead; fuzzy retains only a page-sized ranked candidate set and may stop when later default-ordered rows provably cannot improve it. Every read candidate is validated. A search does not scan unrelated rows solely to validate the whole store; a corrupt value is rejected when its owning read encounters it.
+
+The persistent candidate index is maintained in the same History transaction as
+the projected title/body and deletion. FTS5 stores encoded scalar grams rather
+than clipboard words; it only selects a superset for the existing matcher.
+Sparse candidates drive bounded item lookups. Dense candidates are tested while
+walking the ordered history indexes, avoiding a sort of all matched items.
+Queries without a proven necessary indexed condition retain bounded scanning;
+the index never narrows the declared match semantics.
 
 For one-shot browse, a commit during evaluation does not corrupt the result; the returned page is correctly labeled with its older position. For observation, an invalidation newer than that position causes the result to be discarded and recomputed before it is yielded.
 

@@ -238,8 +238,9 @@ struct SearchWorkerCancellationTests {
             storeURL: storeURL,
             maximumUnpinned: 65
         )
-        // Two batches are sufficient. Park a cancelled read after its first
-        // batch; the independent reader and single writer must both progress.
+        // All 64 rows match, and the requested page exceeds one 32-row
+        // batch. Neither the persistent candidate index nor page completion
+        // can bypass the between-batch suspension exercised below.
         let seedReceipt = try await history.seedPerformanceFixture(
             rowCount: 64
         ) { index in
@@ -268,8 +269,8 @@ struct SearchWorkerCancellationTests {
 
         let cancelled = Task {
             try await history.browse(HistoryBrowseRequest(
-                kind: .search(text: "absent-authority-term", mode: .exact),
-                limit: 10
+                kind: .search(text: "cancel-row-", mode: .exact),
+                limit: 64
             ))
         }
         await gate.waitForPark(cancellationExitPoint)

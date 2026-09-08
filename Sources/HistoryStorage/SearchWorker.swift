@@ -230,10 +230,24 @@ internal actor SearchWorker {
     ///   no row in the computed order (04 §6).
     internal func page(
         _ request: HistoryBrowseRequest,
-        in corpus: SearchCorpusSnapshot,
+        in inputCorpus: SearchCorpusSnapshot,
         continuationAnchor: StoredOrderingAnchor?,
         processMarker: UUID
     ) async throws -> HistoryPage {
+        // The immutable array entry is the matcher oracle used by owner
+        // tests. Production filters SQLite rows before copying each batch.
+#if DEBUG
+        let corpus = request.filter == .all ? inputCorpus : SearchCorpusSnapshot(
+            position: inputCorpus.position,
+            rows: inputCorpus.rows.filter { HistoryFilterSQL.admits($0, filter: request.filter) },
+            debugTrace: inputCorpus.debugTrace
+        )
+#else
+        let corpus = request.filter == .all ? inputCorpus : SearchCorpusSnapshot(
+            position: inputCorpus.position,
+            rows: inputCorpus.rows.filter { HistoryFilterSQL.admits($0, filter: request.filter) }
+        )
+#endif
 #if DEBUG
         let debugClock = ContinuousClock()
         let debugTotalStart = corpus.debugTrace.startedAt

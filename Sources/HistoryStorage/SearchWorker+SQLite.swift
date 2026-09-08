@@ -113,10 +113,19 @@ extension SearchWorker {
 
             await suspensionHandler?(.evaluationEntry)
             try checkSnapshotDeadline(lifetimeDeadline)
-            let reader = SQLiteSearchRows(database: database, limits: limits)
+            let isRankedFuzzy = admitted.mode == .fuzzy && !admitted.term.isEmpty
+            let lowestPossibleFuzzyScore = isRankedFuzzy
+                ? try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: admitted.term, in: database) : 0
+            let reversesOrderedRows = direction == .backward && !isRankedFuzzy
+            let scanDirection: HistoryPageDirection = reversesOrderedRows ? .forward : direction
+            let reader = try SQLiteSearchRows(
+                database: database, limits: limits, filter: request.filter,
+                candidateExpression: SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
+                orderedAnchor: isRankedFuzzy ? nil : anchor, reversesOrder: reversesOrderedRows
+            )
             defer { reader.finish() }
             let directive = ScanDirective(continuationAnchor: anchor, maximumSurvivors: request.limit + 1,
-                                          direction: direction)
+                                          direction: scanDirection)
             var tracker = OrderPreservingScanTracker(directive: directive)
             var ordered: [EvaluatedRow] = []
             var fuzzySelection = FuzzyPageSelection(directive: directive)
@@ -154,19 +163,18 @@ extension SearchWorker {
 #else
                 let snapshot = SearchCorpusSnapshot(position: position, rows: batch.rows)
 #endif
-                // Exact/regexp stop matching after lookahead, but continue
-                // validating later stored rows: corrupt tail projections must
-                // not become invisible merely because the page filled early.
+                // Ordered modes need only the page and one adjacent match.
+                // Corruption is rejected in the bounded candidate projections
+                // this query reads; an unrelated tail is not a page input.
                 if !matchingComplete {
                     let evaluation: EvaluationResult
-                    let isRankedFuzzy = admitted.mode == .fuzzy && !admitted.term.isEmpty
                     let survivorsSoFar = max(0, ordered.count - (anchor == nil ? 0 : 1))
                     let batchDirective = ScanDirective(
-                        continuationAnchor: isRankedFuzzy || (direction == .forward && !ordered.isEmpty)
+                        continuationAnchor: isRankedFuzzy || (scanDirection == .forward && !ordered.isEmpty)
                             ? nil : anchor,
-                        maximumSurvivors: isRankedFuzzy || direction == .backward
+                        maximumSurvivors: isRankedFuzzy || scanDirection == .backward
                             ? batch.rows.count + 1 : request.limit + 1 - survivorsSoFar,
-                        direction: isRankedFuzzy ? .forward : direction
+                        direction: isRankedFuzzy ? .forward : scanDirection
                     )
                     if admitted.term.isEmpty {
                         evaluation = evaluateRecentEquivalent(in: snapshot, directive: batchDirective)
@@ -225,6 +233,11 @@ extension SearchWorker {
                         revisionCounts = revisionCounts.filter { retained.contains($0.key) }
                     }
                 }
+                if matchingComplete { break }
+                if isRankedFuzzy,
+                   fuzzySelection.cannotBeImprovedByLaterDefaultOrderedRows(
+                       lowestPossibleScore: lowestPossibleFuzzyScore
+                   ) { break }
                 let yieldStarted = clock.now
 #if DEBUG
                 await suspensionHandler?(.sqliteBatchComplete)
@@ -233,8 +246,8 @@ extension SearchWorker {
                 regexpDeadline = regexpDeadline.advanced(by: yieldStarted.duration(to: clock.now))
             }
             try checkSnapshotDeadline(lifetimeDeadline)
-            let evaluated = admitted.mode == .fuzzy && !admitted.term.isEmpty
-                ? fuzzySelection.evaluatedRows() : ordered
+            let evaluated = isRankedFuzzy
+                ? fuzzySelection.evaluatedRows() : (reversesOrderedRows ? Array(ordered.reversed()) : ordered)
 #if DEBUG
             searchDebugProbe.record(
                 traceID: trace.id, component: "worker", phase: "evaluation-complete",
@@ -364,11 +377,60 @@ private final class SQLiteSearchRows {
     let limits: HistoryLimits
     var statement: SQLiteStatement?
     var lane = 0
+    let ranges: [(condition: String, bindings: [SQLiteValue], order: String)]
     var pendingRow = false
+    let filter: HistoryFilter
+    let candidateExpression: String?
+    let prefersSparseCandidates: Bool
 
-    init(database: SQLiteDatabase, limits: HistoryLimits) {
+    init(
+        database: SQLiteDatabase, limits: HistoryLimits, filter: HistoryFilter,
+        candidateExpression: String?, orderedAnchor: StoredOrderingAnchor?, reversesOrder: Bool
+    ) throws {
         self.database = database
         self.limits = limits
+        self.filter = filter
+        self.candidateExpression = candidateExpression
+        if let candidateExpression {
+            prefersSparseCandidates = try SQLiteSearchIndex.prefersSparseCandidates(
+                expression: candidateExpression, in: database
+            )
+        } else { prefersSparseCandidates = false }
+        // Each range starts directly at the adjacent anchor in the existing
+        // pin/date/UUID indexes. Reverse reads restore display order only
+        // after their bounded page and lookbehind have been selected.
+        if let orderedAnchor, case let .defaultOrder(ordinal, date, id) = orderedAnchor {
+            if let ordinal {
+                if reversesOrder {
+                    ranges = [("pinOrdinal IS NOT NULL AND pinOrdinal <= ?", [.integer(Int64(ordinal))], "pinOrdinal DESC")]
+                } else {
+                    ranges = [
+                        ("pinOrdinal IS NOT NULL AND pinOrdinal >= ?", [.integer(Int64(ordinal))], "pinOrdinal ASC"),
+                        ("pinOrdinal IS NULL", [], "lastCopiedAt DESC,id ASC"),
+                    ]
+                }
+            } else {
+                let timestamp = SQLiteValue.real(date.timeIntervalSinceReferenceDate)
+                let identifier = SQLiteValue.text(id.rawValue.uuidString)
+                if reversesOrder {
+                    ranges = [
+                        ("pinOrdinal IS NULL AND lastCopiedAt = ? AND id <= ?", [timestamp, identifier], "id DESC"),
+                        ("pinOrdinal IS NULL AND lastCopiedAt > ?", [timestamp], "lastCopiedAt ASC,id DESC"),
+                        ("pinOrdinal IS NOT NULL", [], "pinOrdinal DESC"),
+                    ]
+                } else {
+                    ranges = [
+                        ("pinOrdinal IS NULL AND lastCopiedAt = ? AND id >= ?", [timestamp, identifier], "id ASC"),
+                        ("pinOrdinal IS NULL AND lastCopiedAt < ?", [timestamp], "lastCopiedAt DESC,id ASC"),
+                    ]
+                }
+            }
+        } else {
+            ranges = [
+                ("pinOrdinal IS NOT NULL", [], "pinOrdinal ASC"),
+                ("pinOrdinal IS NULL", [], "lastCopiedAt DESC,id ASC"),
+            ]
+        }
     }
 
     func finish() { statement?.finalize(); statement = nil }
@@ -380,14 +442,27 @@ private final class SQLiteSearchRows {
         while rows.count < SearchWorker.maximumBatchRows {
             try Task.checkCancellation()
             if statement == nil {
-                guard lane < 2 else { break }
-                let condition = lane == 0 ? "pinOrdinal IS NOT NULL" : "pinOrdinal IS NULL"
+                guard lane < ranges.count else { break }
+                let range = ranges[lane]
+                let predicate = HistoryFilterSQL.predicate(filter)
+                let candidateSQL: String
+                if candidateExpression == nil {
+                    candidateSQL = "1"
+                } else if prefersSparseCandidates {
+                    candidateSQL = "history_items.rowid IN (SELECT rowid FROM history_search WHERE history_search MATCH ?)"
+                } else {
+                    // Dense hits walk the ordering index and probe each row's
+                    // posting membership, stopping after page/lookahead. A
+                    // full candidate IN set would sort the whole dense corpus.
+                    candidateSQL = "EXISTS (SELECT 1 FROM history_search WHERE rowid = history_items.rowid AND history_search MATCH ?)"
+                }
+                let candidateBindings = candidateExpression.map { [SQLiteValue.text($0)] } ?? []
                 statement = try database.prepare("""
                     SELECT id,contentVersion,titleUTF8,searchBodyUTF8,effectiveTypeIdentifiersBlob,
                            lastCopiedAt,copyCount,lastSource,pinOrdinal,revisionCount
-                    FROM history_items WHERE \(condition)
-                    ORDER BY pinOrdinal ASC,lastCopiedAt DESC,id ASC
-                    """)
+                    FROM history_items WHERE (\(range.condition)) AND (\(predicate.sql)) AND (\(candidateSQL))
+                    ORDER BY \(range.order)
+                    """, bindings: range.bindings + predicate.bindings + candidateBindings)
             }
             guard let statement else { break }
             if !pendingRow {

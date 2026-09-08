@@ -57,6 +57,10 @@ struct RealHistoryClearLifecycleTests {
 /// Only delays delivery after the real writer has committed. All mutation,
 /// observation and read behavior remains the production SQLite facade.
 private actor ParkedClearReceiptHistory: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        try await base.backup(to: directory)
+    }
+
     let base: any ClipboardHistory
     private var continuation: CheckedContinuation<Void, Never>?
     private(set) var observationCount = 0

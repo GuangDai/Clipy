@@ -193,6 +193,7 @@ struct DragItemProviderTests {
         state.typeFilter = .images
         #expect(state.dragItemProvider(for: reference).registeredTypeIdentifiers.isEmpty)
         state.typeFilter = .all
+        try #require(await pollUntil { state.rows.count == 1 && state.hasAuthoritativeFirstPage })
         #expect(state.dragItemProvider(for: Self.reference(version: 2)).registeredTypeIdentifiers.isEmpty)
         await history.finishObservation()
     }

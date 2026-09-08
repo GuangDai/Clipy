@@ -139,6 +139,10 @@ struct DetailsLazyRepresentationTests {
 }
 
 private actor DetailsReadRecorder: ClipboardHistory {
+    func backup(to directory: URL) async throws -> HistoryBackupReceipt {
+        try await history.backup(to: directory)
+    }
+
     private let history: SQLiteHistory
     private let holdsRead: Bool
     private var continuation: CheckedContinuation<Void, Never>?

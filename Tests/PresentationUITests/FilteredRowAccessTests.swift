@@ -7,7 +7,9 @@ import Testing
 struct FilteredRowAccessTests {
     @Test func interleavedRawRowsKeepStableLanesAndExactReferenceAdmission() async throws {
         let raw = mixedRows()
-        let history = ScriptedHistory(observedFirstPage: fixturePage(rows: raw, next: nil))
+        let history = ScriptedHistory(
+            observedFirstPage: fixturePage(rows: raw, next: nil), repeatsObservedFirstPage: false
+        )
         let state = HistoryViewState(history: history)
         var pasted: [HistoryItemReference] = []
         state.onPaste = { pasted.append($0) }
@@ -32,10 +34,15 @@ struct FilteredRowAccessTests {
             state.typeFilter = filter
             state.showsPinnedOnly = pinnedOnly
             let expected = indices.map { raw[$0] }
+            let matching = raw.filter { expected.contains($0) }
+            let requestFilter = HistoryFilter(type: filter.contentType, pinnedOnly: pinnedOnly)
+            try #require(await pollUntil { await history.observeRequests.last?.filter == requestFilter })
+            await history.emitObservedPage(fixturePage(rows: matching, next: nil))
+            try #require(await pollUntil { state.hasAuthoritativeFirstPage && state.rows == matching })
             #expect(state.displayedRows == expected)
             #expect(state.displayedPinnedRows == expected.filter { $0.pinnedPosition != nil })
             #expect(state.displayedUnpinnedRows == expected.filter { $0.pinnedPosition == nil })
-            #expect(state.rows == raw)
+            #expect(state.rows == matching)
             pasted = []
 
             for row in raw {
@@ -54,7 +61,7 @@ struct FilteredRowAccessTests {
                 #expect(state.dragItemProvider(for: stale).registeredTypeIdentifiers.isEmpty)
             }
         }
-        #expect(await history.observeRequests.count == 1)
+        #expect(await history.observeRequests.count == cases.count)
         await history.finishObservation()
     }
 
@@ -62,8 +69,9 @@ struct FilteredRowAccessTests {
     func prefetchUsesTheLastVisibleLaneRatherThanTheRawSuffix(pinnedOnly: Bool) async throws {
         let raw = mixedRows()
         let cursor = fixtureCursor("interleaved-next")
+        let matching = (pinnedOnly ? [1, 5] : [0, 1, 4, 5]).map { raw[$0] }
         let history = ScriptedHistory(
-            observedFirstPage: fixturePage(rows: raw, next: "interleaved-next"),
+            observedFirstPage: fixturePage(rows: matching, next: "interleaved-next"),
             browseScript: [cursor: .paused(fixturePage(rows: [], next: nil))]
         )
         let state = HistoryViewState(history: history)
@@ -85,7 +93,8 @@ struct FilteredRowAccessTests {
         await history.resumeBrowse(cursor: cursor)
         try #require(await pollUntil { !state.hasNextPage && !state.isLoadingPage })
         #expect(await history.browseRequests.count == 1)
-        #expect(state.rows == raw)
+        #expect(await history.browseRequests.last?.filter == HistoryFilter(type: .text, pinnedOnly: pinnedOnly))
+        #expect(state.rows == matching)
         state.prefetchNextPageIfNeeded(appearingRowID: lastVisible.item.id)
         #expect(!state.isLoadingPage)
         #expect(await history.browseRequests.count == 1)
