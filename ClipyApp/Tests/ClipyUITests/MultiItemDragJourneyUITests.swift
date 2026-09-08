@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import XCTest
 
 /// The receiver lives in the XCTest runner process. The source is Clipy's
@@ -73,9 +74,26 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         defer { target.close() }
         let destination = target.convertPoint(toScreen: NSPoint(x: receiver.bounds.midX, y: receiver.bounds.midY))
         XCTAssertFalse(target.frame.intersects(sourceFrame))
-        XCTAssertTrue(target.isVisible)
+        // orderFront/displayIfNeeded do not establish that the buffered window
+        // has reached WindowServer. Let the runner's main run loop process its
+        // display work, and wait for the actual occlusion/hit-test facts.
+        let receiverReady = NSPredicate { _, _ in
+            MainActor.assumeIsolated {
+                target.isVisible && target.occlusionState.contains(.visible)
+                    && NSWindow.windowNumber(at: destination, belowWindowWithWindowNumber: 0) == target.windowNumber
+            }
+        }
+        let readiness = XCTWaiter.wait(for: [
+            XCTNSPredicateExpectation(predicate: receiverReady, object: nil)
+        ], timeout: 5)
+        let receiverDiagnostics = Self.receiverDiagnostics(target, destination: destination)
+        let receiverAttachment = XCTAttachment(string: receiverDiagnostics)
+        receiverAttachment.name = "Native drag receiver readiness"
+        receiverAttachment.lifetime = .keepAlways
+        add(receiverAttachment)
+        XCTAssertEqual(readiness, .completed, receiverDiagnostics)
         XCTAssertEqual(NSWindow.windowNumber(at: destination, belowWindowWithWindowNumber: 0), target.windowNumber,
-                       "Receiver must own the physical drop point; source: \(sourceFrame), receiver: \(target.frame)")
+                       "Receiver must own the physical drop point; \(receiverDiagnostics)")
         let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = start.withOffset(CGVector(
             dx: destination.x - row.frame.midX,
@@ -107,6 +125,26 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         XCTAssertEqual(items[0][opaque.rawValue], Data([0, 255, 1]))
         XCTAssertEqual(items[1][opaque.rawValue], Data([255, 0, 2]))
     }
+    /// Report only this runner's display metadata. No window titles, clipboard
+    /// content, history IDs, or other applications' window records are included.
+    @MainActor
+    private static func receiverDiagnostics(_ target: NSWindow, destination: NSPoint) -> String {
+        let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+        let processID = Int(ProcessInfo.processInfo.processIdentifier)
+        let fields = [kCGWindowNumber, kCGWindowLayer, kCGWindowBounds, kCGWindowAlpha, kCGWindowIsOnscreen]
+            .map { $0 as String }
+        let ownWindows = windows.filter {
+            ($0[kCGWindowOwnerPID as String] as? NSNumber)?.intValue == processID
+        }.map { window in window.filter { fields.contains($0.key) } }
+        return """
+            runner policy: \(NSApplication.shared.activationPolicy().rawValue), running: \(NSApplication.shared.isRunning)
+            receiver number: \(target.windowNumber), visible: \(target.isVisible), occlusion: \(target.occlusionState.rawValue)
+            opaque: \(target.isOpaque), alpha: \(target.alphaValue), ignoresMouse: \(target.ignoresMouseEvents)
+            frame: \(target.frame), destination: \(destination), topmost: \(NSWindow.windowNumber(at: destination, belowWindowWithWindowNumber: 0))
+            own WindowServer records: \(ownWindows)
+            """
+    }
+
     /// Choose a real free rectangle around the measured source, in AppKit
     /// screen coordinates. Target dimensions shrink to available space; its
     /// position is never guessed from a fixed screen corner.
