@@ -197,6 +197,9 @@ struct SearchHeaderView: View {
                 Text(PanelActionsCopy.text("Images", bundle: copyBundle)).tag(HistoryTypeFilter.images)
                 Text(PanelActionsCopy.text("Links", bundle: copyBundle)).tag(HistoryTypeFilter.links)
             }
+            // Four choices belong in this menu. An explicit inline style
+            // avoids a second native menu-tracking handoff for each filter.
+            .pickerStyle(.inline)
             Divider()
             Toggle(PanelActionsCopy.text("Pinned Only", bundle: copyBundle), isOn: pinnedOnlyBinding)
         } label: {

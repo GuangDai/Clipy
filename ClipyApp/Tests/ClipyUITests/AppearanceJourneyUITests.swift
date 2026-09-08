@@ -178,15 +178,16 @@ final class AppearanceJourneyUITests: XCTestCase {
         app.typeKey("w", modifierFlags: .command)
     }
 
-    /// The type filter is client-side over the loaded rows: with one
-    /// plain-text item, Links narrows to zero rows and the search empty
-    /// state, and All restores the captured row.
+    /// The menu changes the History query: with one plain-text item,
+    /// Links narrows to zero rows and the search empty state, then All
+    /// restores the captured row without dismissing the floating panel.
     @MainActor
     func testFilterMenuNarrowsRows() throws {
         let captured = "alpha-filter-check"
         let app = try launchApp(capturing: captured)
         defer { app.terminate() }
 
+        let panel = app.descendants(matching: .any)["clipy.panel.root"]
         let rows = historyRows(in: app)
         assertRowCount(1, in: rows, app: app, context: "filter initial capture")
 
@@ -195,7 +196,10 @@ final class AppearanceJourneyUITests: XCTestCase {
         filter.click()
         let links = app.menuItems["Links"]
         assertExists(links, timeout: 5, in: app, context: "Links filter item")
+        XCTAssertTrue(links.isHittable, diagnostic(app, context: "inline Links choice"))
         links.click()
+        XCTAssertTrue(panel.exists, diagnostic(app, context: "panel remains open after Links"))
+        XCTAssertEqual(filter.value as? String, "Links", diagnostic(app, context: "Links was selected"))
 
         XCTAssertTrue(
             waitUntil(timeout: 10) { rows.count == 0 },
@@ -209,7 +213,12 @@ final class AppearanceJourneyUITests: XCTestCase {
         filter.click()
         let all = app.menuItems["All"]
         assertExists(all, timeout: 5, in: app, context: "All filter item")
+        XCTAssertTrue(all.isHittable, diagnostic(app, context: "inline All choice"))
         all.click()
+        // A closed panel also reports zero AX rows. Verify the interaction
+        // before judging the asynchronous History observation's row result.
+        XCTAssertTrue(panel.exists, diagnostic(app, context: "panel remains open after All"))
+        XCTAssertEqual(filter.value as? String, "All", diagnostic(app, context: "All was selected"))
         assertRowCount(
             1,
             in: rows,
