@@ -25,6 +25,6 @@ final class SettingsWindowResizeView: NSView {
         guard let window else { return }
         window.styleMask.insert(.resizable)
         window.contentMinSize = NSSize(width: 560, height: 420)
-        window.contentMaxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        window.contentMaxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
     }
 }
