@@ -58,7 +58,7 @@ struct HistoryRowView: View {
     private let onShowDetails: (HistoryItemReference) -> Void
 
     @State private var isHovered = false
-    @State private var dragFrame = CGRect.zero
+    @State private var dragRegion = HistoryRowDragRegionView()
 
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
@@ -123,23 +123,19 @@ struct HistoryRowView: View {
             RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
                 .fill(isHovered && !isSelected ? Color.primary.opacity(0.045) : .clear)
         }
+        .background {
+            if dragSource != nil { HistoryRowDragRegion(view: dragRegion) }
+        }
         .contentShape(Rectangle())
         .onHover { inside in
             isHovered = inside
             // Use the same hit-tested row region as the visible hover state.
             // A transparent background sibling is not the row's event source.
-            dragSource?.hover(row.item, frame: dragFrame, isInside: inside)
-        }
-        .onGeometryChange(for: CGRect.self) { proxy in
-            proxy.frame(in: .named("clipy.history.drag"))
-        } action: { frame in
-            guard let dragSource else { return }
-            dragFrame = frame
-            dragSource.refresh(row.item, frame: frame)
+            dragSource?.hover(row.item, region: dragRegion, isInside: inside)
         }
         .onChange(of: row.item) { old, new in
             dragSource?.retire(old)
-            dragSource?.refresh(new, frame: dragFrame)
+            dragSource?.refresh(new, region: dragRegion)
         }
         .onDisappear { dragSource?.retire(row.item) }
         .onTapGesture(count: 2) { onCopy(row.item) }

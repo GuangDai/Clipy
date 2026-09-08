@@ -130,7 +130,6 @@ struct HistoryListView: View {
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
-        .coordinateSpace(name: "clipy.history.drag")
         .background {
             HistoryListDragSource(view: dragSource) { reference in
                 try await viewState.dragPayload(for: reference)

@@ -28,7 +28,11 @@ struct HistoryListDragSource: NSViewRepresentable {
 @MainActor
 final class HistoryListDraggingView: NSView, NSDraggingSource {
     var load: (@MainActor (HistoryItemReference) async throws -> PastePayload?)?
-    private var hovered: (item: HistoryItemReference, frame: NSRect)?
+    private struct HoveredRow {
+        let item: HistoryItemReference
+        weak var region: NSView?
+    }
+    private var hovered: HoveredRow?
     private var pressed: (item: HistoryItemReference, event: NSEvent)?
     private var preparation: Task<Void, Never>?
     private var eventMonitor: Any?
@@ -57,21 +61,37 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
-    func hover(_ item: HistoryItemReference, frame: NSRect, isInside: Bool) {
+    func hover(_ item: HistoryItemReference, region: NSView, isInside: Bool) {
         if isInside {
-            hovered = (item, frame)
-            trace("hover-enter frame=\(frame) bounds=\(bounds) visible=\(visibleRect)")
+            hovered = HoveredRow(item: item, region: region)
+            trace("hover-enter bounds=\(region.bounds)")
         }
         else if hovered?.item == item { hovered = nil }
     }
 
-    /// Geometry and revision changes also refresh a stationary pointer's one
-    /// candidate. No collection of row rectangles is retained.
-    func refresh(_ item: HistoryItemReference, frame: NSRect) {
+    /// Revision changes also refresh a stationary pointer's one candidate.
+    /// Native geometry is read at admission, so preview movement, scrolling
+    /// and resizing cannot leave a cached row rectangle in the wrong space.
+    func refresh(_ item: HistoryItemReference, region: NSView) {
         guard let window else { return }
-        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
-        if visibleRect.contains(point), frame.contains(point) { hovered = (item, frame) }
+        if contains(window.mouseLocationOutsideOfEventStream, in: region) {
+            hovered = HoveredRow(item: item, region: region)
+        }
         else if hovered?.item.id == item.id { hovered = nil }
+    }
+
+    func item(at pointInWindow: NSPoint) -> HistoryItemReference? {
+        guard let hovered, let region = hovered.region,
+              contains(pointInWindow, in: region) else { return nil }
+        return hovered.item
+    }
+
+    private func contains(_ pointInWindow: NSPoint, in region: NSView) -> Bool {
+        guard let window, region.window === window, !region.isHiddenOrHasHiddenAncestor else { return false }
+        let listPoint = convert(pointInWindow, from: nil)
+        let rowPoint = region.convert(pointInWindow, from: nil)
+        return bounds.intersection(visibleRect).contains(listPoint)
+            && region.bounds.intersection(region.visibleRect).contains(rowPoint)
     }
 
     func retire(_ item: HistoryItemReference) {
@@ -121,10 +141,10 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
         case .leftMouseDown:
             cancelPreparation()
             let point = convert(event.locationInWindow, from: nil)
-            trace("mouse-hit point=\(point) bounds=\(bounds) visible=\(visibleRect) candidate-frame=\(String(describing: hovered?.frame)) clicks=\(event.clickCount)")
+            trace("mouse-hit point=\(point) bounds=\(bounds) visible=\(visibleRect) clicks=\(event.clickCount)")
             guard event.clickCount == 1, !event.modifierFlags.contains(.control),
-                  visibleRect.contains(point), let hovered, hovered.frame.contains(point) else { return }
-            pressed = (hovered.item, event)
+                  let item = item(at: event.locationInWindow) else { return }
+            pressed = (item, event)
             trace("pressed-admitted")
         case .leftMouseDragged:
             trace("mouse-dragged")
