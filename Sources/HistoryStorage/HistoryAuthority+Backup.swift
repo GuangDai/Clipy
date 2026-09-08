@@ -17,9 +17,8 @@ extension HistoryAuthority {
         // A backup must outlive this store's cleanup and disposal. Resolve
         // parent aliases too: a Finder-selected symlink can point into the
         // managed blob tree even when the displayed path is elsewhere.
-        let destinationPath = directory.resolvingSymlinksInPath().standardizedFileURL.pathComponents
-        let ownedPath = storeLocation.ownedDirectoryURL
-            .resolvingSymlinksInPath().standardizedFileURL.pathComponents
+        let destinationPath = try backupPathComponents(directory)
+        let ownedPath = try backupPathComponents(storeLocation.ownedDirectoryURL)
         guard !destinationPath.starts(with: ownedPath) else {
             throw HistoryBackupFailure.invalidDestination
         }
@@ -105,5 +104,24 @@ extension HistoryAuthority {
         } catch {
             throw HistoryBackupFailure.writeFailed
         }
+    }
+
+    /// realpath resolves existing filesystem aliases consistently, including
+    /// macOS /var → /private/var. A new export has no leaf to resolve yet:
+    /// resolve its existing parent and append that leaf without Foundation's
+    /// path standardization rewriting one spelling independently of the other.
+    /// mkdir below also requires this parent to exist.
+    private func backupPathComponents(_ directory: URL) throws -> [String] {
+        if let resolved = Darwin.realpath(directory.path, nil) {
+            defer { free(resolved) }
+            return String(cString: resolved).split(separator: "/").map(String.init)
+        }
+        let parent = directory.deletingLastPathComponent()
+        guard let resolved = Darwin.realpath(parent.path, nil) else {
+            throw HistoryBackupFailure.destinationUnavailable
+        }
+        defer { free(resolved) }
+        return String(cString: resolved).split(separator: "/").map(String.init)
+            + [directory.lastPathComponent]
     }
 }

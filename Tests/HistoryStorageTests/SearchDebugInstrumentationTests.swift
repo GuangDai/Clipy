@@ -1,6 +1,6 @@
 #if DEBUG
 /// Debug-only instrumentation proofs for the search pipeline. These tests
-/// drive the real public facade and real SwiftData implementation, then
+/// drive the real public facade and real SQLite implementation, then
 /// inspect only aggregate events from the injected probe.
 import Foundation
 import HistoryCore
@@ -28,7 +28,8 @@ struct SearchDebugInstrumentationTests {
         )
     }
 
-    @Test func exactSearchEmitsCorrelatedSQLiteBatchAndMatcherStages() async throws {
+    @Test(arguments: [false, true])
+    func exactSearchEmitsOnlyTheStagesActuallyNeeded(hasCandidates: Bool) async throws {
         let storeURL = WSSupport.tempStoreURL("search-debug-stages")
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
@@ -56,11 +57,12 @@ struct SearchDebugInstrumentationTests {
         await history.authority.setSearchDebugProbe(probe)
         await history.searchWorker.setSearchDebugProbe(probe)
 
+        let term = hasCandidates ? "concealed" : "absent diagnostic term"
         let page = try await history.browse(HistoryBrowseRequest(
-            kind: .search(text: "absent diagnostic term", mode: .exact),
+            kind: .search(text: term, mode: .exact),
             limit: 10
         ))
-        #expect(page.rows.isEmpty)
+        #expect(page.rows.count == (hasCandidates ? privateFragments.count : 0))
         await history.authority.setSearchDebugProbe(
             SearchDebugProbe(isEnabled: false)
         )
@@ -78,43 +80,46 @@ struct SearchDebugInstrumentationTests {
         #expect(Set(captured.map(\.traceID)).count == 1)
 
         let phases = Set(captured.map { "\($0.component).\($0.phase)" })
-        let expectedPhases: Set<String> = [
-            "worker.entry",
-            "worker.sqlite-batch",
-            "worker.exact-scan-begin",
-            "worker.exact-scan-progress",
-            "worker.exact-title-scan",
-            "worker.exact-body-scan",
-            "worker.exact-scan-complete",
-            "worker.evaluation-complete",
-            "worker.continuation",
-            "worker.page-materialization",
-            "worker.complete",
+        let queryPhases: Set<String> = [
+            "worker.entry", "worker.evaluation-complete", "worker.continuation",
+            "worker.page-materialization", "worker.complete",
         ]
-        #expect(expectedPhases.isSubset(of: phases))
-
-        let fetch = try #require(captured.first {
-            $0.component == "worker" && $0.phase == "sqlite-batch"
-        })
-        #expect(fetch.rowsProcessed == 3)
-        #expect(fetch.rowsTotal == 3)
-        #expect(fetch.sourceUTF8Bytes > 0)
-
-        let bodyScan = try #require(captured.first {
-            $0.component == "worker" && $0.phase == "exact-body-scan"
-        })
-        #expect(bodyScan.rowsProcessed == 3)
-        #expect(bodyScan.rowsTotal == 3)
-        #expect(bodyScan.bodyUTF8Bytes > 0)
-        #expect(bodyScan.matchedRows == 0)
-        #expect(bodyScan.exactASCIIEvaluations == 6)
-        #expect(bodyScan.exactFoundationEvaluations == 0)
+        #expect(queryPhases.isSubset(of: phases))
+        if hasCandidates {
+            let matcherPhases: Set<String> = [
+                "worker.sqlite-batch", "worker.exact-scan-begin", "worker.exact-scan-progress",
+                "worker.exact-title-scan", "worker.exact-body-scan", "worker.exact-scan-complete",
+            ]
+            #expect(matcherPhases.isSubset(of: phases))
+            let fetch = try #require(captured.first { $0.phase == "sqlite-batch" })
+            #expect(fetch.rowsProcessed == privateFragments.count)
+            #expect(fetch.rowsTotal == privateFragments.count)
+            #expect(fetch.sourceUTF8Bytes > 0)
+            // Titles miss; all candidates take the body lane and return
+            // actual excerpts, establishing that both matcher stages ran.
+            #expect(page.rows.allSatisfy { $0.search?.snippet != nil })
+            let bodyScan = try #require(captured.first { $0.phase == "exact-body-scan" })
+            #expect(bodyScan.rowsProcessed == privateFragments.count)
+            #expect(bodyScan.rowsTotal == privateFragments.count)
+            #expect(bodyScan.bodyUTF8Bytes > 0)
+            #expect(bodyScan.matchedRows == privateFragments.count)
+            #expect(bodyScan.exactASCIIEvaluations == privateFragments.count * 2)
+            #expect(bodyScan.exactFoundationEvaluations == 0)
+        } else {
+            // An absent gram proves there are no candidates, so neither
+            // payload projection nor a fabricated matcher trace is required.
+            #expect(phases == queryPhases)
+            let complete = try #require(captured.first { $0.phase == "complete" })
+            #expect(complete.rowsProcessed == 0)
+            #expect(complete.rowsTotal == 0)
+            #expect(complete.matchedRows == 0)
+        }
 
         let rendered = captured.compactMap(\.jsonLine).joined(separator: "\n")
         for fragment in privateFragments {
             #expect(!rendered.contains(fragment))
         }
-        #expect(!rendered.contains("absent diagnostic term"))
+        #expect(!rendered.contains(term))
         #expect(!rendered.contains("com.example.private-source"))
         #expect(!rendered.contains(storeURL.path))
     }

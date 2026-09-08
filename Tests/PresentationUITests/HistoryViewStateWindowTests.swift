@@ -244,16 +244,15 @@ struct HistoryViewStateWindowTests {
         try #require(await pollUntil {
             await history.observeRequests.last?.kind == .search(text: "row ", mode: .exact)
         })
-        await history.emitObservedPage(HistoryPage(
-            position: ChangePosition(rawValue: 1),
-            rows: Array(allRows.prefix(2)),
-            next: fixtureCursor("page-1")
-        ))
+        // The fixture publishes its first page once. Publishing it again
+        // races pagination: that replacement legitimately retires the window
+        // whose newer cursor this test is about to expire.
         try #require(await pollUntil { state.rows.count == 2 })
         for _ in 0..<3 {
             state.loadNextPage()
             try #require(await pollUntil { !state.isLoadingPage })
         }
+        try #require(state.hasPreviousPage)
         let observedCount = await history.observeRequests.count
         state.loadPreviousPage()
         try #require(await pollUntil { await history.observeRequests.count > observedCount })

@@ -112,12 +112,23 @@ struct HistoryBackupTests {
         let owned = await history.authority.backupTestOwnedDirectory()
         let alias = store.deletingLastPathComponent().appendingPathComponent("content-alias")
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: owned)
-        let destinations = [
+        var destinations = [
             owned,
             owned.appendingPathComponent("export"),
             owned.appendingPathComponent("blobs/export"),
-            alias.appendingPathComponent("blobs/export"),
+            alias,
+            alias.appendingPathComponent("blobs/export-through-alias"),
         ]
+        // On macOS the temporary directory commonly exposes /var while its
+        // physical path starts with /private/var. Exercise both spellings of
+        // an existing parent with a distinct, nonexistent export leaf.
+        if owned.path.hasPrefix("/var/") {
+            destinations.append(URL(fileURLWithPath: "/private" + owned.path)
+                .appendingPathComponent("blobs/export-through-private-var"))
+        } else if owned.path.hasPrefix("/private/var/") {
+            destinations.append(URL(fileURLWithPath: String(owned.path.dropFirst("/private".count)))
+                .appendingPathComponent("blobs/export-through-var"))
+        }
         for destination in destinations {
             await #expect(throws: HistoryBackupFailure.invalidDestination) {
                 try await history.backup(to: destination)
@@ -125,6 +136,9 @@ struct HistoryBackupTests {
         }
         #expect(!FileManager.default.fileExists(atPath: owned.appendingPathComponent("export").path))
         #expect(!FileManager.default.fileExists(atPath: owned.appendingPathComponent("blobs/export").path))
+        #expect(!FileManager.default.fileExists(atPath: owned.appendingPathComponent("blobs/export-through-alias").path))
+        #expect(!FileManager.default.fileExists(atPath: owned.appendingPathComponent("blobs/export-through-private-var").path))
+        #expect(!FileManager.default.fileExists(atPath: owned.appendingPathComponent("blobs/export-through-var").path))
         #expect(try await history.pastePayload(for: item.id).representations.contains {
             $0.bytes == Data(repeating: 47, count: 128 * 1_024)
         })

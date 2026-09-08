@@ -61,14 +61,10 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         return captured
     }
 
-    /// 12 corpus rows; the eight `T`-bearing rows match the exact term in
-    /// body order M M M N M M N M M N N M (newest → oldest). With
-    /// `limit == 5` the first scan must stop after the sixth survivor
-    /// candidate — match positions 0, 1, 2, 4, 5, 7 put the sixth at row
-    /// index 7, so eight rows are processed — and the continuation, whose
-    /// anchor is the fifth match, finds only three post-anchor survivors
-    /// and therefore scans the whole corpus again. Pages must partition
-    /// the matches exactly.
+    /// Twelve retained rows include eight body matches. The index omits
+    /// numeric-only noncandidates, then the matcher stops at page+lookahead.
+    /// Continuation reads its anchor and the remaining three candidates,
+    /// preserving the exact public ordering without re-reading earlier hits.
     @Test(arguments: [SearchMode.exact, .regexp])
     func orderedScanStopsAtThePageBudgetAndResumesAcrossContinuations(mode: SearchMode) async throws {
         let storeURL = WSSupport.tempStoreURL("scan-budget-ordered")
@@ -87,12 +83,17 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
                 : "0123456789\n9876543210\n\(String(format: "%02d", index))"
         })
 
+        let retained = try await history.browse(.init(kind: .recent, limit: 20))
+        let expectedIDs = zip(retained.rows, layout).compactMap { row, matches in
+            matches ? row.item.id : nil
+        }
+        #expect(expectedIDs.count == 8)
         let (events, eventContinuation, _) = await Self.captureProbe(into: history)
         let first = try await history.browse(HistoryBrowseRequest(
             kind: .search(text: "budgetterm", mode: mode),
             limit: 5
         ))
-        #expect(first.rows.count == 5)
+        #expect(first.rows.map(\.item.id) == Array(expectedIDs.prefix(5)))
         #expect(first.next != nil)
         // The term appears only below the first line, so every returned row
         // is a body match whose deferred 03b §8 excerpt materialized here.
@@ -107,8 +108,10 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
             $0.component == "worker"
                 && $0.phase == (mode == .exact ? "exact-scan-complete" : "regexp-scan-complete")
         })
-        #expect(scanComplete.rowsProcessed == 8)
-        #expect(scanComplete.rowsTotal == 12)
+        #expect(scanComplete.rowsProcessed == first.rows.count + 1)
+        #expect(scanComplete.rowsTotal == expectedIDs.count)
+        #expect(firstEvents.filter { $0.phase == "sqlite-batch" }.reduce(0) { $0 + $1.rowsProcessed } == expectedIDs.count)
+        #expect(scanComplete.rowsTotal < retained.rows.count)
         #expect(scanComplete.matchedRows == 6)
         for phase in ["evaluation-complete", "continuation", "page-materialization", "complete"] {
             let summary = try #require(firstEvents.first {
@@ -116,8 +119,8 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
             })
             #expect(summary.matchedRows == 6)
             if phase == "evaluation-complete" || phase == "complete" {
-                #expect(summary.rowsProcessed == 8)
-                #expect(summary.rowsTotal == 12)
+                #expect(summary.rowsProcessed == first.rows.count + 1)
+                #expect(summary.rowsTotal == expectedIDs.count)
             }
         }
 
@@ -129,7 +132,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
             limit: 5,
             cursor: first.next
         ))
-        #expect(second.rows.count == 3)
+        #expect(second.rows.map(\.item.id) == Array(expectedIDs.dropFirst(5)))
         #expect(second.next == nil)
         let secondEvents = await Self.finishCapture(
             history,
@@ -141,17 +144,21 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
             $0.component == "worker"
                 && $0.phase == (mode == .exact ? "exact-scan-complete" : "regexp-scan-complete")
         })
-        #expect(continuationComplete.rowsProcessed == 12)
-        #expect(continuationComplete.matchedRows == 8)
+        let anchorAndTailCount = second.rows.count + 1
+        #expect(continuationComplete.rowsProcessed == anchorAndTailCount)
+        #expect(continuationComplete.rowsTotal == anchorAndTailCount)
+        #expect(continuationComplete.matchedRows == anchorAndTailCount)
+        #expect(secondEvents.filter { $0.phase == "sqlite-batch" }.reduce(0) { $0 + $1.rowsProcessed } == anchorAndTailCount)
         for phase in ["evaluation-complete", "continuation", "page-materialization", "complete"] {
             let summary = try #require(secondEvents.first {
                 $0.component == "worker" && $0.phase == phase
             })
-            // All eight encountered matches count, including the first page's
-            // hits that did not enter this page's bounded candidates.
-            #expect(summary.matchedRows == 8)
+            // The inclusive anchor is validated again, while earlier matches
+            // and numeric-only rows are outside this keyset read.
+            #expect(summary.matchedRows == anchorAndTailCount)
             if phase == "evaluation-complete" || phase == "complete" {
-                #expect(summary.rowsProcessed == 12)
+                #expect(summary.rowsProcessed == anchorAndTailCount)
+                #expect(summary.rowsTotal == anchorAndTailCount)
             }
         }
 
@@ -164,10 +171,9 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         #expect(first.rows.count + second.rows.count == 8)
     }
 
-    /// The order-preserving tracker never stops before the continuation
-    /// anchor: an anchor deep in the corpus forces the full scan, and the
-    /// tail page still returns exactly the remaining matches.
-    @Test func exactScanWithLateAnchorScansTheWholeCorpusForTheTail() async throws {
+    /// A late anchor reads only itself and the remaining candidates; the
+    /// matcher still confirms that anchor before publishing its tail.
+    @Test func exactScanWithLateAnchorReadsOnlyItsAdjacentTail() async throws {
         let storeURL = WSSupport.tempStoreURL("scan-budget-late-anchor")
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
@@ -182,6 +188,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         #expect(first.rows.count == 10)
         #expect(first.next != nil)
 
+        let (events, continuation, _) = await Self.captureProbe(into: history)
         let second = try await history.browse(HistoryBrowseRequest(
             kind: .search(text: "budgetterm", mode: .exact),
             limit: 10,
@@ -189,6 +196,13 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         ))
         #expect(second.rows.count == 2)
         #expect(second.next == nil)
+        #expect(Set(first.rows.map(\.item.id)).isDisjoint(with: second.rows.map(\.item.id)))
+        let captured = await Self.finishCapture(history, stream: events, continuation: continuation)
+        let batchRows = captured.filter { $0.phase == "sqlite-batch" }.reduce(0) { $0 + $1.rowsProcessed }
+        #expect(batchRows == second.rows.count + 1)
+        let scan = try #require(captured.first { $0.phase == "exact-scan-complete" })
+        #expect(scan.rowsProcessed == second.rows.count + 1)
+        #expect(scan.matchedRows == second.rows.count + 1)
     }
 
     /// Empty search routes through the scalar recent lane, whose three pages
@@ -235,7 +249,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         try await Self.seedCorpus(history, bodies: [
             "0123456789\nbudget\n9876543210",
             "0123456789\n9876543210\n001",
-            "0123456789\n9876543210\n002",
+            "0123456789\nbbbbbbbbbb\n002",
         ])
         // One body-only match (term below the first line, digit-only title)
         // plus two title matches (term in the single-line body ⇒ title).
@@ -264,8 +278,12 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         let complete = try #require(captured.first {
             $0.component == "worker" && $0.phase == "fuzzy-scan-complete"
         })
-        #expect(complete.rowsTotal == 5)
-        #expect(complete.rowsProcessed == 5)
+        // The numeric-only row is pruned; the b-only candidate shares an
+        // indexed scalar but Fuse rejects it. The remaining three really match.
+        #expect(complete.rowsTotal == 4)
+        #expect(complete.rowsProcessed == 4)
+        #expect(complete.matchedRows < complete.rowsProcessed)
+        #expect(captured.filter { $0.phase == "sqlite-batch" }.reduce(0) { $0 + $1.rowsProcessed } == 4)
         #expect(complete.titleMatches == 2)
         #expect(complete.bodyMatches == 1)
         #expect(complete.matchedRows == 3)
@@ -275,7 +293,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
             })
             #expect(summary.matchedRows == 3)
             if phase == "evaluation-complete" || phase == "complete" {
-                #expect(summary.rowsProcessed == 5)
+                #expect(summary.rowsProcessed == 4)
             }
         }
         #expect(captured.contains {
@@ -295,7 +313,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         try await Self.seedCorpus(history, bodies: [
             "0123456789\nbudget\n9876543210",
             "0123456789\n9876543210\n001",
-            "0123456789\n9876543210\n002",
+            "0123456789\nbud udg dge get\n002",
         ])
         _ = try await history.perform(.capture(WSSupport.textCapture(
             "budget 0123456789",
@@ -317,8 +335,11 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
         let complete = try #require(captured.first {
             $0.component == "worker" && $0.phase == "regexp-scan-complete"
         })
-        #expect(complete.rowsTotal == 4)
-        #expect(complete.rowsProcessed == 4)
+        // Split grams admit one false-positive candidate; native regexp
+        // matching rejects it, while the numeric-only row is never decoded.
+        #expect(complete.rowsTotal == 3)
+        #expect(complete.rowsProcessed == 3)
+        #expect(captured.filter { $0.phase == "sqlite-batch" }.reduce(0) { $0 + $1.rowsProcessed } == 3)
         #expect(complete.titleMatches == 1)
         #expect(complete.bodyMatches == 1)
         #expect(complete.matchedRows == 2)
