@@ -19,12 +19,12 @@ struct SQLiteScaleTests {
         }
     }
 
-    @Test func mixedProfileHasTenVeryLargeValuesWithoutRetainingTheirContents() {
+    @Test func mixedProfileHasEightyVeryLargeValuesWithoutRetainingTheirContents() {
         let profile = SQLiteScaleFixtureProfile(kind: .mixed, fixedBodyBytes: 1_024)
         let histogram = sqliteScaleRawLengthHistogram(profile: profile, count: 100_000)
         #expect(histogram.values.reduce(0, +) == 100_000)
-        #expect(histogram.filter { $0.key <= 512 }.values.reduce(0, +) == 90_000)
-        #expect(histogram.filter { $0.key >= 1_048_576 }.values.reduce(0, +) == 10)
+        #expect(histogram.filter { $0.key <= 512 }.values.reduce(0, +) == 20_000)
+        #expect(histogram.filter { $0.key >= 1_048_576 }.values.reduce(0, +) == 80)
         #expect(histogram.count <= 5 * 2_048)
     }
 

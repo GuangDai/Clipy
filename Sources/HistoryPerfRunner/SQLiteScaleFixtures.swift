@@ -8,17 +8,17 @@ struct SQLiteScaleFixtureProfile: Sendable {
     let kind: Kind
     let fixedBodyBytes: Int
 
-    /// Every 10,000-row block contains exactly 9000/800/180/19/1 rows in
+    /// Every 10,000-row block contains exactly 2000/6400/1440/152/8 rows in
     /// these bands. A coprime stride spreads large rows through seed batches.
     func byteCount(at index: Int) -> Int {
         guard kind == .mixed else { return fixedBodyBytes }
         let slot = (index * 37) % 10_000
         let range: ClosedRange<Int>
         switch slot {
-        case 0..<9_000: range = 32...512
-        case 9_000..<9_800: range = 1_024...8_192
-        case 9_800..<9_980: range = 8_192...65_536
-        case 9_980..<9_999: range = 65_536...524_288
+        case 0..<2_000: range = 32...512
+        case 2_000..<8_400: range = 1_024...8_192
+        case 8_400..<9_840: range = 8_192...65_536
+        case 9_840..<9_992: range = 65_536...524_288
         default: range = 1_048_576...8_388_608
         }
         // Uniformly spaced discrete length samples keep exact histograms

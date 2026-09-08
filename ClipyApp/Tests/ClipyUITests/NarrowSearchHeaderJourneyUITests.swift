@@ -33,7 +33,6 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-AppleLanguages", "(\(language))", "-AppleLocale", locale,
-            "-clipy.appearance.previewAutoOpen", "NO",
         ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
@@ -44,6 +43,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
+        let preview = panel.descendants(matching: .any)["clipy.preview.root"]
         if panel.frame.width > 363 {
             // Use the actual resizable NSPanel edge. Drag beyond the minimum
             // so AppKit applies the product's 360-point resize constraint.
@@ -53,7 +53,13 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
                 dx: -(panel.frame.width - 360 + 80), dy: 0
             )))
         }
-        XCTAssertTrue(waitUntil { abs(panel.frame.width - 360) <= 3 }, app.debugDescription)
+        // The preview adds its own width and one divider point to the
+        // window. The product minimum constrains the browsing column, not
+        // that complete window (e.g. 360 + 1 + 320 = 681 with preview open).
+        XCTAssertTrue(waitUntil {
+            let previewExtension = preview.exists ? preview.frame.width + 1 : 0
+            return abs(panel.frame.width - previewExtension - 360) <= 3
+        }, app.debugDescription)
         let search = app.textFields["clipy.search.field"]
         let mode = panel.descendants(matching: .any)["clipy.search.mode"]
         let filter = panel.descendants(matching: .any)["clipy.search.filter"]

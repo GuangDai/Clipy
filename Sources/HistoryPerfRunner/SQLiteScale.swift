@@ -132,7 +132,7 @@ func runSQLiteScale(arguments: [String]) async -> Int {
             logicalAfter: usage.map(SQLiteScaleUsage.init),
             diskAfter: disk, failure: failure,
             notes: [
-                "Mixed is a synthetic reference mixture, not measured user behavior: per 100k, 90000 short/8000 medium/1800 long/190 large/10 very-large items. Lengths use 2048 evenly spaced sample points per band. fixed preserves the former equal-size fixture.",
+                "Mixed is a synthetic reference mixture, not measured user behavior: per 100k, 20000 short/64000 medium/14400 long/1520 large/80 very-large items. Lengths use 2048 evenly spaced sample points per band. fixed preserves the former equal-size fixture.",
                 "rawUTF8Bytes reports generated content lengths; indexedTitleUTF8Bytes/indexedSearchBodyUTF8Bytes aggregate actual persisted production projection lengths before revision. Nearest-rank percentiles and floating-point population moments use complete length histograms. The two read/statistics phases are outside query timing.",
                 "Record-only observations; no numeric performance threshold is enforced.",
                 "Run seed and measure as separate processes. Measure open is cold-process; OS filesystem caches are uncontrolled, not cold-disk evidence.",

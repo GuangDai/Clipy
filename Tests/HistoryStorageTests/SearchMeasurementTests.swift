@@ -30,7 +30,8 @@ struct SearchMeasurementTests {
                 #expect(measured.metrics.stopReason == .pageBudget)
             }
             collected += page.rows.map(\.item)
-            cursor = try #require(page.next)
+            let next = try #require(page.next)
+            cursor = next
         }
         let recent = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 128))
         #expect(collected == Array(recent.rows.prefix(56).map(\.item)))
@@ -91,7 +92,8 @@ struct SearchMeasurementTests {
             #expect(measured.metrics.batchCount == 1)
             #expect(measured.metrics.stopReason == .provenBestScore)
             collected += page.rows.map(\.item)
-            cursor = try #require(page.next)
+            let next = try #require(page.next)
+            cursor = next
         }
         let recent = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 128))
         #expect(collected == Array(recent.rows.prefix(56).map(\.item)))

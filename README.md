@@ -29,8 +29,8 @@ xcodegen generate --spec ClipyApp/project.yml
 
 本仓库通过 macOS CI 验证构建和行为。手动 `SQLite storage measurements` 工作流默认
 测100k条，也支持10k。默认 `mixed` 是可重复的合成参考分布，不是实际用户统计：
-90%为32–512B、8%为1–8KiB、1.8%为8–64KiB、0.19%为64–512KiB、0.01%为1–8MiB；
-100k中恰有10条超大文本。正文混合中英文短文、URL、命令、代码、日志和JSON；
+20%为32–512B、64%为1–8KiB、14.4%为8–64KiB、1.52%为64–512KiB、0.08%为1–8MiB；
+100k中恰有80条超大文本。正文混合中英文短文、URL、命令、代码、日志和JSON；
 `fixed` 保留等长文本对照，`body_bytes` 仅作用于该对照。
 
 JSON分别报告原始UTF-8字节与实际持久化title/searchBody投影长度的均值、总体方差、
