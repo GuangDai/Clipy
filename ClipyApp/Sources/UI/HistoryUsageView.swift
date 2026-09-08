@@ -55,7 +55,7 @@ struct HistoryUsageView: View {
             } label: {
                 Text(AutomationMaintenancePresentation.text("About Content Size"))
             }
-            .accessibilityIdentifier("clipy.settings.usage.details")
+            .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.usage.details"))
         } header: {
             Text(HistoryUsageCopy.text("Retained History"))
         }

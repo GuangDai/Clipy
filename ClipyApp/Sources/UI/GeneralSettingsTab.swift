@@ -125,7 +125,7 @@ struct GeneralSettingsTab: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 8)
                 }
-                .accessibilityIdentifier("clipy.settings.general.clear-history")
+                .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.general.clear-history"))
             } footer: {
                 Text(AdaptiveSettingsCopy.text("Clearing history permanently removes saved clipboard content."))
             }

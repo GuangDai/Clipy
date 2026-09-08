@@ -36,10 +36,9 @@ final class AdaptiveSettingsJourneyUITests: XCTestCase {
         ).firstMatch
         XCTAssertTrue(detail.exists, app.debugDescription)
 
-        // Start in AppKit's resize band outside the content. The inside
-        // edge belongs to the Form's full-height scrollbar on macOS 26;
-        // dragging there leaves the window at its original 780-point width.
-        // The detail must reflow with the actual window resize.
+        // Drag AppKit's resize band outside the content. This must change
+        // the real window size; SwiftUI min-width declarations alone left
+        // the Settings window fixed at 780 points on macOS 26.
         let rightEdge = settings.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.65))
             .withOffset(CGVector(dx: 2, dy: 0))
         rightEdge.press(forDuration: 0.1, thenDragTo: rightEdge.withOffset(CGVector(

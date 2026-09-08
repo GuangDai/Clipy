@@ -71,7 +71,7 @@ struct AppearanceSettingsTab: View {
                     .pickerStyle(.segmented)
                     .accessibilityIdentifier("clipy.settings.appearance.font-size")
                 }
-                .accessibilityIdentifier("clipy.settings.appearance.text-appearance")
+                .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.appearance.text-appearance"))
             } header: {
                 Text(SettingsCopy.text("List"))
             }

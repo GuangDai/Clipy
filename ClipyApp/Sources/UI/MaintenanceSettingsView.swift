@@ -126,7 +126,7 @@ struct MaintenanceSettingsView: View {
             } label: {
                 Label(AutomationMaintenancePresentation.text("Diagnostics"), systemImage: "waveform.path.ecg")
             }
-            .accessibilityIdentifier("clipy.settings.maintenance.diagnostics")
+            .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.maintenance.diagnostics"))
         }
     }
 

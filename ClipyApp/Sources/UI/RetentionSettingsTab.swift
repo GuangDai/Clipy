@@ -174,7 +174,7 @@ struct RetentionSettingsTab: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .accessibilityIdentifier("clipy.settings.retention.count-details")
+                .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.retention.count-details"))
             } header: {
                 Text(RetentionSettingsCopy.itemsSection)
             }
@@ -308,7 +308,7 @@ struct RetentionSettingsTab: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
-                .accessibilityIdentifier("clipy.settings.retention.cleanup-details")
+                .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.retention.cleanup-details"))
             } header: {
                 Text(RetentionLayoutCopy.automaticPolicies)
             }

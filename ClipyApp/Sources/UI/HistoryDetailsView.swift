@@ -926,10 +926,7 @@ private struct DetailsBody: View {
                 value: DetailsFormat.count(details.item.contentVersion.rawValue, locale: locale)
             )
         }
-        // Native macOS disclosure triangles hang outside their label's
-        // leading edge. Keep that hit target inside this scroll viewport.
-        .padding(.leading, PanelTheme.spacingXLarge)
-        .accessibilityIdentifier("clipy.details.info")
+        .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.details.info"))
     }
 
     private var contentSection: some View {
@@ -978,6 +975,24 @@ private struct DetailsBody: View {
 
     private var revisionsSection: some View {
         DisclosureGroup(isExpanded: $showsRevisions) {
+            Button {
+                onRevise(.revert(to: .canonical))
+            } label: {
+                Label(
+                    PanelActionsCopy.text("Revert to Original", bundle: copyBundle),
+                    systemImage: "arrow.uturn.backward"
+                )
+            }
+            .controlSize(.small)
+            // A canonical revert whose proposed Effective Content is
+            // byte-identical to the current Effective Content commits an
+            // `.unchanged` no-op (docs/02-domain.md §11 step 5; WS7 (b)),
+            // so the action is disabled exactly in that state.
+            .disabled(!canRevertToOriginal)
+            .accessibilityLabel(PanelActionsCopy.text("Revert to Original", bundle: copyBundle))
+            .accessibilityHint(
+                PanelActionsCopy.text("Restores the canonical content as this item's current content.", bundle: copyBundle)
+            )
             if details.revisions.isEmpty {
                 Text(PanelActionsCopy.text("No revisions", bundle: copyBundle))
                     .font(.caption)
@@ -989,30 +1004,9 @@ private struct DetailsBody: View {
                 }
             }
         } label: {
-            HStack {
-                Text(PanelActionsCopy.text("Revisions", bundle: copyBundle))
-                Spacer()
-                Button {
-                    onRevise(.revert(to: .canonical))
-                } label: {
-                    Label(
-                        PanelActionsCopy.text("Revert to Original", bundle: copyBundle),
-                        systemImage: "arrow.uturn.backward"
-                    )
-                }
-                .controlSize(.small)
-                // A canonical revert whose proposed Effective Content is
-                // byte-identical to the current Effective Content commits an
-                // `.unchanged` no-op (docs/02-domain.md §11 step 5; WS7 (b)),
-                // so the action is disabled exactly in that state.
-                .disabled(!canRevertToOriginal)
-                .accessibilityLabel(PanelActionsCopy.text("Revert to Original", bundle: copyBundle))
-                .accessibilityHint(
-                    PanelActionsCopy.text("Restores the canonical content as this item's current content.", bundle: copyBundle)
-                )
-            }
+            Text(PanelActionsCopy.text("Revisions", bundle: copyBundle))
         }
-        .padding(.leading, PanelTheme.spacingXLarge)
+        .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.details.revisions"))
     }
 
     /// Whether Revert to Original would change the item: at least one
@@ -1180,9 +1174,10 @@ private struct RepresentationRow: View {
                 }
                 .foregroundStyle(.secondary)
             }
-            .padding(.leading, PanelTheme.spacingXLarge)
-            .accessibilityIdentifier("clipy.details.format-details." + representation.identity.accessibilitySuffix)
-            .accessibilityLabel(DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + representation.identity.accessibilityLabel)
+            .disclosureGroupStyle(AppDisclosureGroupStyle(
+                identifier: "clipy.details.format-details." + representation.identity.accessibilitySuffix,
+                accessibilityLabel: DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + representation.identity.accessibilityLabel
+            ))
             .font(.caption)
         }
         .padding(.vertical, PanelTheme.spacingSmall)

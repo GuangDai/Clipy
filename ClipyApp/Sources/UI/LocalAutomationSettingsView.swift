@@ -182,7 +182,7 @@ struct LocalAutomationSettingsView: View {
                 } label: {
                     Text(AutomationMaintenancePresentation.text("Advanced Details"))
                 }
-                .accessibilityIdentifier("clipy.settings.automation.advanced")
+                .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.automation.advanced"))
             } else {
                 Text(LocalAutomationSettingsCopy.text("The bundled command-line tool is unavailable."))
                     .foregroundStyle(.secondary)

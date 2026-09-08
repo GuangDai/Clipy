@@ -154,10 +154,7 @@ struct ReviseEditorView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .accessibilityIdentifier("clipy.editor.format-independence-disclosure")
                         }
-                        // Match Details: the native disclosure triangle
-                        // must remain inside the scrolling editor content.
-                        .padding(.leading, PanelTheme.spacingXLarge)
-                        .accessibilityIdentifier("clipy.editor.about-formats")
+                        .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.editor.about-formats"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
@@ -469,9 +466,10 @@ struct ReviseEditorView: View {
                 }
                 .foregroundStyle(.secondary)
             }
-            .padding(.leading, PanelTheme.spacingXLarge)
-            .accessibilityIdentifier("clipy.editor.format-details." + identity.accessibilitySuffix)
-            .accessibilityLabel(DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + identity.accessibilityLabel)
+            .disclosureGroupStyle(AppDisclosureGroupStyle(
+                identifier: "clipy.editor.format-details." + identity.accessibilitySuffix,
+                accessibilityLabel: DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + identity.accessibilityLabel
+            ))
             .font(.caption)
             if draft.choice(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) == .replace {
                 TextEditor(text: textBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex))

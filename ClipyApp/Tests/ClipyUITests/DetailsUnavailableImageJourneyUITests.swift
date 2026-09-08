@@ -174,9 +174,16 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
     @MainActor
     private func revealFormatMetadata(_ type: String, in details: XCUIElement, app: XCUIApplication) {
         let identifier = "clipy.details.format-details." + type
-        assertVisibleElement(matching: NSPredicate(format: "identifier == %@", identifier),
+        let headerIdentifier = identifier + ".toggle"
+        assertVisibleElement(matching: NSPredicate(format: "identifier == %@", headerIdentifier),
                              in: details, app: app, context: "Format Details: \(type)")
-        details.descendants(matching: .any)[identifier].click()
+        let group = details.descendants(matching: .any)[identifier]
+        let header = group.buttons[headerIdentifier]
+        XCTAssertTrue(header.isEnabled, diagnostic(app, context: "enabled format disclosure: \(type)"))
+        XCTAssertEqual(header.value as? String, "Collapsed")
+        header.click()
+        XCTAssertEqual(header.value as? String, "Expanded",
+                       diagnostic(app, context: "format disclosure expanded after header click: \(type)"))
     }
 
     @MainActor

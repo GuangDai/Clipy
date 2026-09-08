@@ -62,6 +62,10 @@ private struct SettingsRootView: View {
                 storageLocation: appDelegate.storageLocationSettings(),
                 localAutomation: composition.localAutomation?.settings
             )
+            .background {
+                SettingsWindowResizeConfiguration()
+                    .frame(width: 0, height: 0)
+            }
             .sheet(isPresented: $isRecordingSummonShortcut) {
                 SummonShortcutRecorderView { chord in
                     appDelegate.endSummonShortcutRecording()
