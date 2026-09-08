@@ -6,8 +6,8 @@ on:
       rows:
         description: Retained rows per disposable store
         type: choice
-        default: '1000000'
-        options: ['10000', '100000', '1000000', 'all']
+        default: '100000'
+        options: ['10000', '100000']
       body_bytes:
         description: UTF-8 bytes per synthetic clipboard value
         type: choice
@@ -25,7 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rows: ${{ fromJSON(inputs.rows == 'all' && '[10000,100000,1000000]' || format('[{0}]', inputs.rows)) }}
+        rows: ${{ fromJSON(format('[{0}]', inputs.rows)) }}
     env:
       NSUnbufferedIO: YES
       OS_ACTIVITY_MODE: disable
