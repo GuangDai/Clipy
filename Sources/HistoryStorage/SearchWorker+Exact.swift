@@ -16,7 +16,8 @@ extension SearchWorker {
         term: String,
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective,
-        preparedMatcher: ExactLiteralMatcher? = nil
+        preparedMatcher: ExactLiteralMatcher? = nil,
+        work: SearchWorkCounter? = nil
     ) async throws -> EvaluationResult {
         // Preprocess the eligible-ASCII needle once for this public request.
         // The scalar baseline has a linear worst-case bound and delegates
@@ -105,6 +106,7 @@ extension SearchWorker {
                 .exact,
                 beforeRowAt: rowOffset
             )
+            work?.rowsEvaluated += 1
 #if DEBUG
             debugTitleRows += 1
             debugTitleUTF8Bytes += row.debugTitleUTF8Bytes
@@ -125,6 +127,7 @@ extension SearchWorker {
             debugTitleElapsed += debugTitleStart.duration(to: debugClock.now)
 #endif
             if let found = titleMatch {
+                work?.matchesFound += 1
                 // Title match: `snippet == nil`, UTF-16 ranges relative to
                 // `HistoryRow.title` (03b §8).
                 scanTracker.appendIfRetained(
@@ -187,6 +190,7 @@ extension SearchWorker {
 #endif
                 continue
             }
+            work?.matchesFound += 1
             // Preserve the matcher's original UTF-16 range: literal matches
             // can cover only part of a Character, which Character offsets
             // cannot express. The 03b §8 window and highlight construction

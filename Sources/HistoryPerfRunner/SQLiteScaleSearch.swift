@@ -1,5 +1,5 @@
 /// Representative V2-09 search measurements with independently read expected
-/// identities. Fixture values are fixed, so no million-row oracle is needed.
+/// identities. Fixture values are fixed, so no full-corpus oracle is needed.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -39,8 +39,8 @@ func sqliteScaleSearchCases(corpus: SQLiteScaleBrowseEvidence) -> [SQLiteScaleSe
     return [
         SQLiteScaleSearchCase(name: "exact-no-hit", text: "ZZZZZZZZ", mode: .exact,
                               expectedRows: [], expectedTotalMatches: 0),
-        // At the one-million-row scale, indices are 0...999999. Every
-        // trigram exists, but no at-most-six-digit index contains all five
+        // At the 100k-row scale, indices are 0...99999. Every trigram
+        // exists, but no at-most-five-digit index contains all five
         // trigrams of this seven-digit query.
         SQLiteScaleSearchCase(name: "exact-common-grams-no-intersection", text: "1234567", mode: .exact,
                               expectedRows: [], expectedTotalMatches: 0),
@@ -127,19 +127,21 @@ func exerciseSQLiteScaleSearches(
                 requestedLimit: limit, expectedTotalMatches: fixture.expectedTotalMatches
             )
             do {
-                let page = try await measureSQLiteScale(
+                let measured = try await measureSQLiteScale(
                     phase: "search-\(fixture.name)-page\(pageIndex + 1)", samples: &samples, query: query
                 ) {
-                    let result = try await history.browse(HistoryBrowseRequest(
+                    await history.measureSearch(HistoryBrowseRequest(
                         kind: .search(text: fixture.text, mode: fixture.mode), limit: limit, cursor: cursor
                     ))
+                } facts: { measured in
+                    let result = try measured.result.get()
                     try validateSQLiteScaleSearchPage(
                         result, expectedRows: fixture.expectedRows, expectedPosition: position,
                         expectedTotalMatches: fixture.expectedTotalMatches, pageIndex: pageIndex, limit: limit
                     )
-                    return result
-                } facts: { ($0.rows.count, 0) }
-                cursor = page.next
+                    return (result.rows.count, 0)
+                } searchWork: { SQLiteScaleSearchWork($0.metrics) }
+                cursor = try measured.result.get().next
             } catch is CancellationError {
                 throw CancellationError()
             } catch {

@@ -482,7 +482,8 @@ internal actor SearchWorker {
     /// anchor absent from the complete evaluated range.
     internal func evaluateRecentEquivalent(
         in corpus: SearchCorpusSnapshot,
-        directive: ScanDirective
+        directive: ScanDirective,
+        work: SearchWorkCounter? = nil
     ) -> EvaluationResult {
         var tracker = OrderPreservingScanTracker(directive: directive)
         var rows: [EvaluatedRow] = []
@@ -490,6 +491,8 @@ internal actor SearchWorker {
         var processed = 0
 #endif
         for row in corpus.rows {
+            work?.rowsEvaluated += 1
+            work?.matchesFound += 1
             let evaluated = EvaluatedRow(corpusRow: row, search: nil,
                                          anchor: Self.defaultOrderAnchor(for: row))
             tracker.appendIfRetained(evaluated, to: &rows)

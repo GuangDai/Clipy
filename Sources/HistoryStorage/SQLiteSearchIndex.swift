@@ -115,6 +115,7 @@ internal enum SQLiteSearchIndex {
     /// Character must cost an edit in every possible hit. The resulting
     /// score floor lets a full best-score page stop in default row order;
     /// postings remain only a necessary-condition proof, never the matcher.
+    /// For ASCII queries, an absent necessary gram also rules out zero edits.
     internal static func lowestPossibleFuzzyScore(term: String, in database: SQLiteDatabase) throws -> Double {
         let characters = Array(term.lowercased())
         guard !characters.isEmpty else { return 0 }
@@ -127,19 +128,41 @@ internal enum SQLiteSearchIndex {
                 if let known = presence[scalar.value] {
                     exists = known
                 } else {
-                    let statement = try database.prepare(
-                        "SELECT rowid FROM history_search WHERE history_search MATCH ? LIMIT 1",
-                        bindings: [.text("f" + String(UInt64(scalar.value) + 1, radix: 16))]
+                    exists = try postingExists(
+                        "f" + String(UInt64(scalar.value) + 1, radix: 16), in: database
                     )
-                    defer { statement.finalize() }
-                    exists = try statement.step()
                     presence[scalar.value] = exists
                 }
                 if !exists { mustCostEdit = true; break }
             }
             if mustCostEdit { missing += 1 }
         }
+        if missing == 0, characters.count >= 2, term.utf8.allSatisfy({ $0 < 128 }),
+           let expression = matchExpression(term: term, mode: .exact) {
+            // A zero-edit ASCII Fuse match contains the complete lowercased
+            // query in consecutive Characters, and therefore every necessary
+            // exact gram. An absent gram proves at least one edit even when
+            // unrelated body words contain all individual query letters.
+            // One edit can destroy several grams, so never add their counts.
+            // Non-ASCII queries retain the existing scalar-only proof.
+            for token in expression.split(separator: " ") where token.first == "g" {
+                if try !postingExists(String(token), in: database) {
+                    missing = 1
+                    break
+                }
+            }
+        }
         return Double(missing) / Double(characters.count)
+    }
+
+    private static func postingExists(_ token: String, in database: SQLiteDatabase) throws -> Bool {
+        try Task.checkCancellation()
+        let statement = try database.prepare(
+            "SELECT rowid FROM history_search WHERE history_search MATCH ? LIMIT 1",
+            bindings: [.text(token)]
+        )
+        defer { statement.finalize() }
+        return try statement.step()
     }
 
     private static func documentTokens(title: String, body: String) -> String {

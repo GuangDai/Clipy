@@ -27,6 +27,15 @@ swift test --skip 'HistoryPerfTests\.'
 xcodegen generate --spec ClipyApp/project.yml
 ```
 
-本仓库通过 macOS CI 验证构建和行为。规模测量由手动 `SQLite storage measurements`
-工作流运行，支持 10k、100k、1m 条。产品不再设置固定历史条数上限；实际保留量受
-用户策略和可用存储空间影响。百万级一秒搜索目标仍需实际测量证明。
+本仓库通过 macOS CI 验证构建和行为。手动 `SQLite storage measurements` 工作流默认
+测100k条，也支持10k。默认 `mixed` 是可重复的合成参考分布，不是实际用户统计：
+90%为32–512B、8%为1–8KiB、1.8%为8–64KiB、0.19%为64–512KiB、0.01%为1–8MiB；
+100k中恰有10条超大文本。正文混合中英文短文、URL、命令、代码、日志和JSON；
+`fixed` 保留等长文本对照，`body_bytes` 仅作用于该对照。
+
+JSON分别报告原始UTF-8字节与实际持久化title/searchBody投影长度的均值、总体方差、
+最小/最大值和p50/p90/p95/p99/p99.9；投影截断不会伪装成原文缩小。每个查询记录返回行数、
+实际解码/评估行数、匹配数、批次数、停止原因及耗时；失败也保留当时的工作量。
+这些Swift层计数不包含SQLite内部posting扫描或查询计划成本，seed、滚动与统计读取
+均单独计时。产品没有固定历史条数上限，实际保留量受用户策略和可用空间影响；
+搜索速度结论以对应分布和查询场景的CI结果为准。

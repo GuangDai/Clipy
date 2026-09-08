@@ -99,7 +99,38 @@ struct SQLiteSearchIndexTests {
                 try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: $0, in: authority.database)
             }
         }
-        #expect(floors == [0.5, 1, 0.5, 0])
+        #expect(floors == [0.5, 1, 0.5, 1.0 / 6.0])
+    }
+
+    @Test func anAbsentGramProvesOneEditEvenWhenEveryQueryScalarExists() async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
+        let body = "abcdef\nx"
+        let item = try await capture(body, in: history, date: 1)
+        let floors = try await history.authority.withTestDatabase { authority in
+            try ["abXdef", "fedcba", "abcdef"].map {
+                try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: $0, in: authority.database)
+            }
+        }
+        #expect(floors == [1.0 / 6.0, 1.0 / 6.0, 0])
+        let corpus = SearchCorpusSnapshot(
+            position: ChangePosition(rawValue: 1),
+            rows: [SearchCorpusRow(
+                id: item.id, contentVersion: item.contentVersion, title: "abcdef", searchBody: body,
+                debugTitleUTF8Bytes: 6, debugSearchBodyUTF8Bytes: body.utf8.count,
+                typeIdentifiers: ["public.utf8-plain-text"], lastCopiedAt: Date(timeIntervalSinceReferenceDate: 1),
+                copyCount: 1, lastSource: nil, pinOrdinal: nil
+            )], debugTrace: SearchDebugTrace(id: UUID(), startedAt: ContinuousClock().now)
+        )
+        let worker = SearchWorker()
+        // This oracle calls the unindexed evaluator directly, so the new
+        // floor cannot hide a counterexample by stopping the SQLite scan.
+        let substitution = try await worker.unindexedScore(term: "abXdef", corpus: corpus)
+        let substitutionScore = try #require(substitution)
+        #expect(substitutionScore == floors[0])
+        if let reversal = try await worker.unindexedScore(term: "fedcba", corpus: corpus) {
+            #expect(reversal >= floors[1])
+        }
+        #expect(try await worker.unindexedScore(term: "abcdef", corpus: corpus) == floors[2])
     }
 
     @Test func sparseCandidateThresholdUsesANDSubsetsAndActualORUnion() async throws {
@@ -196,6 +227,18 @@ struct SQLiteSearchIndexTests {
 
     private func search(_ text: String, in history: SQLiteHistory) async throws -> HistoryPage {
         try await history.browse(HistoryBrowseRequest(kind: .search(text: text, mode: .exact), limit: 100))
+    }
+}
+
+private extension SearchWorker {
+    func unindexedScore(term: String, corpus: SearchCorpusSnapshot) async throws -> Double? {
+        let evaluation = try await evaluateFuzzy(
+            term: term, in: corpus,
+            directive: ScanDirective(continuationAnchor: nil, maximumSurvivors: 2)
+        )
+        guard let first = evaluation.rows.first,
+              case .fuzzyUnpinned(let score, _, _) = first.anchor else { return nil }
+        return score
     }
 }
 #endif

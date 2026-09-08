@@ -161,6 +161,10 @@ extension SearchWorker {
         /// Zero is Fuse's absolute lower bound. A larger value is permitted
         /// only when query facts prove it for every row in this snapshot;
         /// a score merely observed in the current batch is not such a fact.
+        /// A floor-score cursor may start at its ordered suffix: skipped
+        /// equal-score prefix rows precede that cursor, and skipped worse
+        /// scores cannot improve a full floor-score window. If that window
+        /// does not fill, SQLite subsequently supplies the skipped prefix.
         internal func cannotBeImprovedByLaterDefaultOrderedRows(
             lowestPossibleScore: Double = 0
         ) -> Bool {
@@ -231,7 +235,8 @@ extension SearchWorker {
         term: String,
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective,
-        preparedPattern: Fuse.Pattern? = nil
+        preparedPattern: Fuse.Pattern? = nil,
+        work: SearchWorkCounter? = nil
     ) async throws -> EvaluationResult {
         // Fuse 1.4.0 does not enforce its `maxPatternLength` option (the
         // parameter is unread in the pinned revision, so the documented
@@ -305,6 +310,7 @@ extension SearchWorker {
                 .fuzzy,
                 beforeRowAt: rowOffset
             )
+            work?.rowsEvaluated += 1
 #if DEBUG
             debugProcessedRows += 1
             debugTitleUTF8Bytes += row.debugTitleUTF8Bytes
@@ -375,6 +381,7 @@ extension SearchWorker {
             recordProgressIfNeeded()
 #endif
             guard let hit else { continue scan }
+            work?.matchesFound += 1
             selection.insert(hit)
         }
         try Task.checkCancellation()

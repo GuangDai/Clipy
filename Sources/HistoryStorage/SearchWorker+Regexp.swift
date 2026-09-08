@@ -33,7 +33,8 @@ extension SearchWorker {
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective,
         preparedPattern: NSRegularExpression? = nil,
-        sharedEngineDeadline: ContinuousClock.Instant? = nil
+        sharedEngineDeadline: ContinuousClock.Instant? = nil,
+        work: SearchWorkCounter? = nil
     ) async throws -> EvaluationResult {
         // Admission (03b §8), every rejection is
         // `.invalidInput(.invalidRegularExpression)`: a pattern over the
@@ -116,6 +117,7 @@ extension SearchWorker {
                 .regexp,
                 beforeRowAt: rowOffset
             )
+            work?.rowsEvaluated += 1
 #if DEBUG
             debugProcessedRows += 1
             debugTitleUTF8Bytes += row.debugTitleUTF8Bytes
@@ -129,6 +131,7 @@ extension SearchWorker {
                 literalPattern: literalPattern,
                 deadline: engineDeadline
             ) {
+                work?.matchesFound += 1
                 // Title match: `NSRegularExpression` already reports
                 // UTF-16 offsets, and the prefix's offsets index the title
                 // identically (03b §8: ranges relative to
@@ -181,6 +184,7 @@ extension SearchWorker {
 #endif
                 continue scan
             }
+            work?.matchesFound += 1
             // The 03b §8 excerpt defers to page materialization with the
             // original UTF-16 match intact. A regexp may match only part of
             // a Character; converting through Character offsets here loses
