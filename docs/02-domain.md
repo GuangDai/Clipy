@@ -20,6 +20,7 @@ All declarations in this Part are `package` unless explicitly described as a ref
 
 ```swift
 package struct ContentRepresentation: Sendable, Hashable {
+    package let pasteboardItemIndex: Int
     package let typeIdentifier: String
     package let bytes: Data
 }
@@ -32,14 +33,40 @@ not normalize or rewrite the stored identifier spelling. A normalized content
 set:
 
 - is non-empty;
+- preserves the ordered constituent system pasteboard items through a zero-based
+  `pasteboardItemIndex`; indices start at zero and are contiguous, and every item
+  has at least one retained representation;
 - contains at most one representation for each canonically equivalent
-  `typeIdentifier`;
+  `typeIdentifier` **within each constituent item**;
 - contains no representation whose `bytes` is empty (zero length);
-- is sorted by `typeIdentifier` using a stable Unicode scalar ordering;
+- is sorted by item index, then `typeIdentifier` using stable Unicode scalar ordering;
 - contains no transient/private pasteboard type rejected by preparation;
 - stays within the hard representation-count and byte-size bounds in Part VI.
 
-Two representations with the same type identifier and different bytes are ambiguous input, not an invitation to choose by iteration order. Preparation rejects them with a typed invalid-input failure.
+Two representations with the same type identifier **at the same item index**
+are ambiguous input. Preparation rejects them with a typed invalid-input failure.
+Different items may carry the same type with different bytes; these remain
+separate throughout capture, immutable revisions, exact reads and paste.
+
+A History Item represents one whole copy gesture, including all constituent
+pasteboard items in their observed order. A concealment marker on any constituent
+rejects the entire gesture before payload reads. Empty/metadata-only constituent
+items cannot be represented and cause the entire capture to be rejected.
+Representation-count and byte limits apply to the aggregate gesture.
+
+Canonical containment requires the same constituent-item count and byte-exact
+containment **at each item index**. Swapping two items is a different value, even
+if their type identifiers match. A revision decision addresses
+`(pasteboardItemIndex, typeIdentifier)` and must leave at least one effective
+representation in every original item; it cannot reorder or silently remove an
+item. Equality includes these item boundaries. `ContentVersion`, copy counts,
+retention and `ChangePosition` continue to apply to the whole History Item.
+
+Browse/search may derive a bounded collection title and searchable text; these
+are display projections only. Details and explicit representation requests carry
+item indices. Paste reconstructs distinct `NSPasteboardItem` objects in order
+with the original exact representation bytes; it never joins bytes or invents
+a combined text/file list. Single-item constructor calls default to index zero.
 
 #### 2.2 Fingerprint and signature evidence
 
@@ -49,6 +76,7 @@ package struct ContentFingerprint: Sendable, Hashable {
 }
 
 package struct ContentSignatureEntry: Sendable, Hashable {
+    package let pasteboardItemIndex: Int
     package let typeIdentifier: String
     package let fingerprint: ContentFingerprint
     package let byteCount: Int
@@ -338,11 +366,14 @@ package struct RetentionFacts: Sendable {
 }
 
 package struct RetentionPolicy: Sendable, Hashable {
-    package let maximumUnpinnedItems: Int
+    package let maximumUnpinnedItems: Int?
 }
 ```
 
-`maximumUnpinnedItems` is at least 1 and no greater than the configured hard retained-item bound, matching the Part VI user range 1–5,000. A value of 0 is rejected at the `HistoryStorage` boundary (typed `invalidInput`) so the policy always permits at least one unpinned item. Pinned items are exempt from the user policy, but not from the global hard safety bound.
+`maximumUnpinnedItems` is an optional positive integer (V2-09 §9). `nil`
+disables count-based retirement; zero and negative values are rejected at the
+`HistoryStorage` boundary. Pinned items are exempt. There is no separate total
+retained-item count cap; the per-content safety bounds remain in force.
 
 ### 6. Domain rejection vocabulary
 
@@ -378,7 +409,7 @@ package enum HistoryMutation: Sendable {
         activeRevisionID: RevisionID
     )
     case retire(itemID: HistoryItemID, reason: RetirementReason)
-    case setRetentionPolicy(maximumUnpinnedItems: Int)
+    case setRetentionPolicy(maximumUnpinnedItems: Int?)
 }
 
 package struct NewHistoryItem: Sendable {
@@ -440,8 +471,7 @@ The public closed `HistoryAction` is dispatched in `HistoryStorage`. Each case i
 package func planCapture(
     _ capture: PreparedCapture,
     facts: IngestFacts,
-    retention: RetentionPolicy,
-    hardMaximumRetainedItems: Int
+    retention: RetentionPolicy
 ) throws -> PlanningResult
 
 package func planPinnedPlacement(
@@ -586,8 +616,9 @@ Rules:
 - Capture retention is evaluated on the projected post-insert or post-coalesce state.
 - Insert and its retention retirements are one History Commit.
 - Coalescing can change which unpinned item is oldest.
-- If the global hard retained-item maximum would be exceeded and no eligible unpinned victim can restore the bound, capture fails with `.capacityExceeded(.retainedItems)`.
-- The primary inserted/coalesced item is not selected as a victim in the same commit. Configuration must permit at least one unpinned item.
+- `nil` count policy selects no count-retention victims. A positive count has no
+  fixed 5,000-item ceiling, and there is no separate total retained-item cap.
+- The primary inserted/coalesced item is not selected as a victim in the same commit. An enabled count policy must permit at least one unpinned item.
 - Setting the already-persisted policy value when current state also satisfies it is a no-op. Lowering the value updates the policy and retires all required victims in the same History Commit.
 - Age, total-byte, and automatic revision-retention policies are outside v1.
 
@@ -629,6 +660,9 @@ This table is the stamping contract the Authority (Part V §9) applies mechanica
 - **D16 Pure planning:** identical prepared inputs and facts produce identical planning results.
 - **D17 No framework leakage:** all Domain stored properties are immutable `Sendable` values; no unchecked concurrency escape is allowed.
 - **D18 Semantic-plan completeness:** Storage applies explicit mutation payloads and never infers hidden domain behavior from outcome labels.
-- **D19 Retention floor:** the user retention policy received by planning is always at least one unpinned item (`HistoryStorage` rejects 0 at the boundary), so capture never retires the primary to satisfy the user policy alone; only the global hard retained-item bound can force a capacity failure.
+- **D19 Retention floor:** an enabled count policy is at least one unpinned
+  item (`HistoryStorage` rejects zero and negative values); a disabled policy
+  selects no count victims. Capture never retires its primary to satisfy the
+  user count policy. No global retained-item count bound imposes another cap.
 
 These invariants are design requirements. Part VI defines the tests that must demonstrate them before this specification is called executable.

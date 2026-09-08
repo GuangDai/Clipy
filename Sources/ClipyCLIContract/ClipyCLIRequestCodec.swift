@@ -103,15 +103,24 @@ package extension ClipyCLIContract {
         guard case let .array(values) = value, (1...32).contains(values.count) else { return nil }
         var representations: [ClipyCLIRevisionRepresentation] = []
         for value in values {
-            guard case let .object(object) = value,
-                  object.hasExactly(keys: ["typeIdentifier", "bytesBase64"]),
-                  case let .string(type) = object.value(named: "typeIdentifier"),
+            guard case let .object(object) = value else { return nil }
+            let itemIndex: Int
+            if let indexValue = object.value(named: "pasteboardItemIndex") {
+                guard case let .number(token) = indexValue,
+                      let index = checkedInteger(token), (0..<32).contains(index),
+                      object.hasExactly(keys: ["typeIdentifier", "bytesBase64", "pasteboardItemIndex"]) else { return nil }
+                itemIndex = index
+            } else {
+                guard object.hasExactly(keys: ["typeIdentifier", "bytesBase64"]) else { return nil }
+                itemIndex = 0
+            }
+            guard case let .string(type) = object.value(named: "typeIdentifier"),
                   isNonemptyUTF8(type, atMost: 512),
-                  !representations.contains(where: { $0.typeIdentifier.utf8.elementsEqual(type.utf8) }),
+                  !representations.contains(where: { $0.pasteboardItemIndex == itemIndex && $0.typeIdentifier == type }),
                   case let .string(encoded) = object.value(named: "bytesBase64"),
                   let bytes = Data(base64Encoded: encoded), !bytes.isEmpty,
                   bytes.base64EncodedString() == encoded else { return nil }
-            representations.append(.init(typeIdentifier: type, bytes: bytes))
+            representations.append(.init(typeIdentifier: type, bytes: bytes, pasteboardItemIndex: itemIndex))
         }
         return representations
     }
@@ -252,6 +261,13 @@ package enum ClipyCLIRequest: Equatable, Sendable {
 package struct ClipyCLIRevisionRepresentation: Equatable, Sendable {
     package let typeIdentifier: String
     package let bytes: Data
+    package let pasteboardItemIndex: Int
+
+    package init(typeIdentifier: String, bytes: Data, pasteboardItemIndex: Int = 0) {
+        self.typeIdentifier = typeIdentifier
+        self.bytes = bytes
+        self.pasteboardItemIndex = pasteboardItemIndex
+    }
 }
 
 package enum ClipyCLIBrowseArguments: Equatable, Sendable {

@@ -13,6 +13,6 @@
 "Clipboard Monitoring Unavailable" = "剪贴板监控不可用";
 "Clipy replaced 1 pending clipboard change with a newer one, so it wasn't saved. To try again, copy the older content again." = "Clipy 用较新的剪贴板变化替换了 1 次待处理变化，因此较早的内容未保存。如需重试，请重新复制较早的内容。";
 "Clipy replaced %@ pending clipboard changes with newer ones, so they weren't saved. To try again, copy the older content again." = "Clipy 用较新的剪贴板变化替换了 %@ 次待处理变化，因此较早的内容未保存。如需重试，请重新复制较早的内容。";
-"Clipy can't save multiple clipboard items yet. Copy one item at a time." = "Clipy 暂不支持同时保存多个剪贴板项目，请每次复制一个项目。";
+"Clipy couldn't save this clipboard change because its size or structure isn't supported." = "Clipy 无法保存此次剪贴板变化，因为其大小或结构不受支持。";
 "Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt." = "Clipy 未能完整读取剪贴板变化，请重新复制内容以再次尝试。";
 "A clipboard change wasn't saved. Clipy can't retry it automatically; copy the content again to make a new attempt." = "一次剪贴板变化未保存。Clipy 无法自动重试，请重新复制内容以再次尝试。";

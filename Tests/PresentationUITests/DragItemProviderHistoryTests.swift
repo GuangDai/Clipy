@@ -75,6 +75,31 @@ struct DragItemProviderHistoryTests {
         #expect(state.failure == nil)
     }
 
+    @Test func multiItemDragRejectsInsteadOfExportingOnlyTheFirstItemsBytes() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let receipt = try await history.perform(.capture(ClipboardCapture(
+            representations: [
+                CapturedRepresentation(typeIdentifier: Self.types[0], bytes: Data("first".utf8)),
+                CapturedRepresentation(typeIdentifier: Self.types[0], bytes: Data("second".utf8), pasteboardItemIndex: 1)
+            ],
+            origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
+            observedAt: Date(timeIntervalSince1970: 1)
+        )))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            Issue.record("Expected the complete multi-item capture")
+            return
+        }
+        let state = HistoryViewState(history: history)
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.first?.item == item })
+        let result = await Self.load(state.dragItemProvider(for: item), type: Self.types[0])
+        #expect(result.bytes == nil)
+        #expect(result.errorDomain == NSItemProvider.errorDomain)
+        #expect(result.errorCode == NSItemProvider.ErrorCode.itemUnavailableError.rawValue)
+        #expect(state.failure == nil)
+    }
+
     private static let types = [
         "public.utf8-plain-text", "com.clipy.tests.drag-nul", "com.clipy.tests.drag-opaque",
     ]

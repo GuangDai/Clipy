@@ -236,17 +236,29 @@ internal actor IngestPreparationActor {
         // identifiers need not be adjacent when a third scalar sequence sorts
         // between them.
         let sorted = representations.sorted { lhs, rhs in
-            lhs.typeIdentifier.unicodeScalars.lexicographicallyPrecedes(
+            if lhs.pasteboardItemIndex != rhs.pasteboardItemIndex {
+                return lhs.pasteboardItemIndex < rhs.pasteboardItemIndex
+            }
+            return lhs.typeIdentifier.unicodeScalars.lexicographicallyPrecedes(
                 rhs.typeIdentifier.unicodeScalars
             )
         }
-        var seenTypeIdentifiers = Set<String>()
+        var seenTypeIdentifiers = Set<ContentRepresentationKey>()
         seenTypeIdentifiers.reserveCapacity(sorted.count)
         for representation in sorted {
-            guard seenTypeIdentifiers.insert(representation.typeIdentifier).inserted else {
+            guard seenTypeIdentifiers.insert(ContentRepresentationKey(pasteboardItemIndex: representation.pasteboardItemIndex, typeIdentifier: representation.typeIdentifier)).inserted else {
                 throw HistoryFailure.invalidInput(
                     .duplicateRepresentationType(representation.typeIdentifier)
                 )
+            }
+        }
+
+        guard sorted.first?.pasteboardItemIndex == 0 else {
+            throw HistoryFailure.invalidInput(.emptyCapture)
+        }
+        for (previous, next) in zip(sorted, sorted.dropFirst()) {
+            guard next.pasteboardItemIndex - previous.pasteboardItemIndex <= 1 else {
+                throw HistoryFailure.invalidInput(.emptyCapture)
             }
         }
 
@@ -258,7 +270,8 @@ internal actor IngestPreparationActor {
             CanonicalRepresentation(
                 content: ContentRepresentation(
                     typeIdentifier: representation.typeIdentifier,
-                    bytes: representation.bytes
+                    bytes: representation.bytes,
+                    pasteboardItemIndex: representation.pasteboardItemIndex
                 ),
                 fingerprint: ContentFingerprint(rawValue: fingerprint(representation.bytes))
             )
@@ -276,7 +289,8 @@ internal actor IngestPreparationActor {
             ContentSignatureEntry(
                 typeIdentifier: representation.content.typeIdentifier,
                 fingerprint: representation.fingerprint,
-                byteCount: representation.content.bytes.count
+                byteCount: representation.content.bytes.count,
+                pasteboardItemIndex: representation.content.pasteboardItemIndex
             )
         }
 

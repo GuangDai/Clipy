@@ -27,14 +27,15 @@ package func canonicalContains(
     // the required Unicode canonical-equivalence semantics; a merge walk over
     // the stored scalar order would not, because canonically equivalent
     // spellings can occupy different positions relative to other strings.
-    var existingBytesByType: [String: Data] = [:]
+    guard existing.pasteboardItemCount == incoming.pasteboardItemCount else { return false }
+    var existingBytesByType: [ContentRepresentationKey: Data] = [:]
     existingBytesByType.reserveCapacity(existing.representations.count)
     for representation in existing.representations {
-        existingBytesByType[representation.content.typeIdentifier] =
+        existingBytesByType[representation.content.key] =
             representation.content.bytes
     }
     return incoming.representations.allSatisfy { representation in
-        existingBytesByType[representation.content.typeIdentifier]
+        existingBytesByType[representation.content.key]
             == representation.content.bytes
     }
 }

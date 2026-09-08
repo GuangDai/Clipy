@@ -29,7 +29,7 @@ struct LocalAutomationOperationCodecTests {
         #expect(output.exitCode == 0)
         #expect(output.stderr.isEmpty)
         #expect(String(decoding: output.stdout, as: UTF8.self) ==
-            "{\"ok\":true,\"protocolVersion\":1,\"requestID\":\"\(validRequestID)\",\"result\":{\"contentVersion\":18446744073709551615,\"locator\":\"i1_a\",\"representations\":[{\"bytesBase64\":\"AP8K\",\"typeIdentifier\":\"com.example.binary\"}]}}\n")
+            "{\"ok\":true,\"protocolVersion\":1,\"requestID\":\"\(validRequestID)\",\"result\":{\"contentVersion\":18446744073709551615,\"locator\":\"i1_a\",\"representations\":[{\"bytesBase64\":\"AP8K\",\"pasteboardItemIndex\":0,\"typeIdentifier\":\"com.example.binary\"}]}}\n")
     }
 
     @Test(arguments: [false, true])

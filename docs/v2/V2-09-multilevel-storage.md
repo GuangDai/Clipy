@@ -357,3 +357,19 @@ pressure 不推进 ContentVersion/ChangePosition；搜索取消/过期不发布�
   [`外键索引`](https://sqlite.org/foreignkeys.html#required_and_suggested_database_indexes)：具体能力及适用限制。
 - 历史 [09 多级存储审查](../reviews/2026-08-22-clipy-maccy-deep-review/09-tiered-storage-and-unbounded-history.md)
   的四 bytes、O(N) 分析可作背景；其迁移、完整 checkpoint 与治理条件不作为本设计实现要求。
+
+## 11. 多项系统剪贴板内容
+
+一次 copy 保存为一个 History Item，representation 行持久化零基
+`pasteboardItemIndex`，与 type 一起标识某一项中的表示。系统 item 顺序不可
+丢失；相同 type 在不同 item 中可有不同 bytes。SQLite 去重索引包含 item
+位置，候选确认逐 item 比较原始 bytes，且两端 item 数必须相同。
+Canonical/Effective、immutable revision 与 blob codec 都保存该位置；
+metadata details 和显式 representation 请求同样携带它。list 的类型摘要为
+唯一并排序的并集，search/title 可组合展示，paste 则写回独立且有序的系统 items。
+
+当前格式要求该列存在，旧 SQLite 布局拒绝 open；不提供迁移、双写、读取旧
+格式或自动删除。每个 item 至少保留一个表示，任一 item 的隐私 marker
+拒绝整次 capture。Local Automation 的 Effective JSON 每个 representation
+输出 `pasteboardItemIndex`；revision 输入按 `(pasteboardItemIndex,typeIdentifier)`
+区分，省略位置表示单项位置 0。App Intents 仍消费同一个完整 PastePayload。

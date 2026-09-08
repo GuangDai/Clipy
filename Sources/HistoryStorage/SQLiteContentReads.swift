@@ -30,6 +30,10 @@ internal struct SQLiteRepresentationSource: Sendable {
     let ordinal: Int
     let typeIdentifier: String
     let byteCount: Int
+    let pasteboardItemIndex: Int
+    var key: ContentRepresentationKey {
+        ContentRepresentationKey(pasteboardItemIndex: pasteboardItemIndex, typeIdentifier: typeIdentifier)
+    }
 }
 
 /// Concrete SQL reads; no model hydration, decoder routing or retained row
@@ -162,7 +166,7 @@ internal struct SQLiteContentReads {
         // Deliberately omit inlineBytes: even an inline sibling is not a
         // requested thumbnail payload. Only read(_:) materializes bytes.
         let statement = try database.prepare("""
-            SELECT ordinal, exactType, byteCount FROM representations
+            SELECT ordinal, exactType, byteCount, pasteboardItemIndex FROM representations
             WHERE contentID = ? ORDER BY ordinal LIMIT ?
             """, bindings: [.text(content.id.uuidString), .integer(Int64(limits.maximumRepresentationsPerCaptureOrRevision + 1))])
         defer { statement.finalize() }
@@ -173,17 +177,19 @@ internal struct SQLiteContentReads {
             let ordinal = try nonnegativeInt(statement.integer(at: 0))
             let identifier = try statement.text(at: 1)
             let count = try nonnegativeInt(statement.integer(at: 2))
+            let itemIndex = try nonnegativeInt(statement.integer(at: 3))
             try mapCodecFailure { try CodecValidation.validateTypeIdentifier(identifier, limits: limits) }
             guard ordinal == values.count, count > 0, count <= limits.maximumRepresentationBytes else { throw corrupt }
             let (sum, overflow) = byteCount.addingReportingOverflow(count)
             guard !overflow, sum <= content.byteCount else { throw corrupt }
             byteCount = sum
             values.append(SQLiteRepresentationSource(
-                contentID: content.id, ordinal: ordinal, typeIdentifier: identifier, byteCount: count
+                contentID: content.id, ordinal: ordinal, typeIdentifier: identifier, byteCount: count,
+                pasteboardItemIndex: itemIndex
             ))
         }
         guard values.count == content.representationCount, byteCount == content.byteCount else { throw corrupt }
-        try mapCodecFailure { try CodecValidation.requireNormalizedTypeIdentifierOrder(values.map(\.typeIdentifier)) }
+        try mapCodecFailure { try CodecValidation.requireNormalizedRepresentationOrder(values.map(\.key)) }
         return values
     }
 
@@ -192,8 +198,9 @@ internal struct SQLiteContentReads {
         let values = try representations(in: current)
         if current.ordinal > 0 {
             let canonical = try representations(in: canonicalContent(for: item))
-            let types = Set(canonical.map(\.typeIdentifier))
-            guard values.allSatisfy({ types.contains($0.typeIdentifier) }) else { throw corrupt }
+            let keys = Set(canonical.map(\.key))
+            guard values.allSatisfy({ keys.contains($0.key) }),
+                  values.last?.pasteboardItemIndex == canonical.last?.pasteboardItemIndex else { throw corrupt }
         }
         return values
     }
@@ -217,7 +224,8 @@ internal struct SQLiteContentReads {
         default: throw corrupt
         }
         try Task.checkCancellation()
-        return HistoryRepresentation(typeIdentifier: source.typeIdentifier, bytes: bytes)
+        return HistoryRepresentation(typeIdentifier: source.typeIdentifier, bytes: bytes,
+                                     pasteboardItemIndex: source.pasteboardItemIndex)
     }
 
     private func content(id: UUID, itemID: HistoryItemID) throws -> SQLiteStoredContent {

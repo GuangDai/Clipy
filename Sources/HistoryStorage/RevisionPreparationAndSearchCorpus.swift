@@ -230,12 +230,12 @@ internal actor RevisionPreparationActor {
             // decision/canonical counts then leave a missing Canonical
             // decision no room but to be paired with a foreign one — both
             // are the same incoherent-draft failure.
-            var actionsByType: [String: RevisionDecisionAction] = [:]
+            var actionsByType: [ContentRepresentationKey: RevisionDecisionAction] = [:]
             actionsByType.reserveCapacity(draft.decisions.count)
             for decision in draft.decisions {
                 guard actionsByType.updateValue(
                     decision.action,
-                    forKey: decision.typeIdentifier
+                    forKey: ContentRepresentationKey(pasteboardItemIndex: decision.pasteboardItemIndex, typeIdentifier: decision.typeIdentifier)
                 ) == nil else {
                     throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
                 }
@@ -250,7 +250,7 @@ internal actor RevisionPreparationActor {
             representations.reserveCapacity(source.canonical.representations.count)
             for canonicalRepresentation in source.canonical.representations {
                 let typeIdentifier = canonicalRepresentation.content.typeIdentifier
-                guard let action = actionsByType[typeIdentifier] else {
+                guard let action = actionsByType[canonicalRepresentation.content.key] else {
                     // Counts matched, so a missing decision means a foreign
                     // type took its slot — still an incoherent draft.
                     throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
@@ -260,7 +260,7 @@ internal actor RevisionPreparationActor {
                     representations.append(canonicalRepresentation.content)
                 case .inheritCurrent:
                     guard let current = source.current.representations.first(where: {
-                        $0.typeIdentifier == typeIdentifier
+                        $0.key == canonicalRepresentation.content.key
                     }) else {
                         throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
                     }
@@ -278,7 +278,8 @@ internal actor RevisionPreparationActor {
                     representations.append(
                         ContentRepresentation(
                             typeIdentifier: typeIdentifier,
-                            bytes: bytes
+                            bytes: bytes,
+                            pasteboardItemIndex: canonicalRepresentation.content.pasteboardItemIndex
                         )
                     )
                 case .hide:
@@ -290,11 +291,12 @@ internal actor RevisionPreparationActor {
             }
             // The proposed Effective Content must remain non-empty — a draft
             // that hides every Canonical type is rejected (03a §5).
-            guard !representations.isEmpty else {
+            guard !representations.isEmpty,
+                  Set(representations.map(\.pasteboardItemIndex)) == Set(source.canonical.representations.map { $0.content.pasteboardItemIndex }) else {
                 throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
             }
             proposed = EffectiveContent(representations: representations.sorted {
-                $0.typeIdentifier.unicodeScalars.lexicographicallyPrecedes($1.typeIdentifier.unicodeScalars)
+                $0.key.precedes($1.key)
             })
         case .revert(let target):
             switch target {

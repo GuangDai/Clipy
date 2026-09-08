@@ -9,22 +9,22 @@ package struct ReviseEditorDraft: Sendable {
     package enum DismissalDecision: Hashable, Sendable { case dismiss, confirmDiscard }
     private var item: HistoryItemReference
     private let canonical: [HistoryRepresentationMetadata]
-    private var effectiveTypes: Set<String>
-    private var choices: [String: Choice] = [:]
-    private var replacementTexts: [String: String] = [:]
-    private var replacementCodecs: [String: EditorTextCodec] = [:]
-    private var openingTexts: [String: String] = [:]
+    private var effectiveTypes: Set<RepresentationIdentity>
+    private var choices: [RepresentationIdentity: Choice] = [:]
+    private var replacementTexts: [RepresentationIdentity: String] = [:]
+    private var replacementCodecs: [RepresentationIdentity: EditorTextCodec] = [:]
+    private var openingTexts: [RepresentationIdentity: String] = [:]
     package private(set) var isAwaitingLatestContent = false
 
     package init(details: HistoryDetails) {
         item = details.item
         canonical = details.canonical
-        effectiveTypes = Set(details.effective.map(\.typeIdentifier))
+        effectiveTypes = Set(details.effective.map(\.representationIdentity))
     }
     package var itemID: HistoryItemID { item.id }
     package var itemReference: HistoryItemReference { item }
     package var canonicalRepresentations: [HistoryRepresentationMetadata] { canonical }
-    package var canSubmit: Bool { !isAwaitingLatestContent && !allRepresentationsHidden && !hasEmptyReplacement }
+    package var canSubmit: Bool { !isAwaitingLatestContent && !hasEmptyPasteboardItem && !hasEmptyReplacement }
     package var isDirty: Bool {
         choices.values.contains { $0 != .keepCurrent }
             || replacementTexts.contains { entry in
@@ -35,26 +35,39 @@ package struct ReviseEditorDraft: Sendable {
     package var dismissalDecision: DismissalDecision { isDirty ? .confirmDiscard : .dismiss }
     package var allRepresentationsHidden: Bool {
         !canonical.isEmpty && canonical.allSatisfy {
-            switch choice(for: $0.typeIdentifier) {
+            switch choice(for: $0.typeIdentifier, pasteboardItemIndex: $0.pasteboardItemIndex) {
             case .hide: true
-            case .keepCurrent: !effectiveTypes.contains($0.typeIdentifier)
+            case .keepCurrent: !effectiveTypes.contains($0.representationIdentity)
             case .useOriginal, .replace: false
             }
         }
     }
+    /// A revision keeps every constituent item present. Dropping its final
+    /// format would change the captured gesture's item boundaries.
+    package var hasEmptyPasteboardItem: Bool {
+        Dictionary(grouping: canonical, by: \.pasteboardItemIndex).values.contains { representations in
+            representations.allSatisfy {
+                switch choice(for: $0.typeIdentifier, pasteboardItemIndex: $0.pasteboardItemIndex) {
+                case .hide: true
+                case .keepCurrent: !effectiveTypes.contains($0.representationIdentity)
+                case .useOriginal, .replace: false
+                }
+            }
+        }
+    }
     package var hasEmptyReplacement: Bool {
-        canonical.contains { choice(for: $0.typeIdentifier) == .replace && replacementText(for: $0.typeIdentifier).isEmpty }
+        canonical.contains { choice(for: $0.typeIdentifier, pasteboardItemIndex: $0.pasteboardItemIndex) == .replace && replacementText(for: $0.typeIdentifier, pasteboardItemIndex: $0.pasteboardItemIndex).isEmpty }
     }
-    package func choice(for typeIdentifier: String) -> Choice { choices[typeIdentifier] ?? .keepCurrent }
-    package mutating func setChoice(_ choice: Choice, for typeIdentifier: String) {
-        guard canonical.contains(where: { $0.typeIdentifier == typeIdentifier }) else { return }
-        guard choice != .replace || replacementCodecs[typeIdentifier] != nil else { return }
-        choices[typeIdentifier] = choice
+    package func choice(for typeIdentifier: String, pasteboardItemIndex: Int = 0) -> Choice { choices[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] ?? .keepCurrent }
+    package mutating func setChoice(_ choice: Choice, for typeIdentifier: String, pasteboardItemIndex: Int = 0) {
+        guard canonical.contains(where: { $0.typeIdentifier == typeIdentifier && $0.pasteboardItemIndex == pasteboardItemIndex }) else { return }
+        guard choice != .replace || replacementCodecs[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] != nil else { return }
+        choices[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] = choice
     }
-    package func replacementText(for typeIdentifier: String) -> String { replacementTexts[typeIdentifier] ?? "" }
-    package mutating func setReplacementText(_ text: String, for typeIdentifier: String) {
-        guard replacementCodecs[typeIdentifier] != nil else { return }
-        replacementTexts[typeIdentifier] = text
+    package func replacementText(for typeIdentifier: String, pasteboardItemIndex: Int = 0) -> String { replacementTexts[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] ?? "" }
+    package mutating func setReplacementText(_ text: String, for typeIdentifier: String, pasteboardItemIndex: Int = 0) {
+        guard replacementCodecs[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] != nil else { return }
+        replacementTexts[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] = text
     }
 
     /// Metadata offers declared encodings; choosing Replace validates its source.
@@ -62,20 +75,21 @@ package struct ReviseEditorDraft: Sendable {
         let type = ClipboardFormatIdentifier(rawValue: representation.typeIdentifier)
         return type == .utf8PlainText || type == .utf16PlainText || type == .utf16ExternalPlainText
     }
-    package func replacementRequest(for typeIdentifier: String) -> HistoryRepresentationRequest? {
-        guard let metadata = canonical.first(where: { $0.typeIdentifier == typeIdentifier }), canReplace(metadata) else { return nil }
+    package func replacementRequest(for typeIdentifier: String, pasteboardItemIndex: Int = 0) -> HistoryRepresentationRequest? {
+        guard let metadata = canonical.first(where: { $0.typeIdentifier == typeIdentifier && $0.pasteboardItemIndex == pasteboardItemIndex }), canReplace(metadata) else { return nil }
         return HistoryRepresentationRequest(item: item,
-            basis: effectiveTypes.contains(typeIdentifier) ? .effective : .canonical,
-            typeIdentifier: typeIdentifier)
+            basis: effectiveTypes.contains(RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)) ? .effective : .canonical,
+            typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
     }
-    package func hasReplacementSource(for typeIdentifier: String) -> Bool { replacementCodecs[typeIdentifier] != nil }
+    package func hasReplacementSource(for typeIdentifier: String, pasteboardItemIndex: Int = 0) -> Bool { replacementCodecs[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] != nil }
     @discardableResult
     package mutating func installReplacementSource(_ source: HistoryRepresentation) -> Bool {
-        guard replacementRequest(for: source.typeIdentifier) != nil,
+        guard replacementRequest(for: source.typeIdentifier, pasteboardItemIndex: source.pasteboardItemIndex) != nil,
               let decoded = EditorTextCodec.decode(source) else { return false }
-        replacementTexts[source.typeIdentifier] = decoded.text
-        replacementCodecs[source.typeIdentifier] = decoded.codec
-        openingTexts[source.typeIdentifier] = decoded.text
+        let key = RepresentationIdentity(typeIdentifier: source.typeIdentifier, pasteboardItemIndex: source.pasteboardItemIndex)
+        replacementTexts[key] = decoded.text
+        replacementCodecs[key] = decoded.codec
+        openingTexts[key] = decoded.text
         return true
     }
     package mutating func markStale() { isAwaitingLatestContent = true }
@@ -87,7 +101,7 @@ package struct ReviseEditorDraft: Sendable {
         guard details.item.id == item.id, details.item.contentVersion >= item.contentVersion,
               details.canonical == canonical else { return false }
         for type in Array(replacementTexts.keys) {
-            if choice(for: type) != .replace,
+            if choice(for: type.typeIdentifier, pasteboardItemIndex: type.pasteboardItemIndex) != .replace,
                let current = replacementTexts[type], let opening = openingTexts[type],
                current.utf8.elementsEqual(opening.utf8) {
                 replacementTexts.removeValue(forKey: type)
@@ -96,22 +110,22 @@ package struct ReviseEditorDraft: Sendable {
             }
         }
         item = details.item
-        effectiveTypes = Set(details.effective.map(\.typeIdentifier))
+        effectiveTypes = Set(details.effective.map(\.representationIdentity))
         isAwaitingLatestContent = false
         return true
     }
     package func revisionRequest() -> RevisionRequest {
         RevisionRequest(itemID: item.id, expected: item.contentVersion,
             intent: .replace(RevisionDraft(decisions: canonical.map { representation in
-                let type = representation.typeIdentifier
+                let type = representation.representationIdentity
                 let action: RevisionDecisionAction
-                switch choice(for: type) {
+                switch choice(for: type.typeIdentifier, pasteboardItemIndex: type.pasteboardItemIndex) {
                 case .keepCurrent: action = effectiveTypes.contains(type) ? .inheritCurrent : .hide
                 case .useOriginal: action = .inheritCanonical
                 case .hide: action = .hide
-                case .replace: action = .replace(bytes: replacementCodecs[type]!.encode(replacementText(for: type)))
+                case .replace: action = .replace(bytes: replacementCodecs[type]!.encode(replacementText(for: type.typeIdentifier, pasteboardItemIndex: type.pasteboardItemIndex)))
                 }
-                return RevisionDecision(typeIdentifier: type, action: action)
+                return RevisionDecision(typeIdentifier: type.typeIdentifier, action: action, pasteboardItemIndex: type.pasteboardItemIndex)
             })))
     }
 }

@@ -107,25 +107,27 @@ private func effectiveTextContent(
 
     // The first representation fills the body budget exactly and yields
     // the title; later text contributes neither. These output assertions
-    // establish the budgets, not how many decoder calls were made.
+    // establish the budgets, not how many decoder calls were made. UTF-16
+    // sorts before UTF-8, so this single-item fixture follows the projector's
+    // normalized input contract while still filling the budget first.
     let content = effectiveTextContent([
-        ("public.utf8-plain-text", exactFill),
-        ("public.utf16-external-plain-text", "decoded but contributes nothing"),
+        ("public.utf16-external-plain-text", exactFill),
+        ("public.utf8-plain-text", "decoded but contributes nothing"),
     ])
     let projection = ContentProjector.project(content)
     #expect(projection.searchBody == exactFill)
     #expect(projection.title == truncatedTitle)
     #expect(
         projection.effectiveTypeIdentifiers
-            == ["public.utf8-plain-text", "public.utf16-external-plain-text"]
+            == ["public.utf16-external-plain-text", "public.utf8-plain-text"]
     )
 
     // An encoding-unspecified leading representation remains opaque, so
     // the budget filler still owns the title and body.
     let trailing = effectiveTextContent([
         ("public.plain-text", " \n "),
-        ("public.utf8-plain-text", exactFill),
-        ("public.utf16-external-plain-text", "late tail text"),
+        ("public.utf16-external-plain-text", exactFill),
+        ("public.utf8-plain-text", "late tail text"),
     ])
     let trailingProjection = ContentProjector.project(trailing)
     #expect(trailingProjection.searchBody == exactFill)

@@ -26,6 +26,14 @@ internal struct StoredCanonicalRepresentationV1: Codable, Sendable {
     internal let typeIdentifier: String
     internal let bytes: Data
     internal let fingerprint: UInt64
+    internal let pasteboardItemIndex: Int
+
+    internal init(typeIdentifier: String, bytes: Data, fingerprint: UInt64, pasteboardItemIndex: Int = 0) {
+        self.typeIdentifier = typeIdentifier
+        self.bytes = bytes
+        self.fingerprint = fingerprint
+        self.pasteboardItemIndex = pasteboardItemIndex
+    }
 }
 
 // MARK: - Codec (docs/05-authority-kernel.md §4)
@@ -51,7 +59,8 @@ internal enum CanonicalBlobCodec {
                 StoredCanonicalRepresentationV1(
                     typeIdentifier: representation.content.typeIdentifier,
                     bytes: representation.content.bytes,
-                    fingerprint: representation.fingerprint.rawValue
+                    fingerprint: representation.fingerprint.rawValue,
+                    pasteboardItemIndex: representation.content.pasteboardItemIndex
                 )
             }
         )
@@ -130,7 +139,8 @@ internal enum CanonicalBlobCodec {
                 CanonicalRepresentation(
                     content: ContentRepresentation(
                         typeIdentifier: stored.typeIdentifier,
-                        bytes: stored.bytes
+                        bytes: stored.bytes,
+                        pasteboardItemIndex: stored.pasteboardItemIndex
                     ),
                     fingerprint: ContentFingerprint(rawValue: stored.fingerprint)
                 )

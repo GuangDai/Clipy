@@ -54,8 +54,11 @@ struct AppCaptureCopyHostedTests {
             for: .replacedCapture(totalReplaced: 27), bundle: chinese, locale: locale
         ) == "Clipy 用较新的剪贴板变化替换了 27 次待处理变化，因此较早的内容未保存。如需重试，请重新复制较早的内容。")
         #expect(CaptureNoticePresentation.message(
+            for: .failed(.unsupportedClipboardShape), bundle: try bundle("en")
+        ) == "Clipy couldn't save this clipboard change because its size or structure isn't supported.")
+        #expect(CaptureNoticePresentation.message(
             for: .failed(.unsupportedClipboardShape), bundle: chinese
-        ) == "Clipy 暂不支持同时保存多个剪贴板项目，请每次复制一个项目。")
+        ) == "Clipy 无法保存此次剪贴板变化，因为其大小或结构不受支持。")
         #expect(CaptureNoticePresentation.message(
             for: .failed(.declaredContentUnavailable), bundle: chinese
         ) == "Clipy 未能完整读取剪贴板变化，请重新复制内容以再次尝试。")

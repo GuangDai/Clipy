@@ -31,6 +31,7 @@ final class CLIStandardStreamsProcessTests: XCTestCase {
                 XCTAssertTrue(text.contains("clipyctl recent [--limit N]"))
                 XCTAssertTrue(text.contains("clipyctl search QUERY"))
                 XCTAssertTrue(text.contains("clipyctl read LOCATOR"))
+                XCTAssertTrue(text.contains("--item N"))
                 XCTAssertTrue(text.contains("Settings > Automation"))
             }
         }
@@ -88,6 +89,27 @@ final class CLIStandardStreamsProcessTests: XCTestCase {
                 XCTAssertEqual(reply["ok"] as? Bool, false)
                 XCTAssertEqual((reply["error"] as? [String: Any])?["code"] as? String, "invalid_request")
             }
+        }
+    }
+
+    func testRawItemIndicesRejectBeforeReadingStdin() async throws {
+        let type = "public.utf8-plain-text"
+        let commands = [
+            ["--raw", "--type", type, "--item", "-1"],
+            ["--raw", "--type", type, "--item", "32"],
+            ["--raw", "--type", type, "--item", "1.5"],
+            ["--raw", "--type", type, "--item"],
+            ["read", "locator", "--raw", "--type", type, "--item", "32"],
+            ["read", "locator", "--item", "0"],
+            ["recent", "--item", "0"],
+        ]
+        for command in commands {
+            let invocation = try Invocation(arguments: command)
+            defer { invocation.close() }
+            let result = try await invocation.finish(timeout: 5)
+            XCTAssertEqual(result.status, 2)
+            XCTAssertEqual(result.stderr, Data("clipyctl: invalid_request\n".utf8))
+            if command.contains("--raw") { XCTAssertTrue(result.stdout.isEmpty) }
         }
     }
 

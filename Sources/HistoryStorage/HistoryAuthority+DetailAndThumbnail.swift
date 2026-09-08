@@ -38,29 +38,35 @@ extension HistoryAuthority {
         let contents = try reads.contents(for: item)
         guard let canonical = contents.first else { throw HistoryFailure.persistence(.corruptStoredValue) }
         let canonicalSources = try reads.representations(in: canonical)
-        let canonicalTypes = Set(canonicalSources.map(\.typeIdentifier))
+        let canonicalKeys = Set(canonicalSources.map(\.key))
         let canonicalRepresentations = canonicalSources.map {
-            HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount)
+            HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount,
+                                          pasteboardItemIndex: $0.pasteboardItemIndex)
         }
         var effective = canonicalRepresentations
         var revisions: [RevisionSummary] = []
         for content in contents.dropFirst() {
             let sources = try reads.representations(in: content)
-            guard sources.allSatisfy({ canonicalTypes.contains($0.typeIdentifier) }) else {
+            guard sources.allSatisfy({ canonicalKeys.contains($0.key) }),
+                  sources.last?.pasteboardItemIndex == canonicalSources.last?.pasteboardItemIndex else {
                 throw HistoryFailure.persistence(.corruptStoredValue)
             }
             let isActive = content.id == item.currentContentID
             if isActive {
                 effective = sources.map {
-                    HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount)
+                    HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount,
+                                                  pasteboardItemIndex: $0.pasteboardItemIndex)
                 }
             }
             // Every revision needs only its durable title, type names, size
             // and time. Canonical/current payloads also stay unopened.
+            let typeIdentifiers = Array(Set(sources.map(\.typeIdentifier))).sorted {
+                $0.unicodeScalars.lexicographicallyPrecedes($1.unicodeScalars)
+            }
             revisions.append(RevisionSummary(
                 id: RevisionID(rawValue: content.id), createdAt: content.createdAt,
                 isActive: isActive, title: content.title,
-                typeIdentifiers: sources.map(\.typeIdentifier), byteCount: content.byteCount
+                typeIdentifiers: typeIdentifiers, byteCount: content.byteCount
             ))
         }
         return (HistoryDetails(
@@ -101,7 +107,9 @@ extension HistoryAuthority {
                 case .effective:
                     sources = try reads.currentRepresentations(for: current)
                 }
-                guard let source = sources.first(where: { $0.typeIdentifier == request.typeIdentifier }) else {
+                guard let source = sources.first(where: {
+                    $0.pasteboardItemIndex == request.pasteboardItemIndex && $0.typeIdentifier == request.typeIdentifier
+                }) else {
                     throw HistoryFailure.invalidInput(.unsupportedRepresentationType(request.typeIdentifier))
                 }
                 return try reads.read(source)

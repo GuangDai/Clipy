@@ -4,7 +4,7 @@ import HistoryDomain
 
 extension HistoryAuthority {
     /// V2-09 §§3/4: reuse existing immutable bytes within this item's current
-    /// or Canonical content. Each indexed content/type pair has at most one
+    /// or Canonical content. Each indexed content/item/type key has at most one
     /// candidate; historical revisions and other items are not searched.
     /// Type equivalence narrows candidates; only byte-exact equality reuses a
     /// payload. The new representation row still owns its original spelling.
@@ -19,10 +19,10 @@ extension HistoryAuthority {
                 SELECT currentContentID FROM history_items WHERE id = ?
                 UNION
                 SELECT id FROM contents WHERE itemID = ? AND revisionOrdinal = 0
-            ) AND typeKey = ? AND byteCount = ?
+            ) AND pasteboardItemIndex = ? AND typeKey = ? AND byteCount = ?
             LIMIT 2
             """, bindings: [
-                .text(itemKey), .text(itemKey),
+                .text(itemKey), .text(itemKey), .integer(Int64(representation.pasteboardItemIndex)),
                 .text(representation.typeIdentifier.precomposedStringWithCanonicalMapping),
                 .integer(Int64(representation.bytes.count)),
             ])

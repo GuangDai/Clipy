@@ -796,7 +796,10 @@ invalidation, and exposes neither current retained-byte usage nor a
   formats. Those four families remain opaque and never enter title/search
   through a guessed UTF-8 decode. Malformed bytes of an exact plain type are
   skipped, never guessed through a fallback encoding;
-- effective type identifiers: sorted unique list;
+- effective type identifiers: the unique union across all constituent items,
+  globally sorted by Unicode scalar order (V2-09 §11). This metadata order
+  does not reorder content: capture and paste retain item positions, and
+  each item retains its own normalized representation set;
 - image bytes are not decoded for title/search.
 
 Reference metadata is parsed locally from the first exact `public.url` or

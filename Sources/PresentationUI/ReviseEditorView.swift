@@ -103,7 +103,7 @@ struct ReviseEditorView: View {
     @State private var reloadTask: Task<Void, Never>?
     @State private var replacementTask: Task<Void, Never>?
     @State private var replacementFailure: String?
-    @State private var replacementType: String?
+    @State private var replacementType: RepresentationIdentity?
     @State private var readFence: HistoryDetailsLoadFence
     /// A fixed product-copy key, localized at render time rather than
     /// retaining the language active when the reload completed.
@@ -157,7 +157,7 @@ struct ReviseEditorView: View {
                     }
                     ForEach(
                         draft.canonicalRepresentations,
-                        id: \.typeIdentifier
+                        id: \.representationIdentity
                     ) {
                         representation in
                         decisionRow(for: representation)
@@ -176,7 +176,7 @@ struct ReviseEditorView: View {
                 HStack {
                     Text(replacementFailure).font(.caption)
                     Button(PanelActionsCopy.text("Retry", bundle: copyBundle)) {
-                        if let replacementType { loadReplacement(for: replacementType) }
+                        if let replacementType { loadReplacement(for: replacementType.typeIdentifier, pasteboardItemIndex: replacementType.pasteboardItemIndex) }
                     }
                 }.padding(.horizontal)
             }
@@ -369,6 +369,9 @@ struct ReviseEditorView: View {
         if allRepresentationsHidden {
             return PanelActionsCopy.text("Hiding every representation is not allowed", bundle: copyBundle)
         }
+        if draft.hasEmptyPasteboardItem {
+            return PanelActionsCopy.text("Each clipboard item must keep at least one format", bundle: copyBundle)
+        }
         if draft.hasEmptyReplacement {
             return PanelActionsCopy.text("Replacement text cannot be empty", bundle: copyBundle)
         }
@@ -392,6 +395,8 @@ struct ReviseEditorView: View {
         for representation: HistoryRepresentationMetadata
     ) -> some View {
         let typeIdentifier = representation.typeIdentifier
+        let pasteboardItemIndex = representation.pasteboardItemIndex
+        let identity = representation.representationIdentity
         let replacementIsAvailable = draft.canReplace(representation)
         let replacementAccessibilityHint = replacementIsAvailable
             ? PanelActionsCopy.text(" Replace edits UTF-8 or UTF-16 plain text while preserving its encoding.", bundle: copyBundle)
@@ -402,6 +407,10 @@ struct ReviseEditorView: View {
                     alignment: .leading,
                     spacing: PanelTheme.spacingXXXSmall
                 ) {
+                    if Set(draft.canonicalRepresentations.map(\.pasteboardItemIndex)).count > 1 {
+                        Text("\(pasteboardItemIndex + 1)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Text(verbatim: typeIdentifier)
                         .font(.system(.callout, design: .monospaced))
                         .lineLimit(1)
@@ -416,7 +425,7 @@ struct ReviseEditorView: View {
                 Spacer(minLength: PanelTheme.spacingLarge)
                 Picker(
                     PanelActionsCopy.text("Decision", bundle: copyBundle),
-                    selection: choiceBinding(for: typeIdentifier)
+                    selection: choiceBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
                 ) {
                     Text(PanelActionsCopy.text("Keep Current", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.keepCurrent)
                     Text(PanelActionsCopy.text("Use Original", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.useOriginal)
@@ -432,9 +441,9 @@ struct ReviseEditorView: View {
                 .disabled(isSaving || isReloading || replacementTask != nil)
                 .labelsHidden()
                 .fixedSize()
-                .accessibilityLabel(PanelActionsCopy.format("Editing decision for %@", typeIdentifier, bundle: copyBundle))
+                .accessibilityLabel(PanelActionsCopy.format("Editing decision for %@", identity.accessibilityLabel, bundle: copyBundle))
                 .accessibilityIdentifier(
-                    "clipy.editor.decision.\(typeIdentifier)"
+                    "clipy.editor.decision.\(identity.accessibilitySuffix)"
                 )
                 .accessibilityHint(
                     PanelActionsCopy.text("Keep Current preserves the bytes currently used for pasting. Use Original restores the captured bytes. Hide omits this type from pasting.", bundle: copyBundle)
@@ -450,8 +459,8 @@ struct ReviseEditorView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             }
-            if draft.choice(for: typeIdentifier) == .replace {
-                TextEditor(text: textBinding(for: typeIdentifier))
+            if draft.choice(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) == .replace {
+                TextEditor(text: textBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex))
                     .disabled(isSaving || isReloading || replacementTask != nil)
                     .font(.system(.body, design: .monospaced))
                     // Grows vertically with the draft; the 96-point minimum
@@ -465,10 +474,10 @@ struct ReviseEditorView: View {
                         .strokeBorder(Color.primary.opacity(0.15))
                     }
                     .accessibilityLabel(
-                        PanelActionsCopy.format("Replacement text for %@", typeIdentifier, bundle: copyBundle)
+                        PanelActionsCopy.format("Replacement text for %@", identity.accessibilityLabel, bundle: copyBundle)
                     )
                     .accessibilityIdentifier(
-                        "clipy.editor.replacement.\(typeIdentifier)"
+                        "clipy.editor.replacement.\(identity.accessibilitySuffix)"
                     )
             }
         }
@@ -482,27 +491,27 @@ struct ReviseEditorView: View {
     }
 
     private func choiceBinding(
-        for typeIdentifier: String
+        for typeIdentifier: String, pasteboardItemIndex: Int
     ) -> Binding<ReviseEditorDraft.Choice> {
         Binding(
-            get: { draft.choice(for: typeIdentifier) },
+            get: { draft.choice(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) },
             set: {
                 guard !isSaving, !isReloading, replacementTask == nil else { return }
-                if $0 == .replace, !draft.hasReplacementSource(for: typeIdentifier) {
-                    loadReplacement(for: typeIdentifier)
+                if $0 == .replace, !draft.hasReplacementSource(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) {
+                    loadReplacement(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
                 } else {
-                    draft.setChoice($0, for: typeIdentifier)
+                    draft.setChoice($0, for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
                 }
             }
         )
     }
 
-    private func textBinding(for typeIdentifier: String) -> Binding<String> {
+    private func textBinding(for typeIdentifier: String, pasteboardItemIndex: Int) -> Binding<String> {
         Binding(
-            get: { draft.replacementText(for: typeIdentifier) },
+            get: { draft.replacementText(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) },
             set: {
                 guard !isSaving, !isReloading, replacementTask == nil else { return }
-                draft.setReplacementText($0, for: typeIdentifier)
+                draft.setReplacementText($0, for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
             }
         )
     }
@@ -510,13 +519,13 @@ struct ReviseEditorView: View {
     // MARK: Save
 
     @MainActor
-    private func loadReplacement(for typeIdentifier: String) {
+    private func loadReplacement(for typeIdentifier: String, pasteboardItemIndex: Int) {
         guard replacementTask == nil, !isSaving, !isReloading,
-              let request = draft.replacementRequest(for: typeIdentifier) else { return }
+              let request = draft.replacementRequest(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) else { return }
         _ = readFence.reconcile(viewState.surfacePurge, item: request.item)
         guard !readFence.isPurged else { return }
         replacementFailure = nil
-        replacementType = typeIdentifier
+        replacementType = RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
         let snapshot = draft
         replacementTask = Task {
             do {
@@ -541,7 +550,7 @@ struct ReviseEditorView: View {
                     return
                 }
                 draft = loaded
-                draft.setChoice(.replace, for: typeIdentifier)
+                draft.setChoice(.replace, for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
             } catch {
                 guard !Task.isCancelled else { return }
                 _ = readFence.reconcile(viewState.surfacePurge, item: request.item)
