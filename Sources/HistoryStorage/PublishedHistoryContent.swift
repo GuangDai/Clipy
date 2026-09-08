@@ -12,6 +12,7 @@ internal struct PublishedHistoryContent {
 }
 
 internal struct PublishedHistoryRepresentation {
+    internal let pasteboardItemIndex: Int
     internal let exactType: String
     internal let typeKey: String
     internal let byteCount: Int
@@ -87,6 +88,7 @@ extension HistoryAuthority {
                 }
             }
             published.append(PublishedHistoryRepresentation(
+                pasteboardItemIndex: representation.pasteboardItemIndex,
                 exactType: representation.typeIdentifier,
                 typeKey: representation.typeIdentifier.precomposedStringWithCanonicalMapping,
                 byteCount: representation.bytes.count, fingerprint: fingerprint,

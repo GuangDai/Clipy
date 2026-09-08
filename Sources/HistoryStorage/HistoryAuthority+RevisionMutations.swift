@@ -110,12 +110,13 @@ extension HistoryAuthority {
         let inputs = try revisionPreparationInputs(itemID: itemID, expected: expected, in: database)
         // A complete Effective replacement supplies hidden Canonical types
         // as internal hide decisions without disclosing them to the client.
-        let canonicalTypes = Set(inputs.snapshot.canonical.representations.map(\.content.typeIdentifier))
-        var bytesByType: [String: Data] = [:]
+        let canonicalTypes = Set(inputs.snapshot.canonical.representations.map(\.content.key))
+        var bytesByType: [ContentRepresentationKey: Data] = [:]
         for representation in representations {
-            guard canonicalTypes.contains(representation.typeIdentifier),
+            let key = ContentRepresentationKey(pasteboardItemIndex: representation.pasteboardItemIndex, typeIdentifier: representation.typeIdentifier)
+            guard canonicalTypes.contains(key),
                   !representation.bytes.isEmpty,
-                  bytesByType.updateValue(representation.bytes, forKey: representation.typeIdentifier) == nil else {
+                  bytesByType.updateValue(representation.bytes, forKey: key) == nil else {
                 throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
             }
         }
@@ -123,7 +124,8 @@ extension HistoryAuthority {
             let type = canonical.content.typeIdentifier
             return RevisionDecision(
                 typeIdentifier: type,
-                action: bytesByType[type].map { RevisionDecisionAction.replace(bytes: $0) } ?? .hide
+                action: bytesByType[canonical.content.key].map { RevisionDecisionAction.replace(bytes: $0) } ?? .hide,
+                pasteboardItemIndex: canonical.content.pasteboardItemIndex
             )
         }
         return (

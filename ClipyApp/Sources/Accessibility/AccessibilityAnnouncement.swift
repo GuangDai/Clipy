@@ -26,7 +26,7 @@ enum CaptureNoticePresentation {
             return String(format: format, locale: locale,
                           totalReplaced.formatted(.number.locale(locale)))
         case .failed(.unsupportedClipboardShape):
-            return AppCaptureCopy.text("Clipy can't save multiple clipboard items yet. Copy one item at a time.", bundle: bundle)
+            return AppCaptureCopy.text("Clipy couldn't save this clipboard change because its size or structure isn't supported.", bundle: bundle)
         case .failed(.declaredContentUnavailable):
             return AppCaptureCopy.text("Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt.", bundle: bundle)
         case .failed:

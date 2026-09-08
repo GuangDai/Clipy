@@ -34,7 +34,8 @@ enum PasteboardLineageHint {
     /// the capture proceeds without one and coalescing falls back to
     /// content equality (docs/01-architecture.md §5.1).
     static func decode(_ data: Data) -> HistoryItemID? {
-        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        guard data.count == 36,
+              let text = String(data: data, encoding: .utf8) else { return nil }
         guard let uuid = UUID(uuidString: text) else { return nil }
         return HistoryItemID(rawValue: uuid)
     }

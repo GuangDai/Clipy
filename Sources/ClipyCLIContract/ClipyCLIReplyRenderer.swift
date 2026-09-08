@@ -69,6 +69,8 @@ package extension ClipyCLIContract {
                 if index != 0 { output.appendASCII(",") }
                 output.appendASCII("{\"bytesBase64\":")
                 output.appendJSON(representation.bytes.base64EncodedString())
+                output.appendASCII(",\"pasteboardItemIndex\":")
+                output.appendASCII(String(representation.pasteboardItemIndex))
                 output.appendASCII(",\"typeIdentifier\":")
                 output.appendJSON(representation.typeIdentifier)
                 output.appendASCII("}")
@@ -256,9 +258,12 @@ package struct ClipyCLIEffectiveResult: Sendable {
         package let typeIdentifier: String
         package let bytes: Data
 
-        package init(typeIdentifier: String, bytes: Data) {
+        package let pasteboardItemIndex: Int
+
+        package init(typeIdentifier: String, bytes: Data, pasteboardItemIndex: Int = 0) {
             self.typeIdentifier = typeIdentifier
             self.bytes = bytes
+            self.pasteboardItemIndex = pasteboardItemIndex
         }
     }
     package let locator: String
@@ -273,7 +278,8 @@ package struct ClipyCLIEffectiveResult: Sendable {
         }
         var total = 0
         for representation in representations {
-            guard !representation.typeIdentifier.isEmpty,
+            guard (0..<32).contains(representation.pasteboardItemIndex),
+                  !representation.typeIdentifier.isEmpty,
                   representation.typeIdentifier.utf8.count <= 512,
                   representation.bytes.count <= Self.maximumContentBytes - total else {
                 throw ClipyCLIValueFailure.invalidValue

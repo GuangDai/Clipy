@@ -138,13 +138,17 @@ public struct RevisionDraft: Sendable, Hashable {
 ///
 /// Owning spec: docs/03a-instruction-set.md §5.
 public struct RevisionDecision: Sendable, Hashable {
+    /// Zero-based position of the original system pasteboard item.
+    public let pasteboardItemIndex: Int
     public let typeIdentifier: String
     public let action: RevisionDecisionAction
 
     public init(
         typeIdentifier: String,
-        action: RevisionDecisionAction
+        action: RevisionDecisionAction,
+        pasteboardItemIndex: Int = 0
     ) {
+        self.pasteboardItemIndex = pasteboardItemIndex
         self.typeIdentifier = typeIdentifier
         self.action = action
     }

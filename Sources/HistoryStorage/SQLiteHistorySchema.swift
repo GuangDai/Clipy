@@ -35,6 +35,12 @@ internal enum SQLiteHistorySchema {
                 """)
             defer { countPolicy.finalize() }
             guard try countPolicy.step() else { throw HistoryFailure.persistence(.openStore) }
+            let itemIndex = try database.prepare("""
+                SELECT 1 FROM pragma_table_info('representations')
+                WHERE name='pasteboardItemIndex' LIMIT 1
+                """)
+            defer { itemIndex.finalize() }
+            guard try itemIndex.step() else { throw HistoryFailure.persistence(.openStore) }
             return
         }
 
@@ -112,6 +118,7 @@ internal enum SQLiteHistorySchema {
         CREATE TABLE representations (
             contentID TEXT NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
             ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            pasteboardItemIndex INTEGER NOT NULL DEFAULT 0 CHECK (pasteboardItemIndex >= 0),
             exactType TEXT NOT NULL,
             typeKey TEXT NOT NULL,
             byteCount INTEGER NOT NULL CHECK (byteCount > 0),
@@ -119,7 +126,7 @@ internal enum SQLiteHistorySchema {
             inlineBytes BLOB,
             blobID TEXT,
             PRIMARY KEY (contentID, ordinal),
-            UNIQUE (contentID, typeKey),
+            UNIQUE (contentID, pasteboardItemIndex, typeKey),
             CHECK ((inlineBytes IS NULL) <> (blobID IS NULL)),
             CHECK (inlineBytes IS NULL OR length(inlineBytes) = byteCount)
         )
@@ -224,7 +231,7 @@ internal enum SQLiteHistorySchema {
             WHERE revisionCount > 0 OR revisionBytes > 0
         """,
         """
-        CREATE INDEX representations_dedup ON representations(typeKey, byteCount, fingerprint, contentID)
+        CREATE INDEX representations_dedup ON representations(pasteboardItemIndex, typeKey, byteCount, fingerprint, contentID)
             WHERE fingerprint IS NOT NULL
         """,
         """

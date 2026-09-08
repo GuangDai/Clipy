@@ -27,9 +27,9 @@
 /// unavailable" (`CaptureOutcome.declaredUnavailable`), and the write throws
 /// `PasteboardWriteFailure` when an item refuses a staged representation or
 /// the pasteboard refuses the completed item, so neither a partial freeze
-/// nor a known incomplete write can masquerade as a complete success. A
-/// multi-item clipboard is reported as an unsupported capture shape instead
-/// of silently truncating it to the first item.
+/// nor a known incomplete write can masquerade as a complete success.
+/// Multi-item capture and paste preserve the ordered constituent items;
+/// gestures with an empty constituent item remain explicitly unsupported.
 import AppKit
 import Foundation
 import HistoryCore
@@ -95,7 +95,7 @@ public struct PasteboardAdapter {
     /// only a complete freeze. Production capture flows through
     /// `PasteboardObserver`, which delivers the full outcome; direct
     /// callers that need only the frozen value keep this one. Partial,
-    /// concealed, and multi-item outcomes return nil here; callers needing
+    /// concealed, and unsupported-shape outcomes return nil here; callers needing
     /// the reason use `captureOutcome(observedAt:)`.
     public func capture(observedAt: Date = Date()) -> ClipboardCapture? {
         guard let outcome = captureOutcome(observedAt: observedAt) else {
@@ -116,13 +116,12 @@ public struct PasteboardAdapter {
     /// record of what could not be frozen (docs/03a-instruction-set.md §4;
     /// docs/01-architecture.md §5.1; audit SPEC-IMPL-005).
     ///
-    /// - Exactly one pasteboard item is supported by the current flat capture
-    ///   model. A pasteboard containing multiple items returns an explicit
-    ///   unsupported outcome before any payload accessor runs, with the
-    ///   observed item count and zero representations. It is never flattened
-    ///   and its first item is never presented as a complete observation.
-    /// - Every retainable typed representation of the supported single item
-    ///   becomes one `CapturedRepresentation` (type identifier + bytes).
+    /// - Every retainable typed representation preserves its pasteboard item
+    ///   index, exact type identifier and bytes. Item order is never flattened
+    ///   into a joined string or a single set of types.
+    /// - Privacy declarations are checked before the standard item/format
+    ///   limit. Oversized declarations stop before payload reads; per-format
+    ///   and cumulative byte limits stop further provider reads immediately.
     /// - A type the item DECLARES but whose `data(forType:)` comes back
     ///   nil is never silently dropped: the type identifier is recorded in
     ///   `CaptureOutcome.declaredUnavailable` and the freeze is partial — a
@@ -157,7 +156,7 @@ public struct PasteboardAdapter {
     public func captureOutcome(observedAt: Date = Date()) -> CaptureOutcome? {
         let startChangeCount = pasteboard.changeCount
         guard let items = pasteboard.pasteboardItems,
-              let item = items.first else {
+              !items.isEmpty else {
             let endChangeCount = pasteboard.changeCount
             guard startChangeCount == endChangeCount else {
                 return changedDuringReadOutcome(
@@ -167,82 +166,118 @@ public struct PasteboardAdapter {
             }
             return nil
         }
-        guard items.count == 1 else {
-            let endChangeCount = pasteboard.changeCount
-            guard startChangeCount == endChangeCount else {
-                return changedDuringReadOutcome(
-                    startChangeCount: startChangeCount,
-                    endChangeCount: endChangeCount
-                )
+        let limits = HistoryLimits.standard
+        let maximumRepresentations = limits.maximumRepresentationsPerCaptureOrRevision
+        var declaredRepresentationCount = 0
+        var itemTypeIdentifiers: [[String]] = []
+        // Privacy belongs to the complete gesture and precedes resource
+        // rejection. Visit declarations without retaining a flattened corpus;
+        // saturate the count once it already proves the shape exceeds limits.
+        // Only admitted declarations are retained (at most 32 content types
+        // plus one lineage marker per item), so payloads use this same snapshot.
+        for item in items {
+            var retainedTypes: [String] = []
+            for type in item.types {
+                let typeIdentifier = type.rawValue
+                if PasteboardMarkers.concealedTypeIdentifiers.contains(typeIdentifier) {
+                    let endChangeCount = pasteboard.changeCount
+                    guard startChangeCount == endChangeCount else {
+                        return changedDuringReadOutcome(
+                            startChangeCount: startChangeCount,
+                            endChangeCount: endChangeCount
+                        )
+                    }
+                    return .concealed(.init(
+                        markerTypeIdentifier: typeIdentifier,
+                        changeCount: startChangeCount
+                    ))
+                }
+                if typeIdentifier != PasteboardLineageHint.typeIdentifier,
+                   declaredRepresentationCount <= maximumRepresentations {
+                    declaredRepresentationCount += 1
+                }
+                if items.count <= maximumRepresentations,
+                   declaredRepresentationCount <= maximumRepresentations {
+                    retainedTypes.append(typeIdentifier)
+                }
             }
-            return .unsupportedMultiItem(.init(
-                itemCount: items.count,
-                changeCount: startChangeCount
-            ))
+            if items.count <= maximumRepresentations {
+                itemTypeIdentifiers.append(retainedTypes)
+            }
         }
-        let typeIdentifiers = item.types.map { $0.rawValue }
-        if let marker = typeIdentifiers.first(where: {
-            PasteboardMarkers.concealedTypeIdentifiers.contains($0)
-        }) {
-            let endChangeCount = pasteboard.changeCount
-            guard startChangeCount == endChangeCount else {
-                return changedDuringReadOutcome(
-                    startChangeCount: startChangeCount,
-                    endChangeCount: endChangeCount
-                )
-            }
-            return .concealed(.init(
-                markerTypeIdentifier: marker,
-                changeCount: startChangeCount
-            ))
+        guard items.count <= maximumRepresentations,
+              declaredRepresentationCount <= maximumRepresentations else {
+            return unsupportedCaptureOutcome(itemCount: items.count, startChangeCount: startChangeCount)
         }
 
         var representations: [CapturedRepresentation] = []
-        representations.reserveCapacity(typeIdentifiers.count)
+        representations.reserveCapacity(declaredRepresentationCount)
+        var retainedByteCount = 0
         var unavailableTypeIdentifiers: [String] = []
-        var lineageHint: HistoryItemID?
-        for typeIdentifier in typeIdentifiers {
-            #if DEBUG
-            // The Debug seam forces the documented declared-but-unavailable
-            // outcome (SPEC-IMPL-005).
-            let data: Data?
-            if failureSimulation.unavailableTypeIdentifiers.contains(typeIdentifier) {
-                data = nil
-            } else {
-                payloadReadObserver?(typeIdentifier)
-                data = item.data(
+        var itemLineageHints: [HistoryItemID?] = []
+        for (pasteboardItemIndex, item) in items.enumerated() {
+            var lineageHint: HistoryItemID?
+            for typeIdentifier in itemTypeIdentifiers[pasteboardItemIndex] {
+                #if DEBUG
+                // The Debug seam forces the documented declared-but-unavailable
+                // outcome (SPEC-IMPL-005).
+                let data: Data?
+                if failureSimulation.unavailableTypeIdentifiers.contains(typeIdentifier) {
+                    data = nil
+                } else {
+                    payloadReadObserver?(typeIdentifier)
+                    data = item.data(
+                        forType: NSPasteboard.PasteboardType(typeIdentifier)
+                    )
+                    payloadReadCompletionHook?(typeIdentifier)
+                }
+                #else
+                let data = item.data(
                     forType: NSPasteboard.PasteboardType(typeIdentifier)
                 )
-                payloadReadCompletionHook?(typeIdentifier)
-            }
-            #else
-            let data = item.data(
-                forType: NSPasteboard.PasteboardType(typeIdentifier)
-            )
-            #endif
-            // A promised-data accessor may yield to another pasteboard
-            // owner (REVIEW Card 5B). Once this generation is superseded,
-            // none of its remaining payloads can enter the freeze; avoid
-            // invoking more synchronous providers before the one retry.
-            let currentChangeCount = pasteboard.changeCount
-            guard startChangeCount == currentChangeCount else {
-                return changedDuringReadOutcome(
-                    startChangeCount: startChangeCount,
-                    endChangeCount: currentChangeCount
+                #endif
+                // A promised-data accessor may yield to another pasteboard
+                // owner (REVIEW Card 5B). Once this generation is superseded,
+                // none of its remaining payloads can enter the freeze; avoid
+                // invoking more synchronous providers before the one retry.
+                let currentChangeCount = pasteboard.changeCount
+                guard startChangeCount == currentChangeCount else {
+                    return changedDuringReadOutcome(
+                        startChangeCount: startChangeCount,
+                        endChangeCount: currentChangeCount
+                    )
+                }
+                if let data, data.count > limits.maximumRepresentationBytes {
+                    return unsupportedCaptureOutcome(itemCount: items.count, startChangeCount: startChangeCount)
+                }
+                if typeIdentifier == PasteboardLineageHint.typeIdentifier {
+                    lineageHint = data.flatMap(PasteboardLineageHint.decode)
+                    continue
+                }
+                guard let data else {
+                    unavailableTypeIdentifiers.append(typeIdentifier)
+                    continue
+                }
+                guard !data.isEmpty else { continue }
+                // A synchronous native provider allocates its returned Data
+                // before we can inspect it. Once over budget, release this
+                // attempt and never invoke another provider for the gesture.
+                let (nextByteCount, overflow) = retainedByteCount.addingReportingOverflow(data.count)
+                guard !overflow, nextByteCount <= limits.maximumCaptureBytes else {
+                    return unsupportedCaptureOutcome(itemCount: items.count, startChangeCount: startChangeCount)
+                }
+                retainedByteCount = nextByteCount
+                representations.append(
+                    CapturedRepresentation(typeIdentifier: typeIdentifier, bytes: data,
+                        pasteboardItemIndex: pasteboardItemIndex)
                 )
             }
-            if typeIdentifier == PasteboardLineageHint.typeIdentifier {
-                lineageHint = data.flatMap(PasteboardLineageHint.decode)
-                continue
-            }
-            guard let data else {
-                unavailableTypeIdentifiers.append(typeIdentifier)
-                continue
-            }
-            guard !data.isEmpty else { continue }
-            representations.append(
-                CapturedRepresentation(typeIdentifier: typeIdentifier, bytes: data)
-            )
+            itemLineageHints.append(lineageHint)
+        }
+        // A marker on a single constituent item cannot claim the lineage of
+        // the complete gesture. Every item must carry the same valid hint.
+        let lineageHint = itemLineageHints.first.flatMap { $0 }.flatMap { candidate in
+            itemLineageHints.allSatisfy { $0 == candidate } ? candidate : nil
         }
         let endChangeCount = pasteboard.changeCount
         guard startChangeCount == endChangeCount else {
@@ -250,6 +285,14 @@ public struct PasteboardAdapter {
                 startChangeCount: startChangeCount,
                 endChangeCount: endChangeCount
             )
+        }
+        if items.count > 1, unavailableTypeIdentifiers.isEmpty,
+           Set(representations.map(\.pasteboardItemIndex)).count != items.count {
+            // Empty constituent items cannot be represented by the indexed
+            // payload model. Never silently drop one from the gesture.
+            return .unsupportedMultiItem(.init(
+                itemCount: items.count, changeCount: startChangeCount
+            ))
         }
         let capture = ClipboardCapture(
             representations: representations,
@@ -283,6 +326,18 @@ public struct PasteboardAdapter {
         ))
     }
 
+    /// The legacy case name also covers resource limits. It carries no
+    /// partial content, and an ownership race keeps its distinct retry result.
+    private func unsupportedCaptureOutcome(itemCount: Int, startChangeCount: Int) -> CaptureOutcome {
+        let endChangeCount = pasteboard.changeCount
+        guard startChangeCount == endChangeCount else {
+            return changedDuringReadOutcome(
+                startChangeCount: startChangeCount, endChangeCount: endChangeCount
+            )
+        }
+        return .unsupportedMultiItem(.init(itemCount: itemCount, changeCount: startChangeCount))
+    }
+
     /// Builds the one content-free retry outcome for an ownership change
     /// observed by the freeze fence (REVIEW Card 5B). Bytes read before the
     /// mismatch are intentionally discarded rather than partially admitted.
@@ -301,10 +356,10 @@ public struct PasteboardAdapter {
     /// docs/04-coherence.md §8; docs/01-architecture.md §5.6).
     ///
     /// Every representation and the `com.clipy.lineageHint` metadata are
-    /// first staged on one new, unbound `NSPasteboardItem`. Only a complete
-    /// item reaches the system pasteboard: the adapter then clears the old
-    /// contents and makes one `writeObjects([item])` attempt. The hint lets
-    /// the next capture of this same paste coalesce into the item instead of
+    /// first staged on separate, unbound `NSPasteboardItem`s in item-index
+    /// order. Only the complete array reaches the system pasteboard: the
+    /// adapter clears the old contents and makes one `writeObjects` attempt.
+    /// The hint lets the next capture of this same paste coalesce into the item instead of
     /// inserting a duplicate (WS4 copy-coalescing through History; the
     /// end-to-end proof lives in HistoryStorage, not this target). The write
     /// is a framework side effect owned by the composition root's paste
@@ -319,39 +374,44 @@ public struct PasteboardAdapter {
     /// the partial-write window; Apple does not document it as a cross-process
     /// atomic transaction, so this API makes no atomicity claim.
     public func write(_ payload: PastePayload) throws {
-        let item = NSPasteboardItem()
+        let grouped = Dictionary(grouping: payload.representations, by: \.pasteboardItemIndex)
+        var items: [NSPasteboardItem] = []
         var rejectedTypeIdentifiers: [String] = []
-        for representation in payload.representations {
+        for index in grouped.keys.sorted() {
+            let item = NSPasteboardItem()
+            for representation in grouped[index] ?? [] {
+                #if DEBUG
+                // The Debug seam rejects staging without touching the observed
+                // pasteboard, matching a false item-setter result.
+                let isSimulatedRejection = failureSimulation.rejectedWriteTypeIdentifiers.contains(
+                    representation.typeIdentifier
+                )
+                #else
+                let isSimulatedRejection = false
+                #endif
+                let accepted = !isSimulatedRejection && item.setData(
+                    representation.bytes,
+                    forType: NSPasteboard.PasteboardType(representation.typeIdentifier)
+                )
+                if !accepted {
+                    rejectedTypeIdentifiers.append(representation.typeIdentifier)
+                }
+            }
             #if DEBUG
-            // The Debug seam rejects staging without touching the observed
-            // pasteboard, matching a false item-setter result.
-            let isSimulatedRejection = failureSimulation.rejectedWriteTypeIdentifiers.contains(
-                representation.typeIdentifier
+            let isSimulatedHintRejection = failureSimulation.rejectedWriteTypeIdentifiers.contains(
+                PasteboardLineageHint.typeIdentifier
             )
             #else
-            let isSimulatedRejection = false
+            let isSimulatedHintRejection = false
             #endif
-            let accepted = !isSimulatedRejection && item.setData(
-                representation.bytes,
-                forType: NSPasteboard.PasteboardType(representation.typeIdentifier)
+            let hintAccepted = !isSimulatedHintRejection && item.setData(
+                PasteboardLineageHint.encode(payload.lineageHint),
+                forType: NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier)
             )
-            if !accepted {
-                rejectedTypeIdentifiers.append(representation.typeIdentifier)
+            if !hintAccepted {
+                rejectedTypeIdentifiers.append(PasteboardLineageHint.typeIdentifier)
             }
-        }
-        #if DEBUG
-        let isSimulatedHintRejection = failureSimulation.rejectedWriteTypeIdentifiers.contains(
-            PasteboardLineageHint.typeIdentifier
-        )
-        #else
-        let isSimulatedHintRejection = false
-        #endif
-        let hintAccepted = !isSimulatedHintRejection && item.setData(
-            PasteboardLineageHint.encode(payload.lineageHint),
-            forType: NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier)
-        )
-        if !hintAccepted {
-            rejectedTypeIdentifiers.append(PasteboardLineageHint.typeIdentifier)
+            items.append(item)
         }
         guard rejectedTypeIdentifiers.isEmpty else {
             throw PasteboardWriteFailure.representationsRejected(
@@ -362,9 +422,9 @@ public struct PasteboardAdapter {
         pasteboard.clearContents()
         #if DEBUG
         let itemAccepted = !failureSimulation.rejectCompletedItem
-            && pasteboard.writeObjects([item])
+            && pasteboard.writeObjects(items)
         #else
-        let itemAccepted = pasteboard.writeObjects([item])
+        let itemAccepted = pasteboard.writeObjects(items)
         #endif
         guard itemAccepted else {
             throw PasteboardWriteFailure.itemRejected
@@ -413,8 +473,10 @@ public enum CaptureOutcome: Sendable, Equatable {
     /// A declared privacy marker stopped the freeze before any payload read.
     case concealed(Concealed)
 
-    /// The current flat capture model cannot preserve multiple item
-    /// boundaries. No item payload was read.
+    /// Unsupported structure or resource size: an empty constituent item,
+    /// too many declared items/formats, or bytes exceeding capture limits.
+    /// The legacy case name also covers single-item resource rejection.
+    /// No partial capture is exposed.
     case unsupportedMultiItem(UnsupportedMultiItem)
 
     /// Ownership/content changed while the freeze was read. Bytes from the
@@ -464,7 +526,7 @@ public enum CaptureOutcome: Sendable, Equatable {
         }
     }
 
-    /// Facts of an unsupported multi-item clipboard. There is intentionally
+    /// Facts of a clipboard rejected for structure or size. There is intentionally
     /// no capture or payload field.
     public struct UnsupportedMultiItem: Sendable, Equatable {
         public let itemCount: Int
@@ -492,12 +554,12 @@ public enum CaptureOutcome: Sendable, Equatable {
 /// The typed failure of a paste write (03b §9; 04 §8; audit SPEC-IMPL-005).
 public enum PasteboardWriteFailure: Error, Sendable, Equatable {
     /// One or more setters rejected a representation while building the
-    /// unbound item. Carries every refused type identifier in staging order:
-    /// payload representations first, the lineage-hint marker type last.
+    /// unbound items. Carries every refused type identifier in item order:
+    /// each item's payload representations followed by its lineage marker.
     /// This failure occurs before the existing pasteboard is changed.
     case representationsRejected(typeIdentifiers: [String])
 
-    /// The framework rejected the one completed item passed to
+    /// The framework rejected the completed item array passed to
     /// `writeObjects`. This is a distinct post-clear failure; the framework
     /// does not promise rollback or cross-process atomicity.
     case itemRejected

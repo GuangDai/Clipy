@@ -449,24 +449,35 @@ package final class PreviewContentLoader {
         try Task.checkCancellation()
         guard details.item == item else { return nil }
         guard await isCurrent() else { return nil }
-        let sources = ContentPreview.prepareHistoryPane(details.effective.map {
-            PreviewRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount)
-        })
+        // Select formats within one constituent item at a time. Passing all
+        // items together would combine sibling formats and duplicate exact
+        // identifiers in the renderer's single-item source selection.
+        let grouped = Dictionary(grouping: details.effective, by: \.pasteboardItemIndex)
         var outcome = PreviewOutcome.unavailable(.unsupported)
-        for source in sources {
-            try Task.checkCancellation()
-            if let failure = source.preflightFailure { return failure }
-            let representation = try await history.representation(HistoryRepresentationRequest(
-                item: item, basis: .effective, typeIdentifier: source.typeIdentifier
-            ))
-            try Task.checkCancellation()
-            guard await isCurrent() else { return nil }
-            outcome = await renderer.renderSelectedHistoryPane(source, representation: PreviewRepresentation(
-                typeIdentifier: representation.typeIdentifier, bytes: representation.bytes
-            ), pdfPage: pdfPage)
-            try Task.checkCancellation()
-            guard await isCurrent() else { return nil }
-            if !source.permitsFallback(after: outcome) { return outcome }
+        for index in grouped.keys.sorted() {
+            let sources = ContentPreview.prepareHistoryPane((grouped[index] ?? []).map {
+                PreviewRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount)
+            })
+            for source in sources {
+                try Task.checkCancellation()
+                if let failure = source.preflightFailure {
+                    outcome = failure
+                    break
+                }
+                let representation = try await history.representation(HistoryRepresentationRequest(
+                    item: item, basis: .effective, typeIdentifier: source.typeIdentifier,
+                    pasteboardItemIndex: index
+                ))
+                try Task.checkCancellation()
+                guard await isCurrent() else { return nil }
+                outcome = await renderer.renderSelectedHistoryPane(source, representation: PreviewRepresentation(
+                    typeIdentifier: representation.typeIdentifier, bytes: representation.bytes
+                ), pdfPage: pdfPage)
+                try Task.checkCancellation()
+                guard await isCurrent() else { return nil }
+                if case .content = outcome { return outcome }
+                if !source.permitsFallback(after: outcome) { break }
+            }
         }
         return outcome
     }

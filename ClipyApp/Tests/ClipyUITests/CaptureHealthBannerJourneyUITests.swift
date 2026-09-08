@@ -1,6 +1,6 @@
 /// CaptureHealthBannerJourneyUITests.swift — running-app materialization
 /// evidence for REVIEW Card 6's content-free capture-health banner. A real
-/// two-item General pasteboard generation enters the production observer's
+/// two-item General pasteboard generation with an empty constituent enters the production observer's
 /// unsupported-shape outcome; XCUI then reads and presses the rendered
 /// SwiftUI control in Clipy's actual floating panel.
 import AppKit
@@ -32,7 +32,7 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         defer { app.terminate() }
 
         let expectedMessage =
-            "Clipy can't save multiple clipboard items yet. Copy one item at a time."
+            "Clipy couldn't save this clipboard change because its size or structure isn't supported."
         let banner = app.descendants(matching: .any)[
             "clipy.capture.notice.banner"
         ]
@@ -122,10 +122,7 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
             )
         )
         XCTAssertTrue(
-            second.setString(
-                "clipy-ui-health-\(suffix)-beta",
-                forType: .string
-            )
+            second.setData(Data(), forType: .string)
         )
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()

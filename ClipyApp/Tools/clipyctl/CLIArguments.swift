@@ -5,27 +5,32 @@ import LocalAutomation
 /// one-request stdin interface. Both use the same validation and single send.
 struct CLIArguments {
     let rawType: String?
+    let rawItemIndex: Int?
     let requestJSON: Data?
 
     init?(_ arguments: [String]) {
         guard let command = arguments.first else {
             rawType = nil
+            rawItemIndex = nil
             requestJSON = nil
             return
         }
         switch command {
         case "--raw":
-            guard arguments.count == 3, arguments[1] == "--type",
-                  !arguments[2].isEmpty, arguments[2].utf8.count <= 512 else { return nil }
-            rawType = arguments[2]
+            guard let selection = Self.rawSelection(arguments) else { return nil }
+            rawType = selection.type
+            rawItemIndex = selection.itemIndex
             requestJSON = nil
         case "read":
-            guard arguments.count == 2 || arguments.count == 5 else { return nil }
-            if arguments.count == 5 {
-                guard arguments[2] == "--raw", arguments[3] == "--type",
-                      !arguments[4].isEmpty, arguments[4].utf8.count <= 512 else { return nil }
-                rawType = arguments[4]
-            } else { rawType = nil }
+            guard arguments.count >= 2 else { return nil }
+            if arguments.count > 2 {
+                guard let selection = Self.rawSelection(Array(arguments.dropFirst(2))) else { return nil }
+                rawType = selection.type
+                rawItemIndex = selection.itemIndex
+            } else {
+                rawType = nil
+                rawItemIndex = nil
+            }
             guard let json = Self.json(operation: "detailsEffective", arguments: ["locator": arguments[1]]) else {
                 return nil
             }
@@ -34,6 +39,7 @@ struct CLIArguments {
             guard arguments.count == 2,
                   let json = Self.json(operation: command, arguments: ["locator": arguments[1]]) else { return nil }
             rawType = nil
+            rawItemIndex = nil
             requestJSON = json
         case "recent", "search":
             var fields: [String: Any] = ["limit": 20]
@@ -61,9 +67,20 @@ struct CLIArguments {
             }
             guard let json = Self.json(operation: "browsePreview", arguments: fields) else { return nil }
             rawType = nil
+            rawItemIndex = nil
             requestJSON = json
         default: return nil
         }
+    }
+
+    private static func rawSelection(_ arguments: [String]) -> (type: String, itemIndex: Int?)? {
+        guard arguments.count == 3 || arguments.count == 5,
+              arguments[0] == "--raw", arguments[1] == "--type",
+              !arguments[2].isEmpty, arguments[2].utf8.count <= 512 else { return nil }
+        if arguments.count == 3 { return (arguments[2], nil) }
+        guard arguments[3] == "--item", let index = Int(arguments[4]),
+              (0...31).contains(index) else { return nil }
+        return (arguments[2], index)
     }
 
     private static func json(operation: String, arguments: [String: Any]) -> Data? {
@@ -93,11 +110,20 @@ struct CLIArguments {
         }
         // Swift String equality folds canonical Unicode spellings. Clipboard
         // type identifiers are exact UTF-8 identifiers (ClipboardFormats).
-        let matches = representations.filter {
-            ($0["typeIdentifier"] as? String)?.utf8.elementsEqual(rawType.utf8) == true
+        let matches = representations.filter { representation in
+            guard (representation["typeIdentifier"] as? String)?.utf8.elementsEqual(rawType.utf8) == true else {
+                return false
+            }
+            guard let rawItemIndex else { return true }
+            return representation["pasteboardItemIndex"] as? Int == rawItemIndex
         }
         guard !matches.isEmpty else {
             return .init(exitCode: 4, stdout: Data(), stderr: Data("clipyctl: not_found\n".utf8))
+        }
+        if rawItemIndex == nil, matches.count > 1 {
+            return .init(exitCode: 2, stdout: Data(), stderr: Data(
+                "clipyctl: invalid_request; multiple items match, use --item N\n".utf8
+            ))
         }
         guard matches.count == 1,
               let encoded = matches[0]["bytesBase64"] as? String,
@@ -112,9 +138,9 @@ struct CLIArguments {
         return """
         Usage: clipyctl recent [--limit N] [--cursor CURSOR]
                clipyctl search QUERY [--mode exact|fuzzy|regexp] [--limit N] [--cursor CURSOR]
-               clipyctl read LOCATOR [--raw --type TYPE]
+               clipyctl read LOCATOR [--raw --type TYPE [--item N]]
                clipyctl pin|unpin|delete LOCATOR
-               clipyctl [--raw --type TYPE] < request.json
+               clipyctl [--raw --type TYPE [--item N]] < request.json
                clipyctl --help | -h | --version
 
         Enable Local Automation in Clipy Settings > Automation and grant permissions.
@@ -140,6 +166,9 @@ struct CLIArguments {
         --raw --type TYPE  For detailsEffective or pasteEffective only: write exactly
                            one representation's bytes, with no newline or JSON.
                            TYPE matches the exact returned typeIdentifier.
+        --item N           Select its zero-based pasteboardItemIndex (0...31).
+                           Raw mode only; required if several items have TYPE.
+                           Without --item, a unique TYPE still works as before.
                            Failures leave stdout empty and report a code on stderr.
         --help, --version  Do not read stdin, credentials, or history, or launch Clipy.
 

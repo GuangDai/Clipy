@@ -347,10 +347,11 @@ extension HistoryAuthority {
         for (index, representation) in published.representations.enumerated() {
             try database.execute("""
                 INSERT INTO representations
-                    (contentID, ordinal, exactType, typeKey, byteCount, fingerprint, inlineBytes, blobID)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (contentID, ordinal, pasteboardItemIndex, exactType, typeKey, byteCount, fingerprint, inlineBytes, blobID)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, bindings: [
-                    .text(published.id.uuidString), .integer(Int64(index)), .text(representation.exactType),
+                    .text(published.id.uuidString), .integer(Int64(index)),
+                    .integer(Int64(representation.pasteboardItemIndex)), .text(representation.exactType),
                     .text(representation.typeKey), .integer(Int64(representation.byteCount)),
                     representation.fingerprint.map { .blob(sqliteUInt64($0)) } ?? .null,
                     representation.inline, representation.blobID,

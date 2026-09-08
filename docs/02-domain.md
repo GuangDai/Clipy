@@ -20,6 +20,7 @@ All declarations in this Part are `package` unless explicitly described as a ref
 
 ```swift
 package struct ContentRepresentation: Sendable, Hashable {
+    package let pasteboardItemIndex: Int
     package let typeIdentifier: String
     package let bytes: Data
 }
@@ -32,14 +33,40 @@ not normalize or rewrite the stored identifier spelling. A normalized content
 set:
 
 - is non-empty;
+- preserves the ordered constituent system pasteboard items through a zero-based
+  `pasteboardItemIndex`; indices start at zero and are contiguous, and every item
+  has at least one retained representation;
 - contains at most one representation for each canonically equivalent
-  `typeIdentifier`;
+  `typeIdentifier` **within each constituent item**;
 - contains no representation whose `bytes` is empty (zero length);
-- is sorted by `typeIdentifier` using a stable Unicode scalar ordering;
+- is sorted by item index, then `typeIdentifier` using stable Unicode scalar ordering;
 - contains no transient/private pasteboard type rejected by preparation;
 - stays within the hard representation-count and byte-size bounds in Part VI.
 
-Two representations with the same type identifier and different bytes are ambiguous input, not an invitation to choose by iteration order. Preparation rejects them with a typed invalid-input failure.
+Two representations with the same type identifier **at the same item index**
+are ambiguous input. Preparation rejects them with a typed invalid-input failure.
+Different items may carry the same type with different bytes; these remain
+separate throughout capture, immutable revisions, exact reads and paste.
+
+A History Item represents one whole copy gesture, including all constituent
+pasteboard items in their observed order. A concealment marker on any constituent
+rejects the entire gesture before payload reads. Empty/metadata-only constituent
+items cannot be represented and cause the entire capture to be rejected.
+Representation-count and byte limits apply to the aggregate gesture.
+
+Canonical containment requires the same constituent-item count and byte-exact
+containment **at each item index**. Swapping two items is a different value, even
+if their type identifiers match. A revision decision addresses
+`(pasteboardItemIndex, typeIdentifier)` and must leave at least one effective
+representation in every original item; it cannot reorder or silently remove an
+item. Equality includes these item boundaries. `ContentVersion`, copy counts,
+retention and `ChangePosition` continue to apply to the whole History Item.
+
+Browse/search may derive a bounded collection title and searchable text; these
+are display projections only. Details and explicit representation requests carry
+item indices. Paste reconstructs distinct `NSPasteboardItem` objects in order
+with the original exact representation bytes; it never joins bytes or invents
+a combined text/file list. Single-item constructor calls default to index zero.
 
 #### 2.2 Fingerprint and signature evidence
 
@@ -49,6 +76,7 @@ package struct ContentFingerprint: Sendable, Hashable {
 }
 
 package struct ContentSignatureEntry: Sendable, Hashable {
+    package let pasteboardItemIndex: Int
     package let typeIdentifier: String
     package let fingerprint: ContentFingerprint
     package let byteCount: Int

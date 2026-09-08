@@ -7,6 +7,28 @@
 import Foundation
 import HistoryCore
 
+/// A representation is identified within one ordered system pasteboard item.
+/// Payload bytes are deliberately absent from this lookup key (02 §2.1).
+package struct ContentRepresentationKey: Sendable, Hashable {
+    package let pasteboardItemIndex: Int
+    package let typeIdentifier: String
+
+    package init(pasteboardItemIndex: Int, typeIdentifier: String) {
+        self.pasteboardItemIndex = pasteboardItemIndex
+        self.typeIdentifier = typeIdentifier
+    }
+
+    /// Normalization orders exact scalar spellings; equality still recognizes
+    /// canonically equivalent type spellings. This is deliberately separate
+    /// from Comparable's equality-consistent ordering contract.
+    package func precedes(_ other: Self) -> Bool {
+        if pasteboardItemIndex != other.pasteboardItemIndex {
+            return pasteboardItemIndex < other.pasteboardItemIndex
+        }
+        return typeIdentifier.unicodeScalars.lexicographicallyPrecedes(other.typeIdentifier.unicodeScalars)
+    }
+}
+
 // MARK: - Content representation (docs/02-domain.md §2.1)
 
 /// One typed byte representation of clipboard content.
@@ -14,18 +36,23 @@ import HistoryCore
 ///
 /// Equality uses Swift String equality (Unicode canonical equivalence) for
 /// `typeIdentifier` and byte-exact Data equality for `bytes`. A normalized
-/// content set is non-empty, contains at most one representation per
-/// canonically equivalent `typeIdentifier`, contains no empty-bytes
-/// representation, and is sorted by `typeIdentifier` using a stable Unicode
-/// scalar ordering. Two
-/// representations with the same type identifier and different bytes are
+/// content set contains non-empty ordered items, at most one representation
+/// per canonically equivalent `typeIdentifier` within each item, and no
+/// empty bytes. It is sorted by item index then stable Unicode scalar type
+/// order. Two representations at the same item index with the same type and
+/// different bytes are
 /// ambiguous input — preparation rejects them with a typed invalid-input
 /// failure rather than choosing by iteration order.
 package struct ContentRepresentation: Sendable, Hashable {
+    package let pasteboardItemIndex: Int
+    package var key: ContentRepresentationKey {
+        ContentRepresentationKey(pasteboardItemIndex: pasteboardItemIndex, typeIdentifier: typeIdentifier)
+    }
     package let typeIdentifier: String
     package let bytes: Data
 
-    package init(typeIdentifier: String, bytes: Data) {
+    package init(typeIdentifier: String, bytes: Data, pasteboardItemIndex: Int = 0) {
+        self.pasteboardItemIndex = pasteboardItemIndex
         self.typeIdentifier = typeIdentifier
         self.bytes = bytes
     }
@@ -55,6 +82,10 @@ package struct ContentFingerprint: Sendable, Hashable {
 /// for candidate generation. Signature evidence only accelerates candidacy;
 /// byte-exact confirmation decides every match (D7).
 package struct ContentSignatureEntry: Sendable, Hashable {
+    package let pasteboardItemIndex: Int
+    package var key: ContentRepresentationKey {
+        ContentRepresentationKey(pasteboardItemIndex: pasteboardItemIndex, typeIdentifier: typeIdentifier)
+    }
     package let typeIdentifier: String
     package let fingerprint: ContentFingerprint
     package let byteCount: Int
@@ -62,8 +93,10 @@ package struct ContentSignatureEntry: Sendable, Hashable {
     package init(
         typeIdentifier: String,
         fingerprint: ContentFingerprint,
-        byteCount: Int
+        byteCount: Int,
+        pasteboardItemIndex: Int = 0
     ) {
+        self.pasteboardItemIndex = pasteboardItemIndex
         self.typeIdentifier = typeIdentifier
         self.fingerprint = fingerprint
         self.byteCount = byteCount
@@ -126,6 +159,7 @@ package enum CanonicalContentRejection: Error, Sendable, Equatable {
 /// equality and hash ignore fingerprints (§2.2).
 package struct CanonicalContent: Sendable, Hashable {
     package let representations: [CanonicalRepresentation]
+    package var pasteboardItemCount: Int { (representations.last?.content.pasteboardItemIndex ?? -1) + 1 }
 
     /// The one validating initializer. docs/02-domain.md §2.3
     ///
@@ -144,21 +178,23 @@ package struct CanonicalContent: Sendable, Hashable {
         guard !representations.isEmpty else {
             throw CanonicalContentRejection.emptyRepresentations
         }
-        var seen = Set<String>()
+        var seen = Set<ContentRepresentationKey>()
         seen.reserveCapacity(representations.count)
         for representation in representations {
             let typeIdentifier = representation.content.typeIdentifier
-            guard seen.insert(typeIdentifier).inserted else {
+            guard seen.insert(representation.content.key).inserted else {
                 throw CanonicalContentRejection.duplicateTypeIdentifier(typeIdentifier)
             }
             guard !representation.content.bytes.isEmpty else {
                 throw CanonicalContentRejection.emptyBytes(typeIdentifier: typeIdentifier)
             }
         }
+        guard representations.first?.content.pasteboardItemIndex == 0 else {
+            throw CanonicalContentRejection.nonNormalizedOrder
+        }
         for (previous, next) in zip(representations, representations.dropFirst()) {
-            let earlier = previous.content.typeIdentifier.unicodeScalars
-            let later = next.content.typeIdentifier.unicodeScalars
-            guard earlier.lexicographicallyPrecedes(later) else {
+            guard previous.content.key.precedes(next.content.key),
+                  next.content.pasteboardItemIndex - previous.content.pasteboardItemIndex <= 1 else {
                 throw CanonicalContentRejection.nonNormalizedOrder
             }
         }
@@ -188,13 +224,13 @@ package struct EffectiveContent: Sendable, Hashable {
     package func hasSameRepresentations(as other: EffectiveContent) -> Bool {
         guard representations.count == other.representations.count else { return false }
         if representations == other.representations { return true }
-        var bytesByType: [String: Data] = [:]
+        var bytesByType: [ContentRepresentationKey: Data] = [:]
         bytesByType.reserveCapacity(representations.count)
         for representation in representations {
-            bytesByType[representation.typeIdentifier] = representation.bytes
+            bytesByType[representation.key] = representation.bytes
         }
         return other.representations.allSatisfy {
-            bytesByType[$0.typeIdentifier] == $0.bytes
+            bytesByType[$0.key] == $0.bytes
         }
     }
 }

@@ -125,3 +125,5 @@
 "Saves the complete bytes of this displayed representation to a file you choose." = "将当前显示表示的完整字节保存到你选择的文件。";
 "The Save dialog is unavailable. Try again." = "无法打开保存对话框。请重试。";
 "Clipy couldn't save this file. Choose another location and try again." = "Clipy 无法保存此文件。请选择其他位置后重试。";
+
+"Each clipboard item must keep at least one format" = "剪贴板中的每一项都必须保留至少一种格式";

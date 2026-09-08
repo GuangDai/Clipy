@@ -13,6 +13,6 @@
 "Clipboard Monitoring Unavailable" = "Clipboard Monitoring Unavailable";
 "Clipy replaced 1 pending clipboard change with a newer one, so it wasn't saved. To try again, copy the older content again." = "Clipy replaced 1 pending clipboard change with a newer one, so it wasn't saved. To try again, copy the older content again.";
 "Clipy replaced %@ pending clipboard changes with newer ones, so they weren't saved. To try again, copy the older content again." = "Clipy replaced %@ pending clipboard changes with newer ones, so they weren't saved. To try again, copy the older content again.";
-"Clipy can't save multiple clipboard items yet. Copy one item at a time." = "Clipy can't save multiple clipboard items yet. Copy one item at a time.";
+"Clipy couldn't save this clipboard change because its size or structure isn't supported." = "Clipy couldn't save this clipboard change because its size or structure isn't supported.";
 "Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt." = "Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt.";
 "A clipboard change wasn't saved. Clipy can't retry it automatically; copy the content again to make a new attempt." = "A clipboard change wasn't saved. Clipy can't retry it automatically; copy the content again to make a new attempt.";

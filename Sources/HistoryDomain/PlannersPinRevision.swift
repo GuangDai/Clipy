@@ -279,20 +279,19 @@ private func isNormalizedRevisionContent(
 ) -> Bool {
     let representations = proposed.representations
     guard !representations.isEmpty else { return false }
-    let canonicalTypes = Set(canonical.representations.map { $0.content.typeIdentifier })
-    var seenTypes = Set<String>()
+    guard Set(representations.map(\.pasteboardItemIndex)) == Set(canonical.representations.map { $0.content.pasteboardItemIndex }) else { return false }
+    let canonicalTypes = Set(canonical.representations.map { $0.content.key })
+    var seenTypes = Set<ContentRepresentationKey>()
     seenTypes.reserveCapacity(representations.count)
     for (index, representation) in representations.enumerated() {
         guard !representation.bytes.isEmpty,
-              canonicalTypes.contains(representation.typeIdentifier),
-              seenTypes.insert(representation.typeIdentifier).inserted
+              canonicalTypes.contains(representation.key),
+              seenTypes.insert(representation.key).inserted
         else {
             return false
         }
         if index > 0 {
-            let previous = representations[index - 1].typeIdentifier.unicodeScalars
-            let current = representation.typeIdentifier.unicodeScalars
-            guard previous.lexicographicallyPrecedes(current) else { return false }
+            guard representations[index - 1].key.precedes(representation.key) else { return false }
         }
     }
     return true

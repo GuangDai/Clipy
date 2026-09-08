@@ -182,7 +182,9 @@ internal enum ContentProjector {
         _ content: EffectiveContent,
         limits: HistoryLimits = .standard
     ) -> ContentProjection {
-        let typeIdentifiers = content.representations.map(\.typeIdentifier)
+        let typeIdentifiers = Array(Set(content.representations.map(\.typeIdentifier))).sorted {
+            $0.unicodeScalars.lexicographicallyPrecedes($1.unicodeScalars)
+        }
         var title: String?
         var searchBody = ""
         var remainingSearchBodyBytes = limits.maximumStoredSearchBodyUTF8Bytes
@@ -225,31 +227,35 @@ internal enum ContentProjector {
                 break
             }
         }
-        if title == nil, let reference = referenceProjection(in: content) {
-            title = reference.title
-            var parts = [reference.address]
-            if !reference.path.isEmpty {
-                parts.append(reference.path)
-            }
-            for part in parts {
-                if hasSearchBodyPart {
+        let isCollection = (content.representations.last?.pasteboardItemIndex ?? 0) > 0
+        if title == nil || isCollection {
+            // Reference metadata is local to a constituent item. A file URL
+            // on a later item must remain searchable without becoming paste text.
+            let grouped = Dictionary(grouping: content.representations, by: \.pasteboardItemIndex)
+            for index in grouped.keys.sorted() {
+                guard let reference = referenceProjection(in: EffectiveContent(
+                    representations: grouped[index] ?? []
+                )) else { continue }
+                if title == nil { title = reference.title }
+                var parts = [reference.address]
+                if !reference.path.isEmpty { parts.append(reference.path) }
+                for part in parts {
+                    if hasSearchBodyPart {
+                        guard appendNormalizedUTF8Prefix(
+                            "\n", to: &searchBody, remainingByteCount: &remainingSearchBodyBytes
+                        ) else { break }
+                    }
+                    hasSearchBodyPart = true
                     guard appendNormalizedUTF8Prefix(
-                        "\n",
-                        to: &searchBody,
-                        remainingByteCount: &remainingSearchBodyBytes
+                        part, to: &searchBody, remainingByteCount: &remainingSearchBodyBytes
                     ) else { break }
                 }
-                hasSearchBodyPart = true
-                guard appendNormalizedUTF8Prefix(
-                    part,
-                    to: &searchBody,
-                    remainingByteCount: &remainingSearchBodyBytes
-                ) else { break }
+                if remainingSearchBodyBytes == 0 { break }
             }
         }
         return ContentProjection(
             title: truncatedToUTF8ByteLimit(
-                title ?? typeBasedFallbackTitle(typeIdentifiers: typeIdentifiers),
+                collectionTitle(title ?? typeBasedFallbackTitle(typeIdentifiers: typeIdentifiers), in: content),
                 limit: limits.maximumStoredTitleUTF8Bytes
             ),
             searchBody: searchBody,
@@ -273,16 +279,29 @@ internal enum ContentProjector {
                 continue
             }
             return truncatedToUTF8ByteLimit(
-                title,
+                collectionTitle(title, in: content),
                 limit: limits.maximumStoredTitleUTF8Bytes
             )
         }
+        let grouped = Dictionary(grouping: content.representations, by: \.pasteboardItemIndex)
+        var referenceTitle: String?
+        for index in grouped.keys.sorted() {
+            if let reference = referenceProjection(in: EffectiveContent(representations: grouped[index] ?? [])) {
+                referenceTitle = reference.title
+                break
+            }
+        }
         return truncatedToUTF8ByteLimit(
-            referenceProjection(in: content)?.title ?? typeBasedFallbackTitle(
+            collectionTitle(referenceTitle ?? typeBasedFallbackTitle(
                 typeIdentifiers: content.representations.map(\.typeIdentifier)
-            ),
+            ), in: content),
             limit: limits.maximumStoredTitleUTF8Bytes
         )
+    }
+
+    private static func collectionTitle(_ title: String, in content: EffectiveContent) -> String {
+        let count = (content.representations.last?.pasteboardItemIndex ?? 0) + 1
+        return count > 1 ? "\(count) items: \(title)" : title
     }
 
     // MARK: Inert reference metadata (§15)

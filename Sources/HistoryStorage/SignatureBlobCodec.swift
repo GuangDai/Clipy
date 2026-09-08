@@ -31,6 +31,14 @@ internal struct StoredSignatureEntryV1: Codable, Sendable {
     internal let typeIdentifier: String
     internal let fingerprint: UInt64
     internal let byteCount: Int
+    internal let pasteboardItemIndex: Int
+
+    internal init(typeIdentifier: String, fingerprint: UInt64, byteCount: Int, pasteboardItemIndex: Int = 0) {
+        self.typeIdentifier = typeIdentifier
+        self.fingerprint = fingerprint
+        self.byteCount = byteCount
+        self.pasteboardItemIndex = pasteboardItemIndex
+    }
 }
 
 // MARK: - Codec (docs/05-authority-kernel.md §4)
@@ -57,7 +65,8 @@ internal enum SignatureBlobCodec {
                 StoredSignatureEntryV1(
                     typeIdentifier: entry.typeIdentifier,
                     fingerprint: entry.fingerprint.rawValue,
-                    byteCount: entry.byteCount
+                    byteCount: entry.byteCount,
+                pasteboardItemIndex: entry.pasteboardItemIndex
                 )
             }
         )
@@ -141,14 +150,15 @@ internal enum SignatureBlobCodec {
                 bound: limits.maximumCaptureBytes
             )
         }
-        try CodecValidation.requireNormalizedTypeIdentifierOrder(
-            wire.entries.map(\.typeIdentifier)
+        try CodecValidation.requireNormalizedRepresentationOrder(
+            wire.entries.map { ContentRepresentationKey(pasteboardItemIndex: $0.pasteboardItemIndex, typeIdentifier: $0.typeIdentifier) }
         )
         return wire.entries.map { entry in
             ContentSignatureEntry(
                 typeIdentifier: entry.typeIdentifier,
                 fingerprint: ContentFingerprint(rawValue: entry.fingerprint),
-                byteCount: entry.byteCount
+                byteCount: entry.byteCount,
+                pasteboardItemIndex: entry.pasteboardItemIndex
             )
         }
     }
@@ -179,23 +189,23 @@ internal enum SignatureBlobCodec {
                 signatureCount: entries.count
             )
         }
-        var canonicalTypes = Set<String>()
+        var canonicalTypes = Set<ContentRepresentationKey>()
         canonicalTypes.reserveCapacity(canonical.representations.count)
         for representation in canonical.representations {
-            canonicalTypes.insert(representation.content.typeIdentifier)
+            canonicalTypes.insert(representation.content.key)
         }
-        var entriesByType = [String: ContentSignatureEntry](minimumCapacity: entries.count)
+        var entriesByType = [ContentRepresentationKey: ContentSignatureEntry](minimumCapacity: entries.count)
         for entry in entries {
-            guard canonicalTypes.contains(entry.typeIdentifier) else {
+            guard canonicalTypes.contains(entry.key) else {
                 throw CodecRejection.signatureCoverageOrphanedEntry(
                     typeIdentifier: entry.typeIdentifier
                 )
             }
-            entriesByType[entry.typeIdentifier] = entry
+            entriesByType[entry.key] = entry
         }
         for representation in canonical.representations {
             let typeIdentifier = representation.content.typeIdentifier
-            guard let entry = entriesByType[typeIdentifier] else {
+            guard let entry = entriesByType[representation.content.key] else {
                 throw CodecRejection.signatureCoverageMissingEntry(
                     typeIdentifier: typeIdentifier
                 )
@@ -238,7 +248,7 @@ internal enum SignatureBlobCodec {
         try validateCoverage(canonical: canonical, entries: entries)
 
         let entriesByType = Dictionary(
-            uniqueKeysWithValues: entries.map { ($0.typeIdentifier, $0) }
+            uniqueKeysWithValues: entries.map { ($0.key, $0) }
         )
         for representation in canonical.representations {
             let typeIdentifier = representation.content.typeIdentifier
@@ -246,7 +256,7 @@ internal enum SignatureBlobCodec {
                 rawValue: XXH3Fingerprint.digest(representation.content.bytes)
             )
             guard representation.fingerprint == recomputed,
-                  entriesByType[typeIdentifier]?.fingerprint == recomputed
+                  entriesByType[representation.content.key]?.fingerprint == recomputed
             else {
                 throw CodecRejection.signatureCoverageFingerprintMismatch(
                     typeIdentifier: typeIdentifier
