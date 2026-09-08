@@ -54,13 +54,13 @@ struct CapturePrivacySettingsView: View {
                     .disabled(!canAddIdentifier)
                 }
             }
-            .accessibilityIdentifier("clipy.settings.privacy.manual-entry")
+            .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.privacy.manual-entry"))
         } header: {
             Text(SettingsCopy.text("Privacy"))
+                .accessibilityIdentifier("clipy.settings.privacy.ignored-list")
         } footer: {
             Text(SettingsCopy.text("Clipboard contents from these apps are never recorded."))
         }
-        .accessibilityIdentifier("clipy.settings.privacy.ignored-list")
         .onAppear { ignoreList = CaptureIgnoreList.load(from: .standard) }
     }
 

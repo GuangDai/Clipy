@@ -23,9 +23,11 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         defer { NSPasteboard.general.clearContents() }
         XCTAssertTrue(NSPasteboard.general.writeObjects(originals))
 
+        let traceURL = directory.appendingPathComponent("native-drag.trace")
         let app = XCUIApplication()
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
+        app.launchEnvironment["CLIPY_UI_TEST_DRAG_TRACE_PATH"] = traceURL.path
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.store").path
         app.launch()
@@ -49,15 +51,36 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         defer { target.close() }
         receiver.registerForDraggedTypes([.string, opaque])
         let destination = target.convertPoint(toScreen: NSPoint(x: 130, y: 70))
+        // Hover can activate the source window and open its preview pane.
+        // Resolve both coordinates after that layout, not from the old row.
+        let beforeHover = row.frame
+        row.hover()
+        target.orderFrontRegardless()
+        target.displayIfNeeded()
+        XCTAssertTrue(target.isVisible)
+        XCTAssertEqual(NSWindow.windowNumber(at: destination, belowWindowWithWindowNumber: 0), target.windowNumber,
+                       "The receiver must own the physical destination point before synthesizing a drag")
+        let afterHover = row.frame
         let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = start.withOffset(CGVector(
             dx: destination.x - row.frame.midX,
             dy: screen.frame.maxY - destination.y - row.frame.midY
         ))
-        row.hover()
         start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.5)
         let delivered = NSPredicate { _, _ in MainActor.assumeIsolated { receiver.received != nil } }
-        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: delivered, object: nil)], timeout: 10), .completed)
+        let delivery = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: delivered, object: nil)], timeout: 10)
+        let trace = (try? String(contentsOf: traceURL, encoding: .utf8)) ?? "no source trace"
+        let diagnostics = """
+            row before hover: \(beforeHover), after hover: \(afterHover)
+            receiver visible: \(target.isVisible), frame: \(target.frame), destination: \(destination)
+            receiver entered: \(receiver.enteredCount), prepared: \(receiver.preparedCount), performed: \(receiver.performedCount)
+            \(trace)
+            """
+        let attachment = XCTAttachment(string: diagnostics)
+        attachment.name = "Native drag stages"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        XCTAssertEqual(delivery, .completed, diagnostics)
         let items = try XCTUnwrap(receiver.received)
         XCTAssertEqual(items.count, 2)
         XCTAssertEqual(items[0][NSPasteboard.PasteboardType.string.rawValue], firstText)
@@ -70,17 +93,27 @@ final class MultiItemDragJourneyUITests: XCTestCase {
 @MainActor
 private final class NativeClipboardDropView: NSView {
     var received: [[String: Data]]?
+    var enteredCount = 0
+    var preparedCount = 0
+    var performedCount = 0
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.setFill()
         bounds.fill()
     }
 
-    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation { .copy }
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        enteredCount += 1
+        return .copy
+    }
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation { .copy }
-    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { true }
+    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        preparedCount += 1
+        return true
+    }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        performedCount += 1
         guard let items = sender.draggingPasteboard.pasteboardItems else { return false }
         received = items.map { item in
             var representations: [String: Data] = [:]

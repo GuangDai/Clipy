@@ -195,7 +195,10 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             }
             XCTAssertTrue(replacementVisible)
             viewState.deactivate()
-            let previousAuditSequence = try await history.auditLog(since: 0).map(\.auditSequence).max() ?? 0
+            // A new store starts at audit sequence 1; `since` is inclusive.
+            // The read's own admin record has no organize capability.
+            let previousAudit = try await history.auditLog(since: 1)
+            let firstNewAuditSequence = (previousAudit.map(\.auditSequence).max() ?? 0) + 1
             let failedPinOutput = try await runClient(
                 Data(), arguments: ["pin", locator], holdInputOpen: true, closeOutputReader: true
             )
@@ -205,7 +208,7 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             XCTAssertEqual(afterPin.rows.first?.pinnedPosition, 0)
             // Even a no-op replay would append another existing Gateway
             // audit record. The consumer disappearing must never resend pin.
-            let pinAttempts = try await history.auditLog(since: previousAuditSequence).filter {
+            let pinAttempts = try await history.auditLog(since: firstNewAuditSequence).filter {
                 $0.connectionID == connection && $0.capability == .organize
             }
             XCTAssertEqual(pinAttempts.count, 1)

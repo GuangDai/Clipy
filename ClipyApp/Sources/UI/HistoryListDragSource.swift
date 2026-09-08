@@ -36,6 +36,15 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     // Keep the delegate alive if closing the panel dismantles this view during
     // the native session. AppKit's ended callback releases this scoped owner.
     private var activeSource: HistoryListDraggingView?
+#if DEBUG
+    private var dragTraceLines: [String] = []
+    private let dragTraceURL: URL? = {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["CLIPY_RUNNING_UI_TEST"] == "1",
+              let path = environment["CLIPY_UI_TEST_DRAG_TRACE_PATH"] else { return nil }
+        return URL(fileURLWithPath: path)
+    }()
+#endif
 
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
@@ -49,7 +58,10 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
     func hover(_ item: HistoryItemReference, frame: NSRect, isInside: Bool) {
-        if isInside { hovered = (item, frame) }
+        if isInside {
+            hovered = (item, frame)
+            trace("hover-enter frame=\(frame) bounds=\(bounds) visible=\(visibleRect)")
+        }
         else if hovered?.item == item { hovered = nil }
     }
 
@@ -75,6 +87,7 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil, eventMonitor == nil else { return }
+        trace("monitor-attached bounds=\(bounds) visible=\(visibleRect)")
         eventMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .scrollWheel, .keyDown]
         ) { [weak self] event in
@@ -86,6 +99,7 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     }
 
     func stopMonitoring() {
+        trace("monitor-stopped")
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
         eventMonitor = nil
         hovered = nil
@@ -99,21 +113,28 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
             cancelPreparation()
             return
         }
+        if event.type == .leftMouseDown {
+            trace("mouse-down same-window=\(event.windowNumber == window?.windowNumber) candidate=\(hovered != nil)")
+        }
         guard let window, event.windowNumber == window.windowNumber else { return }
         switch event.type {
         case .leftMouseDown:
             cancelPreparation()
             let point = convert(event.locationInWindow, from: nil)
+            trace("mouse-hit point=\(point) bounds=\(bounds) visible=\(visibleRect) candidate-frame=\(String(describing: hovered?.frame)) clicks=\(event.clickCount)")
             guard event.clickCount == 1, !event.modifierFlags.contains(.control),
                   visibleRect.contains(point), let hovered, hovered.frame.contains(point) else { return }
             pressed = (hovered.item, event)
+            trace("pressed-admitted")
         case .leftMouseDragged:
+            trace("mouse-dragged")
             guard preparation == nil, let pressed, let load else { return }
             let start = pressed.event.locationInWindow
             let current = event.locationInWindow
             let dx = current.x - start.x
             let dy = current.y - start.y
             guard dx * dx + dy * dy >= 16 else { return }
+            trace("threshold-admitted")
             preparation = Task { [weak self, weak window] in
                 defer {
                     // Success, nil and failure all finish this attempt. Clearing
@@ -124,7 +145,12 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
                     }
                 }
                 do {
-                    guard let payload = try await load(pressed.item) else { return }
+                    self?.trace("payload-read-started")
+                    guard let payload = try await load(pressed.item) else {
+                        self?.trace("payload-read-empty")
+                        return
+                    }
+                    self?.trace("payload-read-returned left-held=\(NSEvent.pressedMouseButtons & 1 != 0) cancelled=\(Task.isCancelled)")
                     try Task.checkCancellation()
                     guard let self, let window, self.window === window,
                           self.pressed?.event === pressed.event,
@@ -145,8 +171,10 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
                     let session = self.beginDraggingSession(with: items, event: pressed.event, source: self)
                     session.draggingFormation = .stack
                     self.session = session
+                    self.trace("session-created item-count=\(writers.count)")
                     self.preparation = nil
                 } catch {
+                    self?.trace("payload-read-failed cancelled=\(Task.isCancelled)")
                     // Failure starts no session and exports no partial item.
                     // A cancelled gesture has no late UI or pasteboard effect.
                 }
@@ -156,6 +184,7 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     }
 
     private func cancelPreparation() {
+        if preparation != nil || pressed != nil { trace("preparation-cancelled") }
         preparation?.cancel()
         preparation = nil
         pressed = nil
@@ -182,9 +211,25 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
         .copy
     }
 
+    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+        trace("session-will-begin")
+    }
+
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        trace("session-ended operation=\(operation.rawValue)")
         self.session = nil
         activeSource = nil
         cancelPreparation()
     }
+    private func trace(_ stage: @autoclosure () -> String) {
+#if DEBUG
+        guard let dragTraceURL, dragTraceLines.count < 32 else { return }
+        let value = stage()
+        guard !dragTraceLines.contains(value) else { return }
+        dragTraceLines.append(value)
+        let lines = dragTraceLines.map { "[DEBUG-native-drag] " + $0 }.joined(separator: "\n")
+        try? Data(lines.utf8).write(to: dragTraceURL, options: .atomic)
+#endif
+    }
+
 }
