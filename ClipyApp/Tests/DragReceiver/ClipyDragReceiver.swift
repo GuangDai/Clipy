@@ -72,9 +72,11 @@ private final class DragReceiverDelegate: NSObject, NSApplicationDelegate {
               NSApplication.shared.activationPolicy() == .accessory,
               window.isVisible else { return }
         let center = NSPoint(x: window.frame.midX, y: window.frame.midY)
-        guard NSWindow.windowNumber(at: center, belowWindowWithWindowNumber: 0) == window.windowNumber else { return }
+        let hitWindowNumber = NSWindow.windowNumber(at: center, belowWindowWithWindowNumber: 0)
+        guard hitWindowNumber == window.windowNumber else { return }
         let ready = ReceiverReadiness(
             windowNumber: window.windowNumber,
+            hitWindowNumber: hitWindowNumber,
             frame: ReceiverFrame(x: Double(window.frame.minX), y: Double(window.frame.minY),
                                  width: Double(window.frame.width), height: Double(window.frame.height)),
             activationPolicy: NSApplication.shared.activationPolicy().rawValue,
@@ -153,6 +155,7 @@ private struct ReceiverFrame: Codable, Sendable {
 
 private struct ReceiverReadiness: Codable, Sendable {
     let windowNumber: Int
+    let hitWindowNumber: Int
     let frame: ReceiverFrame
     let activationPolicy: Int
     let isRunning: Bool

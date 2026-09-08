@@ -10,7 +10,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         continueAfterFailure = false
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let opaque = NSPasteboard.PasteboardType("com.clipy.tests.drag-opaque")
         let firstText = Data("clipy-native-drag-first\0".utf8)
         let secondText = Data("clipy-native-drag-second\0".utf8)
@@ -20,7 +20,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         XCTAssertTrue(originals[1].setData(secondText, forType: .string))
         XCTAssertTrue(originals[1].setData(Data([255, 0, 2]), forType: opaque))
         NSPasteboard.general.clearContents()
-        defer { NSPasteboard.general.clearContents() }
+        addTeardownBlock { @MainActor () async in NSPasteboard.general.clearContents() }
         XCTAssertTrue(NSPasteboard.general.writeObjects(originals))
 
         let traceURL = directory.appendingPathComponent("native-drag.trace")
@@ -31,7 +31,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.store").path
         app.launch()
-        defer { app.terminate() }
+        addTeardownBlock { @MainActor () async in app.terminate() }
         let row = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "clipy.history.row."
         )).firstMatch
@@ -63,7 +63,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         let receiverLogURL = directory.appendingPathComponent("receiver.log")
         try Data().write(to: receiverLogURL)
         let receiverLog = try FileHandle(forWritingTo: receiverLogURL)
-        defer { try? receiverLog.close() }
+        addTeardownBlock { try? receiverLog.close() }
         let receiver = Process()
         receiver.executableURL = Bundle(for: Self.self).bundleURL
             .appendingPathComponent("Contents/MacOS/ClipyDragReceiver")
@@ -72,9 +72,10 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         receiver.standardOutput = receiverLog
         receiver.standardError = receiverLog
         try receiver.run()
-        // Register cleanup only after a successful launch. XCTest must never
-        // waitUntilExit on an unstarted Process if the helper is missing.
-        defer {
+        // XCTest teardown also runs after continueAfterFailure=false aborts
+        // the method. Register only after launch so an unstarted Process can
+        // never reach waitUntilExit.
+        addTeardownBlock { @MainActor () async in
             if receiver.isRunning {
                 receiver.terminate()
                 receiver.waitUntilExit()
@@ -91,6 +92,11 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         XCTAssertEqual((ready["activationPolicy"] as? NSNumber)?.intValue, NSApplication.ActivationPolicy.accessory.rawValue)
         XCTAssertEqual(ready["isRunning"] as? Bool, true)
         let receiverWindowNumber = try XCTUnwrap((ready["windowNumber"] as? NSNumber)?.intValue)
+        // AppKit's window query requires an initialized WindowServer connection.
+        // The independent receiver owns it; XCTRunner does not initialize NSApp.
+        // Compare the receiver's actual hit-test result, not a runner-side query.
+        XCTAssertGreaterThan(receiverWindowNumber, 0)
+        XCTAssertEqual((ready["hitWindowNumber"] as? NSNumber)?.intValue, receiverWindowNumber)
         let frame = try XCTUnwrap(ready["frame"] as? [String: NSNumber])
         let actualTargetFrame = try CGRect(
             x: XCTUnwrap(frame["x"]).doubleValue, y: XCTUnwrap(frame["y"]).doubleValue,
@@ -98,8 +104,6 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         )
         let destination = NSPoint(x: actualTargetFrame.midX, y: actualTargetFrame.midY)
         XCTAssertFalse(actualTargetFrame.intersects(sourceFrame))
-        XCTAssertEqual(NSWindow.windowNumber(at: destination, belowWindowWithWindowNumber: 0), receiverWindowNumber,
-                       "Independent AppKit receiver must own the actual destination point")
         let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = start.withOffset(CGVector(
             dx: destination.x - row.frame.midX,
