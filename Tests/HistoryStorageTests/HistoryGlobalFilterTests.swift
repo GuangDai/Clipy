@@ -38,8 +38,9 @@ struct HistoryGlobalFilterTests {
         #expect(cursor == nil)
         var backward = try #require(pages.last)
         for index in stride(from: pages.count - 2, through: 0, by: -1) {
+            let previous = try #require(backward.previous)
             backward = try await history.browse(.init(
-                kind: kind, limit: 3, cursor: #require(backward.previous), filter: .init(type: .links)
+                kind: kind, limit: 3, cursor: previous, filter: .init(type: .links)
             ))
             #expect(backward == pages[index])
         }

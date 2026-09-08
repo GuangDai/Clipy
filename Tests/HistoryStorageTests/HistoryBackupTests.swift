@@ -48,7 +48,7 @@ struct HistoryBackupTests {
             }
             current = updated
         }
-        _ = try await source.perform(.placePinned(first.id, .first))
+        _ = try await source.perform(.placePinned(first.id, at: .first))
         await source.authority.waitForBlobCleanup()
         try await source.authority.createUnreferencedBackupTestBlob()
         let before = try await source.usage()
