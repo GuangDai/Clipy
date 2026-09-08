@@ -1,0 +1,12 @@
+"current" = "Currently applied";
+"pending" = "Changes not yet applied";
+"automatic" = "Automatic cleanup";
+"count-details" = "How the item limit works";
+"policy-details" = "When cleanup happens";
+"count-off" = "No item count limit";
+"count-on" = "Unpinned item limit: %@";
+"age" = "Age";
+"storage" = "Storage";
+"revisions" = "Revisions";
+"policies-off" = "Age, storage and revision limits are off.";
+"policies-on" = "Cleanup limits: %@";

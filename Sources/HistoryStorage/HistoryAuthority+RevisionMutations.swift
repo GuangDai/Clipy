@@ -158,7 +158,8 @@ extension HistoryAuthority {
             itemID: request.itemID,
             in: database,
             blobStore: blobStore,
-            limits: limits
+            limits: limits,
+            expectedVersion: request.expected
         )
 
         let planningResult: PlanningResult

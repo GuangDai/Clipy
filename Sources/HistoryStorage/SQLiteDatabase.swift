@@ -42,8 +42,20 @@ internal struct SQLiteFailure: Error, Equatable, Sendable {
 internal final class SQLiteDatabase {
     private var handle: OpaquePointer?
     private var readDeadline: SQLiteReadDeadline?
+    /// The directory must outlive the SQLite handle, not merely the actor
+    /// that happens to own this connection. Statements retain this connection.
+    private let storeLocation: HistoryStoreLocation?
 
-    internal init(url: URL?, readOnly: Bool = false) throws {
+    internal convenience init(url: URL?, readOnly: Bool = false) throws {
+        try self.init(url: url, readOnly: readOnly, storeLocation: nil)
+    }
+
+    internal convenience init(storeLocation: HistoryStoreLocation, readOnly: Bool = false) throws {
+        try self.init(url: storeLocation.databaseURL, readOnly: readOnly, storeLocation: storeLocation)
+    }
+
+    private init(url: URL?, readOnly: Bool, storeLocation: HistoryStoreLocation?) throws {
+        self.storeLocation = storeLocation
         if let url, !url.isFileURL {
             throw HistoryFailure.persistence(.openStore)
         }
@@ -94,6 +106,10 @@ internal final class SQLiteDatabase {
     }
 
     deinit {
+        // Stored properties release after this body. Every statement retains
+        // self, so finalization precedes this close; only then may the last
+        // storeLocation reference unlink the disposable database/WAL files.
+        // https://www.sqlite.org/c3ref/close.html
         if let handle { sqlite3_close_v2(handle) }
     }
 

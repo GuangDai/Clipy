@@ -1,5 +1,5 @@
 /// Real EN/ZH regular-expression search at the product's 360-point minimum
-/// width. Verifies controls and input focus through the actual adaptive header.
+/// width. Verifies compact controls, filter clearing and continuous input.
 import AppKit
 import XCTest
 
@@ -68,9 +68,8 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         ))
         XCTAssertTrue(waitUntil { rows.count == 1 }, app.debugDescription)
 
-        // No mouse focus repair: changing mode and then adding the result
-        // caption may move the controls to another line, but must preserve
-        // the active text editor and every subsequent query character.
+        // No mouse focus repair: compact mode controls preserve the active
+        // editor and every subsequent query character at the minimum width.
         app.typeKey("3", modifierFlags: .command)
         app.typeText("^clipy.*alpha$")
         let clear = app.buttons["clipy.search.clear"]
@@ -93,13 +92,24 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
             search.value as? String == "alpha" && rows.count == 1
                 && search.frame.width >= 140
         }, app.debugDescription)
-        // Both real menus must still open beside the long selected mode.
+        // Compact menu symbols retain full localized choices.
         mode.click()
         XCTAssertTrue(app.menuItems[language == "en" ? "Exact" : "精确"].waitForExistence(timeout: 5), app.debugDescription)
         app.typeKey(.escape, modifierFlags: [])
         filter.click()
-        XCTAssertTrue(app.menuItems[language == "en" ? "Pinned Only" : "仅置顶"].waitForExistence(timeout: 5), app.debugDescription)
-        app.typeKey(.escape, modifierFlags: [])
+        let pinnedOnly = app.menuItems[language == "en" ? "Pinned Only" : "仅置顶"]
+        XCTAssertTrue(pinnedOnly.waitForExistence(timeout: 5), app.debugDescription)
+        pinnedOnly.click()
+        let clearFilters = app.buttons["clipy.search.clear-filters"]
+        XCTAssertTrue(waitUntil { clearFilters.exists && clearFilters.isHittable && rows.count == 0 }, app.debugDescription)
+        XCTAssertEqual(search.value as? String, "alpha")
+        clearFilters.click()
+        XCTAssertTrue(waitUntil { !clearFilters.exists && rows.count == 1 }, app.debugDescription)
+        XCTAssertEqual(search.value as? String, "alpha")
+        // Clearing filters returns to the same editor without clearing its
+        // query, and the original RegExp mode still executes the suffix.
+        app.typeText("$")
+        XCTAssertTrue(waitUntil { search.value as? String == "alpha$" && rows.count == 1 }, app.debugDescription)
     }
 
     @MainActor

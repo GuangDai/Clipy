@@ -69,7 +69,7 @@ public struct RevisionSummary: Sendable, Hashable {
     public let typeIdentifiers: [String]
     public let byteCount: Int
 
-    package init(
+    public init(
         id: RevisionID,
         createdAt: Date,
         isActive: Bool,
@@ -95,7 +95,7 @@ public struct CopyOccurrenceSummary: Sendable, Hashable {
     public let firstSource: String?
     public let lastSource: String?
 
-    package init(
+    public init(
         firstCopiedAt: Date,
         lastCopiedAt: Date,
         count: UInt64,
@@ -125,7 +125,7 @@ public struct HistoryDetails: Sendable, Hashable {
     public let occurrence: CopyOccurrenceSummary
     public let pinnedPosition: Int?
 
-    package init(
+    public init(
         item: HistoryItemReference,
         title: String,
         canonical: [HistoryRepresentationMetadata],

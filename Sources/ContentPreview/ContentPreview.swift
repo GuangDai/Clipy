@@ -1,4 +1,4 @@
-/// ContentPreview — the concrete package-only renderer for transient preview
+/// ContentPreview — the concrete renderer for transient preview
 /// artifacts. Its small interface accepts immutable representation bytes plus
 /// a closed product purpose and returns only bounded `Sendable` values.
 ///
@@ -12,22 +12,22 @@ import CoreGraphics
 import Foundation
 import ImageIO
 
-package struct PreviewRepresentation: Equatable, Sendable {
-    package let typeIdentifier: String
-    package let bytes: Data
+public struct PreviewRepresentation: Equatable, Sendable {
+    public let typeIdentifier: String
+    public let bytes: Data
 
-    package init(typeIdentifier: String, bytes: Data) {
+    public init(typeIdentifier: String, bytes: Data) {
         self.typeIdentifier = typeIdentifier
         self.bytes = bytes
     }
 }
 
 /// Payload-free source facts. Preparation never reads or retains content.
-package struct PreviewRepresentationMetadata: Sendable, Equatable {
+public struct PreviewRepresentationMetadata: Sendable, Equatable {
     package let typeIdentifier: String
     package let byteCount: Int
 
-    package init(typeIdentifier: String, byteCount: Int) {
+    public init(typeIdentifier: String, byteCount: Int) {
         self.typeIdentifier = typeIdentifier
         self.byteCount = byteCount
     }
@@ -35,9 +35,9 @@ package struct PreviewRepresentationMetadata: Sendable, Equatable {
 
 /// One candidate chosen by the concrete preview owner. Callers only fetch its
 /// bytes; source priority, resource limits and fallback stay in ContentPreview.
-package struct PreviewSource: Sendable {
+public struct PreviewSource: Sendable {
     package let representationIndex: Int
-    package let typeIdentifier: String
+    public let typeIdentifier: String
     package let byteCount: Int
     fileprivate let maximumInputBytes: Int
     fileprivate let kind: Kind
@@ -46,22 +46,22 @@ package struct PreviewSource: Sendable {
         case image, text(PreviewTextCodec), rtf, rtfd, html, pdf, reference
     }
 
-    package var preflightFailure: PreviewOutcome? {
+    public var preflightFailure: PreviewOutcome? {
         guard byteCount >= 0 else { return .failed(.malformedRepresentation) }
         return byteCount > maximumInputBytes ? .failed(.resourceLimit) : nil
     }
 
-    package func permitsFallback(after outcome: PreviewOutcome) -> Bool {
+    public func permitsFallback(after outcome: PreviewOutcome) -> Bool {
         if case .text = kind { return outcome == .failed(.malformedRepresentation) }
         return false
     }
 }
 
-package struct PreviewText: Equatable, Sendable {
+public struct PreviewText: Equatable, Sendable {
     package static let maximumCharacters = 50_000
 
-    package let text: String
-    package let wasTruncated: Bool
+    public let text: String
+    public let wasTruncated: Bool
 
     internal init(text: String, wasTruncated: Bool) {
         self.text = text
@@ -72,14 +72,14 @@ package struct PreviewText: Equatable, Sendable {
 /// Fixed eager display artifact: premultiplied BGRA8 in the sRGB color space.
 /// The renderer constructs it after validation; the per-surface pixel cache
 /// may reconstruct the same layout from independently copied cached bytes.
-package struct PreviewRaster: Equatable, Sendable {
-    package let pixels: Data
-    package let width: Int
-    package let height: Int
-    package let rowBytes: Int
-    package let sourceImageCount: Int
+public struct PreviewRaster: Equatable, Sendable {
+    public let pixels: Data
+    public let width: Int
+    public let height: Int
+    public let rowBytes: Int
+    public let sourceImageCount: Int
 
-    package init(pixels: Data, width: Int, height: Int, rowBytes: Int, sourceImageCount: Int = 1) {
+    public init(pixels: Data, width: Int, height: Int, rowBytes: Int, sourceImageCount: Int = 1) {
         self.pixels = pixels
         self.width = width
         self.height = height
@@ -90,10 +90,10 @@ package struct PreviewRaster: Equatable, Sendable {
 
 /// One requested PDF page, rasterized for display. Copying the item retains
 /// the original document; this artifact never carries interactive PDF actions.
-package struct PreviewPDF: Equatable, Sendable {
-    package let raster: PreviewRaster
-    package let pageCount: Int
-    package let pageNumber: Int
+public struct PreviewPDF: Equatable, Sendable {
+    public let raster: PreviewRaster
+    public let pageCount: Int
+    public let pageNumber: Int
 
     internal init(raster: PreviewRaster, pageCount: Int, pageNumber: Int) {
         self.raster = raster
@@ -102,26 +102,26 @@ package struct PreviewPDF: Equatable, Sendable {
     }
 }
 
-package enum PreviewArtifact: Equatable, Sendable {
+public enum PreviewArtifact: Equatable, Sendable {
     case text(PreviewText)
     case raster(PreviewRaster)
     case reference(PreviewReference)
     case pdf(PreviewPDF)
 }
 
-package enum PreviewUnavailability: Equatable, Sendable {
+public enum PreviewUnavailability: Equatable, Sendable {
     case unsupported
     case pageUnavailable
 }
 
-package enum PreviewFailure: Equatable, Sendable {
+public enum PreviewFailure: Equatable, Sendable {
     case malformedRepresentation
     case resourceLimit
     case renderer
     case cancelled
 }
 
-package enum PreviewOutcome: Equatable, Sendable {
+public enum PreviewOutcome: Equatable, Sendable {
     case content(PreviewArtifact)
     case unavailable(PreviewUnavailability)
     case failed(PreviewFailure)
@@ -135,7 +135,7 @@ package enum ContentPreviewDebugInstrumentation {
     @TaskLocal package static var renderDidStart: (@Sendable () async -> Void)? = nil
 }
 
-package struct ContentPreviewDebugSnapshot: Equatable, Sendable {
+public struct ContentPreviewDebugSnapshot: Equatable, Sendable {
     package let activeJobs: Int
     package let retainedSourceBytes: Int
     package let queuedRasterJobs: Int
@@ -145,7 +145,7 @@ package struct ContentPreviewDebugSnapshot: Equatable, Sendable {
 /// One concrete renderer; no protocol/registry/plugin/cache. The actor keeps
 /// native decode off the MainActor and owns one native slot plus in-flight
 /// accounting; it owns no completed artifact cache.
-package actor ContentPreview {
+public actor ContentPreview {
     /// Preserve the old single-decoder resource ceiling while allowing text
     /// work to overtake a slow native rasterization. Waiters carry no content;
     /// their caller tasks retain their own immutable snapshots.
@@ -161,12 +161,12 @@ package actor ContentPreview {
     private var debugRetainedSourceBytes = 0
     #endif
 
-    package init() {}
+    public init() {}
 
     /// Metadata-only preparation. An image is authoritative; otherwise exact
     /// text candidates may fail decoding before one rich/PDF/reference source
     /// applies. Unrelated representation bytes never enter the preview job.
-    package static func prepareHistoryPane(
+    public static func prepareHistoryPane(
         _ representations: [PreviewRepresentationMetadata]
     ) -> [PreviewSource] {
         func source(_ index: Int, _ kind: PreviewSource.Kind, maximum: Int = 64 * 1_048_576) -> PreviewSource {
@@ -204,7 +204,7 @@ package actor ContentPreview {
     /// In-memory convenience for explicitly loaded files and direct fixtures.
     /// It uses exactly the same metadata preparation and selected renderer as
     /// History's lazy representation reader; it owns no second source policy.
-    package func renderHistoryPane(
+    public func renderHistoryPane(
         _ representations: [PreviewRepresentation], pdfPage: Int = 1
     ) async -> PreviewOutcome {
         guard !Task.isCancelled else { return .failed(.cancelled) }
@@ -237,7 +237,7 @@ package actor ContentPreview {
         return outcome
     }
 
-    package func renderSelectedHistoryPane(
+    public func renderSelectedHistoryPane(
         _ source: PreviewSource, representation: PreviewRepresentation, pdfPage: Int = 1
     ) async -> PreviewOutcome {
         if let failure = source.preflightFailure { return failure }
@@ -251,7 +251,7 @@ package actor ContentPreview {
 
     /// Display-only PNG materialization. Thumbnail request/source/version
     /// ownership remains entirely with HistoryStorage/ThumbnailStore.
-    package func rasterizePNGForDisplay(_ bytes: Data) async -> PreviewOutcome {
+    public func rasterizePNGForDisplay(_ bytes: Data) async -> PreviewOutcome {
         await renderRepresentation(
             PreviewRepresentation(typeIdentifier: "public.png", bytes: bytes),
             kind: .image, maximumInputBytes: ResourceProfile.displayPNG.maximumInputBytes, profile: .displayPNG
@@ -298,7 +298,7 @@ package actor ContentPreview {
     }
 
     #if DEBUG
-    package func debugSnapshot() -> ContentPreviewDebugSnapshot {
+    public func debugSnapshot() -> ContentPreviewDebugSnapshot {
         ContentPreviewDebugSnapshot(activeJobs: debugActiveJobs, retainedSourceBytes: debugRetainedSourceBytes,
                                     queuedRasterJobs: rasterizationWaiters.count)
     }

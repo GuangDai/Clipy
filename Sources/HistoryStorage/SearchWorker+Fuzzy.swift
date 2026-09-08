@@ -165,13 +165,21 @@ extension SearchWorker {
         /// equal-score prefix rows precede that cursor, and skipped worse
         /// scores cannot improve a full floor-score window. If that window
         /// does not fill, SQLite subsequently supplies the skipped prefix.
+        /// In reverse, a floor-score cursor has only equal-score unpinned
+        /// predecessors plus pinned predecessors. A pinned cursor has only
+        /// earlier pins. SQLite can supply those physical prefixes in reverse
+        /// order; the heap still excludes higher-score hits. Once full, later
+        /// eligible rows are farther from the cursor and cannot improve it.
         internal func cannotBeImprovedByLaterDefaultOrderedRows(
-            lowestPossibleScore: Double = 0
+            lowestPossibleScore: Double = 0,
+            reversesEligiblePredecessors: Bool = false
         ) -> Bool {
-            guard directive.direction == .forward,
-                  hits.count == directive.maximumSurvivors,
+            guard hits.count == directive.maximumSurvivors,
                   directive.continuationAnchor == nil || anchorRow != nil,
                   let worst = hits.first else { return false }
+            if directive.direction == .backward {
+                return reversesEligiblePredecessors && anchorRow != nil
+            }
             switch worst.anchor {
             case .defaultOrder(let pinOrdinal, _, _):
                 return pinOrdinal != nil

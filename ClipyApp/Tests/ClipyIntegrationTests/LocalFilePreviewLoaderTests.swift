@@ -1,7 +1,6 @@
 import Darwin
 import Foundation
 import HistoryCore
-import PresentationUI
 import Testing
 @testable import ClipyApp
 
@@ -138,6 +137,49 @@ struct LocalFilePreviewLoaderTests {
         await probe.resume()
         await #expect(throws: FilePreviewFailure.tooLarge) { try await request.value }
         #expect(await probe.chunkCounts.last == LocalFilePreviewLoader.maximumBytes)
+    }
+
+    enum MidReadChange: Sendable { case append, truncate, overwrite }
+
+    @Test(arguments: [MidReadChange.append, .truncate, .overwrite])
+    func fileChangedBetweenChunksDoesNotReturnMixedContents(_ change: MidReadChange) async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("changing.txt")
+        try Data(repeating: 0x41, count: 128 * 1_024).write(to: file)
+        let probe = FilePreviewReadProbe(parkFirst: true)
+        let request = Task {
+            try await LocalFilePreviewDebugInstrumentation.$didReadChunk.withValue({ count in
+                await probe.record(count)
+            }) {
+                try await LocalFilePreviewLoader().load(file.absoluteString)
+            }
+        }
+        await probe.waitUntilFirstChunk()
+        do {
+            let handle = try FileHandle(forWritingTo: file)
+            defer { try? handle.close() }
+            switch change {
+            case .append:
+                _ = try handle.seekToEnd()
+                try handle.write(contentsOf: Data(repeating: 0x42, count: 64 * 1_024))
+            case .truncate:
+                try handle.truncate(atOffset: 64 * 1_024)
+            case .overwrite:
+                try handle.write(contentsOf: Data(repeating: 0x42, count: 128 * 1_024))
+                // No sleep or filesystem timestamp-resolution assumption:
+                // the actual same-length overwrite gets a distinct mtime.
+                try FileManager.default.setAttributes(
+                    [.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: file.path
+                )
+            }
+        } catch {
+            await probe.resume()
+            _ = await request.result
+            throw error
+        }
+        await probe.resume()
+        await #expect(throws: FilePreviewFailure.changedDuringRead) { try await request.value }
     }
 
     private func temporaryDirectory() throws -> URL {

@@ -51,12 +51,16 @@ internal enum PreviewHTMLRenderer {
         var outputBytes = 0
         var consumed = 0
         var outputScalars = 0
+        var nextCharacterCheck = 4_096
         var truncated = false
         var pendingSeparator = ""
         var preDepth = 0
         var headDepth = 0
         var templateDepth = 0
         var rawTextTag: String?
+        enum ScriptEscaping { case data, escaped, doubleEscaped }
+        var scriptEscaping = ScriptEscaping.data
+        var scriptDashes = 0
         var textAreaActive = false
         var ignoreLeadingNewline = false
         var isSuppressed: Bool { headDepth > 0 || templateDepth > 0 }
@@ -69,6 +73,10 @@ internal enum PreviewHTMLRenderer {
 
         mutating func render() throws -> PreviewText {
             while index != scalars.endIndex, !truncated {
+                if rawTextTag == "script" {
+                    try consumeScriptText()
+                    continue
+                }
                 let scalar = scalars[index]
                 // HTML input preprocessing folds source CR/CRLF to LF.
                 // Do this before text extraction, including preformatted
@@ -87,7 +95,7 @@ internal enum PreviewHTMLRenderer {
                         // comments and script source inside a textarea are
                         // user-visible text, not new document instructions.
                         // WHATWG parsing.html#rcdata-state / #parsing-main-inbody.
-                        if startsRawClosingTag("textarea"), let tag = try consumeTag() {
+                        if startsRawTag("textarea", closing: true), let tag = try consumeTag() {
                             handle(tag)
                         } else if !isSuppressed {
                             append("<")
@@ -95,9 +103,10 @@ internal enum PreviewHTMLRenderer {
                         continue
                     }
                     if let rawTextTag {
-                        // Raw script/style text has no ordinary tags or
-                        // comments. Only its own closing tag ends the skip.
-                        if startsRawClosingTag(rawTextTag),
+                        // Style raw text has no ordinary tags or comments.
+                        // Script's additional escape forms are handled above.
+                        // Only this element's own closing tag ends the skip.
+                        if startsRawTag(rawTextTag, closing: true),
                            let tag = try consumeTag() { handle(tag) }
                         continue
                     }
@@ -148,9 +157,23 @@ internal enum PreviewHTMLRenderer {
         mutating func consumeComment() throws -> Bool {
             guard scalars[index...].starts(with: "!--".unicodeScalars) else { return false }
             for _ in 0..<3 { try advance() }
+            // WHATWG comment-start/start-dash: abrupt empty comments still
+            // terminate here, rather than swallowing the remaining document.
+            if index != scalars.endIndex, scalars[index] == ">" {
+                try advance()
+                return true
+            }
+            if scalars[index...].starts(with: "->".unicodeScalars) {
+                for _ in 0..<2 { try advance() }
+                return true
+            }
             while index != scalars.endIndex {
                 if scalars[index...].starts(with: "-->".unicodeScalars) {
                     for _ in 0..<3 { try advance() }
+                    return true
+                }
+                if scalars[index...].starts(with: "--!>".unicodeScalars) {
+                    for _ in 0..<4 { try advance() }
                     return true
                 }
                 try advance()
@@ -158,10 +181,51 @@ internal enum PreviewHTMLRenderer {
             return true
         }
 
-        func startsRawClosingTag(_ name: String) -> Bool {
+        /// Consume script data without interpreting JS syntax or building a
+        /// token buffer. HTML's escaped/double-escaped forms matter even for
+        /// inert text: the first </script> inside <!-- <script> is script
+        /// content, and treating it as a close would leak the remaining code.
+        /// WHATWG §13.2.5.18–31; all lookahead is at most eight scalars.
+        mutating func consumeScriptText() throws {
+            let scalar = scalars[index]
+            if scriptEscaping != .data {
+                if scalar == "-" {
+                    scriptDashes = min(2, scriptDashes + 1)
+                    try advance()
+                    return
+                }
+                if scalar == ">", scriptDashes == 2 { scriptEscaping = .data }
+            }
+            scriptDashes = 0
+            guard scalar == "<" else { try advance(); return }
+            try advance()
+            if startsRawTag("script", closing: true) {
+                if scriptEscaping == .doubleEscaped {
+                    // /script plus its delimiter ends double escaping; it
+                    // does not close the HTML script element.
+                    for _ in 0..<8 { try advance() }
+                    scriptEscaping = .escaped
+                } else if let tag = try consumeTag() {
+                    handle(tag)
+                }
+            } else if scriptEscaping == .escaped,
+                      startsRawTag("script", closing: false) {
+                for _ in 0..<7 { try advance() }
+                scriptEscaping = .doubleEscaped
+            } else if scriptEscaping == .data,
+                      scalars[index...].starts(with: "!--".unicodeScalars) {
+                for _ in 0..<3 { try advance() }
+                scriptEscaping = .escaped
+                scriptDashes = 2
+            }
+        }
+
+        func startsRawTag(_ name: String, closing: Bool) -> Bool {
             var cursor = index
-            guard cursor != scalars.endIndex, scalars[cursor] == "/" else { return false }
-            cursor = scalars.index(after: cursor)
+            if closing {
+                guard cursor != scalars.endIndex, scalars[cursor] == "/" else { return false }
+                cursor = scalars.index(after: cursor)
+            }
             for expected in name.unicodeScalars {
                 guard cursor != scalars.endIndex else { return false }
                 let value = scalars[cursor].value
@@ -218,7 +282,11 @@ internal enum PreviewHTMLRenderer {
                 return
             }
             if tag.name == "script" || tag.name == "style" {
-                if !tag.closing { rawTextTag = tag.name }
+                if !tag.closing {
+                    rawTextTag = tag.name
+                    scriptEscaping = .data
+                    scriptDashes = 0
+                }
                 return
             }
             if tag.name == "textarea" {
@@ -287,11 +355,14 @@ internal enum PreviewHTMLRenderer {
             pendingSeparator = ""
             output.unicodeScalars.append(scalar)
             outputScalars += 1
-            // Amortize Character counting instead of recounting the growing
-            // string for each scalar. One extra Character proves the retained
-            // 50,000-Character prefix is complete before stopping the parser.
-            if outputScalars.isMultiple(of: 4_096), output.count > PreviewText.maximumCharacters {
-                truncated = true
+            // Geometric checkpoints bound the sum of full-string counting
+            // scans. A long combining sequence may contain many scalars but
+            // few Characters; fixed 4K intervals repeatedly scanned its
+            // entire growing prefix. The byte budget remains authoritative,
+            // and render() still cuts the exact 50,000-Character prefix.
+            if outputScalars >= nextCharacterCheck {
+                if output.count > PreviewText.maximumCharacters { truncated = true }
+                nextCharacterCheck *= 2
             }
         }
 

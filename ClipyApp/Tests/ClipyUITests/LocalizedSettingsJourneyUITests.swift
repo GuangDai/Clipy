@@ -1,6 +1,6 @@
 /// LocalizedSettingsJourneyUITests.swift — the first real-language
 /// running-app journey: under Apple's zh-Hans launch arguments the panel,
-/// the Settings tab titles, and the Retention surface must render the
+/// the Settings sidebar titles, and the Retention surface must render the
 /// packaged zh-Hans tables instead of their English development values.
 /// Every asserted string is copied from the shipped tables (PanelActions,
 /// GeneralAppearanceSettings, RetentionSettings); this closes the
@@ -54,15 +54,12 @@ final class LocalizedSettingsJourneyUITests: XCTestCase {
         }, app.debugDescription)
 
         app.typeKey(",", modifierFlags: .command)
-        // GeneralAppearanceSettings/RetentionSettings zh-Hans tab titles
-        // (Settings has exactly three tabs; Privacy is a General section).
-        for title in ["通用", "外观", "保留"] {
-            XCTAssertTrue(
-                app.buttons[title].waitForExistence(timeout: 10),
-                "\(title) tab missing from the zh-Hans Settings journey\n\(app.debugDescription)"
-            )
+        for (category, title) in [("general", "通用"), ("appearance", "外观"), ("retention", "保留")] {
+            let entry = app.buttons["clipy.settings.category.\(category)"]
+            XCTAssertTrue(entry.waitForExistence(timeout: 10), app.debugDescription)
+            XCTAssertEqual(entry.label, title, app.debugDescription)
         }
-        app.buttons["保留"].click()
+        app.buttons["clipy.settings.category.retention"].click()
 
         // RetentionSettings zh-Hans: the Items field label near the tab top.
         let keepAtMost = app.staticTexts["最多保留"]

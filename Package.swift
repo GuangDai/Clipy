@@ -6,8 +6,7 @@ import PackageDescription
 // The HistoryStorage→Fuse edge landed at roadmap step 3 (pinned below; first
 // imported at step 7). xxh3 is package-internal (no product) and vendors
 // pinned xxHash v0.8.3 since step 3 (see Sources/xxh3/VENDORED.md).
-// ClipyIntegrationTests is XcodeGen-hosted and is NOT declared in this
-// manifest.
+// App UI and its hosted presentation/integration tests are XcodeGen-owned.
 
 let package = Package(
     name: "Clipy",
@@ -18,7 +17,8 @@ let package = Package(
         .library(name: "HistoryDomain", targets: ["HistoryDomain"]),
         .library(name: "HistoryStorage", targets: ["HistoryStorage"]),
         .library(name: "PasteboardAdapter", targets: ["PasteboardAdapter"]),
-        .library(name: "PresentationUI", targets: ["PresentationUI"]),
+        .library(name: "ClipboardFormats", targets: ["ClipboardFormats"]),
+        .library(name: "ContentPreview", targets: ["ContentPreview"]),
         .library(name: "LocalAutomation", targets: ["LocalAutomation"]),
     ],
     dependencies: [
@@ -56,11 +56,6 @@ let package = Package(
         .target(
             name: "PasteboardAdapter",
             dependencies: ["HistoryCore"]
-        ),
-        .target(
-            name: "PresentationUI",
-            dependencies: ["HistoryCore", "ClipboardFormats", "ContentPreview"],
-            resources: [.process("Resources")]
         ),
         .target(
             name: "xxh3",
@@ -151,10 +146,6 @@ let package = Package(
         .testTarget(
             name: "PasteboardAdapterTests",
             dependencies: ["PasteboardAdapter", "HistoryCore"]
-        ),
-        .testTarget(
-            name: "PresentationUITests",
-            dependencies: ["PresentationUI", "HistoryCore", "ContentPreview", "HistoryStorage"]
         ),
     ],
     swiftLanguageModes: [.v6]

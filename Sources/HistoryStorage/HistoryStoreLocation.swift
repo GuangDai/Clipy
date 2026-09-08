@@ -2,9 +2,10 @@ import Foundation
 import HistoryCore
 
 /// A store's immutable location and, for disposable stores, its directory
-/// lifetime. Search retains this value until its independent SQLite read
-/// transaction ends; releasing the facade cannot remove an active read's
-/// files (V2-09 §4–§6). No database handle crosses an actor.
+/// lifetime. Every writer/read connection retains this value through close;
+/// statements retain their connection. Releasing the facade or actor cannot
+/// unlink files while SQLite still uses them (V2-09 §4–§6). No database handle
+/// crosses an actor.
 internal final class HistoryStoreLocation: Sendable {
     internal let databaseURL: URL
     internal let rootURL: URL

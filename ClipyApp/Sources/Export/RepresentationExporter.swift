@@ -3,7 +3,6 @@
 import AppKit
 import Foundation
 import HistoryCore
-import PresentationUI
 import UniformTypeIdentifiers
 
 @MainActor

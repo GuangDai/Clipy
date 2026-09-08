@@ -1,7 +1,6 @@
 import Darwin
 import Foundation
 import HistoryCore
-import PresentationUI
 
 #if DEBUG
 enum LocalFilePreviewDebugInstrumentation {
@@ -91,6 +90,23 @@ actor LocalFilePreviewLoader {
             await Task.yield()
         }
         try Task.checkCancellation()
+        // The chunked read can overlap an editor writing this same file.
+        // Reject observed changes rather than render a prefix and suffix
+        // from different contents. The descriptor stays open throughout;
+        // this does not reopen the path or retry the file automatically.
+        var finalStatus = stat()
+        guard Darwin.fstat(descriptor, &finalStatus) == 0 else {
+            throw Self.failure(for: errno)
+        }
+        try Self.checkFile(finalStatus)
+        guard finalStatus.st_size == openedStatus.st_size,
+              bytes.count == Int(openedStatus.st_size),
+              finalStatus.st_mtimespec.tv_sec == openedStatus.st_mtimespec.tv_sec,
+              finalStatus.st_mtimespec.tv_nsec == openedStatus.st_mtimespec.tv_nsec,
+              finalStatus.st_ctimespec.tv_sec == openedStatus.st_ctimespec.tv_sec,
+              finalStatus.st_ctimespec.tv_nsec == openedStatus.st_ctimespec.tv_nsec else {
+            throw FilePreviewFailure.changedDuringRead
+        }
         let finalType = type == "public.utf8-plain-text"
             && (bytes.starts(with: [0xFF, 0xFE]) || bytes.starts(with: [0xFE, 0xFF]))
             ? "public.utf16-external-plain-text" : type

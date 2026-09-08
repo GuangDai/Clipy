@@ -2,7 +2,6 @@
 /// ServiceManagement adapter; tests substitute only that true external
 /// boundary and never touch `SMAppService.mainApp` or History.
 import Foundation
-import PresentationUI
 import Testing
 @testable import ClipyApp
 

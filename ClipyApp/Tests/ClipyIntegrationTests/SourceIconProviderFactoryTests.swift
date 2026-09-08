@@ -2,7 +2,6 @@
 /// rasters; per-surface reuse and FIFO eviction belong to SourceIconStore's
 /// owner tests, with no second process-wide icon retention in the factory.
 import CoreGraphics
-import PresentationUI
 import Testing
 @testable import ClipyApp
 

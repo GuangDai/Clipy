@@ -2,7 +2,6 @@
 /// surface. It is installed before the App Intents dependency can resolve;
 /// absent surface means no derived panel state exists yet.
 import HistoryCore
-import PresentationUI
 
 @MainActor
 final class PanelSurfacePurgeRelay {

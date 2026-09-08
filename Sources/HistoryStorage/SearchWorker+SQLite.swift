@@ -86,7 +86,7 @@ extension SearchWorker {
             regexp = try NSRegularExpression(pattern: admitted.term)
         } else { regexp = nil }
         do {
-            let database = try SQLiteDatabase(url: store.databaseURL, readOnly: true)
+            let database = try SQLiteDatabase(storeLocation: store, readOnly: true)
             defer { try? database.close() }
             try database.execute("BEGIN DEFERRED")
             defer { try? database.execute("ROLLBACK") }
@@ -136,23 +136,28 @@ extension SearchWorker {
             let isRankedFuzzy = admitted.mode == .fuzzy && !admitted.term.isEmpty
             let lowestPossibleFuzzyScore = isRankedFuzzy
                 ? try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: admitted.term, in: database) : 0
-            let fuzzyTailAnchor: StoredOrderingAnchor?
+            let fuzzyOrderedAnchor: StoredOrderingAnchor?
             let completesFuzzyPrefix: Bool
-            if isRankedFuzzy, direction == .forward, let anchor {
+            let reversesFuzzyPredecessors: Bool
+            if isRankedFuzzy, let anchor {
                 switch anchor {
                 case .fuzzyUnpinned(let score, let date, let id) where score == lowestPossibleFuzzyScore:
-                    fuzzyTailAnchor = .defaultOrder(pinnedOrdinal: nil, lastCopiedAt: date, id: id)
-                    completesFuzzyPrefix = true
+                    fuzzyOrderedAnchor = .defaultOrder(pinnedOrdinal: nil, lastCopiedAt: date, id: id)
+                    completesFuzzyPrefix = direction == .forward
+                    reversesFuzzyPredecessors = direction == .backward
                 case .defaultOrder(let ordinal, _, _) where ordinal != nil:
-                    fuzzyTailAnchor = anchor
+                    fuzzyOrderedAnchor = anchor
                     completesFuzzyPrefix = false
+                    reversesFuzzyPredecessors = direction == .backward
                 default:
-                    fuzzyTailAnchor = nil
+                    fuzzyOrderedAnchor = nil
                     completesFuzzyPrefix = false
+                    reversesFuzzyPredecessors = false
                 }
             } else {
-                fuzzyTailAnchor = nil
+                fuzzyOrderedAnchor = nil
                 completesFuzzyPrefix = false
+                reversesFuzzyPredecessors = false
             }
             let reversesOrderedRows = direction == .backward && !isRankedFuzzy
             let scanDirection: HistoryPageDirection = reversesOrderedRows ? .forward : direction
@@ -169,7 +174,8 @@ extension SearchWorker {
                 reader = try SQLiteSearchRows(
                     database: database, limits: limits, filter: request.filter,
                     candidateExpression: SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
-                    orderedAnchor: isRankedFuzzy ? fuzzyTailAnchor : anchor, reversesOrder: reversesOrderedRows,
+                    orderedAnchor: isRankedFuzzy ? fuzzyOrderedAnchor : anchor,
+                    reversesOrder: reversesOrderedRows || reversesFuzzyPredecessors,
                     completesFuzzyPrefix: completesFuzzyPrefix,
                     work: work
                 )
@@ -287,7 +293,8 @@ extension SearchWorker {
                 if matchingComplete { work.stopReason = .pageBudget; break }
                 if isRankedFuzzy,
                    fuzzySelection.cannotBeImprovedByLaterDefaultOrderedRows(
-                       lowestPossibleScore: lowestPossibleFuzzyScore
+                       lowestPossibleScore: lowestPossibleFuzzyScore,
+                       reversesEligiblePredecessors: reversesFuzzyPredecessors
                    ) { work.stopReason = .provenBestScore; break }
                 let yieldStarted = clock.now
 #if DEBUG

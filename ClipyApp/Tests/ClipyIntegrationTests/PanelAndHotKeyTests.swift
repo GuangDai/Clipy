@@ -14,7 +14,6 @@
 import AppKit
 import Carbon.HIToolbox
 import Foundation
-import PresentationUI
 import Testing
 @testable import ClipyApp
 
@@ -317,8 +316,8 @@ struct PopupPositionGeometryTests {
     @Test func previewAtRightEdgeOpensLeadingWithoutMovingTheMainSurface() {
         let mainSurface = NSRect(x: 1_000, y: 200, width: 400, height: 560)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: mainFrame
         )
 
@@ -335,8 +334,8 @@ struct PopupPositionGeometryTests {
     @Test func previewUsesTrailingWhenTheRightSideHasSpace() {
         let mainSurface = NSRect(x: 100, y: 200, width: 400, height: 560)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: mainFrame
         )
 
@@ -354,8 +353,8 @@ struct PopupPositionGeometryTests {
     @Test func negativeOriginLeftEdgePreviewCycleUsesTrailingAndKeepsTheMainSurface() {
         let mainSurface = NSRect(x: -1_600, y: -200, width: 400, height: 560)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: negativeOriginFrame
         )
 
@@ -377,8 +376,8 @@ struct PopupPositionGeometryTests {
     @Test func negativeOriginRightEdgePreviewCycleUsesLeadingAndKeepsTheMainSurface() {
         let mainSurface = NSRect(x: -400, y: 240, width: 400, height: 560)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: negativeOriginFrame
         )
 
@@ -400,8 +399,8 @@ struct PopupPositionGeometryTests {
     @Test func previewConservativelyUsesTrailingWithoutAScreen() {
         let mainSurface = NSRect(x: 1_000, y: 200, width: 400, height: 560)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: nil
         )
 
@@ -416,8 +415,8 @@ struct PopupPositionGeometryTests {
         // while preserving the main surface exactly.
         let mainSurface = NSRect(x: 520, y: 200, width: 400, height: 560)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: mainFrame,
             previewSide: .leading
         )
@@ -436,8 +435,8 @@ struct PopupPositionGeometryTests {
     @Test func previewSideTrailingIsHonoredWhenTheRightSideHasSpace() {
         let mainSurface = NSRect(x: 100, y: 200, width: 400, height: 560)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: mainFrame,
             previewSide: .trailing
         )
@@ -459,8 +458,8 @@ struct PopupPositionGeometryTests {
         // mirror of the automatic right-edge rule.
         let mainSurface = NSRect(x: 100, y: 200, width: 400, height: 560)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: mainFrame,
             previewSide: .leading
         )
@@ -481,8 +480,8 @@ struct PopupPositionGeometryTests {
         // but pinned by an explicit preference instead of `.automatic`.
         let mainSurface = NSRect(x: 1_000, y: 200, width: 400, height: 560)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: mainFrame,
             previewSide: .trailing
         )
@@ -498,27 +497,43 @@ struct PopupPositionGeometryTests {
         )
     }
 
-    @Test func previewExpansionExtendsAUserResizedMainSurfaceByTheFixedExtension() {
-        // The expansion is the fixed 321-point preview extension over the
-        // CURRENT main width — a user-resized column is never squashed back
-        // to the default 400+321.
+    @Test func previewBorrowsExistingSpaceBeforeExpandingAUserResizedWindow() {
         let mainSurface = NSRect(x: 100, y: 200, width: 480, height: 640)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: mainFrame
         )
 
         #expect(expansion.placement == .trailing)
-        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 801, height: 640))
+        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 721, height: 640))
         #expect(
             PopupPositionGeometry.mainSurfaceFrame(
                 in: expansion.panelFrame,
                 previewPlacement: expansion.placement,
                 previewVisible: true,
-                mainSurfaceWidth: 480
-            ) == mainSurface
+                mainSurfaceWidth: 400
+            ) == NSRect(x: 100, y: 200, width: 400, height: 640)
         )
+    }
+
+    @Test func widePreviewToggleDoesNotMoveOrResizeTheWindow() {
+        let original = NSRect(x: 100, y: 200, width: 900, height: 640)
+        for side in [PreviewSidePreference.leading, .trailing] {
+            let opening = PopupPositionGeometry.openingPreviewFrame(from: original,
+                in: mainFrame, previewSide: side)
+            #expect(opening.panelFrame == original)
+            #expect(opening.placement == (side == .leading ? .leading : .trailing))
+        }
+    }
+
+    @Test func previewOpeningFitsANarrowScreenWithoutOverflow() {
+        let screen = NSRect(x: -700, y: 0, width: 700, height: 800)
+        let opening = PopupPositionGeometry.openingPreviewFrame(
+            from: NSRect(x: -650, y: 100, width: 600, height: 560), in: screen,
+            previewColumnWidth: 900)
+        #expect(screen.contains(opening.panelFrame))
+        #expect(opening.panelFrame.width == screen.width)
     }
 
     @Test func previewExpansionUsesAnExplicitFreeFormPreviewColumnWidth() {
@@ -528,8 +543,8 @@ struct PopupPositionGeometryTests {
         // preserved exactly.
         let mainSurface = NSRect(x: 100, y: 200, width: 400, height: 560)
 
-        let expansion = PopupPositionGeometry.expandedPreviewFrame(
-            preservingMainSurface: mainSurface,
+        let expansion = PopupPositionGeometry.openingPreviewFrame(
+            from: mainSurface,
             in: mainFrame,
             previewColumnWidth: 400
         )

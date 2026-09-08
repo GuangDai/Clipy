@@ -17,7 +17,7 @@ import Darwin
 import Foundation
 import HistoryCore
 import HistoryStorage
-import PresentationUI
+@testable import ClipyApp
 import Testing
 
 /// `.serialized`: the RSS probes read PROCESS-wide resident memory, so

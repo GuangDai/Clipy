@@ -1,0 +1,12 @@
+"current" = "当前生效";
+"pending" = "更改尚未应用";
+"automatic" = "自动清理";
+"count-details" = "项目数量限制如何生效";
+"policy-details" = "何时进行清理";
+"count-off" = "不限制项目数量";
+"count-on" = "最多保留 %@ 个未置顶项目";
+"age" = "时间";
+"storage" = "存储量";
+"revisions" = "修订版本";
+"policies-off" = "时间、存储量和修订版本限制均已关闭。";
+"policies-on" = "清理限制：%@";

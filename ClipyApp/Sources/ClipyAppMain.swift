@@ -14,7 +14,6 @@
 /// satisfies SwiftUI's at-least-one-scene requirement.
 import AppKit
 import HistoryCore
-import PresentationUI
 import SwiftUI
 
 /// Clipy itself — the composition root's user-facing shell.
@@ -33,9 +32,12 @@ struct ClipyAppMain: App {
 
         Settings {
             SettingsRootView(appDelegate: appDelegate)
+                // Settings defaults to disabled resize interaction even when
+                // contentMinSize allows a range. Let SwiftUI own both the
+                // interaction behavior and the existing content constraints.
+                .windowResizeBehavior(.enabled)
         }
-        // The per-tab frames stay the content's MINIMUM sizes; the window
-        // itself is freely resizable beyond them.
+        .defaultSize(width: 780, height: 620)
         .windowResizability(.contentMinSize)
     }
 }

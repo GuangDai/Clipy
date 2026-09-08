@@ -13,6 +13,48 @@ import Testing
 
 @Suite("Hosted exact pasteboard outcomes (Card 5B)")
 struct AppCaptureExactOutcomeTests {
+    /// The running-app banner journey uses the same over-limit declaration
+    /// shape. This hosted leaf proves observer→composition→shell publication
+    /// from real pasteboard facts, without a failure hook or a timer wait.
+    @Test @MainActor
+    func overLimitDeclarationsPublishOneDismissibleUnsupportedEpisode() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let pasteboard = ComposedSupport.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let item = NSPasteboardItem()
+        let count = HistoryLimits.standard.maximumRepresentationsPerCaptureOrRevision + 1
+        let types = (0..<count).map {
+            NSPasteboard.PasteboardType("com.clipy.fixture.health.hosted.\($0)")
+        }
+        for type in types {
+            #expect(item.setData(Data([1]), forType: type))
+        }
+        pasteboard.clearContents()
+        #expect(pasteboard.writeObjects([item]))
+        let declaredTypes = try #require(pasteboard.pasteboardItems?.first?.types)
+        #expect(types.allSatisfy { declaredTypes.contains($0) })
+
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        defer { composition.stop() }
+        let appDelegate = AppDelegate()
+        appDelegate.installCompositionForTesting(composition)
+
+        #expect(appDelegate.captureNotice == .failed(.unsupportedClipboardShape))
+        #expect(appDelegate.captureHealth.failedCaptureCount == 1)
+        #expect(appDelegate.captureHealth.activeCommitCount == 0)
+        #expect(appDelegate.captureHealth.pendingCaptureCount == 0)
+        appDelegate.dismissCaptureNotice()
+        appDelegate.receiveCaptureHealthForTesting(composition.captureHealth)
+        #expect(appDelegate.captureNotice == nil)
+
+        let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
+        #expect(page.rows.isEmpty)
+        #expect(page.position.rawValue == 0)
+    }
+
     /// A real NSPasteboardItemDataProvider that declares ownership of a type
     /// but deliberately declines to publish bytes when AppKit requests them.
     /// The provider makes no timeout or permission diagnosis: the only

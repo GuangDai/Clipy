@@ -1,7 +1,6 @@
 /// App-owned ServiceManagement boundary and single-operation state owner
 /// (REVIEW Card 10C). PresentationUI sees only `LaunchAtLoginSettings`.
 import Foundation
-import PresentationUI
 import ServiceManagement
 
 /// Neutral internal copy of the complete macOS 26 `SMAppService.Status`

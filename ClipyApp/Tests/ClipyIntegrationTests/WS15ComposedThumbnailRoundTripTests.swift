@@ -16,7 +16,7 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 import PasteboardAdapter
-import PresentationUI
+@testable import ClipyApp
 import Testing
 
 struct WS15ComposedThumbnailRoundTripTests {

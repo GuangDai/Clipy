@@ -31,7 +31,7 @@ final class MaintenanceJourneyUITests: XCTestCase {
         ))
         XCTAssertTrue(waitUntil { rows.count == 1 }, app.debugDescription)
         app.typeKey(",", modifierFlags: .command)
-        let maintenance = app.buttons["Maintenance"]
+        let maintenance = app.buttons["clipy.settings.category.maintenance"]
         XCTAssertTrue(maintenance.waitForExistence(timeout: 10), app.debugDescription)
         maintenance.click()
 
@@ -47,6 +47,9 @@ final class MaintenanceJourneyUITests: XCTestCase {
         XCTAssertEqual(text(path), folder.path)
         let initialPhysical = text(physical)
         let derivedCache = app.staticTexts["clipy.settings.maintenance.derived-cache"]
+        SettingsJourneyControls.reveal(
+            derivedCache, byExpanding: "clipy.settings.maintenance.diagnostics", in: app
+        )
         XCTAssertTrue(derivedCache.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertEqual(text(derivedCache), "Not Used")
         for identifier in [
@@ -88,7 +91,9 @@ final class MaintenanceJourneyUITests: XCTestCase {
         let window = app.windows.containing(
             .any, identifier: "clipy.settings.maintenance.refresh"
         ).firstMatch
-        let scrollView = window.scrollViews.firstMatch
+        let scrollView = window.scrollViews.containing(
+            .any, identifier: "clipy.settings.maintenance.refresh"
+        ).firstMatch
         for _ in 0..<10 {
             if element.isHittable && scrollView.frame.contains(element.frame) { break }
             scrollView.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))

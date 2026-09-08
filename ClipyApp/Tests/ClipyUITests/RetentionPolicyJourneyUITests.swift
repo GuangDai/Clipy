@@ -55,9 +55,11 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         )
         let owningWindow = settingsWindow(
             in: app,
-            owningTextField: "clipy.settings.retention.storage-mib"
+            owningToggle: "clipy.settings.retention.storage-enabled"
         )
-        let retentionScrollView = owningWindow.scrollViews.firstMatch
+        let retentionScrollView = owningWindow.scrollViews.containing(
+            .switch, identifier: "clipy.settings.retention.age-enabled"
+        ).firstMatch
         assertExists(
             retentionScrollView,
             timeout: 5,
@@ -180,21 +182,17 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         ]
         let owningWindow = settingsWindow(
             in: app,
-            owningTextField: "clipy.settings.retention.age-days"
+            owningToggle: "clipy.settings.retention.age-enabled"
         )
-        let retentionScrollView = owningWindow.scrollViews.firstMatch
+        let retentionScrollView = owningWindow.scrollViews.containing(
+            .switch, identifier: "clipy.settings.retention.age-enabled"
+        ).firstMatch
         assertExists(ageEnabled, timeout: 5, in: app, context: "age toggle")
-        assertExists(ageDays, timeout: 5, in: app, context: "age field")
         assertExists(
             retentionScrollView,
             timeout: 5,
             in: app,
             context: "age policy scroll view"
-        )
-        XCTAssertEqual(
-            ageDays.value as? String,
-            "30",
-            diagnostic(app, context: "default age draft")
         )
         guard scrollUntilFullyVisible(
             ageEnabled,
@@ -202,7 +200,14 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             app: app,
             context: "age toggle below retained usage"
         ) else { return }
+        XCTAssertFalse(ageDays.exists, diagnostic(app, context: "disabled age policy hides its field"))
         ageEnabled.click()
+        assertExists(ageDays, timeout: 5, in: app, context: "enabled age field")
+        XCTAssertEqual(
+            ageDays.value as? String,
+            "30",
+            diagnostic(app, context: "default age draft")
+        )
 
         let apply = app.buttons["clipy.settings.retention.apply"]
         assertExists(apply, timeout: 5, in: app, context: "policy Apply")
@@ -394,20 +399,16 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         ]
         let owningWindow = settingsWindow(
             in: app,
-            owningTextField: "clipy.settings.retention.revision-count"
+            owningToggle: "clipy.settings.retention.revision-count-enabled"
         )
-        let retentionScrollView = owningWindow.scrollViews.firstMatch
+        let retentionScrollView = owningWindow.scrollViews.containing(
+            .switch, identifier: "clipy.settings.retention.age-enabled"
+        ).firstMatch
         assertExists(
             revisionCountToggle,
             timeout: 5,
             in: app,
             context: "revision-count toggle"
-        )
-        assertExists(
-            revisionCountField,
-            timeout: 5,
-            in: app,
-            context: "revision-count field"
         )
         assertExists(
             retentionScrollView,
@@ -421,7 +422,14 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             app: app,
             context: "revision-count toggle below retained usage"
         ) else { return }
+        XCTAssertFalse(revisionCountField.exists, diagnostic(app, context: "disabled revision policy hides its field"))
         revisionCountToggle.click()
+        assertExists(
+            revisionCountField,
+            timeout: 5,
+            in: app,
+            context: "revision-count field"
+        )
         guard scrollUntilFullyVisible(
             revisionCountField,
             in: retentionScrollView,
@@ -556,7 +564,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
 
     @MainActor
     private func openRetentionTab(in app: XCUIApplication) {
-        let retentionTab = app.buttons["Retention"]
+        let retentionTab = app.buttons["clipy.settings.category.retention"]
         assertExists(
             retentionTab,
             timeout: 10,
@@ -592,10 +600,10 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
     @MainActor
     private func settingsWindow(
         in app: XCUIApplication,
-        owningTextField identifier: String
+        owningToggle identifier: String
     ) -> XCUIElement {
         let window = app.windows.containing(
-            .textField,
+            .switch,
             identifier: identifier
         ).firstMatch
         assertExists(

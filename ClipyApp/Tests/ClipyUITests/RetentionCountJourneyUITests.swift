@@ -66,7 +66,7 @@ final class RetentionCountJourneyUITests: XCTestCase {
         )
 
         app.typeKey(",", modifierFlags: .command)
-        let retentionTab = app.buttons["Retention"]
+        let retentionTab = app.buttons["clipy.settings.category.retention"]
         assertExists(
             retentionTab,
             timeout: 10,
@@ -344,7 +344,7 @@ final class RetentionCountJourneyUITests: XCTestCase {
         )
 
         reopenedApp.typeKey(",", modifierFlags: .command)
-        let reopenedRetentionTab = reopenedApp.buttons["Retention"]
+        let reopenedRetentionTab = reopenedApp.buttons["clipy.settings.category.retention"]
         assertExists(
             reopenedRetentionTab,
             timeout: 10,

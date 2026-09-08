@@ -38,6 +38,7 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         let details = try launchAndOpenCapturedDetails(in: app)
         // Header evidence precedes scrolling to the lower Content section.
         assertVisibleText("Content type icon", in: details, app: app)
+        revealFormatMetadata("public.png", in: details, app: app)
         assertVisibleText("public.png", in: details, app: app)
         assertVisibleText("4 bytes", in: details, app: app)
         assertNoRepresentationImage("public.png", in: details, app: app)
@@ -96,8 +97,10 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         defer { app.terminate() }
         let details = try launchAndOpenCapturedDetails(in: app)
         assertVisibleText("Content type icon", in: details, app: app)
+        revealFormatMetadata("public.png", in: details, app: app)
         assertVisibleText("public.png", in: details, app: app)
         assertVisibleText("70 bytes", in: details, app: app)
+        revealFormatMetadata("public.tiff", in: details, app: app)
         assertVisibleText("public.tiff", in: details, app: app)
         assertVisibleText("13 bytes", in: details, app: app)
         assertNoRepresentationImage("public.png", in: details, app: app)
@@ -169,6 +172,22 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
     }
 
     @MainActor
+    private func revealFormatMetadata(_ type: String, in details: XCUIElement, app: XCUIApplication) {
+        let identifier = "clipy.details.format-details." + type
+        let headerIdentifier = identifier + ".toggle"
+        assertVisibleElement(matching: NSPredicate(format: "identifier == %@", headerIdentifier),
+                             in: details, app: app, context: "Format Details: \(type)")
+        let group = details.descendants(matching: .any)[identifier]
+        // SwiftUI retains the native DisclosureTriangle role for the
+        // styled header, including its framework-owned expanded state.
+        let header = group.disclosureTriangles[headerIdentifier]
+        XCTAssertTrue(header.isEnabled, diagnostic(app, context: "enabled format disclosure: \(type)"))
+        header.click()
+        // The caller verifies successful expansion through the displayed
+        // identifier text and byte count after this click.
+    }
+
+    @MainActor
     private func clickPreview(_ type: String, in details: XCUIElement, app: XCUIApplication) {
         let identifier = "clipy.details.show-preview." + type
         assertVisibleElement(matching: NSPredicate(format: "identifier == %@", identifier),
@@ -188,14 +207,22 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
             XCTFail(diagnostic(app, context: "missing Details element: \(context)"))
             return
         }
-        // Grouped Form exposes offscreen children as existing. The observed
-        // narrow Details viewport ended at y629 while Content began at y653.
-        // Find the owning Form rather than scrolling a sibling preview or
-        // the other column of the wide Details layout.
+        // Details exposes vertically offscreen children as existing. Find
+        // its owning scroll view rather than scrolling the sibling preview.
         guard let scrollView = details.scrollViews.allElementsBoundByIndex.first(where: {
             $0.descendants(matching: .any).matching(predicate).firstMatch.exists
         }) else {
             XCTFail(diagnostic(app, context: "owning Details scroll view: \(context)"))
+            return
+        }
+        // A vertical wheel cannot reveal a disclosure triangle laid out
+        // beyond the viewport's leading edge. PR #76 exposed precisely this
+        // clipping (triangle x618, viewport x624); keep full horizontal
+        // containment as an explicit regression assertion before scrolling.
+        guard element.frame.minX >= scrollView.frame.minX,
+              element.frame.maxX <= scrollView.frame.maxX else {
+            XCTFail(diagnostic(app, context:
+                "horizontally clipped Details element: \(context); element=\(element.frame), viewport=\(scrollView.frame)"))
             return
         }
         let scrollCoordinate = scrollView.coordinate(

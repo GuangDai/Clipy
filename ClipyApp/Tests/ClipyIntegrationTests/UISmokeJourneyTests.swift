@@ -30,7 +30,7 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 import PasteboardAdapter
-import PresentationUI
+@testable import ClipyApp
 import Testing
 
 @Suite(

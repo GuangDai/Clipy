@@ -44,14 +44,14 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         // Use the real preference control: a prior journey may have disabled
         // automatic preview. Reopening the panel starts ordinary dwell.
         app.typeKey(",", modifierFlags: .command)
-        let appearance = app.buttons["Appearance"]
+        let appearance = app.buttons["clipy.settings.category.appearance"]
         XCTAssertTrue(appearance.waitForExistence(timeout: 10))
         appearance.click()
         let autoOpen = app.switches["clipy.settings.appearance.preview-auto-open"]
         XCTAssertTrue(autoOpen.waitForExistence(timeout: 5))
         if (autoOpen.value as? Int) == 0 { autoOpen.click() }
         XCTAssertTrue(waitUntil(timeout: 5) { (autoOpen.value as? Int) == 1 })
-        let general = app.buttons["General"]
+        let general = app.buttons["clipy.settings.category.general"]
         XCTAssertTrue(general.exists)
         general.click()
         app.typeKey("w", modifierFlags: .command)

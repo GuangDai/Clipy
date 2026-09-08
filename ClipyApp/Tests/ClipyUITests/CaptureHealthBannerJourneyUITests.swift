@@ -1,7 +1,8 @@
 /// CaptureHealthBannerJourneyUITests.swift — running-app materialization
 /// evidence for REVIEW Card 6's content-free capture-health banner. A real
-/// two-item General pasteboard generation with an empty constituent enters the production observer's
-/// unsupported-shape outcome; XCUI then reads and presses the rendered
+/// General pasteboard generation with 33 opaque formats exceeds the 32-format
+/// capture limit and enters the production observer's unsupported outcome;
+/// XCUI then reads and presses the rendered
 /// SwiftUI control in Clipy's actual floating panel.
 import AppKit
 import XCTest
@@ -113,20 +114,26 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
 
     @MainActor
     private func stageUnsupportedGeneration(suffix: String) {
-        let first = NSPasteboardItem()
-        let second = NSPasteboardItem()
-        XCTAssertTrue(
-            first.setString(
-                "clipy-ui-health-\(suffix)-alpha",
-                forType: .string
-            )
-        )
-        XCTAssertTrue(
-            second.setData(Data(), forType: .string)
-        )
+        // Empty .string bytes in the writer do not establish an empty item
+        // in a different process: AppKit can supply other text formats. The
+        // declaration limit is checked before payload reads, so these opaque
+        // formats provide the same typed episode without that assumption.
+        let item = NSPasteboardItem()
+        let types = (0..<33).map {
+            NSPasteboard.PasteboardType("com.clipy.fixture.health.\(suffix).\($0)")
+        }
+        for type in types {
+            XCTAssertTrue(item.setData(Data([1]), forType: type))
+        }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        XCTAssertTrue(pasteboard.writeObjects([first, second]))
+        XCTAssertTrue(pasteboard.writeObjects([item]))
+        XCTAssertEqual(pasteboard.pasteboardItems?.count, 1)
+        let declaredTypes = pasteboard.pasteboardItems?.first?.types ?? []
+        XCTAssertTrue(
+            types.allSatisfy { declaredTypes.contains($0) },
+            "The General pasteboard must retain every over-limit declaration."
+        )
     }
 
     @MainActor

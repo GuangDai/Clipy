@@ -44,7 +44,7 @@ public struct HistoryRow: Sendable, Hashable {
     public let pinnedPosition: Int?
     public let search: SearchPresentation?
 
-    package init(
+    public init(
         item: HistoryItemReference,
         title: String,
         typeIdentifiers: [String],
@@ -75,7 +75,7 @@ public struct HistoryPage: Sendable, Hashable {
     public let previous: HistoryPageCursor?
     public let next: HistoryPageCursor?
 
-    package init(
+    public init(
         position: ChangePosition,
         rows: [HistoryRow],
         previous: HistoryPageCursor? = nil,

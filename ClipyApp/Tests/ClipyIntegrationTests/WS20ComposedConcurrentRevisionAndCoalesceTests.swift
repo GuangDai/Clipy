@@ -17,7 +17,7 @@
 import Foundation
 import HistoryCore
 import HistoryStorage
-import PresentationUI
+@testable import ClipyApp
 import Testing
 
 struct WS20ComposedConcurrentRevisionAndCoalesceTests {
