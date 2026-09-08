@@ -45,6 +45,31 @@ struct MultiItemPreparationTests {
         #expect(restored.activeRevisionID == revisionID)
     }
 
+    @Test func typeSummaryIsGloballySortedAndUniqueWithoutReorderingConstituentItems() async throws {
+        let prepared = try await IngestPreparationActor().prepare(capture([
+            .init(typeIdentifier: "com.example.z", bytes: Data([1])),
+            .init(typeIdentifier: "com.example.z", bytes: Data([2]), pasteboardItemIndex: 1),
+            .init(typeIdentifier: "com.example.a", bytes: Data([3]), pasteboardItemIndex: 1),
+            .init(typeIdentifier: "com.example.b", bytes: Data([4]), pasteboardItemIndex: 2),
+            .init(typeIdentifier: "com.example.a", bytes: Data([5]), pasteboardItemIndex: 2),
+        ]))
+        // Item order dominates content normalization. First occurrence order
+        // would yield z/a/b, and a flat map would also retain duplicate types.
+        let content = prepared.domain.canonical.representations.map(\.content)
+        #expect(content.map(\.pasteboardItemIndex) == [0, 1, 1, 2, 2])
+        #expect(content.map(\.typeIdentifier) == [
+            "com.example.z", "com.example.a", "com.example.z", "com.example.a", "com.example.b",
+        ])
+        #expect(content.map(\.bytes) == [Data([1]), Data([3]), Data([2]), Data([5]), Data([4])])
+        let summary = prepared.projection.effectiveTypeIdentifiers
+        #expect(summary == ["com.example.a", "com.example.b", "com.example.z"])
+        // The stored type-summary codec independently requires global sorted
+        // uniqueness. Item-boundary ordering belongs to content, not this DTO.
+        #expect(try EffectiveTypeIdentifiersBlobCodec.decode(
+            EffectiveTypeIdentifiersBlobCodec.encode(summary)
+        ) == summary)
+    }
+
     @Test func everyFileItemContributesSearchMetadataWithoutChangingItsURLBytes() async throws {
         let representations: [CapturedRepresentation] = [
             .init(typeIdentifier: "public.file-url", bytes: Data("file:///tmp/alpha.txt".utf8)),

@@ -169,9 +169,10 @@ internal enum ContentProjector {
     ///   contribute nothing. A reference owning the title instead contributes
     ///   its original address and non-empty decoded path under the same join
     ///   and byte budget. The body may be empty (image-only/opaque content).
-    /// - Effective type identifiers: the content's type identifiers, already
-    ///   sorted, unique, and non-empty by the normalized-set invariant
-    ///   (docs/02-domain.md §2.1).
+    /// - Effective type identifiers: the unique union across all constituent
+    ///   items, globally sorted by Unicode scalar order (05 §15; V2-09 §11).
+    ///   Normalized content orders representations by item first, so its flat
+    ///   type sequence can contain repeats and need not be globally sorted.
     ///
     /// `content` must be a normalized, non-normalized-empty Effective Content
     /// value as produced by `effectiveContent(of:)` or capture preparation;
