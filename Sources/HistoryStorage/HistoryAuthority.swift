@@ -91,7 +91,7 @@ internal actor HistoryAuthority {
         self.storageClock = storageClock
         self.gatewayConnectionIDSource = gatewayConnectionIDSource
         self.volumeAvailableCapacityReader = volumeAvailableCapacityReader
-        database = try SQLiteDatabase(url: storeLocation.databaseURL)
+        database = try SQLiteDatabase(storeLocation: storeLocation)
         blobStore = try ImmutableBlobStore(root: storeLocation.rootURL)
     }
 

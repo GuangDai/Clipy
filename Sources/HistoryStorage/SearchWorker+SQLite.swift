@@ -86,7 +86,7 @@ extension SearchWorker {
             regexp = try NSRegularExpression(pattern: admitted.term)
         } else { regexp = nil }
         do {
-            let database = try SQLiteDatabase(url: store.databaseURL, readOnly: true)
+            let database = try SQLiteDatabase(storeLocation: store, readOnly: true)
             defer { try? database.close() }
             try database.execute("BEGIN DEFERRED")
             defer { try? database.execute("ROLLBACK") }
