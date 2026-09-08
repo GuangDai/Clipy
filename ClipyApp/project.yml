@@ -130,6 +130,17 @@ targets:
         product: ClipboardFormats
       - package: Clipy
         product: ContentPreview
+  # An actual AppKit process for the cross-process drag journey. The helper
+  # belongs only to the UI test bundle and is never embedded in Clipy.app.
+  ClipyDragReceiver:
+    type: tool
+    platform: macOS
+    sources:
+      - Tests/DragReceiver
+    settings:
+      PRODUCT_NAME: ClipyDragReceiver
+      SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+      GCC_TREAT_WARNINGS_AS_ERRORS: YES
   ClipyUITests:
     type: bundle.ui-testing
     platform: macOS
@@ -140,6 +151,12 @@ targets:
       GCC_TREAT_WARNINGS_AS_ERRORS: YES
     dependencies:
       - target: ClipyApp
+      - target: ClipyDragReceiver
+        link: false
+        embed: true
+        codeSign: false
+        copy:
+          destination: executables
 schemes:
   ClipyApp:
     build:

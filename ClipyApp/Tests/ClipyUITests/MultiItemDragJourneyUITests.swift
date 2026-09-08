@@ -1,10 +1,9 @@
 import AppKit
-import CoreGraphics
 import XCTest
 
-/// The receiver lives in the XCTest runner process. The source is Clipy's
-/// actual row and native dragging session, so no fabricated session/callback
-/// can satisfy the ordered cross-process pasteboard assertions below.
+/// The receiver is a test-only AppKit process with its own application run
+/// loop. The source is Clipy's actual row/native session; only a real native
+/// drop can produce the ordered bytes checked below.
 final class MultiItemDragJourneyUITests: XCTestCase {
     @MainActor
     func testRealRowDragsBothItemsAndAllBytesToANativeReceiver() throws {
@@ -59,54 +58,62 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         let screen = try XCTUnwrap(NSScreen.screens.first { $0.frame.intersects(sourceFrame) })
         let targetFrame = try XCTUnwrap(Self.receiverFrame(outside: sourceFrame, on: screen.visibleFrame),
             "No separate receiver area beside the actual source window: \(sourceFrame)")
-        let receiver = NativeClipboardDropView(frame: NSRect(origin: .zero, size: targetFrame.size))
-        let target = NSPanel(contentRect: targetFrame,
-            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        target.isReleasedWhenClosed = false
-        // NSPanel defaults to hiding when its application deactivates. The
-        // XCTest runner must remain a visible drop target while Clipy is active.
-        target.hidesOnDeactivate = false
-        target.level = .statusBar
-        target.contentView = receiver
-        receiver.registerForDraggedTypes([.string, opaque])
-        target.orderFrontRegardless()
-        target.displayIfNeeded()
-        defer { target.close() }
-        let destination = target.convertPoint(toScreen: NSPoint(x: receiver.bounds.midX, y: receiver.bounds.midY))
-        XCTAssertFalse(target.frame.intersects(sourceFrame))
-        // orderFront/displayIfNeeded do not establish that the buffered window
-        // has reached WindowServer. Let the runner's main run loop process its
-        // display work, and wait for the actual occlusion/hit-test facts.
-        let receiverReady = NSPredicate { _, _ in
-            MainActor.assumeIsolated {
-                target.isVisible && target.occlusionState.contains(.visible)
-                    && NSWindow.windowNumber(at: destination, belowWindowWithWindowNumber: 0) == target.windowNumber
+        let readyURL = directory.appendingPathComponent("ready.json")
+        let receivedURL = directory.appendingPathComponent("received.json")
+        let receiverLogURL = directory.appendingPathComponent("receiver.log")
+        try Data().write(to: receiverLogURL)
+        let receiverLog = try FileHandle(forWritingTo: receiverLogURL)
+        defer { try? receiverLog.close() }
+        let receiver = Process()
+        receiver.executableURL = Bundle(for: Self.self).bundleURL
+            .appendingPathComponent("Contents/MacOS/ClipyDragReceiver")
+        receiver.arguments = [targetFrame.minX, targetFrame.minY, targetFrame.width, targetFrame.height]
+            .map { String(Double($0)) } + [directory.path]
+        receiver.standardOutput = receiverLog
+        receiver.standardError = receiverLog
+        try receiver.run()
+        // Register cleanup only after a successful launch. XCTest must never
+        // waitUntilExit on an unstarted Process if the helper is missing.
+        defer {
+            if receiver.isRunning {
+                receiver.terminate()
+                receiver.waitUntilExit()
             }
         }
+        let receiverReady = NSPredicate { _, _ in FileManager.default.fileExists(atPath: readyURL.path) }
         let readiness = XCTWaiter.wait(for: [
             XCTNSPredicateExpectation(predicate: receiverReady, object: nil)
         ], timeout: 5)
-        let receiverDiagnostics = Self.receiverDiagnostics(target, destination: destination)
-        let receiverAttachment = XCTAttachment(string: receiverDiagnostics)
-        receiverAttachment.name = "Native drag receiver readiness"
-        receiverAttachment.lifetime = .keepAlways
-        add(receiverAttachment)
-        XCTAssertEqual(readiness, .completed, receiverDiagnostics)
-        XCTAssertEqual(NSWindow.windowNumber(at: destination, belowWindowWithWindowNumber: 0), target.windowNumber,
-                       "Receiver must own the physical drop point; \(receiverDiagnostics)")
+        let readyLog = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
+        XCTAssertEqual(readiness, .completed, "Receiver ready handshake missing; running=\(receiver.isRunning); \(readyLog)")
+        XCTAssertTrue(receiver.isRunning)
+        let ready = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: readyURL)) as? [String: Any])
+        XCTAssertEqual((ready["activationPolicy"] as? NSNumber)?.intValue, NSApplication.ActivationPolicy.accessory.rawValue)
+        XCTAssertEqual(ready["isRunning"] as? Bool, true)
+        let receiverWindowNumber = try XCTUnwrap((ready["windowNumber"] as? NSNumber)?.intValue)
+        let frame = try XCTUnwrap(ready["frame"] as? [String: NSNumber])
+        let actualTargetFrame = try CGRect(
+            x: XCTUnwrap(frame["x"]).doubleValue, y: XCTUnwrap(frame["y"]).doubleValue,
+            width: XCTUnwrap(frame["width"]).doubleValue, height: XCTUnwrap(frame["height"]).doubleValue
+        )
+        let destination = NSPoint(x: actualTargetFrame.midX, y: actualTargetFrame.midY)
+        XCTAssertFalse(actualTargetFrame.intersects(sourceFrame))
+        XCTAssertEqual(NSWindow.windowNumber(at: destination, belowWindowWithWindowNumber: 0), receiverWindowNumber,
+                       "Independent AppKit receiver must own the actual destination point")
         let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = start.withOffset(CGVector(
             dx: destination.x - row.frame.midX,
             dy: desktopTop - destination.y - row.frame.midY
         ))
         start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.5)
-        let delivered = NSPredicate { _, _ in MainActor.assumeIsolated { receiver.received != nil } }
+        let delivered = NSPredicate { _, _ in FileManager.default.fileExists(atPath: receivedURL.path) }
         let delivery = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: delivered, object: nil)], timeout: 10)
         let trace = (try? String(contentsOf: traceURL, encoding: .utf8)) ?? "no source trace"
+        let receiverLogText = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
         let diagnostics = """
             row before hover: \(beforeHover), after hover: \(afterHover), source window: \(sourceFrame)
-            receiver visible: \(target.isVisible), frame: \(target.frame), destination: \(destination)
-            receiver entered: \(receiver.enteredCount), prepared: \(receiver.preparedCount), performed: \(receiver.performedCount)
+            receiver running: \(receiver.isRunning), frame: \(actualTargetFrame), destination: \(destination)
+            \(receiverLogText)
             \(trace)
             """
         let attachment = XCTAttachment(string: diagnostics)
@@ -118,31 +125,29 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         XCTAssertTrue(trace.contains("hover-enter"), diagnostics)
         XCTAssertTrue(trace.contains("pressed-admitted"), diagnostics)
         XCTAssertEqual(delivery, .completed, diagnostics)
-        let items = try XCTUnwrap(receiver.received)
+        let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: receivedURL)) as? [String: Any])
+        let items = try XCTUnwrap(result["items"] as? [[String: Any]])
         XCTAssertEqual(items.count, 2)
-        XCTAssertEqual(items[0][NSPasteboard.PasteboardType.string.rawValue], firstText)
-        XCTAssertEqual(items[1][NSPasteboard.PasteboardType.string.rawValue], secondText)
-        XCTAssertEqual(items[0][opaque.rawValue], Data([0, 255, 1]))
-        XCTAssertEqual(items[1][opaque.rawValue], Data([255, 0, 2]))
+        let first = try Self.representations(in: items[0])
+        let second = try Self.representations(in: items[1])
+        XCTAssertEqual(first[NSPasteboard.PasteboardType.string.rawValue], firstText)
+        XCTAssertEqual(second[NSPasteboard.PasteboardType.string.rawValue], secondText)
+        XCTAssertEqual(first[opaque.rawValue], Data([0, 255, 1]))
+        XCTAssertEqual(second[opaque.rawValue], Data([255, 0, 2]))
+        XCTAssertEqual(first.count, 2)
+        XCTAssertEqual(second.count, 2)
     }
-    /// Report only this runner's display metadata. No window titles, clipboard
-    /// content, history IDs, or other applications' window records are included.
-    @MainActor
-    private static func receiverDiagnostics(_ target: NSWindow, destination: NSPoint) -> String {
-        let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
-        let processID = Int(ProcessInfo.processInfo.processIdentifier)
-        let fields = [kCGWindowNumber, kCGWindowLayer, kCGWindowBounds, kCGWindowAlpha, kCGWindowIsOnscreen]
-            .map { $0 as String }
-        let ownWindows = windows.filter {
-            ($0[kCGWindowOwnerPID as String] as? NSNumber)?.intValue == processID
-        }.map { window in window.filter { fields.contains($0.key) } }
-        return """
-            runner policy: \(NSApplication.shared.activationPolicy().rawValue), running: \(NSApplication.shared.isRunning)
-            receiver number: \(target.windowNumber), visible: \(target.isVisible), occlusion: \(target.occlusionState.rawValue)
-            opaque: \(target.isOpaque), alpha: \(target.alphaValue), ignoresMouse: \(target.ignoresMouseEvents)
-            frame: \(target.frame), destination: \(destination), topmost: \(NSWindow.windowNumber(at: destination, belowWindowWithWindowNumber: 0))
-            own WindowServer records: \(ownWindows)
-            """
+
+    private static func representations(in item: [String: Any]) throws -> [String: Data] {
+        let values = try XCTUnwrap(item["representations"] as? [[String: Any]])
+        var result: [String: Data] = [:]
+        for value in values {
+            let identifier = try XCTUnwrap(value["typeIdentifier"] as? String)
+            let encoded = try XCTUnwrap(value["bytes"] as? String)
+            let bytes = try XCTUnwrap(Data(base64Encoded: encoded))
+            XCTAssertNil(result.updateValue(bytes, forKey: identifier))
+        }
+        return result
     }
 
     /// Choose a real free rectangle around the measured source, in AppKit
@@ -170,40 +175,4 @@ final class MultiItemDragJourneyUITests: XCTestCase {
                       width: size.width, height: size.height)
     }
 
-}
-
-@MainActor
-private final class NativeClipboardDropView: NSView {
-    var received: [[String: Data]]?
-    var enteredCount = 0
-    var preparedCount = 0
-    var performedCount = 0
-
-    override func draw(_ dirtyRect: NSRect) {
-        NSColor.windowBackgroundColor.setFill()
-        bounds.fill()
-    }
-
-    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        enteredCount += 1
-        return .copy
-    }
-    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation { .copy }
-    override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        preparedCount += 1
-        return true
-    }
-
-    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        performedCount += 1
-        guard let items = sender.draggingPasteboard.pasteboardItems else { return false }
-        received = items.map { item in
-            var representations: [String: Data] = [:]
-            for type in item.types {
-                if let bytes = item.data(forType: type) { representations[type.rawValue] = bytes }
-            }
-            return representations
-        }
-        return true
-    }
 }
