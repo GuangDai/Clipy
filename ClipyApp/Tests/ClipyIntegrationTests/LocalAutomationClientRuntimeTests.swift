@@ -195,7 +195,24 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             }
             XCTAssertTrue(replacementVisible)
             viewState.deactivate()
-            for operation in ["pin", "unpin", "delete"] {
+            // A new store starts at audit sequence 1; `since` is inclusive.
+            // The read's own admin record has no organize capability.
+            let previousAudit = try await history.auditLog(since: 1)
+            let firstNewAuditSequence = (previousAudit.map(\.auditSequence).max() ?? 0) + 1
+            let failedPinOutput = try await runClient(
+                Data(), arguments: ["pin", locator], holdInputOpen: true, closeOutputReader: true
+            )
+            XCTAssertEqual(failedPinOutput.exitCode, 5)
+            XCTAssertEqual(failedPinOutput.stderr, Data("clipyctl: output_unavailable\n".utf8))
+            let afterPin = try await history.browse(.init(kind: .recent, limit: 1))
+            XCTAssertEqual(afterPin.rows.first?.pinnedPosition, 0)
+            // Even a no-op replay would append another existing Gateway
+            // audit record. The consumer disappearing must never resend pin.
+            let pinAttempts = try await history.auditLog(since: firstNewAuditSequence).filter {
+                $0.connectionID == connection && $0.capability == .organize
+            }
+            XCTAssertEqual(pinAttempts.count, 1)
+            for operation in ["unpin", "delete"] {
                 let changed = try result(await runClient(Data(), arguments: [operation, locator], holdInputOpen: true))
                 XCTAssertEqual(changed["changed"] as? Bool, true)
             }
@@ -339,6 +356,12 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
                 XCTAssertEqual(selected.stdout, expected)
                 XCTAssertTrue(selected.stderr.isEmpty)
             }
+            let disconnectedRaw = try await runClient(Data(), arguments: [
+                "read", locator, "--raw", "--type", textType, "--item", "0"
+            ], closeOutputReader: true)
+            XCTAssertEqual(disconnectedRaw.exitCode, 5)
+            XCTAssertTrue(disconnectedRaw.stdout.isEmpty)
+            XCTAssertEqual(disconnectedRaw.stderr, Data("clipyctl: output_unavailable\n".utf8))
             let pasteRequest = try request(operation: "pasteEffective", arguments: ["locator": locator])
             let fromStdin = try await runClient(pasteRequest, arguments: [
                 "--raw", "--type", textType, "--item", "1"
@@ -408,7 +431,8 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
     }
 
     private func runClient(
-        _ request: Data, arguments: [String] = [], holdInputOpen: Bool = false, fillOutput: Bool = false
+        _ request: Data, arguments: [String] = [], holdInputOpen: Bool = false,
+        fillOutput: Bool = false, closeOutputReader: Bool = false
     ) async throws -> ProcessOutput {
         let executable = try XCTUnwrap(Bundle.main.executableURL)
             .deletingLastPathComponent().appendingPathComponent("clipyctl")
@@ -419,6 +443,7 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
         let output = Pipe()
         let error = Pipe()
         if fillOutput { try fillPipe(output) }
+        if closeOutputReader { try output.fileHandleForReading.close() }
         process.standardInput = input
         process.standardOutput = output
         process.standardError = error
@@ -439,7 +464,7 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
         process.waitUntilExit()
         return ProcessOutput(
             exitCode: process.terminationStatus,
-            stdout: output.fileHandleForReading.readDataToEndOfFile(),
+            stdout: closeOutputReader ? Data() : output.fileHandleForReading.readDataToEndOfFile(),
             stderr: error.fileHandleForReading.readDataToEndOfFile()
         )
     }

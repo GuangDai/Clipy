@@ -174,6 +174,8 @@ struct CLIArguments {
 
         Exit: 0 success; 2 invalid input; 3 denied; 4 missing/stale; 5 unavailable;
               6 persistence failure. Mutations are never automatically retried.
+        timeout means a deadline elapsed; output_unavailable means the output
+        destination closed or rejected bytes. Completed changes are not undone.
 
         """
     }

@@ -31,3 +31,4 @@
 "Previous PDF Page" = "Previous PDF Page";
 "Next PDF Page" = "Next PDF Page";
 "Page %@ of %@" = "Page %@ of %@";
+"The file changed while it was being read. Return to the file reference to load it again." = "The file changed while it was being read. Return to the file reference to load it again.";

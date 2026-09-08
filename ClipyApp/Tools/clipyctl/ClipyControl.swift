@@ -22,8 +22,18 @@ struct ClipyControl {
             // stdout may already contain a prefix: appending a second JSON
             // reply would corrupt it. Report only a bounded, content-free
             // diagnostic and never execute the request again.
+            let diagnostic: String
+            switch error {
+            case let failure as CLIStandardStreams.Failure:
+                switch failure {
+                case .timeout: diagnostic = "timeout"
+                case .unavailable: diagnostic = "output_unavailable"
+                }
+            case is CancellationError: diagnostic = "cancelled"
+            default: diagnostic = "output_unavailable"
+            }
             try? await CLIStandardStreams.write(
-                Data("clipyctl: timeout\n".utf8), to: STDERR_FILENO,
+                Data("clipyctl: \(diagnostic)\n".utf8), to: STDERR_FILENO,
                 deadline: .now.advanced(by: .seconds(1))
             )
             exit(5)

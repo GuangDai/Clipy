@@ -178,7 +178,7 @@ struct FilePreviewTests {
     }
     #endif
 
-    @Test(arguments: [FilePreviewFailure.permissionDenied, .unavailable, .tooLarge, .unsupported, .invalidReference])
+    @Test(arguments: [FilePreviewFailure.permissionDenied, .unavailable, .changedDuringRead, .tooLarge, .unsupported, .invalidReference])
     func failedFileReadKeepsReferenceRecoveryExplicit(_ failure: FilePreviewFailure) async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("file:///not-opened/private.txt", type: "public.file-url", in: history)

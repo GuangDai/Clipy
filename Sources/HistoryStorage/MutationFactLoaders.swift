@@ -81,9 +81,21 @@ internal enum MutationFactLoaders {
     }
 
     internal static func loadRevisionFacts(itemID: HistoryItemID, in database: SQLiteDatabase,
-                                          blobStore: ImmutableBlobStore, limits: HistoryLimits = .standard) throws -> RevisionFacts {
+                                          blobStore: ImmutableBlobStore, limits: HistoryLimits = .standard,
+                                          expectedVersion: ContentVersion? = nil) throws -> RevisionFacts {
         guard let item = try HistoryItemRowHydration.metadata(itemID: itemID, in: database, limits: limits) else {
             throw HistoryFailure.notFound(itemID)
+        }
+        // A prepared revision can become stale while off the Authority.
+        // Phase two must reject that obsolete proposal before reading any
+        // canonical/current payload, just like preparation does (05 §6.2).
+        if let expectedVersion {
+            // Content reads already honor task cancellation; preserve that
+            // exit when the obsolete request now skips those reads entirely.
+            try Task.checkCancellation()
+            guard expectedVersion == item.contentVersion else {
+                throw HistoryFailure.staleContent(expected: expectedVersion, current: item.contentVersion)
+            }
         }
         let canonical = try HistoryItemRowHydration.canonical(itemID: itemID, in: database, blobStore: blobStore, limits: limits)
         let currentMetadata = try HistoryItemRowHydration.contentMetadata(

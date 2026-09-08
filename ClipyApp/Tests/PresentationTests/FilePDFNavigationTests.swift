@@ -65,10 +65,57 @@ struct FilePDFNavigationTests {
 #endif
     }
 
+    @Test(arguments: [false, true])
+    func clearUnpinnedKeepsThePinnedFileReferenceUsable(wasLoaded: Bool) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let address = "file:///not-opened/pinned.pdf"
+        let item = try await capture(address, in: history)
+        _ = try await history.perform(.placePinned(item.id, at: .first))
+        _ = try await capture("file:///not-opened/unpinned.pdf", in: history)
+        let reads = PDFFileReads(bytes: try pdfData())
+        let loader = PreviewContentLoader(history: history, filePreviewSettings: .init(load: { await reads.load($0) }))
+        await loader.load(item: item)
+        loader.requestFilePreview()
+        if wasLoaded {
+            let task = try #require(loader.confirmFilePreview())
+            await task.value
+            let page = try #require(loader.loadFilePDFPage(2))
+            await page.value
+        }
+        _ = try await history.perform(.clear(.unpinned))
+        let survivors = try await history.browse(.init(kind: .recent, limit: 10))
+        #expect(survivors.rows.count == 1)
+        let row = try #require(survivors.rows.first)
+        #expect(row.item == item)
+        loader.purgePreview(.unpinned, isPinned: row.pinnedPosition != nil)
+        // No reference change follows this Clear commit, so SwiftUI will not
+        // rerun its task. The loader itself must settle at the kept reference.
+        #expect(loader.requestedItem == row.item)
+        guard case .content(.reference(let reference)) = loader.phase else {
+            Issue.record("The retained pinned file must return to its usable reference")
+            return
+        }
+        #expect(reference.address == address)
+        #expect(loader.canLoadFilePreview)
+        #expect(loader.fileLoadConfirmation == nil)
+        #expect(loader.loadedFileReference == nil)
+        #expect(loader.raster == nil)
+        #expect(loader.requestedPDFPage == 1)
+        #expect(await reads.count == (wasLoaded ? 1 : 0))
 #if DEBUG
-    enum Retirement: Sendable { case back, close, removal, revision, selection, clearAll, clearUnpinned }
+        #expect(loader.filePreviewSourceByteCount == 0)
+#endif
+        loader.requestFilePreview()
+        let reload = try #require(loader.confirmFilePreview())
+        await reload.value
+        #expect(loader.pdfPageNumber == 1)
+        #expect(await reads.count == (wasLoaded ? 2 : 1))
+    }
 
-    @Test(arguments: [Retirement.back, .close, .removal, .revision, .selection, .clearAll, .clearUnpinned])
+#if DEBUG
+    enum Retirement: Sendable { case back, close, removal, revision, selection, clearAll, clearUnpinned, pinnedClearUnpinned }
+
+    @Test(arguments: [Retirement.back, .close, .removal, .revision, .selection, .clearAll, .clearUnpinned, .pinnedClearUnpinned])
     func retiringAnInFlightPageReleasesTheSourceAndDiscardsLatePixels(_ retirement: Retirement) async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("file:///not-opened/preview.pdf", in: history)
@@ -98,6 +145,7 @@ struct FilePDFNavigationTests {
         case .selection: await loader.load(item: other)
         case .clearAll: loader.purgePreview(.all)
         case .clearUnpinned: loader.purgePreview(.unpinned)
+        case .pinnedClearUnpinned: loader.purgePreview(.unpinned, isPinned: true)
         }
         let expectedItem = loader.requestedItem
         let expectedPhase = loader.phase

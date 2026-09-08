@@ -11,6 +11,7 @@ internal enum PreviewCopy {
         switch failure {
         case .invalidReference: message = "This is not a local file reference."
         case .unavailable: message = "The file could not be read. It may have moved or been deleted."
+        case .changedDuringRead: message = "The file changed while it was being read. Return to the file reference to load it again."
         case .permissionDenied: message = "Clipy does not have permission to read this file."
         case .tooLarge: message = "The file is too large to preview."
         case .unsupported: message = "This file type cannot be previewed."

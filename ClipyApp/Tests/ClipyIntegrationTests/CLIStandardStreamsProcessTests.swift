@@ -175,18 +175,20 @@ final class CLIStandardStreamsProcessTests: XCTestCase {
         assertFailure(result, code: "invalid_json", requestID: nil)
     }
 
-    func testClosedStdoutReaderExitsNormallyWithOneDiagnosticInsteadOfSIGPIPE() async throws {
-        let invocation = try Invocation(closeOutputReader: true)
-        defer { invocation.close() }
-        try await invocation.writeInput(unknownOperationRequest())
-        try invocation.input.fileHandleForWriting.close()
+    func testClosedStdoutReportsOutputFailureForSuccessAndFailureReplies() async throws {
+        for help in [false, true] {
+            let invocation = try Invocation(arguments: help ? ["--help"] : [], closeOutputReader: true)
+            defer { invocation.close() }
+            if !help { try await invocation.writeInput(unknownOperationRequest()) }
+            try invocation.input.fileHandleForWriting.close()
 
-        let result = try await invocation.finish()
-        XCTAssertEqual(result.reason, .exit, "A vanished consumer must not kill clipyctl with SIGPIPE")
-        XCTAssertEqual(result.status, 5)
-        XCTAssertEqual(result.stderr, Data("clipyctl: timeout\n".utf8))
-        // The consumer is gone, so stdout bytes cannot be observed here.
-        // This proves sink failure reporting, not mutation replay behavior.
+            let result = try await invocation.finish()
+            XCTAssertEqual(result.reason, .exit, "A vanished consumer must not kill clipyctl with SIGPIPE")
+            XCTAssertEqual(result.status, 5)
+            XCTAssertEqual(result.stderr, Data("clipyctl: output_unavailable\n".utf8))
+            // Neither case is a timeout: the consumer already closed the
+            // pipe. No second JSON reply can repair that output stream.
+        }
     }
 
     private func unknownOperationRequest() -> Data {

@@ -17,8 +17,21 @@ internal enum PreviewHTMLEntities {
         return String(scalar)
     }
 
+    /// WHATWG entities.json's semicolon-optional names. These exact spellings
+    /// matter in body text: &notit is ¬it, while &notin; remains ∉.
     internal static let legacyNames: Set<String> = [
-        "amp", "AMP", "lt", "LT", "gt", "GT", "quot", "QUOT", "nbsp", "copy", "reg"
+        "AElig", "AMP", "Aacute", "Acirc", "Agrave", "Aring", "Atilde", "Auml", "COPY",
+        "Ccedil", "ETH", "Eacute", "Ecirc", "Egrave", "Euml", "GT", "Iacute", "Icirc",
+        "Igrave", "Iuml", "LT", "Ntilde", "Oacute", "Ocirc", "Ograve", "Oslash", "Otilde",
+        "Ouml", "QUOT", "REG", "THORN", "Uacute", "Ucirc", "Ugrave", "Uuml", "Yacute",
+        "aacute", "acirc", "acute", "aelig", "agrave", "amp", "aring", "atilde", "auml",
+        "brvbar", "ccedil", "cedil", "cent", "copy", "curren", "deg", "divide", "eacute",
+        "ecirc", "egrave", "eth", "euml", "frac12", "frac14", "frac34", "gt", "iacute",
+        "icirc", "iexcl", "igrave", "iquest", "iuml", "laquo", "lt", "macr", "micro",
+        "middot", "nbsp", "not", "ntilde", "oacute", "ocirc", "ograve", "ordf", "ordm",
+        "oslash", "otilde", "ouml", "para", "plusmn", "pound", "quot", "raquo", "reg",
+        "sect", "shy", "sup1", "sup2", "sup3", "szlig", "thorn", "times", "uacute",
+        "ucirc", "ugrave", "uml", "uuml", "yacute", "yen", "yuml"
     ]
 
     // HTML's numeric-reference replacement for the legacy C1 punctuation
@@ -36,7 +49,8 @@ internal enum PreviewHTMLEntities {
         "amp": "&", "AMP": "&", "lt": "<", "LT": "<", "gt": ">", "GT": ">",
         "quot": "\"", "QUOT": "\"", "apos": "'", "nbsp": "\u{A0}", "ensp": "\u{2002}",
         "emsp": "\u{2003}", "thinsp": "\u{2009}", "zwnj": "\u{200C}", "zwj": "\u{200D}",
-        "lrm": "\u{200E}", "rlm": "\u{200F}", "copy": "©", "reg": "®", "trade": "™",
+        "lrm": "\u{200E}", "rlm": "\u{200F}", "copy": "©", "COPY": "©", "reg": "®", "REG": "®", "trade": "™",
+        "brvbar": "¦", "macr": "¯", "ordf": "ª", "ordm": "º",
         "cent": "¢", "pound": "£", "yen": "¥", "euro": "€", "curren": "¤",
         "sect": "§", "para": "¶", "deg": "°", "plusmn": "±", "times": "×", "divide": "÷",
         "micro": "µ", "middot": "·", "bull": "•", "hellip": "…", "ndash": "–", "mdash": "—",

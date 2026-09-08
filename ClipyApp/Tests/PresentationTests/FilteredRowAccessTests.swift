@@ -8,7 +8,13 @@ struct FilteredRowAccessTests {
     @Test func interleavedRawRowsKeepStableLanesAndExactReferenceAdmission() async throws {
         let raw = mixedRows()
         let history = ScriptedHistory(
-            observedFirstPage: fixturePage(rows: raw, next: nil), repeatsObservedFirstPage: false
+            observedFirstPage: fixturePage(rows: raw, next: nil), repeatsObservedFirstPage: false,
+            pastePayloadRead: { id in
+                guard let row = raw.first(where: { $0.item.id == id }) else { throw HistoryFailure.notFound(id) }
+                return PastePayload(item: row.item, representations: row.typeIdentifiers.map {
+                    HistoryRepresentation(typeIdentifier: $0, bytes: Data([1]))
+                }, lineageHint: id)
+            }
         )
         let state = HistoryViewState(history: history)
         var pasted: [HistoryItemReference] = []
@@ -47,8 +53,8 @@ struct FilteredRowAccessTests {
 
             for row in raw {
                 state.requestPasteFromDisplayedRow(row.item)
-                let provider = state.dragItemProvider(for: row.item)
-                #expect(provider.registeredTypeIdentifiers.isEmpty == !expected.contains(row))
+                let payload = try await state.dragPayload(for: row.item)
+                #expect((payload != nil) == expected.contains(row))
             }
             #expect(Set(pasted) == Set(expected.map(\.item)))
             #expect(pasted.count == expected.count)
@@ -58,7 +64,7 @@ struct FilteredRowAccessTests {
                 )
                 state.requestPasteFromDisplayedRow(stale)
                 #expect(pasted.count == expected.count)
-                #expect(state.dragItemProvider(for: stale).registeredTypeIdentifiers.isEmpty)
+                #expect(try await state.dragPayload(for: stale) == nil)
             }
         }
         #expect(await history.observeRequests.count == cases.count)

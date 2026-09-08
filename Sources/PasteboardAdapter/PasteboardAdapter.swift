@@ -154,6 +154,16 @@ public struct PasteboardAdapter {
     ///   changed-during-read outcome containing no representations. It is a
     ///   retry signal, not an unavailable-type diagnosis.
     public func captureOutcome(observedAt: Date = Date()) -> CaptureOutcome? {
+        captureOutcome(observedAt: observedAt, shouldContinue: { true })
+    }
+
+    /// The observer may be stopped/restarted while a promised-data provider
+    /// spins the main run loop. Its existing session identity decides whether
+    /// another accessor is still wanted; abandoning a read publishes no bytes.
+    internal func captureOutcome(
+        observedAt: Date = Date(), shouldContinue: @MainActor () -> Bool
+    ) -> CaptureOutcome? {
+        guard shouldContinue() else { return nil }
         let startChangeCount = pasteboard.changeCount
         guard let items = pasteboard.pasteboardItems,
               !items.isEmpty else {
@@ -218,6 +228,7 @@ public struct PasteboardAdapter {
         for (pasteboardItemIndex, item) in items.enumerated() {
             var lineageHint: HistoryItemID?
             for typeIdentifier in itemTypeIdentifiers[pasteboardItemIndex] {
+                guard shouldContinue() else { return nil }
                 #if DEBUG
                 // The Debug seam forces the documented declared-but-unavailable
                 // outcome (SPEC-IMPL-005).
@@ -236,6 +247,7 @@ public struct PasteboardAdapter {
                     forType: NSPasteboard.PasteboardType(typeIdentifier)
                 )
                 #endif
+                guard shouldContinue() else { return nil }
                 // A promised-data accessor may yield to another pasteboard
                 // owner (REVIEW Card 5B). Once this generation is superseded,
                 // none of its remaining payloads can enter the freeze; avoid
