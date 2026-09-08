@@ -44,9 +44,7 @@ struct AppDisclosureGroupStyle: DisclosureGroupStyle {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(identifier + ".toggle")
-        .accessibilityValue(Text(
-            LocalizedStringKey(configuration.isExpanded ? "Expanded" : "Collapsed"),
-            tableName: "Disclosure", bundle: .main
-        ))
+        // DisclosureGroup supplies the native disclosure role and expanded
+        // state. A custom visual Button does not replace those AX semantics.
     }
 }

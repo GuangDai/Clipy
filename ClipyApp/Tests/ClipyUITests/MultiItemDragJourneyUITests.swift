@@ -80,6 +80,10 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         attachment.name = "Native drag stages"
         attachment.lifetime = .keepAlways
         add(attachment)
+        // Pin the previously missing row→list hand-off separately from the
+        // end-to-end delivery assertion; the receiver/session are unchanged.
+        XCTAssertTrue(trace.contains("hover-enter"), diagnostics)
+        XCTAssertTrue(trace.contains("pressed-admitted"), diagnostics)
         XCTAssertEqual(delivery, .completed, diagnostics)
         let items = try XCTUnwrap(receiver.received)
         XCTAssertEqual(items.count, 2)

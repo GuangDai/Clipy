@@ -79,7 +79,12 @@ final class CaptureAccessJourneyUITests: XCTestCase {
             in: app,
             message: "Allowed Ask recovery did not restore More Actions."
         ) else { return }
+        // The failing run synthesized x669.5, but the resulting AX tree
+        // placed this same menu at x378...399. Record the actual geometry at
+        // this action boundary before changing the capture or menu behavior.
+        let menuFrameBeforeClick = moreActions.frame
         moreActions.click()
+        let menuFrameAfterClick = moreActions.exists ? moreActions.frame : .zero
         assertEventually(
             {
                 let pause = app.descendants(matching: .any)[
@@ -88,7 +93,7 @@ final class CaptureAccessJourneyUITests: XCTestCase {
                 return pause.exists && pause.isHittable
             },
             in: app,
-            message: "Allowed Ask recovery did not restore Pause."
+            message: "Allowed Ask recovery did not restore Pause. Menu before click: \(menuFrameBeforeClick), after click: \(menuFrameAfterClick)."
         )
     }
 

@@ -13,15 +13,16 @@ enum SettingsJourneyControls {
         if target.exists { return }
         let disclosure = app.descendants(matching: .any)[identifier]
         XCTAssertTrue(disclosure.waitForExistence(timeout: 5), app.debugDescription)
-        let header = disclosure.buttons[identifier + ".toggle"]
+        // The style's Button retains DisclosureGroup's native AX role.
+        // Query the role observed in the running app, not its SwiftUI type.
+        let header = disclosure.disclosureTriangles[identifier + ".toggle"]
         XCTAssertTrue(header.exists, app.debugDescription)
         let scrollView = app.scrollViews.containing(.any, identifier: identifier).firstMatch
         XCTAssertTrue(scrollView.exists, app.debugDescription)
         scroll(header, into: scrollView, app: app)
         header.click()
         let expanded = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            let state = header.value as? String
-            return (state == "Expanded" || state == "已展开") && target.exists
+            target.exists
         }, object: nil)
         XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 5), .completed, app.debugDescription)
     }

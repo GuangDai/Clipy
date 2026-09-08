@@ -16,9 +16,11 @@ final class AdaptiveSettingsJourneyUITests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         NSPasteboard.general.clearContents()
         XCTAssertTrue(NSPasteboard.general.setString("adaptive settings", forType: .string))
+        let resizeTrace = directory.appendingPathComponent("settings-resize-trace.txt")
         let app = XCUIApplication()
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
+        app.launchEnvironment["CLIPY_UI_TEST_SETTINGS_RESIZE_TRACE_PATH"] = resizeTrace.path
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.sqlite").path
         app.launch()
@@ -44,7 +46,11 @@ final class AdaptiveSettingsJourneyUITests: XCTestCase {
         rightEdge.press(forDuration: 0.1, thenDragTo: rightEdge.withOffset(CGVector(
             dx: 600 - settings.frame.width, dy: 0
         )))
-        XCTAssertTrue(waitUntil { abs(settings.frame.width - 600) <= 3 }, app.debugDescription)
+        XCTAssertTrue(
+            waitUntil { abs(settings.frame.width - 600) <= 3 },
+            app.debugDescription + "\nSettings resize diagnostics:\n"
+                + ((try? String(contentsOf: resizeTrace, encoding: .utf8)) ?? "No trace file was produced.")
+        )
         XCTAssertTrue(appearance.isHittable, app.debugDescription)
         XCTAssertTrue(density.isHittable, app.debugDescription)
         let narrowWidth = settings.frame.width

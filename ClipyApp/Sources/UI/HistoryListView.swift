@@ -153,6 +153,7 @@ struct HistoryListView: View {
             isSelected: selection.wrappedValue == row.item.id,
             thumbnails: thumbnails,
             sourceIcons: sourceIcons,
+            dragSource: dragSource,
             onCopy: { viewState.requestPasteFromDisplayedRow($0) },
             onPin: { id, placement in viewState.pin(id, at: placement) },
             onUnpin: { id in viewState.unpin(id) },
@@ -172,29 +173,6 @@ struct HistoryListView: View {
                 onFocusHistory()
             }
         )
-        // The list owns one native drag session/monitor. A row supplies only
-        // the currently hovered rectangle; no row map or payload cache exists.
-        .background {
-            GeometryReader { geometry in
-                Color.clear
-                    .onHover { hovering in
-                        dragSource.hover(
-                            row.item, frame: geometry.frame(in: .named("clipy.history.drag")),
-                            isInside: hovering
-                        )
-                    }
-                    .onGeometryChange(for: CGRect.self) { proxy in
-                        proxy.frame(in: .named("clipy.history.drag"))
-                    } action: { frame in
-                        dragSource.refresh(row.item, frame: frame)
-                    }
-                    .onChange(of: row.item) { old, new in
-                        dragSource.retire(old)
-                        dragSource.refresh(new, frame: geometry.frame(in: .named("clipy.history.drag")))
-                    }
-                    .onDisappear { dragSource.retire(row.item) }
-            }
-        }
         .onAppear {
             viewState.prefetchNextPageIfNeeded(appearingRowID: row.item.id)
         }

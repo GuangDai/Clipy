@@ -50,6 +50,7 @@ struct HistoryRowView: View {
     private let isSelected: Bool
     private let thumbnails: ThumbnailStore
     private let sourceIcons: SourceIconStore?
+    private let dragSource: HistoryListDraggingView?
     private let onCopy: (HistoryItemReference) -> Void
     private let onPin: (HistoryItemID, PinnedPlacement) -> Void
     private let onUnpin: (HistoryItemID) -> Void
@@ -57,6 +58,7 @@ struct HistoryRowView: View {
     private let onShowDetails: (HistoryItemReference) -> Void
 
     @State private var isHovered = false
+    @State private var dragFrame = CGRect.zero
 
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
@@ -71,6 +73,7 @@ struct HistoryRowView: View {
         isSelected: Bool = false,
         thumbnails: ThumbnailStore,
         sourceIcons: SourceIconStore? = nil,
+        dragSource: HistoryListDraggingView? = nil,
         onCopy: @escaping (HistoryItemReference) -> Void,
         onPin: @escaping (HistoryItemID, PinnedPlacement) -> Void,
         onUnpin: @escaping (HistoryItemID) -> Void,
@@ -86,6 +89,7 @@ struct HistoryRowView: View {
         self.isSelected = isSelected
         self.thumbnails = thumbnails
         self.sourceIcons = sourceIcons
+        self.dragSource = dragSource
         self.onCopy = onCopy
         self.onPin = onPin
         self.onUnpin = onUnpin
@@ -120,7 +124,24 @@ struct HistoryRowView: View {
                 .fill(isHovered && !isSelected ? Color.primary.opacity(0.045) : .clear)
         }
         .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
+        .onHover { inside in
+            isHovered = inside
+            // Use the same hit-tested row region as the visible hover state.
+            // A transparent background sibling is not the row's event source.
+            dragSource?.hover(row.item, frame: dragFrame, isInside: inside)
+        }
+        .onGeometryChange(for: CGRect.self) { proxy in
+            proxy.frame(in: .named("clipy.history.drag"))
+        } action: { frame in
+            guard let dragSource else { return }
+            dragFrame = frame
+            dragSource.refresh(row.item, frame: frame)
+        }
+        .onChange(of: row.item) { old, new in
+            dragSource?.retire(old)
+            dragSource?.refresh(new, frame: dragFrame)
+        }
+        .onDisappear { dragSource?.retire(row.item) }
         .onTapGesture(count: 2) { onCopy(row.item) }
         .contextMenu { contextMenu }
         .accessibilityElement(children: .combine)
