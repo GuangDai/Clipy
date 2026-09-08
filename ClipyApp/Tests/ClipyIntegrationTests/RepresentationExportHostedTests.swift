@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import HistoryCore
-import PresentationUI
 import Testing
 @testable import ClipyApp
 

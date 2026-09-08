@@ -188,7 +188,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         choose("Automatic", in: app.descendants(matching: .any)[
             "clipy.settings.appearance.preview-side"
         ], app: app)
-        let general = app.buttons["General"]
+        let general = app.buttons["clipy.settings.category.general"]
         XCTAssertTrue(general.waitForExistence(timeout: 5), app.debugDescription)
         general.click()
         app.typeKey("w", modifierFlags: .command)
@@ -198,7 +198,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
     @MainActor
     private func openAppearance(in app: XCUIApplication) {
         app.typeKey(",", modifierFlags: .command)
-        let tab = app.buttons["Appearance"]
+        let tab = app.buttons["clipy.settings.category.appearance"]
         XCTAssertTrue(tab.waitForExistence(timeout: 10), app.debugDescription)
         tab.click()
     }

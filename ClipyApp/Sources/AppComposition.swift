@@ -13,7 +13,6 @@ import HistoryCore
 import HistoryStorage
 import LocalAutomation
 import PasteboardAdapter
-import PresentationUI
 
 // MARK: - Composition error (docs/roadmap/06-clipyapp.md acceptance)
 

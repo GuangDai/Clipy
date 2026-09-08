@@ -18,7 +18,6 @@
 /// persisted-size round-trip evidence; the interactive edge-drag gesture
 /// itself remains unproved here.
 import AppKit
-import PresentationUI
 import Testing
 @testable import ClipyApp
 
@@ -28,6 +27,8 @@ struct FloatingPanelFrameHostedTests {
 
     @Test
     func previewExpandsOnEitherSideAndPreservesTheActualMainSurface() throws {
+        let restoreGeometry = isolatePersistedPanelGeometryKeys()
+        defer { restoreGeometry() }
         let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
         let visibleFrame = screen.visibleFrame
         try #require(visibleFrame.width >= 721)
@@ -314,6 +315,95 @@ struct FloatingPanelFrameHostedTests {
         #expect(panel.frame.height == PanelGeometry.minimumHeight)
     }
 
+    @Test func wideWindowUsesScreenLimitsAndKeepsItsSizeThroughPreview() throws {
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visible = screen.visibleFrame
+        try #require(visible.width >= 900 && visible.height >= 640)
+        let restore = isolatePersistedPanelGeometryKeys()
+        defer { restore() }
+        PanelGeometry.persistSize(contentWidth: 900, height: 640, to: .standard)
+        let appDelegate = AppDelegate()
+        let panel = FloatingPanel(rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState, onPreviewPlacementChange: { _ in }, onClosed: {})
+        defer { panel.close() }
+        panel.open(at: .statusItem, statusItemButtonScreenFrame:
+            NSRect(x: visible.minX, y: visible.maxY - 1, width: 1, height: 1))
+        let original = panel.frame
+        #expect(original.size == NSSize(width: 900, height: 640))
+        #expect(panel.contentMaxSize == visible.size)
+        panel.setPreviewVisible(true)
+        #expect(panel.frame == original)
+        #expect(panel.contentMaxSize == visible.size)
+        panel.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: panel))
+        #expect(PanelGeometry.persistedSize(from: .standard).contentWidth == 900)
+        panel.setPreviewVisible(false)
+        #expect(panel.frame == original)
+    }
+
+    @Test func fittingALargerPreferredSizeDoesNotRewriteItOnScreenChange() throws {
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visible = screen.visibleFrame
+        let restore = isolatePersistedPanelGeometryKeys()
+        defer { restore() }
+        let preferred = NSSize(width: visible.width + 500, height: visible.height + 500)
+        PanelGeometry.persistSize(contentWidth: preferred.width, height: preferred.height, to: .standard)
+        let appDelegate = AppDelegate()
+        let panel = FloatingPanel(rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState, onPreviewPlacementChange: { _ in }, onClosed: {})
+        defer { panel.close() }
+        panel.open(at: .statusItem, statusItemButtonScreenFrame:
+            NSRect(x: visible.minX, y: visible.maxY - 1, width: 1, height: 1))
+        #expect(panel.frame.size == visible.size)
+        panel.windowDidChangeScreen(Notification(name: NSWindow.didChangeScreenNotification, object: panel))
+        let saved = PanelGeometry.persistedSize(from: .standard)
+        #expect(saved.contentWidth == preferred.width)
+        #expect(saved.height == preferred.height)
+        panel.setPreviewVisible(true)
+        #expect(panel.frame.size == visible.size)
+        panel.setPreviewVisible(false)
+        #expect(panel.frame.size == visible.size)
+    }
+
+    @Test(arguments: [false, true])
+    func userChosenWindowOrDividerSizeSurvivesPreviewCycles(resizeWindow: Bool) throws {
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visible = screen.visibleFrame
+        try #require(visible.width >= 900 && visible.height >= 640)
+        let restore = isolatePersistedPanelGeometryKeys()
+        defer { restore() }
+        PanelGeometry.persistSize(contentWidth: resizeWindow ? 400 : 900, height: 640, to: .standard)
+        let appDelegate = AppDelegate()
+        let panel = FloatingPanel(rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState, onPreviewPlacementChange: { _ in }, onClosed: {})
+        defer { panel.close() }
+        let button = NSRect(x: visible.minX, y: visible.maxY - 1, width: 1, height: 1)
+        panel.open(at: .statusItem, statusItemButtonScreenFrame: button)
+        panel.setPreviewVisible(true)
+        if resizeWindow {
+            // An actual outer-window resize supersedes the automatic 321pt
+            // addition. Closing preview must retain the chosen 900pt width.
+            var resized = panel.frame
+            resized.size.width = 900
+            panel.setFrame(resized, display: false)
+            panel.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: panel))
+        } else {
+            // Equivalent to settling the divider at the list's 360pt floor.
+            // It already fits, so reopening must not add 40pt for a wider list.
+            PanelGeometry.persistPreviewColumnWidth(539, to: .standard)
+        }
+        let chosen = panel.frame
+        #expect(chosen.width == 900)
+        panel.setPreviewVisible(false)
+        #expect(panel.frame == chosen)
+        panel.setPreviewVisible(true)
+        #expect(panel.frame == chosen)
+        panel.close()
+        panel.open(at: .statusItem, statusItemButtonScreenFrame: button)
+        #expect(panel.frame == chosen)
+        panel.setPreviewVisible(true)
+        #expect(panel.frame == chosen)
+    }
+
     /// Saves and clears PanelGeometry's persisted panel-geometry keys (the
     /// two size keys plus the divider's preview column width) and returns
     /// the restore action — the hosted process shares
@@ -325,6 +415,8 @@ struct FloatingPanelFrameHostedTests {
             PanelGeometry.panelContentWidthDefaultsKey,
             PanelGeometry.panelHeightDefaultsKey,
             PanelGeometry.previewColumnWidthDefaultsKey,
+            "clipy.panelAnchorX",
+            "clipy.panelAnchorY",
         ]
         let priorValues = keys.map { key in (key, defaults.object(forKey: key)) }
         for key in keys {

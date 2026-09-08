@@ -20,10 +20,10 @@ public struct HistoryCommit: Sendable {
     public let position: ChangePosition
     public let outcome: HistoryCommitOutcome
     /// True only when the committed plan also retired an item or pruned an
-    /// immutable revision for retention. Package callers use this receipt
+    /// immutable revision for retention. App callers use this receipt
     /// fact to discard derived presentation state without exposing storage's
     /// victim vocabulary at the public History boundary.
-    package let hasDestructiveRetentionEffects: Bool
+    public let hasDestructiveRetentionEffects: Bool
 
     public init(
         position: ChangePosition,

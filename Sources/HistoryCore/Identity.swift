@@ -7,15 +7,14 @@ import Foundation
 /// docs/03a-instruction-set.md §2
 ///
 /// The raw UUID is observable for logging, pasteboard lineage encoding, and
-/// stable persistence. Its raw-value initializer is package-only so minting
-/// stays centralized in `HistoryStorage`; the public string initializer only
-/// reconstructs previously exported identity. This is not a security boundary.
+/// stable persistence. Value construction also supports app-owned previews;
+/// it does not create a retained item or confer History authority.
 public struct HistoryItemID:
     Sendable, Hashable, Comparable, CustomStringConvertible
 {
     public let rawValue: UUID
 
-    package init(rawValue: UUID) {
+    public init(rawValue: UUID) {
         self.rawValue = rawValue
     }
 
@@ -45,11 +44,11 @@ public struct HistoryItemID:
 /// Stable identity of one revision of a retained history item.
 /// docs/03a-instruction-set.md §2
 ///
-/// Minting is centralized in `HistoryStorage`: the initializer is
-/// package-only.
+/// Constructing this value does not append a revision; HistoryStorage owns
+/// that operation. App-owned previews may construct immutable examples.
 public struct RevisionID: Sendable, Hashable, Comparable {
     public let rawValue: UUID
-    package init(rawValue: UUID) { self.rawValue = rawValue }
+    public init(rawValue: UUID) { self.rawValue = rawValue }
 
     public static func < (lhs: Self, rhs: Self) -> Bool {
         withUnsafeBytes(of: lhs.rawValue.uuid) { left in
@@ -67,7 +66,7 @@ public struct RevisionID: Sendable, Hashable, Comparable {
 /// `successor()` are package-only so versioning is minted centrally.
 public struct ContentVersion: Sendable, Hashable, Comparable {
     public let rawValue: UInt64
-    package init(rawValue: UInt64) { self.rawValue = rawValue }
+    public init(rawValue: UInt64) { self.rawValue = rawValue }
     package static let initial = ContentVersion(rawValue: 1)
 
     package func successor() -> ContentVersion? {
@@ -83,12 +82,12 @@ public struct ContentVersion: Sendable, Hashable, Comparable {
 /// Position of one change in the history's global change order.
 /// docs/03a-instruction-set.md §2
 ///
-/// Positions use checked arithmetic and never wrap. `.zero` and
-/// `successor()` are package-only so positions are minted centrally.
+/// Positions use checked arithmetic and never wrap. Advancement remains
+/// package-only; constructing a value does not change the store's position.
 public struct ChangePosition: Sendable, Hashable, Comparable {
     public let rawValue: UInt64
-    package init(rawValue: UInt64) { self.rawValue = rawValue }
-    package static let zero = ChangePosition(rawValue: 0)
+    public init(rawValue: UInt64) { self.rawValue = rawValue }
+    public static let zero = ChangePosition(rawValue: 0)
 
     package func successor() -> ChangePosition? {
         guard rawValue < UInt64.max else { return nil }

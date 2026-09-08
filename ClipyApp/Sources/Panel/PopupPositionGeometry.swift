@@ -6,38 +6,32 @@
 /// the mode value itself comes from PresentationUI's `PopupPositionMode`.
 import AppKit
 import Foundation
-import PresentationUI
 
 /// Pure panel-origin geometry for `PopupPositionMode` (Maccy
 /// `PopupPosition.origin` semantics, plus a uniform visible-frame clamp so
 /// no mode can spill the panel off the active screen).
 enum PopupPositionGeometry {
 
-    /// Expands around the stable main surface by the preview extension
-    /// (`dividerWidth + previewColumnWidth`), so a
-    /// user-resized main column keeps its exact width. `.automatic` keeps
-    /// the original rule: prefer the trailing side; when that would cross
-    /// the current screen's right edge, put the preview on the leading
-    /// side. An explicit `previewSide` pins the preferred side whenever the
-    /// expanded frame still fits the screen there, falling back to the
-    /// other side when it does not. Without a screen there is no overflow
-    /// evidence, so the preferred side stands — trailing remains the
-    /// conservative `.automatic` layout because it does not move the window
-    /// origin. The column width is an explicit INPUT (this type stays a pure
-    /// function over caller-supplied facts); FloatingPanel loads the
-    /// divider's persisted width fresh from defaults per call. The
-    /// `previewWidth` default reproduces the pinned pre-preference
-    /// geometry.
-    static func expandedPreviewFrame(
-        preservingMainSurface mainSurfaceFrame: NSRect,
+    /// Opens a preview within existing window space before growing toward
+    /// the preferred side. Compact windows retain their list width; wider
+    /// windows lend surplus space above the default comfortable list width.
+    /// Screen fitting is transient and never changes persisted preferences.
+    static func openingPreviewFrame(
+        from mainSurfaceFrame: NSRect,
         in screenVisibleFrame: NSRect?,
         previewSide: PreviewSidePreference = .automatic,
         previewColumnWidth: CGFloat = PanelGeometry.previewWidth
     ) -> (panelFrame: NSRect, placement: PreviewPlacement) {
-        let previewExtension = PanelGeometry.dividerWidth
-            + previewColumnWidth
+        // Use a wide window's existing space first. A compact window grows
+        // only enough to keep a comfortable list beside the preferred pane.
+        let paneWidth = PanelGeometry.dividerWidth + PanelGeometry.clampedPreviewColumnWidth(previewColumnWidth)
+        let fitsExistingWidth = mainSurfaceFrame.width >= PanelGeometry.minimumContentWidth + paneWidth
+        let desiredWidth = fitsExistingWidth ? mainSurfaceFrame.width
+            : min(mainSurfaceFrame.width, PanelGeometry.contentWidth) + paneWidth
+        let fittedWidth = min(desiredWidth, screenVisibleFrame?.width ?? desiredWidth)
+        let previewExtension = max(0, fittedWidth - mainSurfaceFrame.width)
         var expandedFrame = mainSurfaceFrame
-        expandedFrame.size.width += previewExtension
+        expandedFrame.size.width = fittedWidth
 
         let trailingFits: Bool
         let leadingFits: Bool
@@ -60,6 +54,9 @@ enum PopupPositionGeometry {
 
         if placement == .leading {
             expandedFrame.origin.x -= previewExtension
+        }
+        if let screenVisibleFrame {
+            expandedFrame.origin = clamped(expandedFrame.origin, size: expandedFrame.size, into: screenVisibleFrame)
         }
         return (expandedFrame, placement)
     }

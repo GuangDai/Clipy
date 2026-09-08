@@ -27,7 +27,7 @@ final class HistoryBackupJourneyUITests: XCTestCase {
         )).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 15), app.debugDescription)
         app.typeKey(",", modifierFlags: .command)
-        let maintenance = app.buttons["Maintenance"]
+        let maintenance = app.buttons["clipy.settings.category.maintenance"]
         XCTAssertTrue(maintenance.waitForExistence(timeout: 10), app.debugDescription)
         maintenance.click()
         let disclosure = app.staticTexts["clipy.settings.maintenance.backup-disclosure"]

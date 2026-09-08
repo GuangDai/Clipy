@@ -20,7 +20,6 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 import PasteboardAdapter
-import PresentationUI
 import Testing
 @testable import ClipyApp
 

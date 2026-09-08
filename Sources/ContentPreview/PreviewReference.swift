@@ -4,17 +4,17 @@
 import ClipboardFormats
 import Foundation
 
-package struct PreviewReference: Equatable, Sendable {
-    package enum Kind: Equatable, Sendable {
+public struct PreviewReference: Equatable, Sendable {
+    public enum Kind: Equatable, Sendable {
         case url
         case file
     }
 
-    package let kind: Kind
+    public let kind: Kind
     /// The complete decoded source spelling, not URL's normalized rendering.
-    package let address: String
+    public let address: String
     /// A decoded path for a file reference, not a resolved filesystem path.
-    package let filePath: String?
+    public let filePath: String?
 
     private static let maximumSourceBytes = 16 * 1_024
 

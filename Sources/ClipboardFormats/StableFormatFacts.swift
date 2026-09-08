@@ -7,10 +7,10 @@ import Foundation
 /// An open-world exact clipboard format identifier. Unknown values remain
 /// representable and opaque; constructing this value is not admission or
 /// validation.
-package struct ClipboardFormatIdentifier: Hashable, Sendable {
-    package let rawValue: String
+public struct ClipboardFormatIdentifier: Hashable, Sendable {
+    public let rawValue: String
 
-    package init(rawValue: String) {
+    public init(rawValue: String) {
         self.rawValue = rawValue
     }
 
@@ -42,7 +42,7 @@ package enum DeclaredStringCodec: Equatable, Sendable {
     case externalUTF16
 }
 
-package extension ClipboardFormatIdentifier {
+public extension ClipboardFormatIdentifier {
     static let plainText = Self(rawValue: "public.plain-text")
     static let utf8PlainText = Self(rawValue: "public.utf8-plain-text")
     static let utf16PlainText = Self(rawValue: "public.utf16-plain-text")

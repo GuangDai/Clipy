@@ -21,7 +21,7 @@ import Darwin
 import Foundation
 import HistoryCore
 import HistoryStorage
-import PresentationUI
+@testable import ClipyApp
 import Testing
 
 /// `.serialized`: the memory tripwire reads PROCESS-wide RSS, so the four

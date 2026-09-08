@@ -11,11 +11,11 @@
 
 The architecture is a downward-only SwiftPM target graph with one public History boundary. Its depth comes from what callers do **not** need to know: Canonical Content, signatures, candidate completeness, SwiftData rows, pin ordinal shifts, retention victims, revision reconstruction, transaction order, and observation races all live behind `ClipboardHistory`.
 
-All library targets live in one Swift package so package-only implementation vocabulary can cross internal target boundaries without becoming public. `ClipyApp` remains the Xcode application/composition target.
+All library targets live in one Swift package so package-only implementation vocabulary can cross internal target boundaries without becoming public. `ClipyApp` owns native SwiftUI/AppKit UI in `ClipyApp/Sources/UI` together with composition and lifecycle. There is no separate PresentationUI module. Its resources live in the app bundle, and its owner tests run in the XcodeGen-hosted `ClipyPresentationTests` bundle alongside `ClipyIntegrationTests` in app CI shard 4.
 
 ```text
 ClipyApp
-├── PresentationUI ────────→ HistoryCore + ClipboardFormats + ContentPreview
+├── Sources/UI ───────────→ HistoryCore + ClipboardFormats + ContentPreview
 ├── PasteboardAdapter ─────→ HistoryCore
 ├── LocalAutomation ───────→ HistoryCore + HistoryStorage + ClipyCLIContract
 └── HistoryStorage ────────→ HistoryCore + ClipboardFormats
@@ -48,8 +48,8 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 
 | Target | Surface | Owns | Must not own |
 |---|---|---|---|
-| `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts | Purpose admission, decoders, bytes, registries, caches, plugins, framework objects |
-| `ContentPreview` | Package-only concrete actor and immutable values | Preview source priority, exact text codecs, fixed resource profiles, eager ImageIO/PDF page rendering, and bounded inert text/raster/copied-address outcomes | History reads, item/reference identity, selection or panel lifecycle, thumbnail request/source/cache policy, external I/O, registries, plugins, or framework objects in its interface |
+| `ClipboardFormats` | Public app-used identifiers, Foundation-only | Open-world exact identifiers and package-only declared string-codec facts | Purpose admission, decoders, bytes, registries, caches, plugins, framework objects |
+| `ContentPreview` | Public concrete renderer and immutable values; internal implementation | Preview source priority, exact text codecs, fixed resource profiles, eager ImageIO/PDF page rendering, and bounded inert text/raster/copied-address outcomes | History reads, item/reference identity, selection or panel lifecycle, thumbnail request/source/cache policy, external I/O, registries, plugins, or framework objects in its interface |
 | `ClipyCLIContract` | Package-only, Foundation-only, no product | Versioned UTF-8 JSON request/reply values, bounded decoding/encoding, and stable exit classes | File handles or standard-stream side effects, transport, credentials, Gateway/History access, a product CLI, operation dispatch, or fabricated Gateway results |
 | `LocalAutomation` | Public concrete service/client and immutable output | Same-user local socket transport, request-to-ingress calls, fixed endpoint locations, bounded request/reply frames | SwiftData models, a second writer, UI state, clipboard capture, or automatic mutation retries |
 | `clipyctl` | Bundled XcodeGen command-line tool | One stdin JSON request, exact stdout reply, content-free stderr, containing-app cold launch, bounded connection retries | Store access, enrollment/grant decisions, endpoint selection from request input, or installer/symlink management |
@@ -57,8 +57,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | `HistoryDomain` | Package-only, Foundation-only | Content lineage, immutable state, complete fact values, pure planners, semantic mutation plans and invariants | Public ports, I/O, actors, clocks, UUID generation, persistence |
 | `HistoryStorage` | Public concrete adapter plus internal implementation | `SwiftDataHistory`, Authority actor, schema/codecs, fact loaders, version minting, ingest preparation, Signature Index, read projections, observation plumbing, thumbnail production, and the app-owned Local Automation ingress with enrollment/credential custody | AppKit pasteboard, UI state, service location, or transport |
 | `PasteboardAdapter` | Public adapter values used by the app | NSPasteboard observation/writes and translation to/from `HistoryCore` raw values | Deduplication, Canonical Content, fingerprints, persistence |
-| `PresentationUI` | Public UI assembly | View state and interactions over History DTOs; exact-reference/task/lifecycle fences around ContentPreview | `@Model`, Domain state, persistence rules, change-feed bookkeeping, ImageIO decode |
-| `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, App Intents entry points, dependency injection, and the app-local external-remove→surface-purge join | Domain decisions, Gateway policy, global event buses, or duplicate persistence paths |
+| `ClipyApp` | Native UI and composition root | SwiftUI/AppKit views and view state over History DTOs, preview lifecycle, concrete construction, paste orchestration, App Intents, dependency injection, and the external-remove→surface-purge join | Domain decisions, Gateway policy, ImageIO decoding, global event buses, or duplicate persistence paths |
 | `xxh3` | Package-internal C/ObjC++ sibling | 64-bit representation fingerprints | Item identity or final dedup decisions |
 | `Fuse` | External Swift library used internally | Threshold-based fuzzy matching inside `SearchWorker` | Public search score or cross-actor matcher state |
 | `HistoryPerfRunner` | Package executable, no product surface | Part VI §9 release-like workloads, machine metadata, and versioned fixtures | Caller APIs, alternate writers, production state, absolute-latency claims |
@@ -67,7 +66,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 
 #### Access rules
 
-- `public` is reserved for caller-visible `HistoryCore`, concrete History construction and app-owned automation enrollment, and transport/adapter/UI entry points. Automation operation values remain `package` inside the library graph.
+- `public` is reserved for caller-visible History values, concrete library entry points, and the format/preview values consumed by the app. UI declarations stay internal to ClipyApp; app-owned previews can construct pure History DTO values without gaining mutation authority. Automation operation values remain `package` inside the library graph.
 - Cross-target implementation declarations use Swift `package` access.
 - `ClipboardFormats` states stable exact facts only. Projection, Preview, Details, and Edit retain separate purpose policy; unknown identifiers remain opaque raw values.
 - `ContentPreview` is one concrete deep module, not a renderer protocol,
@@ -120,7 +119,7 @@ The following rejected surfaces are implementation detail, not public abstractio
 |---|---|---|
 | SwiftData | Local-substitutable | Production and tests use the same `SwiftDataHistory`; tests select an in-memory `ModelContainer`. There is no second fake writer implementation. |
 | NSPasteboard/AppKit | Framework | `PasteboardAdapter` translates framework values to raw `HistoryCore` capture values and paste payloads back to AppKit. |
-| SwiftUI | Framework | Confined to `PresentationUI`; views receive value snapshots and an injected `any ClipboardHistory`. |
+| SwiftUI | Framework | App-owned UI; views receive value snapshots and an injected `any ClipboardHistory`. |
 | ImageIO | Framework | Confined to two concrete behavior owners: `HistoryStorage` produces version-fenced encoded thumbnails; `ContentPreview` eagerly materializes transient display rasters and full-pane preview artifacts. Neither exposes ImageIO/CoreGraphics objects across its actor/module seam, and there is no hypothetical public decoder port. |
 | Credential randomness / private files | System randomness and local filesystem | The internal `HistoryStorage` `CredentialStore` actor owns the exact F1 server credential in user-private files. `SecRandomCopyBytes` only generates the secret. Server and client files are separate; real-file and process tests exercise custody, while narrow injected failures cover unavailable operations. No Keychain fallback or signing prerequisite is part of this account-wide design. |
 | xxh3 | In-process C dependency | Internal fingerprint function; a package-only deterministic collision double is permitted in Domain/Storage tests. |
@@ -251,7 +250,7 @@ will reclaim physical disk capacity.
 #### 5.2 Pin, reorder, remove, and clear
 
 ```text
-PresentationUI gesture
+App UI gesture
   → perform(.placePinned / .unpin / .remove / .clear)
   → Authority loads the exact item or complete pinned/clear facts
   → Domain computes the complete final pin order or removal set
@@ -281,7 +280,7 @@ A revert copies the chosen historical Effective Content into a newly minted revi
 #### 5.4 Browse and search
 
 ```text
-PresentationUI
+App UI
   → browse(request) or observe(request)
   → Authority captures ChangePosition + scalar rows from one serialized read
   → exact/fuzzy/regexp evaluation over scalar search projections
@@ -299,7 +298,7 @@ The internal invalidation is content-free, may coalesce to the newest `ChangePos
 #### 5.6 Paste
 
 ```text
-PresentationUI selection
+App UI selection
   → ClipyApp asks history.pastePayload(for:)
   → HistoryStorage resolves current Effective Content
   → ClipyApp passes PastePayload to PasteboardAdapter
@@ -413,7 +412,7 @@ The Authority does not retain model objects between operations. Each isolated re
 - `ClipboardFormats` may import Foundation only and must not own a purpose-specific behavior policy.
 - `ContentPreview` may import only Foundation, ClipboardFormats, CoreGraphics,
   and ImageIO. It must not import HistoryCore/HistoryStorage, SwiftUI/AppKit,
-  persistence, or adapters; PresentationUI must not import ImageIO.
+  persistence, or adapters; app views leave ImageIO decoding to ContentPreview.
 - `ClipyCLIContract` may import Foundation only and must not own standard-stream
   I/O, transport, credential, Gateway, History, or product-CLI behavior.
 - `ClipyUDSF0Shared` may import Foundation and Darwin only;
@@ -423,7 +422,7 @@ The Authority does not retain model objects between operations. Each isolated re
 - `HistoryCore` must not import `HistoryDomain`, `HistoryStorage`, SwiftData, AppKit, SwiftUI, ImageIO, or xxh3.
 - `HistoryDomain` must not import `HistoryStorage`, SwiftData, AppKit, SwiftUI, ImageIO, or xxh3.
 - Adapters and UI must not import `HistoryDomain` or `HistoryStorage`.
-- `HistoryStorage` must not import an adapter or `PresentationUI`.
+- `HistoryStorage` must not import an adapter or the app module.
 - `Security` is confined to `HistoryStorage`'s internal F1 server-credential
   implementation; it must not enter `HistoryCore`, `HistoryDomain`, UI, or an
   adapter as a credential-sharing shortcut.

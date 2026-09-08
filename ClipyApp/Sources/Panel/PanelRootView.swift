@@ -6,7 +6,6 @@
 /// (main-actor UI); failure vocabulary docs/03b-instruction-set.md §10.
 import AppKit
 import HistoryCore
-import PresentationUI
 import SwiftUI
 
 /// The panel's content root. Reads the app delegate's composition state

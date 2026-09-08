@@ -6,7 +6,7 @@ import AppKit
 import Foundation
 import HistoryCore
 import HistoryStorage
-import PresentationUI
+@testable import ClipyApp
 import SwiftUI
 import Testing
 

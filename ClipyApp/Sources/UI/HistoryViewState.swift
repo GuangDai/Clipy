@@ -1,0 +1,1185 @@
+/// HistoryViewState.swift — the panel's single observable view-state holder
+/// over HistoryCore DTOs (docs/01-architecture.md §6; docs/roadmap/
+/// 05-presentationui.md). It never sees SwiftData, Domain state, or
+/// fingerprints — only the public DTO seam.
+///
+/// Observation is snapshot replacement, not deltas (docs/04-coherence.md §5):
+/// every incoming `HistoryPage` REPLACES `rows`. The held page is ordinary
+/// caller state, not a cache tier (docs/04-coherence.md §11). Additional
+/// pages are one-shot `browse` requests (docs/03a-instruction-set.md §7) in a
+/// three-page window. Cursor expiration restarts the current observation
+/// from page one (docs/04-coherence.md §6).
+import ClipboardFormats
+import Foundation
+import HistoryCore
+import SwiftUI
+
+/// One receipt-confirmed invalidation for state owned by a single panel
+/// surface (deep review Card 9B). This narrow public UI coordination value is
+/// visible to the ClipyApp composition boundary, which only forwards the
+/// opaque value (GOV-3 contraction; 01 §8 module boundary): the scope
+/// vocabulary and the payload members below are package, so only
+/// PresentationUI constructs or inspects one. It is not a second History
+/// event stream: authoritative rows still arrive exclusively through
+/// `observe`; the signal only drops derived presentation state which must
+/// not survive a destructive/effective-content commit.
+struct HistorySurfacePurge: Equatable, Sendable {
+    enum Scope: Equatable, Sendable {
+        case all
+        case unpinned
+        case item(HistoryItemID)
+        case revision(
+            old: HistoryItemReference,
+            new: HistoryItemReference
+        )
+    }
+
+    let generation: Int
+    let scope: Scope
+
+    init(generation: Int, scope: Scope) {
+        self.generation = generation
+        self.scope = scope
+    }
+}
+
+/// View state over HistoryCore DTOs — the ONLY state holder for the browsing
+/// panel (docs/01-architecture.md §6; roadmap 05).
+///
+/// Mutation methods (`pin`, `unpin`, `remove`, `clear`) do not throw: they
+/// forward the `HistoryAction` to `perform` and store any typed
+/// `HistoryFailure` into `failure` (docs/03b-instruction-set.md §10), where
+/// the observation loop that committed the mutation also refreshes `rows`.
+/// The detail/revise/retention methods are thin `async throws` passthroughs
+/// because their callers (details pane, settings) own retry presentation.
+@MainActor @Observable
+final class HistoryViewState {
+
+    // MARK: - Injected state
+
+    /// The public History seam (docs/03a-instruction-set.md §3). Production
+    /// passes `SQLiteHistory`; SwiftUI previews pass the scripted
+    /// `PreviewClipboardHistory`.
+    let history: any ClipboardHistory
+
+    /// App-owned preferences for explicit file preview reads.
+    var filePreviewSettings: FilePreviewSettings?
+
+    /// Rows per browse/observation page. Default 50 — inside the Part VI
+    /// page/observation row-limit range 1…500 (docs/06-cross-cutting.md §2).
+    let pageLimit: Int
+
+    // MARK: - Observed panel state
+
+    /// At most three consecutive browse pages. Older/Newer navigation drops
+    /// the opposite page's DTOs; observation replaces the window (04 §5/§6).
+    private(set) var rows: [HistoryRow] = []
+
+    /// True while a one-shot `browse` pagination request is in flight.
+    /// Package (GOV-3): the pagination footer and owner tests read it;
+    /// ClipyApp observes loading only through the first-page seam below.
+    private(set) var isLoadingPage = false
+
+    /// True after a browse intent has invalidated its prior rows and before
+    /// the replacement observation produces its first authoritative page (or
+    /// typed failure). This is intentionally separate from pagination: no
+    /// prior-query row remains executable during this phase.
+    private(set) var isLoadingFirstPage = false
+
+    /// The latest typed failure to surface in the panel banner; `nil` when
+    /// its owning operation has recovered.
+    private(set) var failure: HistoryFailure?
+
+    /// Latest receipt-confirmed presentation purge. The generation makes two
+    /// identical mutations separately observable by SwiftUI and fences late
+    /// local completions without introducing a process-wide cache bus.
+    private(set) var surfacePurge: HistorySurfacePurge?
+
+    /// Monotonic identity of a published failure. Unlike `HistoryFailure`
+    /// equality, this distinguishes two occurrences of the same typed value
+    /// so dismissing one banner cannot suppress a later recurrence (Card 8H).
+    private(set) var failureEpisode = 0
+
+    /// Whether the visible failure belongs to query activity that
+    /// `refresh()` can actually retry. Mutation failures require repeating
+    /// their original user action; presenting Refresh as mutation Retry would
+    /// be a no-op with misleading copy (Card 8H).
+    var canRetryFailureByRefreshing: Bool {
+        switch failureSource {
+        case .observation, .pagination:
+            return true
+        case .mutation, nil:
+            return false
+        }
+    }
+
+    /// The raw search-field draft. Edits restart observation after a 250 ms
+    /// debounce; only the empty string means `.recent`. Exact and regexp
+    /// whitespace is syntax and is never rewritten by presentation state.
+    var searchText: String = "" {
+        didSet {
+            // Swift String equality merges canonically equivalent spellings,
+            // but exact/regexp searches can distinguish their literal scalars.
+            // Such an edit must retire the old results and highlight ranges.
+            guard !searchText.utf8.elementsEqual(oldValue.utf8) else { return }
+            advanceSearchQueryGeneration()
+            scheduleSearchRestart()
+        }
+    }
+
+    /// The search evaluation mode (docs/03a-instruction-set.md §7). A change
+    /// restarts observation immediately.
+    var searchMode: SearchMode = .fuzzy {
+        didSet {
+            guard searchMode != oldValue else { return }
+            advanceSearchQueryGeneration()
+            replaceObservationImmediately()
+        }
+    }
+
+    /// Composition-root paste hand-off (docs/01-architecture.md §5.6): the
+    /// view state never touches the pasteboard; it hands the reference to the
+    /// app, which resolves the payload and writes it. Default no-op so
+    /// previews need no wiring.
+    var onPaste: @MainActor @Sendable (HistoryItemReference) -> Void = { _ in }
+
+    /// Explicit Details Save As handoff. The immutable representation comes
+    /// from the displayed Canonical/Effective snapshot; the app owns the
+    /// destination picker and file write (V2-07 §4.1.1).
+    var onExportRepresentation:
+        @MainActor @Sendable (HistoryRepresentation) async -> Result<Void, RepresentationExportFailure> = {
+            _ in .failure(.unavailable)
+        }
+
+    /// App-shell accessibility handoff for one user-initiated remove whose
+    /// committed receipt has already published its exact surface purge.
+    /// External/background mutations use their own ingress and never invoke
+    /// this callback, avoiding unsolicited or duplicate announcements.
+    var onCommittedUserRemoval:
+        @MainActor @Sendable (HistorySurfacePurge) -> Void = { _ in }
+
+    /// Content-free accessibility handoff for one settled search intent.
+    /// Only the current query generation's first authoritative observation
+    /// page invokes this callback with the filtered visible count.
+    /// Debounce drafts, stale completions,
+    /// replacement snapshots, and pagination never do (REVIEW UI-16/Card
+    /// 15D). `hasNextPage` keeps the app shell from presenting this bounded
+    /// first-page count as an exact total.
+    var onSettledSearchResultCount:
+        @MainActor @Sendable (_ count: Int, _ hasNextPage: Bool) -> Void = {
+            _, _ in
+        }
+
+    // MARK: - Pagination/observation bookkeeping (private)
+
+    /// The observe loop task; cancelled and replaced on every restart.
+    private var observationTask: Task<Void, Never>?
+
+    /// The pending 250 ms search-debounce task.
+    private var debounceTask: Task<Void, Never>?
+
+    /// The one-shot page request owned by the current browsing lifecycle.
+    private var paginationTask: Task<Void, Never>?
+
+    /// Monotonic ownership token for pagination completion. Cancellation is
+    /// advisory; the token prevents a non-cooperative stale request from
+    /// mutating rows or a newer request's loading state.
+    private var paginationRequestToken = 0
+
+    /// Direction is encoded by History, never interpreted here. Only the
+    /// three loaded pages retain navigation metadata (04 §6).
+    private struct LoadedPage {
+        let rowCount: Int
+        let previous: HistoryPageCursor?
+        let next: HistoryPageCursor?
+
+        init(_ page: HistoryPage) {
+            rowCount = page.rows.count
+            previous = page.previous
+            next = page.next
+        }
+    }
+    private var loadedPages: [LoadedPage] = []
+    private var rowsBeforeWindow = 0
+
+    var hasPreviousPage: Bool { loadedPages.first?.previous != nil }
+    var loadedPageCount: Int { loadedPages.count }
+    /// Remains true when Newer returns to the first three pages: dropping
+    /// the tail still needs visible-selection reconciliation and Latest.
+    private(set) var hasWindowedPages = false
+    var traversedRowCount: Int { rowsBeforeWindow + rows.count }
+
+    /// Counts belong to the complete filtered query, including rows already
+    /// traversed before this bounded window.
+    var displayedCount: Int { traversedRowCount }
+    var displayedCountIsLowerBound: Bool {
+        hasNextPage || (observedPosition == nil && !rows.isEmpty)
+    }
+
+    /// Position of the latest authoritative first page. A receipt may return
+    /// after an equal or newer observation; that page must not be erased,
+    /// though the receipt still publishes its derived-state purge.
+    private var observedPosition: ChangePosition?
+
+    /// A receipt proves this history instance has committed at least this
+    /// position. Buffered observations/one-shot reads may predate its delivery.
+    /// Query changes and panel closure do not erase that already-known fact.
+    private var latestReceiptPosition: ChangePosition?
+
+    /// Rows-epoch counter. Bumped on every observation restart AND on every
+    /// applied observed page, so a one-shot pagination result captured against
+    /// superseded rows is discarded instead of appending to replaced rows.
+    private var observationGeneration = 0
+
+    /// Monotonic identity of the raw-query/mode intent. Same-query refreshes,
+    /// observation replacement pages, lifecycle restarts, and pagination do
+    /// not advance it, so they cannot reannounce one already-settled search
+    /// generation (review UI-4/UI-16).
+    private var searchQueryGeneration = 0
+
+    /// The one active search intent still eligible for a result-count
+    /// announcement. Applying its first authoritative page consumes the
+    /// value before invoking the callback, so an identical later snapshot
+    /// cannot announce again.
+    private var pendingSearchAnnouncementGeneration: Int?
+
+    /// The operation family that owns the visible failure. Observation and
+    /// pagination recover through query activity; mutation failures remain
+    /// visible until a later mutation succeeds.
+    private enum FailureSource: Equatable {
+        case mutation
+        case observation
+        case pagination
+    }
+
+    private var failureSource: FailureSource?
+
+#if DEBUG
+    /// One narrow running-app Card 3B ordering seam. It never substitutes
+    /// History: the real `SQLiteHistory` remains this state's sole facade,
+    /// and both mutations still reach its sole `HistoryAuthority` writer. The
+    /// first editor revision is preceded by one distinct real revision; the
+    /// next details read then returns one typed transient failure before all
+    /// later reads resume normally.
+    private var injectCompetingEditorRevisionForTesting = false
+    private var failNextEditorDetailsReadForTesting = false
+#endif
+
+    /// Search-edit debounce (V2-07 §4 feel: no per-keystroke re-observe).
+    private static let searchDebounceInterval: Duration = .milliseconds(250)
+
+    // MARK: - Init
+
+    init(history: any ClipboardHistory, pageLimit: Int = 50) {
+        self.history = history
+        self.pageLimit = pageLimit
+    }
+
+    // MARK: - Derived panel state
+
+    /// Rows in the pinned lane (`pinnedPosition != nil`; docs/
+    /// 03b-instruction-set.md §8 — the position is 0-based, display adds one).
+    var pinnedRows: [HistoryRow] {
+        rows.filter { $0.pinnedPosition != nil }
+    }
+
+    /// Rows in the recency lane.
+    var unpinnedRows: [HistoryRow] {
+        rows.filter { $0.pinnedPosition == nil }
+    }
+
+    /// Each filter is part of the History query: changing it immediately
+    /// retires the previous page/cursors and observes matching retained rows.
+    var typeFilter: HistoryTypeFilter = .all {
+        didSet {
+            guard typeFilter != oldValue else { return }
+            advanceSearchQueryGeneration()
+            replaceObservationImmediately()
+        }
+    }
+
+    var showsPinnedOnly = false {
+        didSet {
+            guard showsPinnedOnly != oldValue else { return }
+            advanceSearchQueryGeneration()
+            replaceObservationImmediately()
+        }
+    }
+
+    private var historyFilter: HistoryFilter {
+        HistoryFilter(type: typeFilter.contentType, pinnedOnly: showsPinnedOnly)
+    }
+
+    /// The pinned lane of the current filtered query.
+    var displayedPinnedRows: [HistoryRow] {
+        rows.filter { $0.pinnedPosition != nil && isDisplayed($0) }
+    }
+
+    /// The recency lane of the current query; empty while
+    /// `showsPinnedOnly` is set.
+    var displayedUnpinnedRows: [HistoryRow] {
+        guard !showsPinnedOnly else { return [] }
+        return rows.filter { $0.pinnedPosition == nil && isDisplayed($0) }
+    }
+
+    /// The list's visible order after its type and pinned-only filters.
+    /// AppKit's Return handler reads this same order synchronously, so an
+    /// old selection cannot paste a hidden row while SwiftUI is still
+    /// reconciling the filter change (01 §5.6; review Card 14A).
+    var displayedRows: [HistoryRow] {
+        var displayed = displayedPinnedRows
+        if !showsPinnedOnly {
+            for row in rows where row.pinnedPosition == nil && isDisplayed(row) {
+                displayed.append(row)
+            }
+        }
+        return displayed
+    }
+
+    private func isDisplayed(_ row: HistoryRow) -> Bool {
+        (!showsPinnedOnly || row.pinnedPosition != nil) && typeFilter.admits(row)
+    }
+
+    /// Whether a further one-shot page exists after the displayed rows.
+    var hasNextPage: Bool {
+        loadedPages.last?.next != nil
+    }
+
+    /// Prefetch follows the final visible row in the filtered query. The
+    /// three-page window then switches to explicit older/newer navigation
+    /// (review Card 8B; 04 §6).
+    func prefetchNextPageIfNeeded(appearingRowID: HistoryItemID) {
+        // Once the three-page window is full, navigation becomes explicit.
+        // Newly appearing rows must not trigger an endless eviction/prefetch loop.
+        guard hasNextPage, !isLoadingPage, loadedPageCount < 3 else { return }
+        let lastUnpinned = showsPinnedOnly ? nil : rows.last(where: {
+            $0.pinnedPosition == nil && isDisplayed($0)
+        })
+        let lastDisplayed = lastUnpinned ?? rows.last(where: {
+            $0.pinnedPosition != nil && isDisplayed($0)
+        })
+        guard lastDisplayed?.item.id == appearingRowID else { return }
+        loadNextPage()
+    }
+
+    /// Whether the current browse generation has published its authoritative
+    /// first page. Query restart clears this fact before clearing/replacing
+    /// rows; a load failure leaves it false, while an authoritative empty page
+    /// sets it true through its ChangePosition (review Card 8A/8C).
+    private(set) var hasAuthoritativeFirstPage = false
+
+    /// Whether the search field holds a query. Only a truly empty raw draft
+    /// is `.recent`; whitespace can be meaningful exact/regexp syntax.
+    var isSearchActive: Bool {
+        !searchText.isEmpty
+    }
+
+    /// The admitted query shape derived atomically from raw draft + mode.
+    /// Exact/regexp preserve the draft byte-for-byte. Fuzzy admission is a
+    /// bounded view of that draft, leaving the raw value intact for a later
+    /// mode switch (03b §8; 06 §2).
+    private var admittedKind: HistoryBrowseKind {
+        guard !searchText.isEmpty else { return .recent }
+        switch searchMode {
+        case .exact, .regexp:
+            return .search(text: searchText, mode: searchMode)
+        case .fuzzy:
+            let limit = HistoryLimits.standard.maximumFuzzyQueryCharacters
+            return .search(text: String(searchText.prefix(limit)), mode: .fuzzy)
+        }
+    }
+
+    // MARK: - Lifecycle
+
+    /// Starts the observe loop for the current query. Idempotent: an existing
+    /// loop already owns the active panel episode, so duplicate AppKit and
+    /// SwiftUI lifecycle notifications do not register a second observer.
+    /// Re-activation after `deactivate()` starts a fresh loop.
+    func activate() {
+        guard observationTask == nil else { return }
+        replaceObservationImmediately()
+    }
+
+    /// Cancels browsing and releases this closed surface's rows/cursors.
+    /// Query, mode and filters survive; activate obtains a fresh first page.
+    func deactivate() {
+        debounceTask?.cancel()
+        debounceTask = nil
+        observationTask?.cancel()
+        observationTask = nil
+        invalidatePagination()
+        observationGeneration += 1
+        hasAuthoritativeFirstPage = false
+        observedPosition = nil
+        rows = []
+        resetPageWindow()
+        isLoadingFirstPage = false
+    }
+
+    /// Explicit re-observe on user action (V2-07 §4: re-browse after retry) —
+    /// immediate, no debounce.
+    func refresh() {
+        replaceObservationImmediately()
+    }
+
+    /// Clears the raw query as one immediate intent. The TextField's ordinary
+    /// edits remain debounced, while its explicit Clear control invalidates
+    /// the old generation and starts `.recent` without a stale-results window.
+    /// Package (GOV-3): the Clear control lives in this module's search
+    /// header; composition-root search restarts go through `searchText`.
+    func clearSearch() {
+        guard !searchText.isEmpty else { return }
+        searchText = ""
+        debounceTask?.cancel()
+        debounceTask = nil
+        startObservation()
+    }
+
+    /// Appends the next older page, retiring the newest page when the window
+    /// is full. Expiration restarts the same query at page one (04 §6).
+    func loadNextPage() {
+        guard !isLoadingPage, let cursor = loadedPages.last?.next else { return }
+        loadPage(cursor: cursor, prepending: false)
+    }
+
+    /// Read adjacent newer rows using the first loaded page's opaque cursor.
+    func loadPreviousPage() {
+        guard !isLoadingPage, let cursor = loadedPages.first?.previous else { return }
+        loadPage(cursor: cursor, prepending: true)
+    }
+
+    func returnToLatest() {
+        replaceObservationImmediately()
+    }
+
+    private func loadPage(cursor: HistoryPageCursor, prepending: Bool) {
+        paginationRequestToken += 1
+        let requestToken = paginationRequestToken
+        isLoadingPage = true
+
+        // Snapshot the request shape at call time: MainActor is free during
+        // the await, and the cursor must travel with the kind it was minted
+        // under or storage will (correctly) fail it as `.snapshotExpired`.
+        let kind = admittedKind
+        let filter = historyFilter
+        let limit = pageLimit
+        let generation = observationGeneration
+        let history = self.history
+
+        paginationTask = Task { [weak self] in
+            do {
+                let page = try await history.browse(
+                    HistoryBrowseRequest(kind: kind, limit: limit, cursor: cursor, filter: filter)
+                )
+                guard let self,
+                      self.paginationRequestToken == requestToken,
+                      self.observationGeneration == generation
+                else { return }
+                guard self.latestReceiptPosition.map({ page.position >= $0 }) ?? true else {
+                    // Neither edge of this older snapshot remains usable.
+                    // Keep the partial display, not an invented exact total.
+                    self.loadedPages = []
+                    self.observedPosition = nil
+                    self.finishPagination(requestToken)
+                    return
+                }
+                // Never combine pages from different snapshots, even if
+                // an adapter returns a page before observation catches up.
+                guard page.position == self.observedPosition else {
+                    self.replaceObservationImmediately()
+                    return
+                }
+                if prepending {
+                    self.rowsBeforeWindow -= page.rows.count
+                    if self.loadedPages.count == 3 {
+                        self.hasWindowedPages = true
+                        // The final older page can be shorter than limit.
+                        self.rows.removeLast(self.loadedPages.removeLast().rowCount)
+                    }
+                    self.loadedPages.insert(LoadedPage(page), at: 0)
+                    self.rows.insert(contentsOf: page.rows, at: 0)
+                } else {
+                    if self.loadedPages.count == 3 {
+                        self.hasWindowedPages = true
+                        let removedCount = self.loadedPages.removeFirst().rowCount
+                        self.rows.removeFirst(removedCount)
+                        self.rowsBeforeWindow += removedCount
+                    }
+                    self.loadedPages.append(LoadedPage(page))
+                    self.rows.append(contentsOf: page.rows)
+                }
+                self.clearFailure(from: .pagination)
+                self.finishPagination(requestToken)
+            } catch let failure as HistoryFailure {
+                guard let self,
+                      self.paginationRequestToken == requestToken,
+                      self.observationGeneration == generation
+                else { return }
+                if case .snapshotExpired = failure {
+                    // Reobserve this exact query: the first page may already
+                    // have left the bounded window, and its old cursor is no
+                    // longer an authoritative recovery point (04 §6).
+                    self.publishFailure(failure, from: .pagination)
+                    self.replaceObservationImmediately()
+                    return
+                }
+                self.publishFailure(failure, from: .pagination)
+                self.finishPagination(requestToken)
+            } catch {
+                // browse throws typed HistoryFailure at the storage boundary
+                // (docs/03a-instruction-set.md §3); an untyped error has no
+                // panel vocabulary and is swallowed.
+                self?.finishPagination(requestToken)
+            }
+        }
+    }
+
+    // MARK: - Interactions (docs/03a-instruction-set.md §5; 03b §12)
+
+    /// Hands a paste request to the composition root (docs/
+    /// 01-architecture.md §5.6); the view state never touches NSPasteboard.
+    func requestPaste(_ item: HistoryItemReference) {
+        onPaste(item)
+    }
+
+    /// List-owned paste requests are accepted only while the exact row is
+    /// still in the filtered authoritative display. This closes the render
+    /// gap after a filter hides a row or a query intent clears `rows`, while
+    /// the old row closure or selection may still be reachable.
+    func requestPasteFromDisplayedRow(_ item: HistoryItemReference) {
+        guard rows.contains(where: { $0.item == item && isDisplayed($0) }) else { return }
+        onPaste(item)
+    }
+
+    // MARK: - Drag-out (01 §5.6; 03b §9)
+
+    /// One lazily-loading drag provider for a displayed row. The bytes
+    /// resolve on drop through the same `pastePayload(for:)` Effective
+    /// Content read that backs the composition root's paste hand-off
+    /// (docs/01-architecture.md §5.6; docs/03b-instruction-set.md §9) —
+    /// never from row display state. Every advertised type is available to
+    /// the receiver, including opaque bytes; plain text and the preferred
+    /// raster types are offered first. The read returns current Effective
+    /// Content by ID (03b §9 / 04 §8 DEC-PASTE-REFERENCE); an advertised type
+    /// hidden before that first read reports item-unavailable. Failures go
+    /// to the drop completion, without changing the panel banner.
+    /// The first representation request resolves one immutable payload for
+    /// the entire drag. Other formats share that result even if History
+    /// changes between receiver requests; constructing the provider does
+    /// not read or retain clipboard bytes.
+    /// `NSItemProvider` is Foundation, so
+    /// PresentationUI's no-AppKit rule (01 §6) is preserved.
+    func dragItemProvider(
+        for reference: HistoryItemReference
+    ) -> NSItemProvider {
+        let provider = NSItemProvider()
+        guard let row = rows.first(where: { $0.item == reference && isDisplayed($0) }) else {
+            return provider
+        }
+        let advertised = row.typeIdentifiers
+        let preferred = Self.dragTypePreference.filter { advertised.contains($0) }
+        let remaining = advertised.filter { !Self.dragTypePreference.contains($0) }
+        let payloadRead = DragPayloadRead(history: history, itemID: reference.id)
+        for typeIdentifier in preferred + remaining {
+            provider.registerDataRepresentation(
+                forTypeIdentifier: typeIdentifier,
+                visibility: .all
+            ) { completion in
+                Task {
+                    do {
+                        let payload = try await payloadRead.value()
+                        // This SwiftUI drag surface supplies one provider.
+                        // Multi-item transfers use Paste, which preserves all
+                        // item boundaries; never export a partial gesture.
+                        guard Set(payload.representations.map(\.pasteboardItemIndex)).count == 1,
+                              let bytes = payload.representations
+                            .first(where: { $0.typeIdentifier == typeIdentifier })?.bytes else {
+                            completion(nil, NSError(
+                                domain: NSItemProvider.errorDomain,
+                                code: NSItemProvider.ErrorCode.itemUnavailableError.rawValue
+                            ))
+                            return
+                        }
+                        completion(bytes, nil)
+                    } catch {
+                        completion(nil, error)
+                    }
+                }
+                return nil
+            }
+        }
+        return provider
+    }
+
+    /// Registration preference only; other representations remain available
+    /// as their exact identifiers and bytes, without guessed text semantics.
+    private static let dragTypePreference: [String] = [
+        "public.utf8-plain-text",
+        "public.png",
+        "public.tiff",
+    ]
+
+    /// Pins or reorders; typed failures land in `failure`.
+    func pin(_ id: HistoryItemID, at placement: PinnedPlacement = .first) {
+        perform(.placePinned(id, at: placement))
+    }
+
+    /// Awaitable Pin seam for a details action whose readback must follow the
+    /// mutation receipt rather than race the fire-and-forget task.
+    func pinAwaitingReceipt(
+        _ id: HistoryItemID,
+        at placement: PinnedPlacement = .first
+    ) async throws -> HistoryReceipt {
+        try await performAwaitingReceipt(.placePinned(id, at: placement))
+    }
+
+    /// Unpins; typed failures land in `failure`.
+    func unpin(_ id: HistoryItemID) {
+        perform(.unpin(id))
+    }
+
+    /// Awaitable Unpin seam paired with `pinAwaitingReceipt` for details.
+    func unpinAwaitingReceipt(
+        _ id: HistoryItemID
+    ) async throws -> HistoryReceipt {
+        try await performAwaitingReceipt(.unpin(id))
+    }
+
+    /// Removes one item; typed failures land in `failure`.
+    func remove(_ id: HistoryItemID) {
+        perform(.remove(id))
+    }
+
+    /// Awaitable Remove seam for a user intent that must sequence its next
+    /// read/transition after the real receipt (review UI-2/Card 9B).
+    func removeAwaitingReceipt(
+        _ id: HistoryItemID
+    ) async throws -> HistoryReceipt {
+        try await performAwaitingReceipt(.remove(id))
+    }
+
+    /// Removes a whole class of items; typed failures land in `failure`.
+    func clear(_ scope: ClearScope) {
+        perform(.clear(scope))
+    }
+
+    /// Awaitable Clear seam used by the panel confirmation. Receipt-driven
+    /// purge publication remains inside this view state.
+    func clearAwaitingReceipt(
+        _ scope: ClearScope
+    ) async throws -> HistoryReceipt {
+        try await performAwaitingReceipt(.clear(scope))
+    }
+
+    // MARK: - Thin async passthroughs (callers own presentation)
+
+    /// Full detail for one item (docs/03b-instruction-set.md §9).
+    func details(for id: HistoryItemID) async throws -> HistoryDetails {
+#if DEBUG
+        if failNextEditorDetailsReadForTesting {
+            failNextEditorDetailsReadForTesting = false
+            throw HistoryFailure.temporarilyUnavailable(.factProof)
+        }
+#endif
+        return try await history.details(for: id)
+    }
+
+    /// Appends an immutable content revision (docs/03a-instruction-set.md §5).
+    func revise(_ request: RevisionRequest) async throws -> HistoryReceipt {
+        try await performRevision(request, beforePurge: nil)
+    }
+
+    /// A details-owned edit or revert must hand its receipt-minted exact
+    /// reference to the Details owner before publishing the corresponding purge.
+    /// That ordering prevents the old-reference surface from being retired in
+    /// the same MainActor turn, while every other revise caller keeps the
+    /// ordinary purge behavior above.
+    func reviseKeepingDetails(
+        _ request: RevisionRequest,
+        onCommittedReference:
+            @escaping @MainActor (HistoryItemReference) -> Void
+    ) async throws -> HistoryReceipt {
+        try await performRevision(
+            request,
+            beforePurge: onCommittedReference
+        )
+    }
+
+    private func performRevision(
+        _ request: RevisionRequest,
+        beforePurge:
+            (@MainActor (HistoryItemReference) -> Void)?
+    ) async throws -> HistoryReceipt {
+#if DEBUG
+        if injectCompetingEditorRevisionForTesting,
+           let competing = Self.competingEditorRevisionForRunningUITest(
+               for: request
+           ) {
+            injectCompetingEditorRevisionForTesting = false
+            _ = try await history.perform(.revise(competing))
+            failNextEditorDetailsReadForTesting = true
+        }
+#endif
+        let action = HistoryAction.revise(request)
+        let receipt = try await history.perform(action)
+        if case .committed(let commit) = receipt,
+           case .revised(let reference) = commit.outcome {
+            beforePurge?(reference)
+        }
+        publishSurfacePurge(for: action, receipt: receipt)
+        return receipt
+    }
+
+#if DEBUG
+    /// ClipyApp's exact running-UI launch configuration arms only the next
+    /// editable-text revision. No scripted `ClipboardHistory`, fake receipt,
+    /// or alternate storage path is installed.
+    func configureEditorStaleJourneyForRunningUITest() {
+        injectCompetingEditorRevisionForTesting = true
+        failNextEditorDetailsReadForTesting = false
+    }
+
+    static func competingEditorRevisionForRunningUITest(
+        for request: RevisionRequest
+    ) -> RevisionRequest? {
+        guard case .replace(let draft) = request.intent,
+              draft.decisions.contains(where: {
+                  $0.typeIdentifier
+                      == ClipboardFormatIdentifier.utf8PlainText.rawValue
+              })
+        else { return nil }
+
+        let decisions = draft.decisions.map { decision in
+            guard decision.typeIdentifier
+                == ClipboardFormatIdentifier.utf8PlainText.rawValue else {
+                return decision
+            }
+            return RevisionDecision(
+                typeIdentifier: decision.typeIdentifier,
+                action: .replace(
+                    bytes: Data("clipy-editor-competing-revision".utf8)
+                ),
+                pasteboardItemIndex: decision.pasteboardItemIndex
+            )
+        }
+        return RevisionRequest(
+            itemID: request.itemID,
+            expected: request.expected,
+            intent: .replace(RevisionDraft(decisions: decisions))
+        )
+    }
+#endif
+
+    /// Applies the optional count limit; nil turns off count-based removal.
+    func applyMaximumUnpinnedItems(_ count: Int?) async throws -> HistoryReceipt {
+        let action = HistoryAction.setRetentionPolicy(maximumUnpinnedItems: count)
+        let receipt = try await history.perform(action)
+        publishSurfacePurge(for: action, receipt: receipt)
+        return receipt
+    }
+
+    /// Applies the V2-02 age/storage/revision policy dimensions
+    /// (docs/v2/V2-02-retention.md §3.1).
+    func applyRetentionPolicies(
+        _ policies: HistoryRetentionPolicies
+    ) async throws -> HistoryReceipt {
+        let action = HistoryAction.setRetentionPolicies(policies)
+        let receipt = try await history.perform(action)
+        publishSurfacePurge(for: action, receipt: receipt)
+        return receipt
+    }
+
+    /// Composition-root receipt handoff for clipboard captures. Capture has
+    /// no panel-owned action method, but its same-commit retention victims
+    /// must retire derived surface state before observation catches up.
+    func acceptCaptureReceipt(_ receipt: HistoryReceipt) {
+        publishDestructiveRetentionPurge(receipt)
+    }
+
+    /// Composition-root removal handoff. The app-owned ingress calls this
+    /// after the real Gateway has committed a positive remove and before
+    /// replying; pin/unpin/no-op/failure never enter this seam (Card 9B).
+    /// This ID-only callback proves an exact purge, not a snapshot position;
+    /// it cannot reject buffered observations using the receipt floor.
+    func acceptCommittedExternalRemoval(
+        _ itemID: HistoryItemID
+    ) -> HistorySurfacePurge {
+        publishExactItemPurge(itemID)
+    }
+
+    /// The automation ingress forwards the real revision commit and its
+    /// request's old reference before replying. Use the same commit-position
+    /// rule as a local edit: a late callback never removes already-new rows.
+    func acceptCommittedExternalRevision(
+        from old: HistoryItemReference,
+        commit: HistoryCommit
+    ) -> HistorySurfacePurge? {
+        guard case .revised(let new) = commit.outcome else { return nil }
+        let scope: HistorySurfacePurge.Scope = commit.hasDestructiveRetentionEffects
+            ? .all : .revision(old: old, new: new)
+        return publishCommittedSurfacePurge(scope, position: commit.position)
+    }
+
+    /// The authoritative configured retention state (docs/v2/V2-07-ux.md
+    /// §5.2/§6.3) — the settings tabs' panel-open read, so every control
+    /// opens at its persisted value instead of a neutral prefill (audit
+    /// SPEC-IMPL-003). Configured policy only; no usage readout exists on
+    /// the public surface (V2-07 §2.2 OPEN-2).
+    func retentionConfiguration() async throws -> HistoryRetentionConfiguration {
+        try await history.retentionConfiguration()
+    }
+
+    // MARK: - Observation plumbing (private)
+
+    /// Invalidates one browse intent and immediately starts its replacement
+    /// observation. The invalidation itself is shared with debounced edits so
+    /// one intent bumps ownership exactly once.
+    private func replaceObservationImmediately() {
+        beginFirstPageLoad()
+        startObservation()
+    }
+
+    /// Synchronously retires all state owned by the previous browse intent.
+    /// This is the single invalidation path for immediate and debounced
+    /// replacement, not a general loading-state reducer.
+    private func beginFirstPageLoad() {
+        debounceTask?.cancel()
+        debounceTask = nil
+        observationTask?.cancel()
+        observationTask = nil
+        invalidatePagination()
+        observationGeneration += 1
+        // Retire the old generation's authority before publishing its empty
+        // loading placeholder. Selection reconciliation must never observe
+        // `rows == []` while this still describes the prior settled page.
+        hasAuthoritativeFirstPage = false
+        observedPosition = nil
+        rows = []
+        resetPageWindow()
+        clearQueryFailure()
+        isLoadingFirstPage = true
+    }
+
+    /// Starts observation for the already-invalidated current intent.
+    private func startObservation() {
+        let kind = admittedKind
+        let filter = historyFilter
+        let limit = pageLimit
+        let history = self.history
+        let queryGeneration = searchQueryGeneration
+
+        observationTask = Task { [weak self] in
+            guard !Task.isCancelled else { return }
+            let stream = await history.observe(
+                HistoryObservationRequest(kind: kind, limit: limit, filter: filter)
+            )
+            do {
+                for try await page in stream {
+                    // A superseded loop must not apply pages over its
+                    // replacement; cancellation flips before the first
+                    // resume of a stale loop.
+                    guard !Task.isCancelled else { return }
+                    self?.applyObservedPage(
+                        page,
+                        forSearchGeneration: queryGeneration
+                    )
+                }
+            } catch {
+                // The frozen Part III stream failure is untyped
+                // (docs/03a-instruction-set.md §3): implementations still
+                // throw HistoryFailure, so cast to recover the typed
+                // vocabulary. Cancellation is not a panel failure.
+                guard !Task.isCancelled,
+                      let failure = error as? HistoryFailure
+                else { return }
+                self?.publishFailure(failure, from: .observation)
+                self?.isLoadingFirstPage = false
+            }
+        }
+    }
+
+    /// Applies one observed page as a full replacement (docs/
+    /// 04-coherence.md §5) and resets the bounded navigation window.
+    /// The generation bump discards any in-flight
+    /// one-shot append whose rows were captured before this replacement.
+    private func applyObservedPage(
+        _ page: HistoryPage,
+        forSearchGeneration queryGeneration: Int
+    ) {
+        guard latestReceiptPosition.map({ page.position >= $0 }) ?? true else { return }
+        invalidatePagination()
+        observationGeneration += 1
+        rows = page.rows
+        loadedPages = [LoadedPage(page)]
+        hasWindowedPages = false
+        rowsBeforeWindow = 0
+        observedPosition = page.position
+        hasAuthoritativeFirstPage = true
+        clearQueryFailure()
+        isLoadingFirstPage = false
+        if pendingSearchAnnouncementGeneration == queryGeneration {
+            pendingSearchAnnouncementGeneration = nil
+            onSettledSearchResultCount(displayedRows.count, page.next != nil)
+        }
+    }
+
+    /// Advances only the user's admitted query/mode generation. Generic
+    /// observation restarts intentionally do not re-arm an announcement for
+    /// an identical settled search (REVIEW Card 15D).
+    private func advanceSearchQueryGeneration() {
+        searchQueryGeneration += 1
+        pendingSearchAnnouncementGeneration = isSearchActive
+            ? searchQueryGeneration
+            : nil
+    }
+
+    private func resetPageWindow() {
+        loadedPages = []
+        hasWindowedPages = false
+        rowsBeforeWindow = 0
+    }
+
+    /// Cancels and invalidates pagination synchronously. The request may
+    /// still return, but only the current token may publish or finish loading.
+    private func invalidatePagination() {
+        paginationTask?.cancel()
+        paginationTask = nil
+        paginationRequestToken += 1
+        isLoadingPage = false
+    }
+
+    /// Clears loading only when `token` still owns the current request.
+    private func finishPagination(_ token: Int) {
+        guard paginationRequestToken == token else { return }
+        paginationTask = nil
+        isLoadingPage = false
+    }
+
+    /// Debounces search-field edits into one observation restart.
+    private func scheduleSearchRestart() {
+        beginFirstPageLoad()
+        debounceTask = Task { [weak self] in
+            do {
+                try await Task.sleep(for: Self.searchDebounceInterval)
+            } catch {
+                // Cancelled: a newer edit owns the restart.
+                return
+            }
+            self?.debounceTask = nil
+            self?.startObservation()
+        }
+    }
+
+    /// Forwards one mutating History Action; a typed failure is stored into
+    /// `failure` rather than thrown. Receipt-confirmed destructive mutations
+    /// retire affected rows synchronously; observation remains the only path
+    /// which can repopulate authoritative rows.
+    private func perform(_ action: HistoryAction) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.performAwaitingReceipt(action)
+            } catch {
+                // The awaitable helper already published a typed failure.
+                // Untyped failures have no panel vocabulary (03a §3).
+            }
+        }
+    }
+
+    /// The shared receipt boundary for fire-and-forget list actions and
+    /// explicitly sequenced details/panel actions.
+    private func performAwaitingReceipt(
+        _ action: HistoryAction
+    ) async throws -> HistoryReceipt {
+        do {
+            let receipt = try await history.perform(action)
+            publishSurfacePurge(for: action, receipt: receipt)
+            clearFailure(from: .mutation)
+            return receipt
+        } catch let failure as HistoryFailure {
+            publishFailure(failure, from: .mutation)
+            throw failure
+        }
+    }
+
+    /// Converts only a matching, effective commit into local purge work.
+    /// `.unchanged`, zero-count outcomes, metadata mutations, and failures do
+    /// not discard presentation state (03a §6; review Card 9B).
+    private func publishSurfacePurge(
+        for action: HistoryAction,
+        receipt: HistoryReceipt
+    ) {
+        guard case .committed(let commit) = receipt else { return }
+        recordCommittedPosition(commit.position)
+
+        let scope: HistorySurfacePurge.Scope?
+        if commit.hasDestructiveRetentionEffects {
+            scope = .all
+        } else {
+            switch (action, commit.outcome) {
+            case (.clear(.all), .cleared(let count)) where count > 0:
+                scope = .all
+            case (.clear(.unpinned), .cleared(let count)) where count > 0:
+                scope = .unpinned
+            case (.remove(let id), .removed(let count)) where count > 0:
+                scope = .item(id)
+            case (.revise(let request), .revised(let newReference)):
+                scope = .revision(
+                    old: HistoryItemReference(
+                        id: request.itemID,
+                        contentVersion: request.expected
+                    ),
+                    new: newReference
+                )
+            default:
+                scope = nil
+            }
+        }
+
+        guard let scope else { return }
+        let purge = publishCommittedSurfacePurge(scope, position: commit.position)
+        if case (.remove, .removed(let count)) = (action, commit.outcome),
+           count > 0 {
+            onCommittedUserRemoval(purge)
+        }
+        if scope == .unpinned, observationTask != nil {
+            // Pin state in the held page may trail a just-committed Unpin.
+            // Clear every executable row and restart this exact query; only
+            // the post-receipt authoritative snapshot may repopulate it.
+            // A late receipt or a Settings-only mutation must not reopen a
+            // closed browsing surface. An active search debounce already owns
+            // its replacement when no observation task currently exists.
+            replaceObservationImmediately()
+        }
+    }
+
+    private func publishCommittedSurfacePurge(
+        _ scope: HistorySurfacePurge.Scope,
+        position: ChangePosition
+    ) -> HistorySurfacePurge {
+        recordCommittedPosition(position)
+        let hasObservedCommit = observedPosition.map {
+            $0 >= position
+        } ?? false
+        if scope != .unpinned, !hasObservedCommit {
+            applyReceiptConfirmedRowPurge(scope)
+        }
+        let generation = (surfacePurge?.generation ?? 0) + 1
+        let purge = HistorySurfacePurge(
+            generation: generation,
+            scope: scope
+        )
+        surfacePurge = purge
+        return purge
+    }
+
+    /// Capture receipts have no local action-to-outcome scope. Only the
+    /// authoritative retention-effect bit can invalidate their surfaces.
+    private func publishDestructiveRetentionPurge(_ receipt: HistoryReceipt) {
+        guard case .committed(let commit) = receipt else { return }
+        recordCommittedPosition(commit.position)
+        guard commit.hasDestructiveRetentionEffects else { return }
+        _ = publishCommittedSurfacePurge(.all, position: commit.position)
+    }
+
+    private func recordCommittedPosition(_ position: ChangePosition) {
+        guard latestReceiptPosition.map({ position > $0 }) ?? true else { return }
+        latestReceiptPosition = position
+    }
+
+    private func publishExactItemPurge(
+        _ itemID: HistoryItemID
+    ) -> HistorySurfacePurge {
+        let scope = HistorySurfacePurge.Scope.item(itemID)
+        applyReceiptConfirmedRowPurge(scope)
+        let generation = (surfacePurge?.generation ?? 0) + 1
+        let purge = HistorySurfacePurge(
+            generation: generation,
+            scope: scope
+        )
+        surfacePurge = purge
+        return purge
+    }
+
+    /// Retires executable list state for precise destructive scopes. Clear
+    /// Unpinned instead uses the full observation restart above because held
+    /// pin metadata cannot classify its members authoritatively.
+    private func applyReceiptConfirmedRowPurge(
+        _ scope: HistorySurfacePurge.Scope
+    ) {
+        invalidatePagination()
+        observationGeneration += 1
+        resetPageWindow()
+        // Until observation supplies a replacement, the surviving rows are
+        // only a partial display and cannot establish an exact total count.
+        observedPosition = nil
+
+        switch scope {
+        case .all:
+            rows = []
+        case .unpinned:
+            // Handled by the full observation restart in
+            // `publishSurfacePurge`.
+            break
+        case .item(let id):
+            rows.removeAll { $0.item.id == id }
+        case .revision(let old, _):
+            rows.removeAll { $0.item == old }
+        }
+    }
+
+    /// Publishes one concrete failure occurrence. Equality is deliberately
+    /// irrelevant: a repeated typed value after recovery is a new episode.
+    private func publishFailure(
+        _ failure: HistoryFailure,
+        from source: FailureSource
+    ) {
+        self.failure = failure
+        failureSource = source
+        failureEpisode += 1
+    }
+
+    /// Clears a failure only when the successful operation belongs to the
+    /// same family; unrelated healthy activity must not hide it.
+    private func clearFailure(from source: FailureSource) {
+        guard failureSource == source else { return }
+        failure = nil
+        failureSource = nil
+    }
+
+    /// A fresh query intent or authoritative page retires query-owned
+    /// observation/pagination failures, while leaving mutation feedback
+    /// visible until the next explicit mutation succeeds.
+    private func clearQueryFailure() {
+        switch failureSource {
+        case .observation, .pagination:
+            failure = nil
+            failureSource = nil
+        case .mutation, nil:
+            break
+        }
+    }
+}
+
+/// One lazy History read for one drag gesture. Its provider's format
+/// callbacks share both the in-flight task and its immutable success/failure;
+/// a receiver cannot combine representations from different revisions.
+private actor DragPayloadRead {
+    private let history: any ClipboardHistory
+    private let itemID: HistoryItemID
+    private var task: Task<PastePayload, Error>?
+
+    init(history: any ClipboardHistory, itemID: HistoryItemID) {
+        self.history = history
+        self.itemID = itemID
+    }
+
+    func value() async throws -> PastePayload {
+        if let task { return try await task.value }
+        let history = history
+        let itemID = itemID
+        let task = Task { try await history.pastePayload(for: itemID) }
+        self.task = task
+        return try await task.value
+    }
+}

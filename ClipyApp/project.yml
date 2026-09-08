@@ -1,11 +1,12 @@
 # XcodeGen spec for the ClipyApp application target and its hosted
-# ClipyIntegrationTests bundle (docs/01-architecture.md §9 item 6: the app
+# hosted integration/presentation bundles (docs/01-architecture.md §9 item 6: the app
 # target is XcodeGen-owned; the library graph stays SwiftPM-owned).
 # Regenerate from the repo root with:
 #   xcodegen generate --spec ClipyApp/project.yml
 name: ClipyApp
 options:
   bundleIdPrefix: com.clipy
+  developmentLanguage: en
   deploymentTarget:
     macOS: "26.0"
 settings:
@@ -21,8 +22,7 @@ targets:
     platform: macOS
     sources:
       - Sources
-      # App-owned copy (including StatusMenu) lives in this bundle;
-      # SwiftPM targets retain their own localized resources.
+      # All app and UI copy lives in the application bundle.
       - Resources
       - Tools/ClipyUDSF0Shared
     settings:
@@ -49,7 +49,9 @@ targets:
       - package: Clipy
         product: PasteboardAdapter
       - package: Clipy
-        product: PresentationUI
+        product: ClipboardFormats
+      - package: Clipy
+        product: ContentPreview
       - package: Clipy
         product: LocalAutomation
       - target: clipyctl
@@ -96,8 +98,7 @@ targets:
     dependencies:
       - target: ClipyApp
       # Package products the composed suites import directly (real
-      # SQLiteHistory + PasteboardAdapter + PresentationUI); ClipyApp
-      # itself already links all four (docs/roadmap/06-clipyapp.md step 9c).
+      # SQLiteHistory + PasteboardAdapter); UI is part of ClipyApp itself.
       - package: Clipy
         product: HistoryCore
       - package: Clipy
@@ -105,9 +106,30 @@ targets:
       - package: Clipy
         product: PasteboardAdapter
       - package: Clipy
-        product: PresentationUI
+        product: ClipboardFormats
+      - package: Clipy
+        product: ContentPreview
       - package: Clipy
         product: LocalAutomation
+  ClipyPresentationTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests/PresentationTests
+    settings:
+      SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+      GCC_TREAT_WARNINGS_AS_ERRORS: YES
+      TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clipy.app/Contents/MacOS/Clipy"
+    dependencies:
+      - target: ClipyApp
+      - package: Clipy
+        product: HistoryCore
+      - package: Clipy
+        product: HistoryStorage
+      - package: Clipy
+        product: ClipboardFormats
+      - package: Clipy
+        product: ContentPreview
   ClipyUITests:
     type: bundle.ui-testing
     platform: macOS
@@ -124,9 +146,11 @@ schemes:
       targets:
         ClipyApp: all
         ClipyIntegrationTests: [test]
+        ClipyPresentationTests: [test]
     test:
       targets:
         - ClipyIntegrationTests
+        - ClipyPresentationTests
         - ClipyUITests
   ClipyUDSF0Evidence:
     build:

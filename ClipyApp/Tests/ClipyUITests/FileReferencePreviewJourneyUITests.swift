@@ -68,7 +68,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         // dwell even if a previous run left the preference disabled. No
         // manual preview toggle substitutes for the dwell transition.
         app.typeKey(",", modifierFlags: .command)
-        let appearance = app.buttons["Appearance"]
+        let appearance = app.buttons["clipy.settings.category.appearance"]
         XCTAssertTrue(appearance.waitForExistence(timeout: 10), app.debugDescription)
         appearance.click()
         let autoOpen = app.switches["clipy.settings.appearance.preview-auto-open"]
@@ -76,7 +76,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         if (autoOpen.value as? Int) == 0 { autoOpen.click() }
         XCTAssertTrue(waitUntil(timeout: 5) { (autoOpen.value as? Int) == 1 },
                       app.debugDescription)
-        let general = app.buttons["General"]
+        let general = app.buttons["clipy.settings.category.general"]
         XCTAssertTrue(general.exists, app.debugDescription)
         general.click()
         app.typeKey("w", modifierFlags: .command)

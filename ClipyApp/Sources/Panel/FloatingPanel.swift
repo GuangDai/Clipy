@@ -1,26 +1,8 @@
-/// FloatingPanel.swift — the floating clipboard panel: Maccy's
-/// `FloatingPanel` (Maccy/FloatingPanel.swift) replicated onto Clipy's
-/// surface — a non-activating `NSPanel` that becomes key without
-/// foregrounding the app, positions itself per `PopupPositionMode`,
-/// widens for the preview column without animation (Maccy's layout-storm
-/// lesson), persists its dragged-to anchor for `.lastPosition`, and closes
-/// on focus loss.
-///
-/// The browsing column and the height are user-RESIZABLE within
-/// PanelGeometry's minimum/maximum bounds (enforced through
-/// `contentMinSize`/`contentMaxSize`); a settled user size persists under
-/// PanelGeometry's `clipy.panel*` keys and is re-applied on every open,
-/// shrunk to fit the target screen when a size persisted on a larger
-/// display would overflow. The preview column's width change is the
-/// `dividerWidth + persisted preview column width` extension — the
-/// panel's free-drag divider width, read fresh from defaults per width
-/// computation — driven by `setPreviewVisible(_:)`. The keep-open pin
-/// (AppDelegate's `isPanelKeepOpenActive`, read through `isKeepOpenActive`)
-/// suppresses ONLY the focus-loss close; every explicit close path is
-/// untouched.
+/// The app-owned floating panel. User dimensions have usability floors;
+/// the active display supplies resize limits. Preview borrows existing width
+/// before adding space, and display fitting never rewrites saved dimensions.
 import AppKit
 import Carbon.HIToolbox
-import PresentationUI
 import SwiftUI
 
 enum PanelKeyEventDisposition: Equatable {
@@ -103,6 +85,10 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// Set around programmatic `setFrame` calls so `windowDidMove` persists
     /// only USER drag positions as the `.lastPosition` anchor.
     private var isProgrammaticMove = false
+
+    /// Only space actually added for this preview session is removed when
+    /// it closes. Preview inside an already-wide window leaves its size alone.
+    private var previewAddedWidth: CGFloat = 0
 
     /// AppKit can notify the parent that it resigned key before
     /// `beginSheetModal` has made `attachedSheet` observable. Defer the close
@@ -229,7 +215,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     ///
     /// The open size is the persisted user size (PanelGeometry's clamped
     /// read of the `clipy.panel*` keys, defaulting to 400×560), plus the
-    /// fixed preview extension when the pane is open, shrunk to fit the
+    /// space added by the current preview session, shrunk to fit the
     /// target screen's visible frame when a size persisted on a larger
     /// display would overflow — the geometry layer clamps ORIGINS only, so
     /// the shrink must happen here. `previewSide` is captured for every
@@ -246,17 +232,19 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         let persisted = PanelGeometry.persistedSize(from: .standard)
         var size = NSSize(
             width: persisted.contentWidth
-                + (isPreviewVisible ? Self.previewExtension : 0),
+                + (isPreviewVisible ? previewAddedWidth : 0),
             height: persisted.height
         )
         let mouseLocation = NSEvent.mouseLocation
         let screens = NSScreen.screens.map { (frame: $0.frame, visibleFrame: $0.visibleFrame) }
         // Size and origin use the same target display, including a status
         // item summoned while the pointer remains on a different screen.
-        if let targetVisibleFrame = PopupPositionGeometry.targetVisibleFrame(
+        let targetVisibleFrame = PopupPositionGeometry.targetVisibleFrame(
             for: mode, statusItemButtonScreenFrame: statusItemButtonScreenFrame,
             mouseLocation: mouseLocation, screens: screens
-        ) {
+        )
+        applyResizeLimits(in: targetVisibleFrame)
+        if let targetVisibleFrame {
             size = NSSize(
                 width: min(size.width, targetVisibleFrame.width),
                 height: min(size.height, targetVisibleFrame.height)
@@ -325,25 +313,21 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
 
     // MARK: - Preview width (Maccy's no-animation setFrame)
 
-    /// Widens/narrows the panel by the preview column width in a single
-    /// `setFrame` — never animated (an animated resize forces a full
-    /// NSHostingView layout per display-link frame; Maccy documents the
-    /// resulting layout storm). Geometry chooses the side with room —
-    /// pinned to the session's `previewSide` preference when one is set —
-    /// while preserving the main surface's exact screen frame, including a
-    /// user-resized width (Card 9C/9F). The resize bounds follow the
-    /// visibility so a preview-open panel can never be dragged narrower
-    /// than the main column's minimum plus the extension.
+    /// Borrow existing width for preview and add only missing space, without
+    /// animation. Closing reverses that addition, rather than subtracting a
+    /// complete pane from an already-wide user window.
     func setPreviewVisible(_ visible: Bool) {
         guard visible != isPreviewVisible else { return }
         if visible {
-            let expansion = PopupPositionGeometry.expandedPreviewFrame(
-                preservingMainSurface: frame,
+            let previousWidth = frame.width
+            let expansion = PopupPositionGeometry.openingPreviewFrame(
+                from: frame,
                 in: screen?.visibleFrame,
                 previewSide: previewSide,
                 previewColumnWidth: Self.persistedPreviewColumnWidth
             )
             isPreviewVisible = true
+            previewAddedWidth = max(0, expansion.panelFrame.width - previousWidth)
             setPreviewPlacement(expansion.placement)
             setFrameProgrammatically(expansion.panelFrame, display: isPresented)
         } else {
@@ -351,9 +335,10 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
                 in: frame,
                 previewPlacement: previewPlacement,
                 previewVisible: true,
-                mainSurfaceWidth: frame.width - Self.previewExtension
+                mainSurfaceWidth: max(PanelGeometry.minimumContentWidth, frame.width - previewAddedWidth)
             )
             isPreviewVisible = false
+            previewAddedWidth = 0
             // Keep the actual side for the closed-edge opener. The next
             // expansion resolves placement from its current screen and preference.
             setFrameProgrammatically(mainSurfaceFrame, display: isPresented)
@@ -365,16 +350,20 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
 
     /// Persists the user-dragged position as the normalized `.lastPosition`
     /// anchor (Maccy's `saveWindowPosition`, gated to user drags only). The
-    /// main-surface width is the LIVE browsing-column width, so a resized
-    /// panel's anchor still tracks the stable main surface.
+    /// anchor describes the frame that will remain when preview closes.
+    /// Borrowing space inside a wide window must not shift its next reopen.
     func windowDidMove(_ notification: Notification) {
+        persistAnchor()
+    }
+
+    private func persistAnchor() {
         guard !isProgrammaticMove, let screenFrame = screen?.visibleFrame else { return }
         let anchor = PopupPositionGeometry.normalizedAnchor(
             forPanelFrame: frame,
             previewPlacement: previewPlacement,
             previewVisible: isPreviewVisible,
             mainSurfaceWidth: frame.width
-                - (isPreviewVisible ? Self.previewExtension : 0),
+                - (isPreviewVisible ? previewAddedWidth : 0),
             in: screenFrame
         )
         UserDefaults.standard.set(anchor.x, forKey: Self.anchorXKey)
@@ -389,10 +378,11 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// the limits changed under an existing frame — snaps back without
     /// animation.
     func windowDidEndLiveResize(_ notification: Notification) {
-        let previewExtension = isPreviewVisible ? Self.previewExtension : 0
-        let contentWidth = PanelGeometry.clampedContentWidth(
-            frame.width - previewExtension
-        )
+        // An explicit resize chooses the whole window's dimensions. It
+        // supersedes automatic preview expansion, so closing/reopening the
+        // pane must not subtract old borrowed space from that user choice.
+        previewAddedWidth = 0
+        let contentWidth = PanelGeometry.clampedContentWidth(frame.width)
         let height = PanelGeometry.clampedHeight(frame.height)
         PanelGeometry.persistSize(
             contentWidth: contentWidth,
@@ -400,7 +390,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             to: .standard
         )
         let clampedSize = NSSize(
-            width: contentWidth + previewExtension,
+            width: contentWidth,
             height: height
         )
         if clampedSize != frame.size {
@@ -409,6 +399,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
                 display: isPresented
             )
         }
+        persistAnchor()
     }
 
     /// Arms preview dwell auto-open while the panel is key.
@@ -425,20 +416,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
 
     // MARK: - Anchor persistence
 
-    /// The width the preview column adds when open: the divider plus the
-    /// persisted free-drag preview column width. The width is read fresh
-    /// from defaults at EVERY width computation (open, preview toggle,
-    /// resize settle, limits), so a settled divider drag applies to the
-    /// next computation and no cached width can go stale. The 320 default
-    /// equals the historical constant (`dividerWidth + 320`), so existing
-    /// frame fixtures are unchanged.
-    private static var previewExtension: CGFloat {
-        PanelGeometry.dividerWidth + persistedPreviewColumnWidth
-    }
-
-    /// The divider's persisted preview column width, read fresh from
-    /// defaults at call time — the single load behind `previewExtension`
-    /// and the expansion geometry's `previewColumnWidth` input.
+    /// The preferred divider width; display fitting leaves it unchanged.
     private static var persistedPreviewColumnWidth: CGFloat {
         PanelGeometry.persistedPreviewColumnWidth(from: .standard)
     }
@@ -451,28 +429,31 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     static func savedAnchor() -> NSPoint? {
         let defaults = UserDefaults.standard
         guard let x = defaults.object(forKey: anchorXKey) as? Double,
-              let y = defaults.object(forKey: anchorYKey) as? Double
+              let y = defaults.object(forKey: anchorYKey) as? Double,
+              x.isFinite, y.isFinite
         else { return nil }
         return NSPoint(x: x, y: y)
     }
 
     // MARK: - Private
 
-    /// The interactive-resize bounds for the current preview visibility:
-    /// the browsing column stays within PanelGeometry's width bounds and
-    /// the fixed preview extension rides on top while the pane is open.
-    /// These constrain only user drags; programmatic frames (open's
-    /// shrink-to-fit on a smaller display) are never clamped by them.
-    private func applyResizeLimits() {
-        let previewExtension = isPreviewVisible ? Self.previewExtension : 0
+    /// Usability minima and the current screen's available drawing area.
+    private func applyResizeLimits(in visibleFrame: NSRect? = nil) {
+        let available = visibleFrame ?? screen?.visibleFrame ?? NSScreen.main?.visibleFrame
+        let maximum = available?.size ?? NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        let previewExtension = isPreviewVisible
+            ? PanelGeometry.dividerWidth + PanelGeometry.minimumPreviewColumnWidth : 0
         contentMinSize = NSSize(
-            width: PanelGeometry.minimumContentWidth + previewExtension,
-            height: PanelGeometry.minimumHeight
+            width: min(PanelGeometry.minimumContentWidth + previewExtension, maximum.width),
+            height: min(PanelGeometry.minimumHeight, maximum.height)
         )
-        contentMaxSize = NSSize(
-            width: PanelGeometry.maximumContentWidth + previewExtension,
-            height: PanelGeometry.maximumHeight
-        )
+        contentMaxSize = maximum
+    }
+
+    func windowDidChangeScreen(_ notification: Notification) {
+        // Moving between screens changes available resize space, not the
+        // saved preferred size. A later open fits that preference to its screen.
+        applyResizeLimits()
     }
 
     private func setFrameProgrammatically(_ frame: NSRect, display: Bool) {

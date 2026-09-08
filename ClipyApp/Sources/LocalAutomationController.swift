@@ -3,7 +3,6 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 import LocalAutomation
-import PresentationUI
 
 /// The app owns one enrolled ingress and one listener after opening History.
 /// Settings and startup share these instances; a disabled connection creates

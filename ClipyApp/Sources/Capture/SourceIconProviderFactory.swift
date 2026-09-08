@@ -10,7 +10,6 @@
 /// it does not keep a second process-lifetime collection of decoded icons.
 import AppKit
 import CoreGraphics
-import PresentationUI
 
 @MainActor
 enum SourceIconProviderFactory {

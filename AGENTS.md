@@ -156,8 +156,8 @@ purpose-specific DTOs; they never see SwiftData, Domain state, fingerprints, or
 canonical content internals.
 
 ```text
-ClipyApp (XcodeGen app, composition root)
-├── PresentationUI ────────→ HistoryCore + ClipboardFormats + ContentPreview
+ClipyApp (XcodeGen app, composition root and native SwiftUI/AppKit UI)
+├── Sources/UI ───────────→ HistoryCore + ClipboardFormats + ContentPreview
 ├── PasteboardAdapter ─────→ HistoryCore
 └── HistoryStorage ────────→ HistoryCore + ClipboardFormats
           │                → HistoryDomain
@@ -174,15 +174,14 @@ PreviewAccessProbeRunner ──→ ContentPreview (DEBUG-only test evidence only
 
 | Target | Surface | Role |
 |---|---|---|
-| `ClipboardFormats` | Package-only, Foundation-only | Open-world exact identifiers and declared string-codec facts; no purpose policy, registry, plugin, cache, or decoder |
-| `ContentPreview` | Package-only concrete actor/values | Exact preview source selection, fixed resource profiles, text codecs, eager ImageIO decode, bounded inert text/BGRA8 artifacts; no History/reference/lifecycle/cache/plugin ownership |
+| `ClipboardFormats` | Public app-used identifiers; Foundation-only | Open-world exact identifiers and package-only declared string-codec facts; no purpose policy, registry, plugin, cache, or decoder |
+| `ContentPreview` | Public concrete renderer/values; internal implementation | Exact preview source selection, fixed resource profiles, text codecs, eager ImageIO decode, bounded inert text/BGRA8 artifacts; no History/reference/lifecycle/cache/plugin ownership |
 | `ClipyCLIContract` | Package-only, Foundation-only, no product | X.8 bounded UTF-8 JSON request/reply codec and stable exit classes; no executable, standard-stream I/O, transport, credential, Gateway/History access, or fabricated result |
 | `HistoryCore` | Public, Foundation-only | `ClipboardHistory` protocol, IDs/tokens, closed `HistoryAction` set, request/response DTOs, receipts, typed failures, `HistoryLimits.standard` |
 | `HistoryDomain` | `package` access, Foundation-only, pure | Content lineage, complete action facts, seven pure planners, typed mutation plans. No I/O, actors, clocks, UUID/Date generation, or async |
 | `HistoryStorage` | Public concrete `SwiftDataHistory` + internal implementation | Sole SwiftData authority, schema/codecs, `HistoryAuthority` actor (single writer), fact loaders, Signature Index, read projections, observation plumbing, thumbnail single-flight |
 | `PasteboardAdapter` | Public adapter | NSPasteboard observation/writes ↔ `HistoryCore` raw values. No Domain state, no fingerprints |
-| `PresentationUI` | Public UI | SwiftUI view state over `HistoryCore` DTOs plus ContentPreview artifacts; owns exact-reference/task/lifecycle fences, never ImageIO decode |
-| `ClipyApp` | Composition root | Concrete construction, lifecycle, paste orchestration, App Intents entry points, DI |
+| `ClipyApp` | App module, including `Sources/UI` | Native SwiftUI/AppKit views, view state over History DTOs, preview lifecycle, concrete construction, paste orchestration, App Intents, and DI |
 | `xxh3` | Package-internal C | 64-bit representation fingerprints (vendored xxHash v0.8.3) |
 | `HistoryPerfRunner` | Executable | Part VI §9 performance-runner scaffold (fixtures populate at step 8) |
 | `HistoryRestartProbe` | Test evidence executable target | Card 1C-1 three-process public-API restart tracer; no declared package product |
@@ -195,8 +194,9 @@ PreviewAccessProbeRunner ──→ ContentPreview (DEBUG-only test evidence only
   `ModelContext.transaction` is the sole commit primitive.
 - Only immutable `Sendable` values cross module/actor boundaries. `@Model`,
   `ModelContext`, `PersistentIdentifier`, `NSImage`, `CGImage` never cross.
-- Only `HistoryCore` (plus the `SwiftDataHistory` constructor and adapter/UI
-  entry points) is `public`. Cross-target implementation vocabulary uses Swift
+- Caller-visible History values, concrete library entry points, and the
+  app-used format/preview values are `public`. UI is internal to ClipyApp.
+  Cross-target implementation vocabulary uses Swift
   `package` access. `@Model` types are internal to `HistoryStorage`.
 - Accessing a closed `HistoryAction` set: adding an action is an owned source
   change and must make compiler-exhaustive switches fail until handled.
@@ -307,9 +307,12 @@ logs are not parsed as compiler output. Write warning-free code.
 - Test framework: Swift Testing (`swift test`), test targets mirror owners:
   `HistoryCoreTests`, `HistoryDomainTests`, `HistoryStorageTests`,
   `ContentPreviewTests`,
-  `PasteboardAdapterTests`, `PresentationUITests` (SwiftPM), plus
+  `PasteboardAdapterTests` (SwiftPM), plus `ClipyPresentationTests` and
   `ClipyIntegrationTests` hosted by the app (XcodeGen-only, not in
   `Package.swift`) and the XcodeGen-only `ClipyUITests` running-app tracer.
+  Presentation tests live in `ClipyApp/Tests/PresentationTests`; all UI
+  localization lives in `ClipyApp/Resources`. There is no PresentationUI
+  library or separate SwiftPM UI resource bundle.
   `HistoryPerfTests` (SwiftPM) holds the perf/AB
   measurement-helper proofs for the `HistoryPerfRunner` executable; the
   PR/push correctness lane skips it (`--skip 'HistoryPerfTests\.'`). Its

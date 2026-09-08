@@ -59,7 +59,7 @@ final class RetentionUsageJourneyUITests: XCTestCase {
         // the tab — its onDisappear clears the row and the next appearance
         // owns a fresh read.
         app.typeKey(",", modifierFlags: .command)
-        let retentionTab = app.buttons["Retention"]
+        let retentionTab = app.buttons["clipy.settings.category.retention"]
         assertExists(
             retentionTab,
             timeout: 10,
@@ -69,7 +69,7 @@ final class RetentionUsageJourneyUITests: XCTestCase {
         retentionTab.click()
         assertUsage(itemCount: "2", contentSize: "56 bytes", in: app)
 
-        app.buttons["General"].click()
+        app.buttons["clipy.settings.category.general"].click()
         // The Settings window on the General tab is anchored by the
         // Keyboard Shortcut section's Change button — the retention fields
         // are off-tab, and the runtime AX tree flattens the privacy
@@ -88,6 +88,9 @@ final class RetentionUsageJourneyUITests: XCTestCase {
 
         // Danger Zone clear through its real destructive confirmation.
         let clearAll = app.buttons["Clear All History…"]
+        SettingsJourneyControls.reveal(
+            clearAll, byExpanding: "clipy.settings.general.clear-history", in: app
+        )
         assertExists(
             clearAll,
             timeout: 10,
@@ -96,7 +99,9 @@ final class RetentionUsageJourneyUITests: XCTestCase {
         )
         // The General tab's Form scrolls; bring the Danger Zone into view
         // the way ClipboardJourneyUITests scrolls the Retention Apply.
-        let generalScrollView = settingsWindow.scrollViews.firstMatch
+        let generalScrollView = settingsWindow.scrollViews.containing(
+            .any, identifier: "clipy.settings.general.clear-history"
+        ).firstMatch
         assertExists(
             generalScrollView,
             timeout: 5,
@@ -136,19 +141,17 @@ final class RetentionUsageJourneyUITests: XCTestCase {
             diagnostic(app, context: "clear-all sheet dismisses")
         )
 
-        // Re-enter immediately: users need not wait on General for Clear's
-        // receipt. If the tab's first usage read precedes that commit, its
-        // receipt-confirmed purge must refresh the now-visible usage. The
-        // runner does not hold Clear, so this exercises the interaction but
-        // does not guarantee that its initial read wins the race.
-        retentionTab.click()
-        assertUsage(itemCount: "0", contentSize: "0 bytes", in: app)
-
-        app.buttons["General"].click()
+        // The sidebar constructs only the selected category. Verify Clear's
+        // receipt feedback while General is visible; a new visit does not
+        // resurrect a discarded category's transient operation status.
         XCTAssertTrue(
             app.staticTexts["Removed 2 items."].waitForExistence(timeout: 10),
             diagnostic(app, context: "exact clear-all receipt feedback")
         )
+        // Retention then performs its authoritative read after a clear that
+        // completed outside this category, replacing the previous usage.
+        retentionTab.click()
+        assertUsage(itemCount: "0", contentSize: "0 bytes", in: app)
     }
 
     @MainActor

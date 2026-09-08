@@ -1,7 +1,6 @@
 /// On-demand, whole-process memory facts for Maintenance (V2-07 §6.3).
 /// Mach stays in the app target; no History action or cache eviction occurs.
 import Darwin
-import PresentationUI
 
 actor ProcessMemoryReader {
     enum ReadFailure: Error { case unavailable }

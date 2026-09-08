@@ -42,7 +42,8 @@ case "$shard" in
   2) selected_classes=("${gui_group_2[@]}") ;;
   3) selected_classes=("${gui_group_3[@]}") ;;
   4)
-    # The complement includes all hosted tests and every remaining/new UI
+    # The complement includes both app-hosted bundles (integration and
+    # presentation) and every remaining/new UI
     # class. Reuse the same lists so a new test cannot fall between shards.
     for test_class in "${gui_group_1[@]}" "${gui_group_2[@]}" "${gui_group_3[@]}"; do
       test_arguments+=("-skip-testing:ClipyUITests/$test_class")

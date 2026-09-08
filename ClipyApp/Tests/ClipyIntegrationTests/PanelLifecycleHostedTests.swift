@@ -13,7 +13,6 @@ import Carbon.HIToolbox
 import HistoryCore
 import HistoryStorage
 import PasteboardAdapter
-import PresentationUI
 import Synchronization
 import Testing
 @testable import ClipyApp

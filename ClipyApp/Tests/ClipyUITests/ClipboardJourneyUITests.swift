@@ -127,7 +127,7 @@ final class ClipboardJourneyUITests: XCTestCase {
         // app launches (an earlier journey in this run leaves it on
         // Appearance). Select the tab under test explicitly instead of
         // relying on the fresh-launch default.
-        let generalTab = app.buttons["General"]
+        let generalTab = app.buttons["clipy.settings.category.general"]
         XCTAssertTrue(generalTab.waitForExistence(timeout: 10))
         generalTab.click()
         let launchAtLogin = app.switches[
@@ -260,7 +260,7 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(shortcutStatus.exists)
         XCTAssertTrue(shortcutWarning.exists)
 
-        let retentionTab = app.buttons["Retention"]
+        let retentionTab = app.buttons["clipy.settings.category.retention"]
         XCTAssertTrue(retentionTab.waitForExistence(timeout: 5))
         retentionTab.click()
 
@@ -269,11 +269,13 @@ final class ClipboardJourneyUITests: XCTestCase {
         ]
         XCTAssertTrue(ageLimit.waitForExistence(timeout: 5))
         let settingsWindow = app.windows.containing(
-            .textField,
-            identifier: "clipy.settings.retention.age-days"
+            .switch,
+            identifier: "clipy.settings.retention.age-enabled"
         ).firstMatch
         XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
-        let retentionScrollView = settingsWindow.scrollViews.firstMatch
+        let retentionScrollView = settingsWindow.scrollViews.containing(
+            .switch, identifier: "clipy.settings.retention.age-enabled"
+        ).firstMatch
         XCTAssertTrue(retentionScrollView.waitForExistence(timeout: 5))
         guard scrollUntilFullyVisible(
             ageLimit,

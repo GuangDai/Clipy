@@ -38,6 +38,7 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         let details = try launchAndOpenCapturedDetails(in: app)
         // Header evidence precedes scrolling to the lower Content section.
         assertVisibleText("Content type icon", in: details, app: app)
+        revealFormatMetadata("public.png", in: details, app: app)
         assertVisibleText("public.png", in: details, app: app)
         assertVisibleText("4 bytes", in: details, app: app)
         assertNoRepresentationImage("public.png", in: details, app: app)
@@ -96,8 +97,10 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         defer { app.terminate() }
         let details = try launchAndOpenCapturedDetails(in: app)
         assertVisibleText("Content type icon", in: details, app: app)
+        revealFormatMetadata("public.png", in: details, app: app)
         assertVisibleText("public.png", in: details, app: app)
         assertVisibleText("70 bytes", in: details, app: app)
+        revealFormatMetadata("public.tiff", in: details, app: app)
         assertVisibleText("public.tiff", in: details, app: app)
         assertVisibleText("13 bytes", in: details, app: app)
         assertNoRepresentationImage("public.png", in: details, app: app)
@@ -166,6 +169,14 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
     private func assertVisibleText(_ value: String, in details: XCUIElement, app: XCUIApplication) {
         let predicate = NSPredicate(format: "label == %@ OR value == %@", value, value)
         assertVisibleElement(matching: predicate, in: details, app: app, context: value)
+    }
+
+    @MainActor
+    private func revealFormatMetadata(_ type: String, in details: XCUIElement, app: XCUIApplication) {
+        let identifier = "clipy.details.format-details." + type
+        assertVisibleElement(matching: NSPredicate(format: "identifier == %@", identifier),
+                             in: details, app: app, context: "Format Details: \(type)")
+        details.descendants(matching: .any)[identifier].click()
     }
 
     @MainActor

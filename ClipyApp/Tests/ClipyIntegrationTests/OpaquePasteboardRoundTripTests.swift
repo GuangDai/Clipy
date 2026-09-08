@@ -7,7 +7,7 @@ import AppKit
 import Foundation
 import HistoryCore
 import PasteboardAdapter
-import PresentationUI
+@testable import ClipyApp
 import Testing
 
 struct OpaquePasteboardRoundTripTests {

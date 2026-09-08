@@ -1,5 +1,4 @@
 import Dispatch
-import PresentationUI
 
 extension AppDelegate {
     /// TIER-5: one app-owned source, delivered directly to the existing panel
