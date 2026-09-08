@@ -926,6 +926,9 @@ private struct DetailsBody: View {
                 value: DetailsFormat.count(details.item.contentVersion.rawValue, locale: locale)
             )
         }
+        // Native macOS disclosure triangles hang outside their label's
+        // leading edge. Keep that hit target inside this scroll viewport.
+        .padding(.leading, PanelTheme.spacingXLarge)
         .accessibilityIdentifier("clipy.details.info")
     }
 
@@ -1009,6 +1012,7 @@ private struct DetailsBody: View {
                 )
             }
         }
+        .padding(.leading, PanelTheme.spacingXLarge)
     }
 
     /// Whether Revert to Original would change the item: at least one
@@ -1176,6 +1180,7 @@ private struct RepresentationRow: View {
                 }
                 .foregroundStyle(.secondary)
             }
+            .padding(.leading, PanelTheme.spacingXLarge)
             .accessibilityIdentifier("clipy.details.format-details." + representation.identity.accessibilitySuffix)
             .accessibilityLabel(DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + representation.identity.accessibilityLabel)
             .font(.caption)

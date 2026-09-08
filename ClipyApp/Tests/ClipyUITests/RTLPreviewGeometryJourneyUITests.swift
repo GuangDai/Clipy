@@ -121,7 +121,12 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
                         ? preview.frame.minX > divider.frame.midX
                         : preview.frame.maxX < divider.frame.midX)
             }, "\(side) preview must stay on its physical side.\n\(app.debugDescription)")
-            XCTAssertLessThan(filter.frame.maxX, search.frame.minX, app.debugDescription)
+            // Check the same-row menu order again after Settings and the
+            // preview reopen. Search may occupy its own full-width row; its
+            // horizontal origin cannot establish whether the menus mirror.
+            XCTAssertLessThan(filter.frame.maxX, mode.frame.minX, app.debugDescription)
+            XCTAssertLessThan(filter.frame.minY, mode.frame.maxY, app.debugDescription)
+            XCTAssertLessThan(mode.frame.minY, filter.frame.maxY, app.debugDescription)
             let baseline = panel.frame
             let translation: CGFloat = isRight ? 60 : -60
             let start = divider.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))

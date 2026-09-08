@@ -199,14 +199,22 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
             XCTFail(diagnostic(app, context: "missing Details element: \(context)"))
             return
         }
-        // Grouped Form exposes offscreen children as existing. The observed
-        // narrow Details viewport ended at y629 while Content began at y653.
-        // Find the owning Form rather than scrolling a sibling preview or
-        // the other column of the wide Details layout.
+        // Details exposes vertically offscreen children as existing. Find
+        // its owning scroll view rather than scrolling the sibling preview.
         guard let scrollView = details.scrollViews.allElementsBoundByIndex.first(where: {
             $0.descendants(matching: .any).matching(predicate).firstMatch.exists
         }) else {
             XCTFail(diagnostic(app, context: "owning Details scroll view: \(context)"))
+            return
+        }
+        // A vertical wheel cannot reveal a disclosure triangle laid out
+        // beyond the viewport's leading edge. PR #76 exposed precisely this
+        // clipping (triangle x618, viewport x624); keep full horizontal
+        // containment as an explicit regression assertion before scrolling.
+        guard element.frame.minX >= scrollView.frame.minX,
+              element.frame.maxX <= scrollView.frame.maxX else {
+            XCTFail(diagnostic(app, context:
+                "horizontally clipped Details element: \(context); element=\(element.frame), viewport=\(scrollView.frame)"))
             return
         }
         let scrollCoordinate = scrollView.coordinate(
