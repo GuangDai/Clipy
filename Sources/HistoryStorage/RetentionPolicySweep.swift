@@ -74,8 +74,12 @@ extension HistoryAuthority {
                 // Pass 3: select a small ID batch, finalize that SELECT, then
                 // prune its survivors. This avoids mutating a table under an
                 // active scan and keeps retirement-subsumes-prune counts exact.
+                // No second walk is needed when projection found no work.
+                // An active-only byte violation still needs the survivor veto
+                // even if its inactive prune count is zero (V2-02 DC-27).
                 var prunedCount = 0
-                if let policy = newPolicies.revisions {
+                if let policy = newPolicies.revisions,
+                   projectedPrunedCount > 0 || hasUnsatisfiableRevision {
                     var after = ""
                     while true {
                         let batch = try sweepRevisionCandidates(after: after, policy: policy)
@@ -140,7 +144,8 @@ extension HistoryAuthority {
         }
         guard !predicates.isEmpty else { return [] }
         let rows = try database.prepare("""
-            SELECT id FROM history_items WHERE id > ? AND (\(predicates.joined(separator: " OR ")))
+            SELECT id FROM history_items WHERE id > ? AND (revisionCount > 0 OR revisionBytes > 0)
+                AND (\(predicates.joined(separator: " OR ")))
             ORDER BY id LIMIT 32
             """, bindings: bindings)
         defer { rows.finalize() }

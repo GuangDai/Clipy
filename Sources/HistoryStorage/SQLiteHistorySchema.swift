@@ -216,6 +216,13 @@ internal enum SQLiteHistorySchema {
         """
         CREATE INDEX history_items_current_content ON history_items(currentContentID)
         """,
+        // R3 policy sweeps need only revision-bearing IDs and two scalars.
+        // Keep the keyset walk off the large title/search metadata pages;
+        // stores without revisions have an empty candidate index (V2-09 §4).
+        """
+        CREATE INDEX history_items_revision_candidates ON history_items(id, revisionCount, revisionBytes)
+            WHERE revisionCount > 0 OR revisionBytes > 0
+        """,
         """
         CREATE INDEX representations_dedup ON representations(typeKey, byteCount, fingerprint, contentID)
             WHERE fingerprint IS NOT NULL
