@@ -99,7 +99,107 @@ struct SQLiteSearchIndexTests {
                 try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: $0, in: authority.database)
             }
         }
-        #expect(floors == [0.5, 1, 0.5, 0])
+        #expect(floors == [0.5, 1, 0.5, 1.0 / 6.0])
+    }
+
+    @Test func anAbsentGramProvesOneEditEvenWhenEveryQueryScalarExists() async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
+        let body = "abcdef\nx"
+        let item = try await capture(body, in: history, date: 1)
+        let floors = try await history.authority.withTestDatabase { authority in
+            try ["abXdef", "fedcba", "abcdef"].map {
+                try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: $0, in: authority.database)
+            }
+        }
+        #expect(floors == [1.0 / 6.0, 1.0 / 6.0, 0])
+        let corpus = SearchCorpusSnapshot(
+            position: ChangePosition(rawValue: 1),
+            rows: [SearchCorpusRow(
+                id: item.id, contentVersion: item.contentVersion, title: "abcdef", searchBody: body,
+                debugTitleUTF8Bytes: 6, debugSearchBodyUTF8Bytes: body.utf8.count,
+                typeIdentifiers: ["public.utf8-plain-text"], lastCopiedAt: Date(timeIntervalSinceReferenceDate: 1),
+                copyCount: 1, lastSource: nil, pinOrdinal: nil
+            )], debugTrace: SearchDebugTrace(id: UUID(), startedAt: ContinuousClock().now)
+        )
+        let worker = SearchWorker()
+        // This oracle calls the unindexed evaluator directly, so the new
+        // floor cannot hide a counterexample by stopping the SQLite scan.
+        let substitution = try await worker.unindexedScore(term: "abXdef", corpus: corpus)
+        let substitutionScore = try #require(substitution)
+        #expect(substitutionScore == floors[0])
+        if let reversal = try await worker.unindexedScore(term: "fedcba", corpus: corpus) {
+            #expect(reversal >= floors[1])
+        }
+        #expect(try await worker.unindexedScore(term: "abcdef", corpus: corpus) == floors[2])
+    }
+
+    @Test func sparseCandidateThresholdUsesANDSubsetsAndActualORUnion() async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
+            persistence: .temporary, initialMaximumUnpinnedItems: 5_000
+        ))
+        _ = try await history.seedPerformanceFixture(rowCount: 4_097) { index in
+            let boundary = index < 4_096 ? "bnd" : "lst"
+            let half = index < 2_048 ? "lft" : (index < 4_096 ? "rgt" : "")
+            return WSSupport.textCapture(
+                "record\(index)\nall \(boundary) \(half)",
+                observedAt: Date(timeIntervalSinceReferenceDate: Double(index))
+            )
+        }
+        let all = try #require(SQLiteSearchIndex.matchExpression(term: "all", mode: .exact))
+        let boundary = try #require(SQLiteSearchIndex.matchExpression(term: "bnd", mode: .exact))
+        let left = try #require(SQLiteSearchIndex.matchExpression(term: "lft", mode: .exact))
+        let right = try #require(SQLiteSearchIndex.matchExpression(term: "rgt", mode: .exact))
+        let last = try #require(SQLiteSearchIndex.matchExpression(term: "lst", mode: .exact))
+        let missing = try #require(SQLiteSearchIndex.matchExpression(term: "zzz", mode: .exact))
+        let expressions = [
+            boundary, all, missing,
+            "\(all) AND \(boundary)", "\(all) AND \(all)", "\(all) AND \(missing)",
+            "\(left) OR \(right)", "\(boundary) OR \(left)", "\(boundary) OR \(last)",
+        ]
+        let choices = try await history.authority.withTestDatabase { authority in
+            try expressions.map {
+                try SQLiteSearchIndex.prefersSparseCandidates(expression: $0, in: authority.database)
+            }
+        }
+        #expect(choices == [true, false, true, true, false, true, true, true, false])
+        // A frequent existing scalar costs zero edits; repeated absent query
+        // positions each still cost one. Presence does not need its doc count.
+        let floor = try await history.authority.withTestDatabase { authority in
+            try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: "aZZZZZZZ", in: authority.database)
+        }
+        #expect(floor == 0.875)
+    }
+
+    @Test func individuallyDenseGramsCanHaveAnEmptyOrSparseIntersection() async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
+            persistence: .temporary, initialMaximumUnpinnedItems: 9_000
+        ))
+        _ = try await history.seedPerformanceFixture(rowCount: 8_194) { index in
+            WSSupport.textCapture(
+                "record\(index)\nall " + (index < 4_097 ? "abc" : "bcd"),
+                observedAt: Date(timeIntervalSinceReferenceDate: Double(index))
+            )
+        }
+        let first = try #require(SQLiteSearchIndex.matchExpression(term: "abc", mode: .exact))
+        let second = try #require(SQLiteSearchIndex.matchExpression(term: "bcd", mode: .exact))
+        let common = try #require(SQLiteSearchIndex.matchExpression(term: "all", mode: .exact))
+        let intersection = try #require(SQLiteSearchIndex.matchExpression(term: "abcd", mode: .exact))
+        let choices = try await history.authority.withTestDatabase { authority in
+            try [first, second, intersection, "\(first) AND \(common)"].map {
+                try SQLiteSearchIndex.prefersSparseCandidates(expression: $0, in: authority.database)
+            }
+        }
+        // Each side has 4,097 postings, but none share an item. The control
+        // AND really has 4,097 shared items and must retain the dense path.
+        #expect(choices == [false, false, true, false])
+        #expect(try await search("abcd", in: history).rows.isEmpty)
+
+        let matching = try await capture("abcd", in: history, date: 8_195)
+        let sparse = try await history.authority.withTestDatabase { authority in
+            try SQLiteSearchIndex.prefersSparseCandidates(expression: intersection, in: authority.database)
+        }
+        #expect(sparse)
+        #expect(try await search("abcd", in: history).rows.map(\.item) == [matching])
     }
 
     private func capture(_ text: String, in history: SQLiteHistory, date: Double) async throws -> HistoryItemReference {
@@ -127,6 +227,18 @@ struct SQLiteSearchIndexTests {
 
     private func search(_ text: String, in history: SQLiteHistory) async throws -> HistoryPage {
         try await history.browse(HistoryBrowseRequest(kind: .search(text: text, mode: .exact), limit: 100))
+    }
+}
+
+private extension SearchWorker {
+    func unindexedScore(term: String, corpus: SearchCorpusSnapshot) async throws -> Double? {
+        let evaluation = try await evaluateFuzzy(
+            term: term, in: corpus,
+            directive: ScanDirective(continuationAnchor: nil, maximumSurvivors: 2)
+        )
+        guard let first = evaluation.rows.first,
+              case .fuzzyUnpinned(let score, _, _) = first.anchor else { return nil }
+        return score
     }
 }
 #endif

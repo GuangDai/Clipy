@@ -34,9 +34,53 @@ app path contains spaces. These actions do not enable access or grant permission
 `clipyctl --help` (also `-h`) and `clipyctl --version` return without reading
 stdin, credentials, or clipboard history.
 
-The client is bundled at `Clipy.app/Contents/MacOS/clipyctl`. It accepts one
-UTF-8 JSON request on stdin and returns one JSON reply on stdout. For a Clipy
-installation in `/Applications`, list recent items with:
+The client is bundled at `Clipy.app/Contents/MacOS/clipyctl`. Common shell
+commands construct the existing request automatically, including a fresh request
+ID, and return one JSON reply on stdout. These commands do not read stdin:
+
+```sh
+client='/Applications/Clipy.app/Contents/MacOS/clipyctl'
+"$client" recent --limit 20
+"$client" search 'meeting notes'
+"$client" search '^https://' --mode regexp --limit 10
+```
+
+| Command | Options | Permission |
+| --- | --- | --- |
+| `recent` | `--limit N`, `--cursor CURSOR` | Browse Previews |
+| `search QUERY` | `--mode exact\|fuzzy\|regexp`, `--limit N`, `--cursor CURSOR` | Browse Previews |
+| `read LOCATOR` | `--raw --type TYPE`, optional `--item N` with raw output | Read Current Content |
+| `pin LOCATOR` / `unpin LOCATOR` | None | Pin and Unpin Items |
+| `delete LOCATOR` | None | Delete Items |
+
+The default limit is 20; accepted limits are 1 through 500. Search defaults to
+`exact`. Quote the query as a single shell argument to preserve spaces, quotes,
+and regular-expression characters. To continue a page, repeat its command,
+query, mode, and limit with `--cursor` set to that reply's `result.nextCursor`.
+Stop when `nextCursor` is `null`.
+
+Use an item's `locator` from `result.items` to read or organize it:
+
+```sh
+locator='<locator from recent or search>'
+"$client" read "$locator"
+"$client" read "$locator" --raw --type public.utf8-plain-text > clipboard.txt
+"$client" pin "$locator"
+"$client" unpin "$locator"
+"$client" delete "$locator"
+```
+
+`read` maps to `detailsEffective`; it returns current content and does not paste
+or change the system clipboard. `delete` removes the item immediately when the
+connection has permission; it does not ask for confirmation in the terminal.
+Every command still uses the same permissions, bounded request validation, and
+single-send behavior as the JSON interface. Invalid command arguments fail
+before reading credentials or launching Clipy. Duplicate, unknown, and missing
+options are rejected.
+
+For complete script control, invoking the client without a command accepts one
+UTF-8 JSON request on stdin and returns one JSON reply on stdout. This remains
+the interface for `reviseContent` and arbitrary representation arrays:
 
 ```sh
 printf '%s\n' '{"protocolVersion":1,"requestID":"12345678-1234-1234-1234-123456789abc","operation":"browsePreview","arguments":{"limit":20}}' |
@@ -59,7 +103,11 @@ Use a returned item's `locator` for these operations:
 | `reviseContent` | `locator`, `expectedContentVersion`, complete `representations` | Revise Content |
 
 The two content operations return `contentVersion` together with current
-representations as type identifiers and base64 bytes. `pasteEffective` returns a payload to your program; it does
+representations as `pasteboardItemIndex`, type identifiers and base64 bytes.
+One History item represents one copy gesture, which can contain several ordered
+system pasteboard items. Their zero-based indices preserve those boundaries;
+the same type can occur independently in different items.
+`pasteEffective` returns a payload to your program; it does
 not change the system clipboard or simulate a paste. Original content and old
 revisions are not disclosed. Locators and cursors are opaque and expire across
 an app restart; rerun browse/search when they expire.
@@ -67,14 +115,20 @@ an app restart; rerun browse/search when they expire.
 To revise an item, first read its Effective content and retain that reply's
 `contentVersion`. Submit `reviseContent` with that number as
 `expectedContentVersion` and a complete desired representation array. Each
-entry contains exactly `typeIdentifier` and `bytesBase64`. Bytes are preserved
+entry contains `typeIdentifier` and `bytesBase64`, plus `pasteboardItemIndex`
+for its system pasteboard item (omitting the index means item 0). Bytes are preserved
 exactly, including NUL, line endings, and Unicode spelling. Base64 must use its
 standard alphabet and padding, without whitespace. Empty payloads, duplicate
-types, and types absent from the item's original content are rejected. Omitted
-original types become hidden from Effective content.
+types within the same system item, and item/type pairs absent from the original
+content are rejected. Omitted original representations become hidden from
+Effective content, but each original system item must keep a representation.
 
-For binary pipelines, `clipyctl --raw --type TYPE` accepts the same JSON stdin
-request but only for `detailsEffective` or `pasteEffective`. It writes exactly
+For binary pipelines, `clipyctl read LOCATOR --raw --type TYPE` selects one
+representation directly. Add `--item N` to select a particular zero-based
+system item, for example `read LOCATOR --raw --type public.file-url --item 1`.
+Without `--item`, a type present in several items produces an ambiguity error;
+the client never silently selects the first. `clipyctl --raw --type TYPE` also accepts JSON stdin,
+but only for `detailsEffective` or `pasteEffective`. It writes exactly
 the selected representation bytes, without a newline, JSON, or Base64 wrapper.
 NUL bytes and original text encodings are preserved. A missing representation,
 denied read, invalid command, or other failure writes only the bounded error

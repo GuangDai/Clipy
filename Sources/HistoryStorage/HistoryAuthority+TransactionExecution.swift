@@ -292,7 +292,7 @@ extension HistoryAuthority {
         case .setRetentionPolicy(let maximum):
             try database.execute(
                 "UPDATE history_state SET maximumUnpinnedItems = ? WHERE key = ?",
-                bindings: [.integer(Int64(maximum)), .text(Self.positionSingletonKey)]
+                bindings: [maximum.map { .integer(Int64($0)) } ?? .null, .text(Self.positionSingletonKey)]
             )
 
         case .pruneRevisions(let itemID, let removedRevisionIDs, let scalars):
@@ -347,10 +347,11 @@ extension HistoryAuthority {
         for (index, representation) in published.representations.enumerated() {
             try database.execute("""
                 INSERT INTO representations
-                    (contentID, ordinal, exactType, typeKey, byteCount, fingerprint, inlineBytes, blobID)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (contentID, ordinal, pasteboardItemIndex, exactType, typeKey, byteCount, fingerprint, inlineBytes, blobID)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, bindings: [
-                    .text(published.id.uuidString), .integer(Int64(index)), .text(representation.exactType),
+                    .text(published.id.uuidString), .integer(Int64(index)),
+                    .integer(Int64(representation.pasteboardItemIndex)), .text(representation.exactType),
                     .text(representation.typeKey), .integer(Int64(representation.byteCount)),
                     representation.fingerprint.map { .blob(sqliteUInt64($0)) } ?? .null,
                     representation.inline, representation.blobID,
@@ -401,7 +402,7 @@ extension HistoryAuthority {
         let revisions = try statement.integer(at: 2)
         let ordinal = try statement.isNull(at: 3) ? nil : statement.integer(at: 3)
         guard canonical >= 0, revisions >= 0,
-              ordinal.map({ $0 >= 0 && $0 < Int64(limits.hardMaximumRetainedItems) }) ?? true else {
+              ordinal.map({ $0 >= 0 }) ?? true else {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
         return (

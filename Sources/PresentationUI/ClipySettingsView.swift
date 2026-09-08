@@ -11,7 +11,7 @@
 /// §5 (`setRetentionPolicy`, `clear`/`ClearScope`) with receipts per §6;
 /// failure rendering: docs/03b-instruction-set.md §10 via
 /// `FailurePresentation`; bounds: docs/06-cross-cutting.md §2
-/// (`userMaximumUnpinnedRange` 1–5,000, default 200); retention:
+/// (optional positive unpinned count, default 200); retention:
 /// docs/v2/V2-02-retention.md §3.1 (both-nil revision normalization),
 /// §8.1 (action + receipt), §8.3 (admission ranges), §12 (receipt feedback);
 /// UX: docs/v2/V2-07-ux.md §5.2, §6.3, §9 (accessibility).
@@ -694,10 +694,12 @@ private struct RetentionSettingsTab: View {
                     onRefresh: { usageRefreshGeneration += 1 }
                 )
                 Section {
+                    Toggle(RetentionSettingsCopy.countToggle, isOn: countEnabled)
+                        .accessibilityIdentifier("clipy.settings.retention.count-enabled")
                     LabeledContent {
                         HStack {
                             TextField("200", text: maximumUnpinnedText)
-                                .frame(width: 88)
+                                .frame(width: 120)
                                 .multilineTextAlignment(.trailing)
                                 .accessibilityLabel(
                                     RetentionSettingsCopy.maximumUnpinnedAccessibilityLabel
@@ -719,8 +721,9 @@ private struct RetentionSettingsTab: View {
                     } label: {
                         Text(RetentionSettingsCopy.itemsKeepAtMost)
                     }
-                    if maximumUnpinnedValue == nil {
-                        Text(unpinnedRangeHint)
+                    .disabled(!draft.countEnabled)
+                    if !draft.maximumUnpinnedInputIsValid {
+                        Text(RetentionSettingsCopy.countInputHint)
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
@@ -772,6 +775,8 @@ private struct RetentionSettingsTab: View {
                     }
                 } header: {
                     Text(RetentionSettingsCopy.itemsSection)
+                } footer: {
+                    Text(RetentionSettingsCopy.countEnforcementNote)
                 }
                 Section {
                     Toggle(RetentionSettingsCopy.ageToggle, isOn: ageEnabled)
@@ -949,10 +954,14 @@ private struct RetentionSettingsTab: View {
         usageRefreshGeneration += 1
     }
 
-    /// The parsed count, or `nil` when the text is not a whole number
-    /// inside `userMaximumUnpinnedRange` (06 §2).
-    private var maximumUnpinnedValue: Int? {
-        draft.countSubmission()?.maximumUnpinnedItems
+    private var countEnabled: Binding<Bool> {
+        Binding(
+            get: { draft.countEnabled },
+            set: {
+                draft.setCountEnabled($0)
+                countStatus = nil
+            }
+        )
     }
 
     private var maximumUnpinnedText: Binding<String> {
@@ -973,14 +982,6 @@ private struct RetentionSettingsTab: View {
                 draft.maximumUnpinnedStepperValue = $0
                 countStatus = nil
             }
-        )
-    }
-
-    private var unpinnedRangeHint: String {
-        let range = HistoryLimits.standard.userMaximumUnpinnedRange
-        return RetentionSettingsCopy.rangeHint(
-            from: range.lowerBound,
-            to: range.upperBound
         )
     }
 

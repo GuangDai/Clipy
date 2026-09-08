@@ -54,21 +54,27 @@ private final class NonCooperativeLaunchOperation {
     enum Failure: Error { case rejected }
 
     private(set) var entered = false
-    private(set) var completed = false
     private var continuation: CheckedContinuation<Void, Never>?
+    private var entryContinuation: CheckedContinuation<Void, Never>?
 
     func run(shouldFail: Bool = true) async throws {
         entered = true
         await withCheckedContinuation { continuation in
             self.continuation = continuation
+            entryContinuation?.resume()
+            entryContinuation = nil
         }
-        completed = true
         if shouldFail { throw Failure.rejected }
     }
 
     func finish() {
         continuation?.resume()
         continuation = nil
+    }
+
+    func waitForEntry() async {
+        guard !entered else { return }
+        await withCheckedContinuation { entryContinuation = $0 }
     }
 }
 
@@ -83,10 +89,8 @@ struct LaunchAtLoginControllerTests {
 
         controller.setEnabled(true)
 
-        let settled = await waitUntil {
-            controller.presentation.state == .requiresApproval
-        }
-        #expect(settled)
+        await joinPendingOperation(controller) {}
+        #expect(controller.presentation.state == .requiresApproval)
         #expect(recorder.registerCount == 1)
         #expect(!controller.presentation.operationFailed)
     }
@@ -100,10 +104,8 @@ struct LaunchAtLoginControllerTests {
 
         controller.setEnabled(false)
 
-        let settled = await waitUntil {
-            controller.presentation.state == .off
-        }
-        #expect(settled)
+        await joinPendingOperation(controller) {}
+        #expect(controller.presentation.state == .off)
         #expect(recorder.unregisterCount == 1)
         #expect(!controller.presentation.operationFailed)
     }
@@ -119,10 +121,8 @@ struct LaunchAtLoginControllerTests {
         #expect(controller.presentation.isOn)
         controller.setEnabled(false)
 
-        let settled = await waitUntil {
-            controller.presentation.state == .off
-        }
-        #expect(settled)
+        await joinPendingOperation(controller) {}
+        #expect(controller.presentation.state == .off)
         #expect(recorder.registerCount == 0)
         #expect(recorder.unregisterCount == 1)
         #expect(!controller.presentation.operationFailed)
@@ -157,10 +157,8 @@ struct LaunchAtLoginControllerTests {
             operations: register.operations
         )
         registerController.setEnabled(true)
-        let registerFailed = await waitUntil {
-            registerController.presentation.operationFailed
-        }
-        #expect(registerFailed)
+        await joinPendingOperation(registerController) {}
+        #expect(registerController.presentation.operationFailed)
         #expect(registerController.presentation.state == .off)
         #expect(register.registerCount == 1)
     }
@@ -174,10 +172,8 @@ struct LaunchAtLoginControllerTests {
             operations: unregister.operations
         )
         unregisterController.setEnabled(false)
-        let unregisterFailed = await waitUntil {
-            unregisterController.presentation.operationFailed
-        }
-        #expect(unregisterFailed)
+        await joinPendingOperation(unregisterController) {}
+        #expect(unregisterController.presentation.operationFailed)
         #expect(unregisterController.presentation.state == .on)
         #expect(unregister.unregisterCount == 1)
     }
@@ -205,16 +201,11 @@ struct LaunchAtLoginControllerTests {
         #expect(controller.presentation.state == .off)
         controller.setEnabled(true)
         controller.setEnabled(false)
-        let entered = await waitUntil { operation.entered }
-        #expect(entered)
+        await operation.waitForEntry()
         #expect(recorder.registerCount == 1)
         #expect(recorder.unregisterCount == 0)
 
-        operation.finish()
-        let settled = await waitUntil {
-            !controller.presentation.operationPending
-        }
-        #expect(settled)
+        await joinPendingOperation(controller) { operation.finish() }
         #expect(controller.presentation.state == .requiresApproval)
         #expect(!controller.presentation.operationFailed)
     }
@@ -241,44 +232,69 @@ struct LaunchAtLoginControllerTests {
         )
 
         controller.setEnabled(true)
-        let failed = await waitUntil { controller.presentation.operationFailed }
-        #expect(failed)
+        await joinPendingOperation(controller) {}
+        #expect(controller.presentation.operationFailed)
         #expect(!controller.presentation.operationPending)
 
         controller.setEnabled(true)
         #expect(!controller.presentation.operationFailed)
         #expect(controller.presentation.operationPending)
-        let entered = await waitUntil { operation.entered }
-        #expect(entered)
-        operation.finish()
-        let settled = await waitUntil {
-            !controller.presentation.operationPending
-        }
-        #expect(settled)
+        await operation.waitForEntry()
+        await joinPendingOperation(controller) { operation.finish() }
         #expect(controller.presentation.state == .on)
         #expect(!controller.presentation.operationFailed)
     }
 
-    @Test("refresh before a scheduled operation starts prevents its external call")
+    @Test("refresh before a scheduled operation starts preserves the user's request")
     @MainActor
     func refreshBeforeOperationStarts() async {
         let recorder = LaunchAtLoginOperationRecorder(status: .notRegistered)
         let controller = LaunchAtLoginController(operations: recorder.operations)
 
+        recorder.statusAfterRegister = .enabled
         controller.setEnabled(true)
         controller.refresh()
-        #expect(!controller.presentation.operationPending)
-
-        // Join a subsequent operation so the queued main-actor work is driven
-        // to completion; the superseded registration must never run.
-        recorder.statusAfterUnregister = .notFound
+        #expect(controller.presentation.operationPending)
         controller.setEnabled(false)
-        let settled = await waitUntil {
-            controller.presentation.state == .unavailable
-        }
-        #expect(settled)
+
+        await joinPendingOperation(controller) {}
+        #expect(controller.presentation.state == .on)
+        #expect(recorder.registerCount == 1)
+        #expect(recorder.unregisterCount == 0)
+    }
+
+    @Test("activation refresh cannot overlap or hide an outstanding successful operation")
+    @MainActor
+    func refreshDuringSuccessfulOperation() async {
+        let operation = NonCooperativeLaunchOperation()
+        let recorder = LaunchAtLoginOperationRecorder(status: .requiresApproval)
+        let controller = LaunchAtLoginController(operations: LaunchAtLoginOperations(
+            status: { recorder.status },
+            register: { recorder.registerCount += 1 },
+            unregister: {
+                recorder.unregisterCount += 1
+                try await operation.run(shouldFail: false)
+                recorder.status = .notRegistered
+            },
+            openSystemSettings: {}
+        ))
+
+        controller.setEnabled(false)
+        await operation.waitForEntry()
+        recorder.status = .enabled
+        controller.refresh()
+        #expect(controller.presentation.state == .on)
+        #expect(controller.presentation.operationPending)
+        controller.setEnabled(true)
+        controller.setEnabled(false)
         #expect(recorder.registerCount == 0)
         #expect(recorder.unregisterCount == 1)
+
+        await joinPendingOperation(controller) {
+            operation.finish()
+        }
+        #expect(controller.presentation.state == .off)
+        #expect(!controller.presentation.operationFailed)
     }
 
     @Test("refresh follows externally changed approval and registration status")
@@ -317,9 +333,9 @@ struct LaunchAtLoginControllerTests {
         #expect(controller.presentation.state == .requiresApproval)
     }
 
-    @Test("newer refresh fences a noncooperative stale failure")
+    @Test("refresh during an operation preserves its failure and permits subsequent recovery")
     @MainActor
-    func refreshFencesStaleCompletion() async {
+    func refreshPreservesPendingFailureAndLaterRecovery() async {
         let gate = NonCooperativeLaunchOperation()
         let status = LaunchAtLoginOperationRecorder(status: .notRegistered)
         let operations = LaunchAtLoginOperations(
@@ -331,31 +347,43 @@ struct LaunchAtLoginControllerTests {
         let controller = LaunchAtLoginController(operations: operations)
 
         controller.setEnabled(true)
-        let entered = await waitUntil { gate.entered }
-        #expect(entered)
+        await gate.waitForEntry()
         status.status = .enabled
         controller.refresh()
         #expect(controller.presentation.state == .on)
         #expect(!controller.presentation.operationFailed)
+        #expect(controller.presentation.operationPending)
+
+        await joinPendingOperation(controller) { gate.finish() }
+        #expect(controller.presentation.state == .on)
+        #expect(controller.presentation.operationFailed)
         #expect(!controller.presentation.operationPending)
 
-        gate.finish()
-        let completed = await waitUntil { gate.completed }
-        #expect(completed)
-        #expect(controller.presentation.state == .on)
+        status.status = .notRegistered
+        controller.refresh()
+        #expect(controller.presentation.state == .off)
         #expect(!controller.presentation.operationFailed)
     }
 
+    /// Join the actual completion publication; activation races need no
+    /// elapsed-time deadline or repeated scheduler/status sampling.
     @MainActor
-    private func waitUntil(
-        _ condition: @MainActor () -> Bool
-    ) async -> Bool {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .seconds(2))
-        while clock.now < deadline {
-            if condition() { return true }
-            try? await Task.sleep(for: .milliseconds(10))
+    private func joinPendingOperation(
+        _ controller: LaunchAtLoginController,
+        finish: @MainActor () -> Void
+    ) async {
+        guard controller.presentation.operationPending else {
+            finish()
+            return
         }
-        return condition()
+        await withCheckedContinuation { continuation in
+            controller.onPresentationChanged = { value in
+                guard !value.operationPending else { return }
+                controller.onPresentationChanged = nil
+                continuation.resume()
+            }
+            finish()
+        }
     }
+
 }

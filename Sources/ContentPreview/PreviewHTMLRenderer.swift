@@ -58,7 +58,7 @@ internal enum PreviewHTMLRenderer {
         var templateDepth = 0
         var rawTextTag: String?
         var textAreaActive = false
-        var ignoreLeadingTextAreaNewline = false
+        var ignoreLeadingNewline = false
         var isSuppressed: Bool { headDepth > 0 || templateDepth > 0 }
 
         init(_ source: String, maximumOutputBytes: Int) {
@@ -70,12 +70,13 @@ internal enum PreviewHTMLRenderer {
         mutating func render() throws -> PreviewText {
             while index != scalars.endIndex, !truncated {
                 let scalar = scalars[index]
-                // HTML input preprocessing folds CR/CRLF to LF. Preserve
-                // the resulting textarea line breaks as visible field text.
-                if textAreaActive, scalar == "\r" {
+                // HTML input preprocessing folds source CR/CRLF to LF.
+                // Do this before text extraction, including preformatted
+                // code, but never change a CR produced by `&#13;`.
+                if scalar == "\r" {
                     try advance()
                     if index != scalars.endIndex, scalars[index] == "\n" { try advance() }
-                    if !isSuppressed { append("\n") }
+                    if rawTextTag == nil, !isSuppressed { append("\n") }
                     continue
                 }
                 if scalar == "<" {
@@ -100,6 +101,10 @@ internal enum PreviewHTMLRenderer {
                            let tag = try consumeTag() { handle(tag) }
                         continue
                     }
+                    // The pre rule applies to its next token only. A comment
+                    // or child tag ends that opportunity even if it supplies
+                    // no visible text; textarea markup remains literal above.
+                    ignoreLeadingNewline = false
                     if try consumeComment() { continue }
                     if let tag = try consumeTag() {
                         handle(tag)
@@ -218,7 +223,7 @@ internal enum PreviewHTMLRenderer {
             }
             if tag.name == "textarea" {
                 textAreaActive = !tag.closing
-                ignoreLeadingTextAreaNewline = !tag.closing
+                ignoreLeadingNewline = !tag.closing
                 if !isSuppressed { separate("\n") }
                 return
             }
@@ -234,6 +239,9 @@ internal enum PreviewHTMLRenderer {
             guard !isSuppressed else { return }
             if tag.name == "pre" {
                 preDepth = tag.closing ? max(0, preDepth - 1) : preDepth + 1
+                // WHATWG parsing.html#parsing-main-inbody: ignore one LF
+                // character token immediately after the opening pre tag.
+                ignoreLeadingNewline = !tag.closing
             }
             if Self.blockTags.contains(tag.name) || tag.name == "br" || tag.name == "hr" {
                 separate("\n")
@@ -249,8 +257,8 @@ internal enum PreviewHTMLRenderer {
 
         mutating func append(_ scalar: Unicode.Scalar) {
             guard !truncated else { return }
-            if textAreaActive, ignoreLeadingTextAreaNewline {
-                ignoreLeadingTextAreaNewline = false
+            if ignoreLeadingNewline {
+                ignoreLeadingNewline = false
                 if scalar == "\n" { return }
             }
             // HTML collapses only ASCII whitespace. NBSP remains selectable

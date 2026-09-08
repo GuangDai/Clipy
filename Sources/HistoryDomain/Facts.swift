@@ -183,16 +183,13 @@ package struct ClearFacts: Sendable {
 /// The single v1 user retention dimension: maximum unpinned item count.
 /// docs/02-domain.md §5.5
 ///
-/// `maximumUnpinnedItems` is at least 1 and no greater than the configured
-/// hard retained-item bound (the Part VI user range is 1–5,000). 0 is
-/// rejected at the `HistoryStorage` boundary (typed `invalidInput`), so
-/// planning always receives a policy that permits at least one unpinned item
-/// (D19). Pinned items are exempt from the user policy, but not from the
-/// global hard safety bound.
+/// Nil disables count retention. A positive value limits only unpinned
+/// items; there is no separate total-item cap (V2-09 §9). Storage rejects
+/// non-positive configured values before Domain planning.
 package struct RetentionPolicy: Sendable, Hashable {
-    package let maximumUnpinnedItems: Int
+    package let maximumUnpinnedItems: Int?
 
-    package init(maximumUnpinnedItems: Int) {
+    package init(maximumUnpinnedItems: Int?) {
         self.maximumUnpinnedItems = maximumUnpinnedItems
     }
 }

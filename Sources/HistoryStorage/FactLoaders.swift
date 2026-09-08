@@ -139,26 +139,24 @@ internal enum HistoryItemRowHydration {
               metadata.byteCount <= (metadata.ordinal == 0 ? limits.maximumCaptureBytes : limits.maximumProposedRevisionBytes)
         else { throw corrupt }
         let rows = try database.prepare("""
-            SELECT ordinal,exactType,typeKey,byteCount,fingerprint,inlineBytes,blobID
+            SELECT ordinal,exactType,typeKey,byteCount,fingerprint,inlineBytes,blobID,pasteboardItemIndex
             FROM representations WHERE contentID=? ORDER BY ordinal
             """, bindings: [.text(metadata.id.uuidString)])
         defer { rows.finalize() }
-        var types = Set<String>()
+        var keys: [ContentRepresentationKey] = []
         var total = 0
         var representationCount = 0
-        var previousType: String?
         while try rows.step() {
             try autoreleasepool {
                 let type = try rows.text(at: 1)
                 let count = try integer(rows, 3)
+                let itemIndex = try integer(rows, 7)
                 guard try integer(rows, 0) == representationCount,
                       !type.isEmpty, type.utf8.count <= limits.maximumTypeIdentifierUTF8Bytes,
                       try rows.text(at: 2) == type.precomposedStringWithCanonicalMapping,
-                      types.insert(type).inserted, count > 0, count <= limits.maximumRepresentationBytes,
+                      itemIndex >= 0, count > 0, count <= limits.maximumRepresentationBytes,
                       representationCount < metadata.representationCount else { throw corrupt }
-                if let previousType {
-                    guard previousType.unicodeScalars.lexicographicallyPrecedes(type.unicodeScalars) else { throw corrupt }
-                }
+                keys.append(ContentRepresentationKey(pasteboardItemIndex: itemIndex, typeIdentifier: type))
                 let inline = try rows.optionalBlob(at: 5)
                 let blobID = try rows.optionalText(at: 6)
                 let bytes: Data
@@ -170,22 +168,27 @@ internal enum HistoryItemRowHydration {
                 guard bytes.count == count else { throw corrupt }
                 let fingerprint = try rows.optionalBlob(at: 4).map { ContentFingerprint(rawValue: try sqliteUInt64($0)) }
                 guard (metadata.ordinal == 0) == (fingerprint != nil) else { throw corrupt }
-                visit(ContentRepresentation(typeIdentifier: type, bytes: bytes), fingerprint)
+                visit(ContentRepresentation(typeIdentifier: type, bytes: bytes, pasteboardItemIndex: itemIndex), fingerprint)
                 representationCount += 1
-                previousType = type
                 total += count
             }
         }
         guard representationCount == metadata.representationCount, total == metadata.byteCount else { throw corrupt }
+        try mapCodecFailure { try CodecValidation.requireNormalizedRepresentationOrder(keys) }
         if metadata.ordinal > 0 {
             let canonicalTypes = try database.prepare("""
-                SELECT r.typeKey FROM representations r JOIN contents c ON c.id=r.contentID
+                SELECT r.pasteboardItemIndex,r.typeKey FROM representations r JOIN contents c ON c.id=r.contentID
                 WHERE c.itemID=? AND c.revisionOrdinal=0
                 """, bindings: [.text(itemID.rawValue.uuidString)])
             defer { canonicalTypes.finalize() }
-            var allowed = Set<String>()
-            while try canonicalTypes.step() { allowed.insert(try canonicalTypes.text(at: 0)) }
-            guard types.isSubset(of: allowed) else { throw corrupt }
+            var allowed = Set<ContentRepresentationKey>()
+            while try canonicalTypes.step() {
+                allowed.insert(ContentRepresentationKey(
+                    pasteboardItemIndex: try integer(canonicalTypes, 0), typeIdentifier: try canonicalTypes.text(at: 1)
+                ))
+            }
+            guard Set(keys).isSubset(of: allowed),
+                  keys.last?.pasteboardItemIndex == allowed.map(\.pasteboardItemIndex).max() else { throw corrupt }
         }
     }
 
@@ -224,14 +227,15 @@ internal enum IngestFactLoader {
         if match == nil {
             var sql = """
                 SELECT c.itemID FROM representations r JOIN contents c ON c.id=r.contentID
-                WHERE c.revisionOrdinal=0 AND r.typeKey=? AND r.byteCount=? AND r.fingerprint=?
+                WHERE c.revisionOrdinal=0 AND r.pasteboardItemIndex=? AND r.typeKey=? AND r.byteCount=? AND r.fingerprint=?
                 """
             var bindings: [SQLiteValue] = []
             for (index, representation) in prepared.canonical.representations.enumerated() {
                 if index > 0 {
-                    sql += " AND EXISTS(SELECT 1 FROM representations s WHERE s.contentID=c.id AND s.typeKey=? AND s.byteCount=? AND s.fingerprint=?)"
+                    sql += " AND EXISTS(SELECT 1 FROM representations s WHERE s.contentID=c.id AND s.pasteboardItemIndex=? AND s.typeKey=? AND s.byteCount=? AND s.fingerprint=?)"
                 }
-                bindings += [.text(representation.content.typeIdentifier.precomposedStringWithCanonicalMapping),
+                bindings += [.integer(Int64(representation.content.pasteboardItemIndex)),
+                             .text(representation.content.typeIdentifier.precomposedStringWithCanonicalMapping),
                              .integer(Int64(representation.content.bytes.count)), .blob(sqliteUInt64(representation.fingerprint.rawValue))]
             }
             let candidates = try database.prepare(sql, bindings: bindings)
@@ -257,7 +261,7 @@ internal enum IngestFactLoader {
         guard try state.step() else { throw HistoryFailure.persistence(.invariantViolation) }
         let retained = try HistoryItemRowHydration.integer(state, 0)
         let pinned = try HistoryItemRowHydration.integer(state, 1)
-        guard retained >= 0, retained <= limits.hardMaximumRetainedItems, pinned >= 0, pinned <= retained else {
+        guard retained >= 0, pinned >= 0, pinned <= retained else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
         let unpinned = retained - pinned
@@ -276,7 +280,7 @@ internal enum IngestFactLoader {
         do {
             victimCount = try captureRetirementCount(
                 confirmedMatch: match, retainedCount: retained, unpinnedCount: unpinned,
-                retention: retention, hardMaximumRetainedItems: limits.hardMaximumRetainedItems
+                retention: retention
             )
         } catch let rejection as DomainRejection {
             throw rejection.historyFailure

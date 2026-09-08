@@ -3,6 +3,7 @@
 import Darwin
 import Foundation
 import HistoryCore
+import HistoryStorage
 
 struct SQLiteScaleMemory: Codable, Sendable {
     let residentBytes: UInt64
@@ -33,12 +34,14 @@ struct SQLiteScaleSample: Codable, Sendable {
     let elapsedMilliseconds: Double
     let before: SQLiteScaleMemory
     let after: SQLiteScaleMemory?
-    let rowsVisited: Int?
+    let returnedRows: Int?
+    let processedFixtureRows: Int?
     /// Bytes explicitly returned by purpose-specific content reads. This is
     /// neither total process-owned memory nor retained logical store bytes.
     let returnedContentBytes: Int?
     let failure: String?
     let query: SQLiteScaleQuery?
+    let searchWork: SQLiteScaleSearchWork?
 }
 
 struct SQLiteScaleDisk: Codable, Sendable {
@@ -90,7 +93,8 @@ struct SQLiteScaleUsage: Codable, Sendable {
 struct SQLiteScaleReport: Codable, Sendable {
     let mode: String
     let retainedRows: Int
-    let bodyBytes: Int
+    let bodyBytes: Int?
+    let fixtureStatistics: SQLiteScaleFixtureStatistics
     let operatingSystem: String
     let physicalMemoryBytes: UInt64
     let samples: [SQLiteScaleSample]
@@ -106,21 +110,25 @@ func measureSQLiteScale<T>(
     samples: inout [SQLiteScaleSample],
     query: SQLiteScaleQuery? = nil,
     operation: () async throws -> T,
-    facts: (T) -> (rows: Int, contentBytes: Int) = { _ in (0, 0) }
+    facts: (T) throws -> (rows: Int, contentBytes: Int) = { _ in (0, 0) },
+    searchWork: (T) -> SQLiteScaleSearchWork? = { _ in nil },
+    fixtureRows: (T) -> Int? = { _ in nil }
 ) async throws -> T {
     let before = try SQLiteScaleMemory.read()
     let clock = ContinuousClock()
     let start = clock.now
+    var work: SQLiteScaleSearchWork?
     do {
         let result = try await operation()
+        work = searchWork(result)
         let elapsed = durationToMs(start.duration(to: clock.now))
         let after = try SQLiteScaleMemory.read()
-        let resultFacts = facts(result)
+        let resultFacts = try facts(result)
         samples.append(SQLiteScaleSample(
             phase: phase, elapsedMilliseconds: elapsed,
             before: before, after: after,
-            rowsVisited: resultFacts.rows, returnedContentBytes: resultFacts.contentBytes,
-            failure: nil, query: query
+            returnedRows: resultFacts.rows, processedFixtureRows: fixtureRows(result), returnedContentBytes: resultFacts.contentBytes,
+            failure: nil, query: query, searchWork: work
         ))
         print("sqlite-scale phase=\(phase) elapsedMs=\(elapsed) rss=\(after.residentBytes)")
         return result
@@ -131,10 +139,29 @@ func measureSQLiteScale<T>(
         samples.append(SQLiteScaleSample(
             phase: phase, elapsedMilliseconds: elapsed,
             before: before, after: try? SQLiteScaleMemory.read(),
-            rowsVisited: nil, returnedContentBytes: nil,
-            failure: String(describing: error), query: query
+            returnedRows: nil, processedFixtureRows: nil, returnedContentBytes: nil,
+            failure: String(describing: error), query: query, searchWork: work
         ))
         print("sqlite-scale phase=\(phase) failed=\(error)")
         throw error
+    }
+}
+
+/// Request-local work returned by the same production scan, including partial
+/// work when its deadline/failure terminates the request. SQL posting-list and
+/// planner work are not represented by these Swift row counters.
+struct SQLiteScaleSearchWork: Codable, Sendable {
+    let rowsDecoded: Int
+    let rowsEvaluated: Int
+    let matchesFound: Int
+    let batchCount: Int
+    let stopReason: String
+
+    init(_ metrics: SearchWorkMetrics) {
+        rowsDecoded = metrics.rowsDecoded
+        rowsEvaluated = metrics.rowsEvaluated
+        matchesFound = metrics.matchesFound
+        batchCount = metrics.batchCount
+        stopReason = metrics.stopReason.rawValue
     }
 }

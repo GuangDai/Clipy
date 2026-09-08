@@ -86,7 +86,9 @@ struct ClipboardHistoryItemEntity: TransientAppEntity {
         let historyDetails = details.details
         id = historyDetails.item.id.description
         title = details.title
-        typeIdentifiers = historyDetails.effective.map(\.typeIdentifier)
+        typeIdentifiers = Array(Set(historyDetails.effective.map(\.typeIdentifier))).sorted {
+            $0.unicodeScalars.lexicographicallyPrecedes($1.unicodeScalars)
+        }
         lastCopiedAt = historyDetails.occurrence.lastCopiedAt
         copyCount = String(historyDetails.occurrence.count)
         lastSource = historyDetails.occurrence.lastSource

@@ -96,8 +96,8 @@ internal actor HistoryAuthority {
     }
 
     @discardableResult
-    internal func performStartup(initialMaximumUnpinnedItems: Int) async throws -> ExternalConnectionID {
-        guard limits.userMaximumUnpinnedRange.contains(initialMaximumUnpinnedItems) else {
+    internal func performStartup(initialMaximumUnpinnedItems: Int?) async throws -> ExternalConnectionID {
+        guard initialMaximumUnpinnedItems.map(limits.userMaximumUnpinnedRange.contains) ?? true else {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
         do {
@@ -129,7 +129,7 @@ internal actor HistoryAuthority {
     /// EXISTS stops at its first row; no table is materialized (V2-09 §4).
     internal static func ensurePositionSingleton(
         in database: SQLiteDatabase,
-        initialMaximumUnpinnedItems: Int,
+        initialMaximumUnpinnedItems: Int?,
         limits: HistoryLimits
     ) throws {
         let existing = try database.prepare("SELECT key FROM history_state LIMIT 2")
@@ -165,7 +165,7 @@ internal actor HistoryAuthority {
             VALUES (?, ?, ?, 0, 0, 0, 0)
             """, bindings: [
                 .text(positionSingletonKey), .blob(sqliteUInt64(0)),
-                .integer(Int64(initialMaximumUnpinnedItems)),
+                initialMaximumUnpinnedItems.map { .integer(Int64($0)) } ?? .null,
             ])
     }
 }

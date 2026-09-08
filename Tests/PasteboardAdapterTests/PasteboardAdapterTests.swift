@@ -3,9 +3,8 @@
 ///
 /// - Capture freezes all retainable typed representations of the pasteboard
 ///   item (03a §4; 01 §5.1).
-/// - Multiple pasteboard items produce an explicit unsupported shape before
-///   payload access; the adapter never flattens duplicate types or silently
-///   presents the first item as the complete clipboard gesture (CLIP-7).
+/// - Multiple pasteboard items preserve their order, duplicate types on
+///   different items, and byte-exact payloads through capture and paste.
 /// - A sibling `org.nspasteboard.ConcealedType` — and every other marker in
 ///   the configured private/transient set — short-circuits the WHOLE item
 ///   before any payload accessor runs; the explicit concealed outcome has
@@ -239,50 +238,124 @@ func captureOfEmptyPasteboardReturnsNil() {
     #expect(PasteboardAdapter(pasteboard: pasteboard).capture() == nil)
 }
 
-#if DEBUG
 @Test @MainActor
-func multipleItemsAreExplicitlyUnsupportedBeforeAnyPayloadRead() throws {
+func multipleItemsPreserveOrderRepeatedTypesAndExactBytesThroughPaste() throws {
     let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-
     let first = NSPasteboardItem()
-    #expect(first.setData(Data("first".utf8), forType: .string))
-    #expect(
-        first.setData(
-            Data("first-custom".utf8),
-            forType: NSPasteboard.PasteboardType("com.clipy.tests.first")
-        )
-    )
     let second = NSPasteboardItem()
-    #expect(second.setData(Data("second".utf8), forType: .string))
-    #expect(
-        second.setData(
-            Data("second-custom".utf8),
-            forType: NSPasteboard.PasteboardType("com.clipy.tests.second")
-        )
-    )
+    let custom = NSPasteboard.PasteboardType("com.clipy.tests.opaque")
+    let firstText = Data("first\u{0}\n".utf8)
+    let secondText = Data("second\u{301}".utf8)
+    let firstOpaque = Data([0x00, 0xFF, 0x81])
+    let secondOpaque = Data([0xFF, 0x00, 0x82])
+    #expect(first.setData(firstText, forType: .string))
+    #expect(first.setData(firstOpaque, forType: custom))
+    #expect(second.setData(secondText, forType: .string))
+    #expect(second.setData(secondOpaque, forType: custom))
     #expect(pasteboard.writeObjects([first, second]))
+    let adapter = PasteboardAdapter(pasteboard: pasteboard)
+    let capture = try #require(adapter.capture())
+    #expect(capture.representations.count == 4)
+    #expect(capture.representations.map(\.pasteboardItemIndex) == [0, 0, 1, 1])
+    let id = HistoryItemID(rawValue: UUID())
+    try adapter.write(PastePayload(
+        item: HistoryItemReference(id: id, contentVersion: .initial),
+        representations: capture.representations.reversed().map {
+            HistoryRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes,
+                pasteboardItemIndex: $0.pasteboardItemIndex)
+        }, lineageHint: id
+    ))
+    let written = try #require(pasteboard.pasteboardItems)
+    #expect(written.count == 2)
+    #expect(written[0].data(forType: .string) == firstText)
+    #expect(written[1].data(forType: .string) == secondText)
+    #expect(written[0].data(forType: custom) == firstOpaque)
+    #expect(written[1].data(forType: custom) == secondOpaque)
+    let recaptured = try #require(adapter.capture())
+    #expect(recaptured.origin.lineageHint == id)
+    #expect(Set(recaptured.representations) == Set(capture.representations))
+}
 
-    var payloadAccessorCalls: [String] = []
-    var adapter = PasteboardAdapter(pasteboard: pasteboard)
-    adapter.payloadReadObserver = { typeIdentifier in
-        payloadAccessorCalls.append(typeIdentifier)
+@Test @MainActor
+func multiItemLineageRequiresTheSameValidHintOnEveryItem() throws {
+    let id = HistoryItemID(rawValue: UUID())
+    for secondHint in [Optional<Data>.none, Data("invalid".utf8), PasteboardLineageHint.encode(HistoryItemID(rawValue: UUID()))] {
+        let pasteboard = makePasteboard()
+        let first = NSPasteboardItem()
+        let second = NSPasteboardItem()
+        #expect(first.setString("one", forType: .string))
+        #expect(second.setString("two", forType: .string))
+        let hintType = NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier)
+        #expect(first.setData(PasteboardLineageHint.encode(id), forType: hintType))
+        if let secondHint { #expect(second.setData(secondHint, forType: hintType)) }
+        #expect(pasteboard.writeObjects([first, second]))
+        let capture = try #require(PasteboardAdapter(pasteboard: pasteboard).capture())
+        #expect(capture.origin.lineageHint == nil)
+        #expect(capture.representations.count == 2)
     }
+}
 
-    let outcome = try #require(adapter.captureOutcome())
-
-    #expect(payloadAccessorCalls.isEmpty)
-    guard case let .unsupportedMultiItem(unsupported) = outcome else {
-        Issue.record("expected the unsupported multi-item outcome")
+@Test @MainActor
+func multiItemEmptyConstituentIsNotSilentlyDropped() throws {
+    let pasteboard = makePasteboard()
+    let first = NSPasteboardItem()
+    let second = NSPasteboardItem()
+    #expect(first.setString("one", forType: .string))
+    #expect(second.setData(Data(), forType: .string))
+    #expect(pasteboard.writeObjects([first, second]))
+    let adapter = PasteboardAdapter(pasteboard: pasteboard)
+    guard case .unsupportedMultiItem(let unsupported) = adapter.captureOutcome() else {
+        Issue.record("An empty constituent item must not disappear from a complete capture")
         return
     }
     #expect(unsupported.itemCount == 2)
-    #expect(unsupported.changeCount == pasteboard.changeCount)
-    // The convenience API must not disguise the first item as the complete
-    // clipboard gesture when the public capture model cannot preserve the
-    // two item boundaries or their duplicate string representations.
     #expect(adapter.capture() == nil)
+}
+
+#if DEBUG
+@Test(arguments: concealmentMarkers) @MainActor
+func privacyMarkerOnLaterItemRejectsWholeGestureBeforePayloadRead(marker: String) throws {
+    let pasteboard = makePasteboard()
+    let first = NSPasteboardItem()
+    let second = NSPasteboardItem()
+    #expect(first.setString("private sibling", forType: .string))
+    #expect(second.setString("private", forType: .string))
+    #expect(second.setData(Data([1]), forType: NSPasteboard.PasteboardType(marker)))
+    #expect(pasteboard.writeObjects([first, second]))
+    var payloadAccessorCalls: [String] = []
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadObserver = { payloadAccessorCalls.append($0) }
+    guard case .concealed(let concealed) = adapter.captureOutcome() else {
+        Issue.record("A marker on any item must exclude the complete capture")
+        return
+    }
+    #expect(concealed.markerTypeIdentifier == marker)
     #expect(payloadAccessorCalls.isEmpty)
+}
+#endif
+
+#if DEBUG
+@Test @MainActor
+func laterItemStagingFailurePreservesTheExistingPasteboard() throws {
+    let pasteboard = makePasteboard()
+    #expect(pasteboard.setString("keep prior clipboard", forType: .string))
+    let oldChangeCount = pasteboard.changeCount
+    let rejectedType = "com.clipy.tests.rejected-later-item"
+    let adapter = PasteboardAdapter(pasteboard: pasteboard,
+        failureSimulation: PasteboardFailureSimulation(rejectedWriteTypeIdentifiers: [rejectedType]))
+    let id = HistoryItemID(rawValue: UUID())
+    let payload = PastePayload(
+        item: HistoryItemReference(id: id, contentVersion: .initial),
+        representations: [
+            HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("first".utf8)),
+            HistoryRepresentation(typeIdentifier: rejectedType, bytes: Data([1]), pasteboardItemIndex: 1)
+        ], lineageHint: id
+    )
+    #expect(throws: PasteboardWriteFailure.representationsRejected(typeIdentifiers: [rejectedType])) {
+        try adapter.write(payload)
+    }
+    #expect(pasteboard.changeCount == oldChangeCount)
+    #expect(pasteboard.string(forType: .string) == "keep prior clipboard")
 }
 #endif
 
@@ -874,3 +947,125 @@ func observerStopHaltsDelivery() {
     #expect(!deliveredAfterStop)
     #expect(received.count == 1)
 }
+
+#if DEBUG
+/// Real named-pasteboard limits, serialized so the two native large-payload
+/// cases do not overlap their provider allocations with one another.
+@Suite(.serialized) @MainActor
+struct CaptureResourceLimitTests {
+    @Test(arguments: [false, true])
+    func excessiveDeclaredFormatsOrItemsStopBeforePayloadReads(tooManyItems: Bool) throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let count = HistoryLimits.standard.maximumRepresentationsPerCaptureOrRevision + 1
+        var items: [NSPasteboardItem] = []
+        if tooManyItems {
+            for _ in 0..<count {
+                let item = NSPasteboardItem()
+                #expect(item.setData(Data([1]), forType: .string))
+                items.append(item)
+            }
+        } else {
+            let item = NSPasteboardItem()
+            for index in 0..<count {
+                #expect(item.setData(Data([1]), forType: .init("com.clipy.tests.limit.\(index)")))
+            }
+            items.append(item)
+        }
+        #expect(pasteboard.writeObjects(items))
+        var reads = 0
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadObserver = { _ in reads += 1 }
+        guard case .unsupportedMultiItem(let rejected) = adapter.captureOutcome() else {
+            Issue.record("Over-limit declarations must produce a content-free rejection")
+            return
+        }
+        #expect(rejected.itemCount == items.count)
+        #expect(rejected.changeCount == pasteboard.changeCount)
+        #expect(reads == 0)
+    }
+
+    @Test func privacyOnLastItemTakesPrecedenceOverTheDeclarationLimit() throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        var items: [NSPasteboardItem] = []
+        for _ in 0...HistoryLimits.standard.maximumRepresentationsPerCaptureOrRevision {
+            let item = NSPasteboardItem()
+            #expect(item.setData(Data([1]), forType: .string))
+            items.append(item)
+        }
+        let last = try #require(items.last)
+        let marker = "org.nspasteboard.ConcealedType"
+        #expect(last.setData(Data([1]), forType: .init(marker)))
+        #expect(pasteboard.writeObjects(items))
+        var reads = 0
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadObserver = { _ in reads += 1 }
+        guard case .concealed(let concealed) = adapter.captureOutcome() else {
+            Issue.record("Privacy must remain a quiet whole-gesture exclusion even over resource limits")
+            return
+        }
+        #expect(concealed.markerTypeIdentifier == marker)
+        #expect(reads == 0)
+    }
+
+    @Test func lineageMetadataDoesNotConsumeTheRepresentationLimit() throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let item = NSPasteboardItem()
+        let limit = HistoryLimits.standard.maximumRepresentationsPerCaptureOrRevision
+        for index in 0..<limit {
+            #expect(item.setData(Data([1]), forType: .init("com.clipy.tests.limit.\(index)")))
+        }
+        let id = HistoryItemID(rawValue: UUID())
+        #expect(item.setData(PasteboardLineageHint.encode(id), forType: .init(PasteboardLineageHint.typeIdentifier)))
+        #expect(pasteboard.writeObjects([item]))
+        let capture = try #require(PasteboardAdapter(pasteboard: pasteboard).capture())
+        #expect(capture.representations.count == limit)
+        #expect(capture.origin.lineageHint == id)
+    }
+
+    @Test func oversizedRepresentationStopsBeforeTheNextItemProvider() throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let first = NSPasteboardItem()
+        let second = NSPasteboardItem()
+        let type = NSPasteboard.PasteboardType("com.clipy.tests.oversized")
+        #expect(first.setData(Data(repeating: 0x61,
+            count: HistoryLimits.standard.maximumRepresentationBytes + 1), forType: type))
+        #expect(second.setData(Data([1]), forType: .string))
+        #expect(pasteboard.writeObjects([first, second]))
+        var reads: [String] = []
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadObserver = { reads.append($0) }
+        guard case .unsupportedMultiItem = adapter.captureOutcome() else {
+            Issue.record("An oversized representation must reject the entire gesture")
+            return
+        }
+        #expect(reads == [type.rawValue])
+    }
+
+    @Test func aggregateByteLimitStopsFurtherProvidersAndExposesNoPartialCapture() throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let limit = HistoryLimits.standard.maximumRepresentationBytes
+        let bytes = Data(repeating: 0x61, count: limit)
+        var items: [NSPasteboardItem] = []
+        for index in 0..<4 {
+            let item = NSPasteboardItem()
+            #expect(item.setData(index < 2 ? bytes : Data([1]),
+                forType: .init("com.clipy.tests.aggregate.\(index)")))
+            items.append(item)
+        }
+        #expect(pasteboard.writeObjects(items))
+        var reads: [String] = []
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadObserver = { reads.append($0) }
+        guard case .unsupportedMultiItem = adapter.captureOutcome() else {
+            Issue.record("Cross-item bytes exceeding the capture budget must reject the complete gesture")
+            return
+        }
+        #expect(reads == (0..<3).map { "com.clipy.tests.aggregate.\($0)" })
+    }
+}
+#endif

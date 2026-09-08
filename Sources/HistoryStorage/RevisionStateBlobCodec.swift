@@ -43,6 +43,13 @@ internal struct StoredRevisionV1: Codable, Sendable {
 internal struct StoredRepresentationV1: Codable, Sendable {
     internal let typeIdentifier: String
     internal let bytes: Data
+    internal let pasteboardItemIndex: Int
+
+    internal init(typeIdentifier: String, bytes: Data, pasteboardItemIndex: Int = 0) {
+        self.typeIdentifier = typeIdentifier
+        self.bytes = bytes
+        self.pasteboardItemIndex = pasteboardItemIndex
+    }
 }
 
 // MARK: - Codec (docs/05-authority-kernel.md §4)
@@ -88,7 +95,8 @@ internal enum RevisionStateBlobCodec {
             representations: revision.content.representations.map { representation in
                 StoredRepresentationV1(
                     typeIdentifier: representation.typeIdentifier,
-                    bytes: representation.bytes
+                    bytes: representation.bytes,
+                    pasteboardItemIndex: representation.pasteboardItemIndex
                 )
             }
         )
@@ -158,10 +166,10 @@ internal enum RevisionStateBlobCodec {
                 bound: limits.maximumRevisionsPerItem
             )
         }
-        var canonicalTypes = Set<String>()
+        var canonicalTypes = Set<ContentRepresentationKey>()
         canonicalTypes.reserveCapacity(canonical.representations.count)
         for representation in canonical.representations {
-            canonicalTypes.insert(representation.content.typeIdentifier)
+            canonicalTypes.insert(representation.content.key)
         }
         var seenRevisionIDs = Set<UUID>()
         seenRevisionIDs.reserveCapacity(wire.revisions.count)
@@ -184,8 +192,6 @@ internal enum RevisionStateBlobCodec {
                 )
             }
             var revisionBytes = 0
-            var typeIdentifiers: [String] = []
-            typeIdentifiers.reserveCapacity(stored.representations.count)
             var contentRepresentations: [ContentRepresentation] = []
             contentRepresentations.reserveCapacity(stored.representations.count)
             for representation in stored.representations {
@@ -214,11 +220,11 @@ internal enum RevisionStateBlobCodec {
                     )
                 }
                 revisionBytes = newRevisionBytes
-                typeIdentifiers.append(representation.typeIdentifier)
                 contentRepresentations.append(
                     ContentRepresentation(
                         typeIdentifier: representation.typeIdentifier,
-                        bytes: representation.bytes
+                        bytes: representation.bytes,
+                        pasteboardItemIndex: representation.pasteboardItemIndex
                     )
                 )
             }
@@ -244,13 +250,12 @@ internal enum RevisionStateBlobCodec {
                     bound: limits.maximumTotalRevisionBytesPerItem
                 )
             }
-            try CodecValidation.requireNormalizedTypeIdentifierOrder(
-                typeIdentifiers
-            )
-            for typeIdentifier in typeIdentifiers where !canonicalTypes.contains(typeIdentifier) {
-                throw CodecRejection.nonCanonicalRevisionType(
-                    typeIdentifier
-                )
+            try CodecValidation.requireNormalizedRepresentationOrder(contentRepresentations.map(\.key))
+            guard Set(contentRepresentations.map(\.pasteboardItemIndex)) == Set(canonical.representations.map { $0.content.pasteboardItemIndex }) else {
+                throw CodecRejection.nonNormalizedOrder
+            }
+            for representation in contentRepresentations where !canonicalTypes.contains(representation.key) {
+                throw CodecRejection.nonCanonicalRevisionType(representation.typeIdentifier)
             }
             guard seenRevisionIDs.insert(stored.id).inserted else {
                 throw CodecRejection.duplicateRevisionID(stored.id)

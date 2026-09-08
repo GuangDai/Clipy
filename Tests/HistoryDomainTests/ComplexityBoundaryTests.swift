@@ -153,8 +153,7 @@ func largePinnedCountStillProducesConstantSizeRelocations(pinnedCount: Int) thro
             candidates: [],
             retained: [hinted]
         ),
-        retention: RetentionPolicy(maximumUnpinnedItems: 10),
-        hardMaximumRetainedItems: 10
+        retention: RetentionPolicy(maximumUnpinnedItems: 10)
     )
 
     guard case .commit(let plan) = result,
@@ -210,8 +209,7 @@ func largePinnedCountStillProducesConstantSizeRelocations(pinnedCount: Int) thro
             candidates: [],
             retained: [hinted]
         ),
-        retention: RetentionPolicy(maximumUnpinnedItems: 10),
-        hardMaximumRetainedItems: 10
+        retention: RetentionPolicy(maximumUnpinnedItems: 10)
     )
 
     guard case .commit(let plan) = result,

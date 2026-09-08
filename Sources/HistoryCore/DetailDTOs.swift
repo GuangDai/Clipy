@@ -9,10 +9,13 @@ import Foundation
 /// One typed representation of an item's stored content bytes.
 /// docs/03b-instruction-set.md §9
 public struct HistoryRepresentation: Sendable, Hashable {
+    /// Zero-based position of the original system pasteboard item.
+    public let pasteboardItemIndex: Int
     public let typeIdentifier: String
     public let bytes: Data
 
-    public init(typeIdentifier: String, bytes: Data) {
+    public init(typeIdentifier: String, bytes: Data, pasteboardItemIndex: Int = 0) {
+        self.pasteboardItemIndex = pasteboardItemIndex
         self.typeIdentifier = typeIdentifier
         self.bytes = bytes
     }
@@ -21,10 +24,13 @@ public struct HistoryRepresentation: Sendable, Hashable {
 /// Metadata for one stored representation. No payload is read to produce it.
 /// The identifier preserves its exact persisted spelling (V2-09 §5).
 public struct HistoryRepresentationMetadata: Sendable, Hashable {
+    /// Zero-based position of the original system pasteboard item.
+    public let pasteboardItemIndex: Int
     public let typeIdentifier: String
     public let byteCount: Int
 
-    public init(typeIdentifier: String, byteCount: Int) {
+    public init(typeIdentifier: String, byteCount: Int, pasteboardItemIndex: Int = 0) {
+        self.pasteboardItemIndex = pasteboardItemIndex
         self.typeIdentifier = typeIdentifier
         self.byteCount = byteCount
     }
@@ -41,11 +47,14 @@ public enum HistoryContentBasis: Sendable, Hashable {
 public struct HistoryRepresentationRequest: Sendable, Hashable {
     public let item: HistoryItemReference
     public let basis: HistoryContentBasis
+    /// Zero-based position of the original system pasteboard item.
+    public let pasteboardItemIndex: Int
     public let typeIdentifier: String
 
-    public init(item: HistoryItemReference, basis: HistoryContentBasis, typeIdentifier: String) {
+    public init(item: HistoryItemReference, basis: HistoryContentBasis, typeIdentifier: String, pasteboardItemIndex: Int = 0) {
         self.item = item
         self.basis = basis
+        self.pasteboardItemIndex = pasteboardItemIndex
         self.typeIdentifier = typeIdentifier
     }
 }

@@ -199,9 +199,9 @@ struct WS21RetentionPolicyTests {
     await #expect(throws: HistoryFailure.invalidInput(.invalidRetentionPolicy)) {
         try await history.perform(.setRetentionPolicy(maximumUnpinnedItems: 0))
     }
-    // WS21 boundary clause: 5,001 is above the Part VI user range (06 §2).
+    // A negative enabled count is invalid; nil is the explicit disabled value.
     await #expect(throws: HistoryFailure.invalidInput(.invalidRetentionPolicy)) {
-        try await history.perform(.setRetentionPolicy(maximumUnpinnedItems: 5_001))
+        try await history.perform(.setRetentionPolicy(maximumUnpinnedItems: -1))
     }
 
     // No commit and no advance for either rejection: the singleton and the

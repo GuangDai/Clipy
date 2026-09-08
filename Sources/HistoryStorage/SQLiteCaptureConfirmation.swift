@@ -52,18 +52,22 @@ internal enum SQLiteCaptureConfirmation {
         incoming: CanonicalContent, content: HistoryContentMetadata, itemID: HistoryItemID,
         database: SQLiteDatabase, blobStore: ImmutableBlobStore, limits: HistoryLimits
     ) throws -> Int {
-        // Type-only keys preserve Swift String canonical equivalence without
+        // Item/type keys preserve Swift String canonical equivalence without
         // hashing payloads. Values share the caller's immutable incoming Data.
-        let incomingByType = Dictionary(uniqueKeysWithValues: incoming.representations.map {
-            ($0.content.typeIdentifier, $0.content)
+        let incomingByKey = Dictionary(uniqueKeysWithValues: incoming.representations.map {
+            ($0.content.key, $0.content)
         })
         var matched = 0
+        var lastItemIndex = -1
         try HistoryItemRowHydration.visitRepresentations(
             in: content, itemID: itemID, database: database, blobStore: blobStore, limits: limits
         ) { representation, _ in
-            if incomingByType[representation.typeIdentifier] == representation { matched += 1 }
+            lastItemIndex = representation.pasteboardItemIndex
+            if incomingByKey[representation.key] == representation { matched += 1 }
         }
-        return matched
+        // Canonical containment permits extra formats within the same items,
+        // never additional or missing system pasteboard items.
+        return lastItemIndex + 1 == incoming.pasteboardItemCount ? matched : 0
     }
 
     private static var corrupt: HistoryFailure { .persistence(.corruptStoredValue) }

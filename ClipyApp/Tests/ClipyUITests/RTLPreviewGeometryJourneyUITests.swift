@@ -45,13 +45,18 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         }, app.debugDescription)
 
         let search = panel.textFields["clipy.search.field"]
+        let mode = panel.descendants(matching: .any)["clipy.search.mode"]
         let filter = panel.descendants(matching: .any)["clipy.search.filter"]
-        // Positive RTL evidence: this filter follows Search in source order,
-        // so its physical position is on the LEFT only when content mirrors.
-        // A full-panel LTR override or ineffective launch args must fail here.
+        // The adaptive header can move the menus below Search, but these two
+        // controls remain on the same row. Filter follows Mode in source
+        // order, so its physical position is on the LEFT only under RTL.
+        // A full-panel LTR override or ineffective launch args still fails.
         XCTAssertTrue(waitUntil(timeout: 5) {
-            search.exists && filter.exists && search.isHittable && filter.isHittable
-                && filter.frame.maxX < search.frame.minX
+            search.exists && mode.exists && filter.exists
+                && search.isHittable && mode.isHittable && filter.isHittable
+                && filter.frame.maxX < mode.frame.minX
+                && filter.frame.minY < mode.frame.maxY
+                && mode.frame.minY < filter.frame.maxY
         }, app.debugDescription)
 
         let preview = panel.descendants(matching: .any)["clipy.preview.root"]

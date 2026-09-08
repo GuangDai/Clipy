@@ -426,10 +426,9 @@ struct AppCaptureLaneTests {
         #expect(page.rows.map(\.title) == ["C", "A"])
     }
 
-    /// Adapter outcomes that cannot become complete Canonical Content are
-    /// explicit health episodes, not silent drops and not lane entries.
+    /// One system copy gesture enters the capture lane as one ordered value.
     @Test @MainActor
-    func multiItemClipboardPublishesContentFreeUnsupportedShape() async throws {
+    func multiItemClipboardCapturesBothItemsThroughTheAppLane() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         let pasteboard = ComposedSupport.makePasteboard()
         pasteboard.clearContents()
@@ -447,11 +446,24 @@ struct AppCaptureLaneTests {
         appDelegate.installCompositionForTesting(composition)
         defer { composition.stop() }
 
-        #expect(
-            appDelegate.captureNotice == .failed(.unsupportedClipboardShape)
-        )
-        #expect(appDelegate.captureHealth.activeCommitCount == 0)
-        #expect(appDelegate.captureHealth.pendingCaptureCount == 0)
+        let settled = await ComposedSupport.waitFor {
+            composition.captureHealth.activeCommitCount == 0
+                && composition.captureHealth.pendingCaptureCount == 0
+        }
+        #expect(settled)
+        #expect(appDelegate.captureNotice == nil)
+        let page = try await history.browse(.init(kind: .recent, limit: 10))
+        #expect(page.rows.count == 1)
+        let item = try #require(page.rows.first?.item)
+        let payload = try await history.pastePayload(for: item.id)
+        #expect(payload.representations.map(\.pasteboardItemIndex) == [0, 1])
+        #expect(payload.representations.map(\.bytes) == [Data("first".utf8), Data("second".utf8)])
+        let destination = ComposedSupport.makePasteboard()
+        try PasteboardAdapter(pasteboard: destination).write(payload)
+        let pasted = try #require(destination.pasteboardItems)
+        #expect(pasted.count == 2)
+        #expect(pasted[0].data(forType: .string) == Data("first".utf8))
+        #expect(pasted[1].data(forType: .string) == Data("second".utf8))
     }
 
 #if DEBUG

@@ -12,9 +12,6 @@ private struct HistoryLimitsFixture {
     var maximumProposedRevisionBytes = 64 * 1_048_576
     var maximumRevisionsPerItem = 100
     var maximumTotalRevisionBytesPerItem = 256 * 1_048_576
-    var hardMaximumRetainedItems = 5_000
-    var userMaximumUnpinnedLowerBound = 1
-    var userMaximumUnpinnedUpperBound = 5_000
     var defaultMaximumUnpinnedItems = 200
     var maximumSourceApplicationObservationUTF8Bytes = 1_024
     var maximumStoredTitleUTF8Bytes = 1_024
@@ -40,9 +37,6 @@ private struct HistoryLimitsFixture {
             maximumProposedRevisionBytes: maximumProposedRevisionBytes,
             maximumRevisionsPerItem: maximumRevisionsPerItem,
             maximumTotalRevisionBytesPerItem: maximumTotalRevisionBytesPerItem,
-            hardMaximumRetainedItems: hardMaximumRetainedItems,
-            userMaximumUnpinnedLowerBound: userMaximumUnpinnedLowerBound,
-            userMaximumUnpinnedUpperBound: userMaximumUnpinnedUpperBound,
             defaultMaximumUnpinnedItems: defaultMaximumUnpinnedItems,
             maximumSourceApplicationObservationUTF8Bytes: maximumSourceApplicationObservationUTF8Bytes,
             maximumStoredTitleUTF8Bytes: maximumStoredTitleUTF8Bytes,
@@ -70,7 +64,6 @@ enum HistoryLimitsRejectionCase: CaseIterable, Sendable {
     case nonPositiveProposedRevisionBytes
     case nonPositiveRevisionCount
     case nonPositiveTotalRevisionBytes
-    case nonPositiveRetainedItemCount
     case nonPositiveDefaultUnpinnedCount
     case nonPositiveSourceApplicationBytes
     case nonPositiveStoredTitleBytes
@@ -83,14 +76,10 @@ enum HistoryLimitsRejectionCase: CaseIterable, Sendable {
     case nonPositiveSnippetCharacters
     case snippetCannotFitContentAndEllipses
     case nonPositiveThumbnailBytes
-    case nonPositiveUnpinnedRangeLowerBound
     case nonPositivePageRangeLowerBound
     case nonPositiveThumbnailRangeLowerBound
-    case malformedUnpinnedRange
     case malformedPageRange
     case malformedThumbnailRange
-    case unpinnedRangeExceedsHardMaximum
-    case defaultUnpinnedOutsideRange
     case representationExceedsCapture
     case representationExceedsProposedRevision
     case proposedRevisionExceedsItemTotal
@@ -114,8 +103,6 @@ private func rejectedLimits(for rejection: HistoryLimitsRejectionCase) -> Histor
         fixture.maximumRevisionsPerItem = 0
     case .nonPositiveTotalRevisionBytes:
         fixture.maximumTotalRevisionBytesPerItem = 0
-    case .nonPositiveRetainedItemCount:
-        fixture.hardMaximumRetainedItems = 0
     case .nonPositiveDefaultUnpinnedCount:
         fixture.defaultMaximumUnpinnedItems = 0
     case .nonPositiveSourceApplicationBytes:
@@ -140,26 +127,16 @@ private func rejectedLimits(for rejection: HistoryLimitsRejectionCase) -> Histor
         fixture.maximumBodySearchSnippetCharacters = 2
     case .nonPositiveThumbnailBytes:
         fixture.maximumEncodedThumbnailBytes = 0
-    case .nonPositiveUnpinnedRangeLowerBound:
-        fixture.userMaximumUnpinnedLowerBound = 0
     case .nonPositivePageRangeLowerBound:
         fixture.pageRowLimitLowerBound = 0
     case .nonPositiveThumbnailRangeLowerBound:
         fixture.thumbnailDimensionLowerBound = 0
-    case .malformedUnpinnedRange:
-        fixture.userMaximumUnpinnedLowerBound = 2
-        fixture.userMaximumUnpinnedUpperBound = 1
     case .malformedPageRange:
         fixture.pageRowLimitLowerBound = 2
         fixture.pageRowLimitUpperBound = 1
     case .malformedThumbnailRange:
         fixture.thumbnailDimensionLowerBound = 2
         fixture.thumbnailDimensionUpperBound = 1
-    case .unpinnedRangeExceedsHardMaximum:
-        fixture.userMaximumUnpinnedUpperBound = 5_001
-    case .defaultUnpinnedOutsideRange:
-        fixture.userMaximumUnpinnedUpperBound = 100
-        fixture.defaultMaximumUnpinnedItems = 101
     case .representationExceedsCapture:
         fixture.maximumRepresentationBytes = 65
         fixture.maximumProposedRevisionBytes = 65
@@ -190,8 +167,6 @@ func historyLimitsRejectsEveryInvalidProfile(
     fixture.maximumProposedRevisionBytes = 64
     fixture.maximumCaptureBytes = 64
     fixture.maximumTotalRevisionBytesPerItem = 64
-    fixture.userMaximumUnpinnedLowerBound = 1
-    fixture.userMaximumUnpinnedUpperBound = 1
     fixture.defaultMaximumUnpinnedItems = 1
     fixture.pageRowLimitLowerBound = 1
     fixture.pageRowLimitUpperBound = 1
@@ -199,4 +174,13 @@ func historyLimitsRejectsEveryInvalidProfile(
     fixture.thumbnailDimensionUpperBound = 1
 
     #expect(fixture.make() != nil)
+}
+
+@Test(arguments: [1, 5_001, 1_000_000, Int.max])
+func historyLimitsAcceptsEveryPositiveCountPolicy(defaultCount: Int) throws {
+    var fixture = HistoryLimitsFixture()
+    fixture.defaultMaximumUnpinnedItems = defaultCount
+    let limits = try #require(fixture.make())
+    #expect(limits.defaultMaximumUnpinnedItems == defaultCount)
+    #expect(limits.userMaximumUnpinnedRange == (1...Int.max))
 }

@@ -6,6 +6,7 @@
 /// docs/06-cross-cutting.md §2 (Part VI).
 import Foundation
 import HistoryCore
+import HistoryDomain
 
 // MARK: - Codec rejection vocabulary (docs/05-authority-kernel.md §4)
 
@@ -200,6 +201,28 @@ internal func mapCodecFailure<T>(_ body: () throws -> T) throws -> T {
 /// Normalization checks and envelope arithmetic shared by the v1 blob
 /// decoders. docs/05-authority-kernel.md §4
 internal enum CodecValidation {
+    /// Item positions are contiguous and each item has its own normalized
+    /// representation set. Boundaries are retained in immutable content.
+    internal static func requireNormalizedRepresentationOrder(
+        _ keys: [ContentRepresentationKey]
+    ) throws {
+        var seen = Set<ContentRepresentationKey>()
+        for key in keys {
+            guard seen.insert(key).inserted else {
+                throw CodecRejection.duplicateTypeIdentifier(key.typeIdentifier)
+            }
+        }
+        guard keys.first?.pasteboardItemIndex == 0 else {
+            throw CodecRejection.nonNormalizedOrder
+        }
+        for (previous, next) in zip(keys, keys.dropFirst()) {
+            guard previous.precedes(next),
+                  next.pasteboardItemIndex - previous.pasteboardItemIndex <= 1 else {
+                throw CodecRejection.nonNormalizedOrder
+            }
+        }
+    }
+
     /// §4: a type identifier is non-empty and within the Part VI UTF-8 byte
     /// bound.
     internal static func validateTypeIdentifier(

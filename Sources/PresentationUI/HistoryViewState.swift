@@ -588,7 +588,11 @@ public final class HistoryViewState {
                 Task {
                     do {
                         let payload = try await payloadRead.value()
-                        guard let bytes = payload.representations
+                        // This SwiftUI drag surface supplies one provider.
+                        // Multi-item transfers use Paste, which preserves all
+                        // item boundaries; never export a partial gesture.
+                        guard Set(payload.representations.map(\.pasteboardItemIndex)).count == 1,
+                              let bytes = payload.representations
                             .first(where: { $0.typeIdentifier == typeIdentifier })?.bytes else {
                             completion(nil, NSError(
                                 domain: NSItemProvider.errorDomain,
@@ -754,7 +758,8 @@ public final class HistoryViewState {
                 typeIdentifier: decision.typeIdentifier,
                 action: .replace(
                     bytes: Data("clipy-editor-competing-revision".utf8)
-                )
+                ),
+                pasteboardItemIndex: decision.pasteboardItemIndex
             )
         }
         return RevisionRequest(
@@ -765,8 +770,8 @@ public final class HistoryViewState {
     }
 #endif
 
-    /// Applies the v1 count-dimension retention cap.
-    public func applyMaximumUnpinnedItems(_ count: Int) async throws -> HistoryReceipt {
+    /// Applies the optional count limit; nil turns off count-based removal.
+    public func applyMaximumUnpinnedItems(_ count: Int?) async throws -> HistoryReceipt {
         let action = HistoryAction.setRetentionPolicy(maximumUnpinnedItems: count)
         let receipt = try await history.perform(action)
         publishSurfacePurge(for: action, receipt: receipt)

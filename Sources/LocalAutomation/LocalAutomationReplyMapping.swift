@@ -34,7 +34,7 @@ package enum LocalAutomationReplyMapping {
                     locator: content.locator,
                     contentVersion: content.contentVersion,
                     representations: content.representations.map {
-                        .init(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
+                        .init(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes, pasteboardItemIndex: $0.pasteboardItemIndex)
                     }
                 )
                 reply = .success(for: request, effective: effective)
@@ -64,7 +64,7 @@ package enum LocalAutomationReplyMapping {
             .reviseContent(
                 locator: locator, expectedContentVersion: expectedContentVersion,
                 representations: representations.map {
-                    HistoryRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes)
+                    HistoryRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes, pasteboardItemIndex: $0.pasteboardItemIndex)
                 }
             )
         }

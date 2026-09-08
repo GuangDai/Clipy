@@ -64,8 +64,9 @@ public struct AgeRetention: Sendable, Hashable {
 /// unpinned items are retired until the budget is restored.
 public struct StorageRetention: Sendable, Hashable {
     /// Retire oldest until retained bytes <= maxTotalBytes. Admitted only
-    /// within `1 ... 5,000 × 384 MiB` at the HistoryStorage boundary
-    /// (`V2-02` §8.3).
+    /// within `1 ... 2,013,265,920,000` bytes at the HistoryStorage boundary
+    /// (`V2-02` §8.3). This configured-threshold bound is independent of
+    /// total history count and does not cap stores with R2 disabled.
     public let maxTotalBytes: Int
 
     public init(maxTotalBytes: Int) {
@@ -111,12 +112,10 @@ public struct RevisionRetention: Sendable, Hashable {
 /// the V2-02 dimensions as ONE unified "Retention" group — one read, one
 /// serialized snapshot, no cross-read drift.
 public struct HistoryRetentionConfiguration: Sendable, Hashable {
-    /// The v1 count dimension (docs/03a-instruction-set.md §5
-    /// `.setRetentionPolicy`; `V2-02` §1 — the count never moved onto the
-    /// V2 policy value). Always inside `HistoryLimits.standard
-    /// .userMaximumUnpinnedRange` (docs/06-cross-cutting.md §2; the durable
-    /// singleton is validated fail-closed on every read, `05` §16).
-    public let maximumUnpinnedItems: Int
+    /// Optional maximum retained unpinned count (V2-09 §9). Nil disables
+    /// count retention; positive values have no artificial product upper cap.
+    /// Pinned items remain exempt, and byte/age policies apply independently.
+    public let maximumUnpinnedItems: Int?
 
     /// The V2-02 age/storage/revision dimensions, each `nil` when that
     /// dimension is disabled (DC-23; `V2-02` §3.1). Disabled dimensions
@@ -125,7 +124,7 @@ public struct HistoryRetentionConfiguration: Sendable, Hashable {
     public let policies: HistoryRetentionPolicies
 
     public init(
-        maximumUnpinnedItems: Int,
+        maximumUnpinnedItems: Int?,
         policies: HistoryRetentionPolicies
     ) {
         self.maximumUnpinnedItems = maximumUnpinnedItems

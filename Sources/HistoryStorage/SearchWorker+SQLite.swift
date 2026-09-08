@@ -16,6 +16,25 @@ extension SearchWorker {
     internal static let maximumBatchUTF8Bytes = 1_048_576
     internal static let maximumSnapshotLifetime: Duration = .seconds(30)
 
+    internal func measurePage(
+        _ request: HistoryBrowseRequest, store: HistoryStoreLocation, processMarker: UUID
+    ) async -> MeasuredSearchPage {
+        let work = SearchWorkCounter()
+        do {
+            let result = try await scanSQLite(
+                request, store: store, processMarker: processMarker,
+                expectedPosition: nil, includesRevisionCounts: false, work: work
+            )
+            return MeasuredSearchPage(result: .success(result.page), metrics: work.snapshot())
+        } catch {
+            if error is CancellationError { work.stopReason = .cancelled }
+            else if error as? HistoryFailure == .temporarilyUnavailable(.searchEngineDeadline) {
+                work.stopReason = .deadline
+            } else { work.stopReason = .failed }
+            return MeasuredSearchPage(result: .failure(error), metrics: work.snapshot())
+        }
+    }
+
     internal func page(
         _ request: HistoryBrowseRequest,
         store: HistoryStoreLocation,
@@ -45,7 +64,8 @@ extension SearchWorker {
         store: HistoryStoreLocation,
         processMarker: UUID,
         expectedPosition: ChangePosition?,
-        includesRevisionCounts: Bool
+        includesRevisionCounts: Bool,
+        work: SearchWorkCounter = SearchWorkCounter()
     ) async throws -> SearchPageResult {
         // Declared before connection/statement defers, so directory ownership
         // is released only after every request-owned SQLite handle closes.
@@ -116,14 +136,45 @@ extension SearchWorker {
             let isRankedFuzzy = admitted.mode == .fuzzy && !admitted.term.isEmpty
             let lowestPossibleFuzzyScore = isRankedFuzzy
                 ? try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: admitted.term, in: database) : 0
+            let fuzzyTailAnchor: StoredOrderingAnchor?
+            let completesFuzzyPrefix: Bool
+            if isRankedFuzzy, direction == .forward, let anchor {
+                switch anchor {
+                case .fuzzyUnpinned(let score, let date, let id) where score == lowestPossibleFuzzyScore:
+                    fuzzyTailAnchor = .defaultOrder(pinnedOrdinal: nil, lastCopiedAt: date, id: id)
+                    completesFuzzyPrefix = true
+                case .defaultOrder(let ordinal, _, _) where ordinal != nil:
+                    fuzzyTailAnchor = anchor
+                    completesFuzzyPrefix = false
+                default:
+                    fuzzyTailAnchor = nil
+                    completesFuzzyPrefix = false
+                }
+            } else {
+                fuzzyTailAnchor = nil
+                completesFuzzyPrefix = false
+            }
             let reversesOrderedRows = direction == .backward && !isRankedFuzzy
             let scanDirection: HistoryPageDirection = reversesOrderedRows ? .forward : direction
-            let reader = try SQLiteSearchRows(
-                database: database, limits: limits, filter: request.filter,
-                candidateExpression: SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
-                orderedAnchor: isRankedFuzzy ? nil : anchor, reversesOrder: reversesOrderedRows
-            )
-            defer { reader.finish() }
+            let reader: SQLiteSearchRows?
+            if isRankedFuzzy, lowestPossibleFuzzyScore > 0.7 {
+                // Every possible match needs more edits than the frozen
+                // Fuse loop ever attempts. Skip candidate selection as well
+                // as row reads; the ordinary empty-page path below still
+                // rejects an unconfirmed cursor anchor and checks deadline/
+                // cancellation before publishing the snapshot's position.
+                reader = nil
+                work.stopReason = .provenNoMatch
+            } else {
+                reader = try SQLiteSearchRows(
+                    database: database, limits: limits, filter: request.filter,
+                    candidateExpression: SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
+                    orderedAnchor: isRankedFuzzy ? fuzzyTailAnchor : anchor, reversesOrder: reversesOrderedRows,
+                    completesFuzzyPrefix: completesFuzzyPrefix,
+                    work: work
+                )
+            }
+            defer { reader?.finish() }
             let directive = ScanDirective(continuationAnchor: anchor, maximumSurvivors: request.limit + 1,
                                           direction: scanDirection)
             var tracker = OrderPreservingScanTracker(directive: directive)
@@ -142,7 +193,7 @@ extension SearchWorker {
                 phaseElapsed: .zero, totalElapsed: startedAt.duration(to: clock.now)
             )
 #endif
-            while true {
+            while let reader {
                 try checkSnapshotDeadline(lifetimeDeadline)
                 let fetchStarted = clock.now
                 let batch = try reader.nextBatch(includesRevisionCounts: includesRevisionCounts)
@@ -177,24 +228,24 @@ extension SearchWorker {
                         direction: isRankedFuzzy ? .forward : scanDirection
                     )
                     if admitted.term.isEmpty {
-                        evaluation = evaluateRecentEquivalent(in: snapshot, directive: batchDirective)
+                        evaluation = evaluateRecentEquivalent(in: snapshot, directive: batchDirective, work: work)
                     } else {
                         switch admitted.mode {
                         case .exact:
                             evaluation = try await evaluateExact(
                                 term: admitted.term, in: snapshot, directive: batchDirective,
-                                preparedMatcher: exact
+                                preparedMatcher: exact, work: work
                             )
                         case .regexp:
                             evaluation = try await evaluateRegexp(
                                 term: admitted.term, in: snapshot, directive: batchDirective,
                                 preparedPattern: regexp,
-                                sharedEngineDeadline: min(regexpDeadline, lifetimeDeadline)
+                                sharedEngineDeadline: min(regexpDeadline, lifetimeDeadline), work: work
                             )
                         case .fuzzy:
                             evaluation = try await evaluateFuzzy(
                                 term: admitted.term, in: snapshot, directive: batchDirective,
-                                preparedPattern: fuzzy
+                                preparedPattern: fuzzy, work: work
                             )
                         }
                     }
@@ -233,11 +284,11 @@ extension SearchWorker {
                         revisionCounts = revisionCounts.filter { retained.contains($0.key) }
                     }
                 }
-                if matchingComplete { break }
+                if matchingComplete { work.stopReason = .pageBudget; break }
                 if isRankedFuzzy,
                    fuzzySelection.cannotBeImprovedByLaterDefaultOrderedRows(
                        lowestPossibleScore: lowestPossibleFuzzyScore
-                   ) { break }
+                   ) { work.stopReason = .provenBestScore; break }
                 let yieldStarted = clock.now
 #if DEBUG
                 await suspensionHandler?(.sqliteBatchComplete)
@@ -382,15 +433,21 @@ private final class SQLiteSearchRows {
     let filter: HistoryFilter
     let candidateExpression: String?
     let prefersSparseCandidates: Bool
+    let work: SearchWorkCounter
+    let fuzzyPrefixLane: Int?
 
     init(
         database: SQLiteDatabase, limits: HistoryLimits, filter: HistoryFilter,
-        candidateExpression: String?, orderedAnchor: StoredOrderingAnchor?, reversesOrder: Bool
+        candidateExpression: String?, orderedAnchor: StoredOrderingAnchor?, reversesOrder: Bool,
+        completesFuzzyPrefix: Bool,
+        work: SearchWorkCounter
     ) throws {
         self.database = database
         self.limits = limits
         self.filter = filter
         self.candidateExpression = candidateExpression
+        self.work = work
+        self.fuzzyPrefixLane = completesFuzzyPrefix ? 2 : nil
         if let candidateExpression {
             prefersSparseCandidates = try SQLiteSearchIndex.prefersSparseCandidates(
                 expression: candidateExpression, in: database
@@ -419,10 +476,22 @@ private final class SQLiteSearchRows {
                         ("pinOrdinal IS NOT NULL", [], "pinOrdinal DESC"),
                     ]
                 } else {
-                    ranges = [
+                    var forwardRanges: [(condition: String, bindings: [SQLiteValue], order: String)] = [
                         ("pinOrdinal IS NULL AND lastCopiedAt = ? AND id >= ?", [timestamp, identifier], "id ASC"),
                         ("pinOrdinal IS NULL AND lastCopiedAt < ?", [timestamp], "lastCopiedAt DESC,id ASC"),
                     ]
+                    if completesFuzzyPrefix {
+                        // For a floor-score anchor, equal-score prefix rows
+                        // precede the cursor, but worse-score prefix rows may
+                        // be needed if the tail cannot fill page+lookahead.
+                        // These disjoint ranges are reached only if the tail
+                        // did not prove its retained page globally unbeatable.
+                        forwardRanges += [
+                            ("pinOrdinal IS NULL AND lastCopiedAt > ?", [timestamp], "lastCopiedAt DESC,id ASC"),
+                            ("pinOrdinal IS NULL AND lastCopiedAt = ? AND id < ?", [timestamp, identifier], "id ASC"),
+                        ]
+                    }
+                    ranges = forwardRanges
                 }
             }
         } else {
@@ -469,6 +538,9 @@ private final class SQLiteSearchRows {
                 guard try statement.step() else {
                     finish()
                     lane += 1
+                    // Evaluate the completed tail before deciding whether
+                    // any skipped fuzzy prefix needs to be decoded at all.
+                    if lane == fuzzyPrefixLane, !rows.isEmpty { break }
                     continue
                 }
                 pendingRow = true
@@ -525,6 +597,8 @@ private final class SQLiteSearchRows {
             if includesRevisionCounts, let count = try? statement.integer(at: 9), let exact = Int(exactly: count) {
                 counts[row.id] = exact
             }
+            if rows.isEmpty { work.batchCount += 1 }
+            work.rowsDecoded += 1
             rows.append(row)
             byteCount += rowBytes
             pendingRow = false

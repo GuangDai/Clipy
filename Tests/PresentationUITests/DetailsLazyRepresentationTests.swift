@@ -63,7 +63,7 @@ struct DetailsLazyRepresentationTests {
             let presentation = try await DetailsRepresentationPresentation.load(
                 request, metadata: metadata, history: history, renderer: ContentPreview()
             )
-            #expect(presentation == .plainText(expected))
+            #expect(presentation == .plainText(expected, wasTruncated: basis == .canonical))
         }
         #expect(await history.requests.map(\.basis) == [.canonical, .effective])
         let original = try await history.representation(HistoryRepresentationRequest(

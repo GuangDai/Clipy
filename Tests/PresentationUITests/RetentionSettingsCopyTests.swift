@@ -36,6 +36,21 @@ struct RetentionSettingsCopyTests {
             + "you apply retention settings. Time passing alone doesn't remove items.")
     }
 
+    @Test("optional count copy distinguishes count removal from independent retention policies")
+    func optionalCountCopy() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        #expect(RetentionSettingsCopy.plain(
+            "settings.retention.items.toggle", "missing", bundle: chinese
+        ) == "限制未置顶项目数量")
+        #expect(RetentionSettingsCopy.plain(
+            "settings.retention.items.input-hint", "missing", bundle: english
+        ) == "Enter a positive whole number.")
+        #expect(RetentionSettingsCopy.plain(
+            "settings.retention.items.enforcement-note", "missing", bundle: chinese
+        ) == "关闭后，未置顶项目不受条数限制。已启用的时间、存储空间和修订版本限制仍然生效。条数限制不会移除已置顶项目。")
+    }
+
     @Test("revision-limit recovery does not blame pinned items in Chinese")
     func revisionBudgetRecoveryCopy() throws {
         let chinese = try bundle("zh-Hans")

@@ -26,7 +26,7 @@ internal enum StampedMutation: Sendable {
     case bulkClear(scope: ClearScope, affectedCount: Int)
     case retirePrefix(RetentionRetirementPrefix)
 
-    case setRetentionPolicy(maximumUnpinnedItems: Int)
+    case setRetentionPolicy(maximumUnpinnedItems: Int?)
 
     case pruneRevisions(
         itemID: HistoryItemID,

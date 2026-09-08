@@ -12,11 +12,12 @@ extension HistoryAuthority {
         let destination = relocation.destinationOrdinal?.rawValue
         let count = relocation.pinnedCountBefore
         let delta = (destination == nil ? 0 : 1) - (previous == nil ? 0 : 1)
-        guard count >= 0, count <= limits.hardMaximumRetainedItems,
+        let (finalCount, countOverflow) = count.addingReportingOverflow(delta)
+        guard count >= 0, !countOverflow,
               previous != destination,
               previous.map({ $0 >= 0 && $0 < count }) ?? true,
-              destination.map({ $0 >= 0 && $0 < count + delta }) ?? true,
-              count + delta >= 0, count + delta <= limits.hardMaximumRetainedItems else {
+              destination.map({ $0 >= 0 && $0 < finalCount }) ?? true,
+              finalCount >= 0 else {
             throw TransactionApplyRejection.finalPinOrderViolated
         }
         let old = try requireMutationRow(relocation.itemID, in: database)
@@ -41,9 +42,14 @@ extension HistoryAuthority {
                   previous.map({ !shift.range.contains($0) }) ?? true else {
                 throw TransactionApplyRejection.finalPinOrderViolated
             }
-            // Count is bounded by the current admitted HistoryLimits above.
             // B=P+1 leaves both the old lane and a newly inserted final P free.
-            let base = Int64(count) + 1
+            // Check the temporary SQL integer range rather than imposing a
+            // product history-count cap (V2-09 §4/§9).
+            let (base, baseOverflow) = Int64(count).addingReportingOverflow(1)
+            let (temporaryUpper, upperOverflow) = Int64(upper).addingReportingOverflow(base)
+            guard !baseOverflow, !upperOverflow else {
+                throw HistoryFailure.capacityExceeded(.retainedItems)
+            }
             let width = Int64(upper - lower + 1)
             try database.execute("""
                 UPDATE history_items SET pinOrdinal = pinOrdinal + ?
@@ -57,7 +63,7 @@ extension HistoryAuthority {
                 WHERE pinOrdinal BETWEEN ? AND ?
                 """, bindings: [
                     .integer(base), .integer(Int64(shift.delta)),
-                    .integer(Int64(lower) + base), .integer(Int64(upper) + base),
+                    .integer(Int64(lower) + base), .integer(temporaryUpper),
                 ])
             guard try database.changedRowCount == width else {
                 throw TransactionApplyRejection.finalPinOrderViolated

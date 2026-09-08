@@ -26,6 +26,21 @@ internal enum SQLiteHistorySchema {
                 """)
             defer { pinIndex.finalize() }
             guard try pinIndex.step() else { throw HistoryFailure.persistence(.openStore) }
+            // Disabled count retention is stored as NULL. An older NOT NULL
+            // layout cannot implement that operation; reject it at open
+            // without rewriting the existing user's database (V2-09 §9).
+            let countPolicy = try database.prepare("""
+                SELECT 1 FROM pragma_table_info('history_state')
+                WHERE name='maximumUnpinnedItems' AND "notnull"=0 LIMIT 1
+                """)
+            defer { countPolicy.finalize() }
+            guard try countPolicy.step() else { throw HistoryFailure.persistence(.openStore) }
+            let itemIndex = try database.prepare("""
+                SELECT 1 FROM pragma_table_info('representations')
+                WHERE name='pasteboardItemIndex' LIMIT 1
+                """)
+            defer { itemIndex.finalize() }
+            guard try itemIndex.step() else { throw HistoryFailure.persistence(.openStore) }
             return
         }
 
@@ -46,7 +61,7 @@ internal enum SQLiteHistorySchema {
         CREATE TABLE history_state (
             key TEXT PRIMARY KEY NOT NULL CHECK (key = 'retained-history'),
             changePosition BLOB NOT NULL CHECK (length(changePosition) = 8),
-            maximumUnpinnedItems INTEGER NOT NULL CHECK (maximumUnpinnedItems > 0),
+            maximumUnpinnedItems INTEGER CHECK (maximumUnpinnedItems > 0),
             retainedItemCount INTEGER NOT NULL DEFAULT 0 CHECK (retainedItemCount >= 0),
             pinnedItemCount INTEGER NOT NULL DEFAULT 0 CHECK (pinnedItemCount >= 0),
             canonicalBytes INTEGER NOT NULL DEFAULT 0 CHECK (canonicalBytes >= 0),
@@ -103,6 +118,7 @@ internal enum SQLiteHistorySchema {
         CREATE TABLE representations (
             contentID TEXT NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
             ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+            pasteboardItemIndex INTEGER NOT NULL DEFAULT 0 CHECK (pasteboardItemIndex >= 0),
             exactType TEXT NOT NULL,
             typeKey TEXT NOT NULL,
             byteCount INTEGER NOT NULL CHECK (byteCount > 0),
@@ -110,7 +126,7 @@ internal enum SQLiteHistorySchema {
             inlineBytes BLOB,
             blobID TEXT,
             PRIMARY KEY (contentID, ordinal),
-            UNIQUE (contentID, typeKey),
+            UNIQUE (contentID, pasteboardItemIndex, typeKey),
             CHECK ((inlineBytes IS NULL) <> (blobID IS NULL)),
             CHECK (inlineBytes IS NULL OR length(inlineBytes) = byteCount)
         )
@@ -207,8 +223,15 @@ internal enum SQLiteHistorySchema {
         """
         CREATE INDEX history_items_current_content ON history_items(currentContentID)
         """,
+        // R3 policy sweeps need only revision-bearing IDs and two scalars.
+        // Keep the keyset walk off the large title/search metadata pages;
+        // stores without revisions have an empty candidate index (V2-09 §4).
         """
-        CREATE INDEX representations_dedup ON representations(typeKey, byteCount, fingerprint, contentID)
+        CREATE INDEX history_items_revision_candidates ON history_items(id, revisionCount, revisionBytes)
+            WHERE revisionCount > 0 OR revisionBytes > 0
+        """,
+        """
+        CREATE INDEX representations_dedup ON representations(pasteboardItemIndex, typeKey, byteCount, fingerprint, contentID)
             WHERE fingerprint IS NOT NULL
         """,
         """

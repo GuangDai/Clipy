@@ -3,8 +3,8 @@ import Darwin
 import Foundation
 import LocalAutomation
 
-/// One invocation consumes one bounded UTF-8 JSON request and writes the
-/// transport's exact reply. Only connection establishment may retry: after
+/// One invocation builds a shell command request or consumes bounded UTF-8
+/// JSON stdin, then writes its reply. Only connection establishment may retry: after
 /// sending a mutation, uncertainty is returned to its caller (V2-05).
 @main
 struct ClipyControl {
@@ -50,7 +50,8 @@ struct ClipyControl {
     private static func request(mode: CLIArguments) async -> LocalAutomationOutput {
         let request: Data
         do {
-            request = try await CLIStandardStreams.readRequest()
+            if let generated = mode.requestJSON { request = generated }
+            else { request = try await CLIStandardStreams.readRequest() }
         } catch CLIStandardStreams.Failure.timeout {
             return LocalAutomationClient.failure(.timeout)
         } catch is CancellationError {

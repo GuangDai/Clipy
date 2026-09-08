@@ -272,6 +272,14 @@ completed-cache bytes 不包括 source buffers、临时拷贝和系统 decoder w
 ## 9. 保留策略与磁盘空间
 
 用户可关闭条目数限制；保留额度优先按内容 bytes 表达，现有 count 限制可作为可选项。
+`maximumUnpinnedItems` 使用可选正整数：`nil` 明确关闭按条数删除，SQLite 保存 NULL；
+正整数表示用户选择的未置顶额度，默认仍为 200。公开打开配置、修改 action、配置读回
+与 Domain 使用同一语义，没有 999/5,000 的产品条数上限，也没有另一个总 retained
+count hard cap。关闭条数限制不关闭 age/storage/revision 策略或单次输入资源限制。
+关闭后重开保持 nil；重新启用额度时最旧未置顶项的退休与配置、ChangePosition/HCR
+一起提交，失败时全部回滚。整数表示溢出仍是明确容量失败，不能悄悄绕回负数。
+旧的 `maximumUnpinnedItems NOT NULL` 布局不能表达关闭状态，打开时明确拒绝；
+不迁移、不补写、不删除原文件。
 自动删除的首版顺序保持可解释：最旧未置顶项优先。置顶保护不因内存压力或磁盘紧张
 偷偷失效。文本永久保留若加入，必须是用户看得见的分类策略，不能暗藏在猜测的
 reuseProbability/权重分数里。
@@ -293,22 +301,34 @@ APFS 共享块和备份会使物理大小不同；不能把近似目录 allocate
 4. 搜索、保留策略应用、Clear、启动清理与 UI 导航书签都移除随全仓规模增长的 Swift facts/DTO/ID
    数组。尤其大 Clear/retention 的 receipt/HCR 不能为了列出全部 IDs重新分配全仓内存；
    采用现有 scope/count 语义或明确修订其业务返回值，保持事务及观察一致性。
-5. 在 CI 用真实磁盘数据分别测 10k、100k、1m：冷启动、静置、首屏、持续滚动、三种
+5. 在 CI 用真实磁盘数据测 10k、100k，当前以 100k 为主：冷启动、静置、首屏、持续滚动、三种
    搜索、当前/旧内容 Copy、revision/prune、pressure 后恢复。记录 owned bytes、RSS、
    footprint、耗时及磁盘增长，区分 idle 与活动峰值。规模不是新的仓库 gate/证书，
    这些是产品行为和资源表现的证据。
-6. 上述路径可用且数据支持结论后，取消 5,000 hard cap 和 count-only 产品上限。
-   不先改成 Int.max 再让旧全量路径承受百万条数据。
+6. 条数限制使用 §9 的公开可选策略；规模 fixture 与产品使用同一个 HistoryLimits，
+   不再创建仅供 fixture 使用的更高容量配置。直接测试覆盖普通公开 store 在 5,000
+   条真实 SQLite fixture 之上的 capture/coalesce/pin/读取，以及 5,001/百万用户额度。
+   这证明产品路径不再拒绝大历史，不替代步骤 5 的资源与性能测量。
 
-手动 `SQLite storage measurements` 工作流提供 10k、100k、1m 或三档并行选择，
-使用 Release `HistoryPerfRunner --sqlite-scale`。seed 和 measure 分属独立进程，
-fixture open 只调整该专用数据库的条数限额，公开产品 open 仍用标准限额。工作负载
+手动 `SQLite storage measurements` 工作流提供 10k、100k，默认 100k；1m 数据准备
+按用户 2026-09-08 的要求停止。使用 Release `HistoryPerfRunner --sqlite-scale`，
+seed 和 measure 分属独立进程，采用与公开产品相同的存储与条数策略。工作负载
 包含首屏、固定单页窗口的全量遍历、三种搜索的未命中/稀疏与密集命中/拼写错误、当前/Canonical Copy 及
 revision/prune，分别记录逻辑内容、文件系统用量、RSS、进程历史 peak RSS、footprint
 和耗时，不设数值达标门槛。进程冷启动不代表磁盘缓存冷启动；独立 Storage runner
-也不能证明整个 App 的 owned bytes、真实压力恢复或完整生产者内容分布。实现了
-测量入口不代表这些规模已通过验证，产品条数上限仍须等真实结果再调整。
-百万条下一秒内完成搜索是当前优化目标；用每条查询的实际结果和耗时判断，不能用
+也不能证明整个 App 的 owned bytes、真实压力恢复或完整生产者内容分布。
+
+默认 mixed 是可复现的合成文本场景，每 100k 条包含 20,000 条 32–512 B、64,000 条
+1–8 KiB、14,400 条 8–64 KiB、1,520 条 64–512 KiB、80 条 1–8 MiB 文本；它不是
+真实用户分布统计。fixed 保留等长对照。报告原始 UTF-8 长度与实际持久化标题/搜索正文
+长度的均值、总体方差、标准差和分位数，后者可能因生产投影上限而截断。
+
+每次搜索记录同次请求解码/评估/命中行数、批数和停止原因；失败保留部分工作量。
+这些是 Swift 候选投影与 matcher 的计数，不包含 FTS posting 内部求交/遍历次数。
+返回 DTO 条数与 seed/full-scroll 处理条数分别记录。精确和正则按游标相邻读取，
+取得一页及 lookahead 后停止；fuzzy 仅在能证明结果不可改善时提前停止。最低分数的
+fuzzy 续页优先读游标后的内容，不足时补扫前缀，不能为了少读而丢弃较差分数结果。
+100k 场景继续以一秒内完成交互搜索为优化目标；用每条查询的实际结果和耗时判断，不能用
 单一不存在词项或省略结果校验代替。复杂正则与索引不适用的查询仍如实记录耗时、
 取消和截止失败；不以放宽截止时间使测量表面通过。
 
@@ -337,3 +357,19 @@ pressure 不推进 ContentVersion/ChangePosition；搜索取消/过期不发布�
   [`外键索引`](https://sqlite.org/foreignkeys.html#required_and_suggested_database_indexes)：具体能力及适用限制。
 - 历史 [09 多级存储审查](../reviews/2026-08-22-clipy-maccy-deep-review/09-tiered-storage-and-unbounded-history.md)
   的四 bytes、O(N) 分析可作背景；其迁移、完整 checkpoint 与治理条件不作为本设计实现要求。
+
+## 11. 多项系统剪贴板内容
+
+一次 copy 保存为一个 History Item，representation 行持久化零基
+`pasteboardItemIndex`，与 type 一起标识某一项中的表示。系统 item 顺序不可
+丢失；相同 type 在不同 item 中可有不同 bytes。SQLite 去重索引包含 item
+位置，候选确认逐 item 比较原始 bytes，且两端 item 数必须相同。
+Canonical/Effective、immutable revision 与 blob codec 都保存该位置；
+metadata details 和显式 representation 请求同样携带它。list 的类型摘要为
+唯一并排序的并集，search/title 可组合展示，paste 则写回独立且有序的系统 items。
+
+当前格式要求该列存在，旧 SQLite 布局拒绝 open；不提供迁移、双写、读取旧
+格式或自动删除。每个 item 至少保留一个表示，任一 item 的隐私 marker
+拒绝整次 capture。Local Automation 的 Effective JSON 每个 representation
+输出 `pasteboardItemIndex`；revision 输入按 `(pasteboardItemIndex,typeIdentifier)`
+区分，省略位置表示单项位置 0。App Intents 仍消费同一个完整 PastePayload。

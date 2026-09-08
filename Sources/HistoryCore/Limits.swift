@@ -35,13 +35,8 @@ public struct HistoryLimits: Sendable, Hashable {
     /// §2 table: "Total revision bytes per History Item" — 256 MiB.
     public let maximumTotalRevisionBytesPerItem: Int
 
-    /// §2 table: "Hard retained History Item count" — 5,000. Pinned items are
-    /// exempt from the user maximum-unpinned policy but still count toward
-    /// this hard bound.
-    public let hardMaximumRetainedItems: Int
-
-    /// §2 table: "User maximum-unpinned range" — 1–5,000. The permitted
-    /// interval for the user retention policy value.
+    /// V2-09: an enabled count policy accepts any positive representable
+    /// count. Retained history has no separate artificial item-count cap.
     public let userMaximumUnpinnedRange: ClosedRange<Int>
 
     /// §2 table: "Default maximum unpinned items" — 200.
@@ -91,9 +86,7 @@ public struct HistoryLimits: Sendable, Hashable {
     /// combinations by returning `nil` (docs/06-cross-cutting.md §2).
     ///
     /// Rejected: any non-positive scalar bound; an inverted lower/upper bound
-    /// pair; a range whose lower bound is below 1; the user-unpinned bound pair
-    /// not contained in `1...hardMaximumRetainedItems`;
-    /// `defaultMaximumUnpinnedItems` outside that pair;
+    /// pair; a range whose lower bound is below 1;
     /// `maximumRepresentationBytes` exceeding
     /// `maximumProposedRevisionBytes` or `maximumCaptureBytes`; or
     /// `maximumProposedRevisionBytes` exceeding
@@ -111,9 +104,6 @@ public struct HistoryLimits: Sendable, Hashable {
         maximumProposedRevisionBytes: Int,
         maximumRevisionsPerItem: Int,
         maximumTotalRevisionBytesPerItem: Int,
-        hardMaximumRetainedItems: Int,
-        userMaximumUnpinnedLowerBound: Int,
-        userMaximumUnpinnedUpperBound: Int,
         defaultMaximumUnpinnedItems: Int,
         maximumSourceApplicationObservationUTF8Bytes: Int,
         maximumStoredTitleUTF8Bytes: Int,
@@ -137,7 +127,6 @@ public struct HistoryLimits: Sendable, Hashable {
               maximumProposedRevisionBytes >= 1,
               maximumRevisionsPerItem >= 1,
               maximumTotalRevisionBytesPerItem >= 1,
-              hardMaximumRetainedItems >= 1,
               defaultMaximumUnpinnedItems >= 1,
               maximumSourceApplicationObservationUTF8Bytes >= 1,
               maximumStoredTitleUTF8Bytes >= 1,
@@ -154,18 +143,13 @@ public struct HistoryLimits: Sendable, Hashable {
               maximumEncodedThumbnailBytes >= 1
         else { return nil }
 
-        guard userMaximumUnpinnedLowerBound >= 1,
-              pageRowLimitLowerBound >= 1,
+        guard pageRowLimitLowerBound >= 1,
               thumbnailDimensionLowerBound >= 1,
-              userMaximumUnpinnedLowerBound <= userMaximumUnpinnedUpperBound,
               pageRowLimitLowerBound <= pageRowLimitUpperBound,
               thumbnailDimensionLowerBound <= thumbnailDimensionUpperBound
         else { return nil }
 
-        guard userMaximumUnpinnedUpperBound <= hardMaximumRetainedItems,
-              defaultMaximumUnpinnedItems >= userMaximumUnpinnedLowerBound,
-              defaultMaximumUnpinnedItems <= userMaximumUnpinnedUpperBound,
-              maximumRepresentationBytes <= maximumProposedRevisionBytes,
+        guard maximumRepresentationBytes <= maximumProposedRevisionBytes,
               maximumRepresentationBytes <= maximumCaptureBytes,
               maximumProposedRevisionBytes <= maximumTotalRevisionBytesPerItem,
               maximumFuzzyQueryCharacters <= 64
@@ -178,9 +162,7 @@ public struct HistoryLimits: Sendable, Hashable {
         self.maximumProposedRevisionBytes = maximumProposedRevisionBytes
         self.maximumRevisionsPerItem = maximumRevisionsPerItem
         self.maximumTotalRevisionBytesPerItem = maximumTotalRevisionBytesPerItem
-        self.hardMaximumRetainedItems = hardMaximumRetainedItems
-        self.userMaximumUnpinnedRange =
-            userMaximumUnpinnedLowerBound...userMaximumUnpinnedUpperBound
+        self.userMaximumUnpinnedRange = 1...Int.max
         self.defaultMaximumUnpinnedItems = defaultMaximumUnpinnedItems
         self.maximumSourceApplicationObservationUTF8Bytes = maximumSourceApplicationObservationUTF8Bytes
         self.maximumStoredTitleUTF8Bytes = maximumStoredTitleUTF8Bytes
@@ -211,9 +193,6 @@ public struct HistoryLimits: Sendable, Hashable {
         maximumProposedRevisionBytes: 64 * 1_048_576,
         maximumRevisionsPerItem: 100,
         maximumTotalRevisionBytesPerItem: 256 * 1_048_576,
-        hardMaximumRetainedItems: 5_000,
-        userMaximumUnpinnedLowerBound: 1,
-        userMaximumUnpinnedUpperBound: 5_000,
         defaultMaximumUnpinnedItems: 200,
         maximumSourceApplicationObservationUTF8Bytes: 1_024,
         maximumStoredTitleUTF8Bytes: 1_024,

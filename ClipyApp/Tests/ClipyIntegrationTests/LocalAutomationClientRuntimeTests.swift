@@ -81,15 +81,21 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             for capability in [ExternalCapability.browsePreview, .readEffectiveContent, .organize, .deleteItem] {
                 _ = try await ingress.setCapability(capability, enabled: true, clientDirectory: clientDirectory)
             }
-            let page = try result(await runClient(browse))
+            // Keep stdin open: a shell command must construct its request
+            // directly, rather than entering the ten-second stdin reader.
+            let page = try result(await runClient(Data(), arguments: ["recent", "--limit", "10"], holdInputOpen: true))
             let items = try XCTUnwrap(page["items"] as? [[String: Any]])
             XCTAssertEqual(items.count, 1)
             XCTAssertEqual(items.first?["title"] as? String, "cli-original")
             let locator = try XCTUnwrap(items.first?["locator"] as? String)
-            let searched = try result(await runClient(request(arguments: [
-                "query": "cli-original", "mode": "exact", "limit": 10
-            ])))
+            let searched = try result(await runClient(Data(), arguments: [
+                "search", "cli-original", "--mode", "exact", "--limit", "10"
+            ], holdInputOpen: true))
             XCTAssertEqual((searched["items"] as? [[String: Any]])?.count, 1)
+            for (query, mode) in [("^cli-original$", "regexp"), ("cli-orignl", "fuzzy")] {
+                let matches = try result(await runClient(Data(), arguments: ["search", query, "--mode", mode]))
+                XCTAssertEqual((matches["items"] as? [[String: Any]])?.count, 1)
+            }
 
             let current = try await history.browse(.init(kind: .recent, limit: 1))
             let reference = try XCTUnwrap(current.rows.first?.item)
@@ -101,9 +107,12 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
                 )]))
             )))
             for operation in ["detailsEffective", "pasteEffective"] {
-                let content = try result(await runClient(request(
-                    operation: operation, arguments: ["locator": locator]
-                )))
+                let content: [String: Any]
+                if operation == "detailsEffective" {
+                    content = try result(await runClient(Data(), arguments: ["read", locator], holdInputOpen: true))
+                } else {
+                    content = try result(await runClient(request(operation: operation, arguments: ["locator": locator])))
+                }
                 let representations = try XCTUnwrap(content["representations"] as? [[String: Any]])
                 XCTAssertEqual(Set(content.keys), ["contentVersion", "locator", "representations"])
                 XCTAssertEqual(content["contentVersion"] as? UInt64, 2)
@@ -165,7 +174,14 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             XCTAssertEqual(Data(base64Encoded: authoredBytes), exactAuthoredBytes)
             for operation in ["detailsEffective", "pasteEffective"] {
                 let read = try request(operation: operation, arguments: ["locator": locator])
-                let raw = try await runClient(read, arguments: ["--raw", "--type", "public.utf8-plain-text"])
+                let raw: ProcessOutput
+                if operation == "detailsEffective" {
+                    raw = try await runClient(Data(), arguments: [
+                        "read", locator, "--raw", "--type", "public.utf8-plain-text"
+                    ], holdInputOpen: true)
+                } else {
+                    raw = try await runClient(read, arguments: ["--raw", "--type", "public.utf8-plain-text"])
+                }
                 XCTAssertEqual(raw.exitCode, 0)
                 XCTAssertEqual(raw.stdout, exactAuthoredBytes, "Raw stdout must preserve NUL, CRLF and decomposed UTF-8")
                 XCTAssertTrue(raw.stderr.isEmpty)
@@ -181,27 +197,39 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
             XCTAssertTrue(replacementVisible)
             viewState.deactivate()
             for operation in ["pin", "unpin", "delete"] {
-                let changed = try result(await runClient(request(
-                    operation: operation, arguments: ["locator": locator]
-                )))
+                let changed = try result(await runClient(Data(), arguments: [operation, locator], holdInputOpen: true))
                 XCTAssertEqual(changed["changed"] as? Bool, true)
             }
             let remaining = try await history.browse(.init(kind: .recent, limit: 10))
             XCTAssertTrue(remaining.rows.isEmpty)
 
             let binary = Data([0, 0xFF, 0x80, 0x0A, 0])
+            let literalQuery = "binary companion \"notes\" \\folder e\u{301}"
             _ = try await history.perform(.capture(ComposedSupport.textCapture(
-                "binary-companion", observedAt: Date(timeIntervalSinceReferenceDate: 13),
+                literalQuery, observedAt: Date(timeIntervalSinceReferenceDate: 13),
                 extra: [(typeIdentifier: "org.clipy.test-binary", bytes: Array(binary))]
             )))
-            let binaryPage = try result(await runClient(browse))
+            let binaryPage = try result(await runClient(Data(), arguments: ["search", literalQuery], holdInputOpen: true))
             let binaryItems = try XCTUnwrap(binaryPage["items"] as? [[String: Any]])
+            XCTAssertEqual(binaryItems.count, 1)
+            XCTAssertEqual(binaryItems.first?["title"] as? String, literalQuery)
             let binaryLocator = try XCTUnwrap(binaryItems.first?["locator"] as? String)
             let binaryRead = try request(operation: "detailsEffective", arguments: ["locator": binaryLocator])
             let binaryOutput = try await runClient(binaryRead, arguments: ["--raw", "--type", "org.clipy.test-binary"])
             XCTAssertEqual(binaryOutput.exitCode, 0)
             XCTAssertEqual(binaryOutput.stdout, binary, "Select one representation without decoding it as text")
             XCTAssertTrue(binaryOutput.stderr.isEmpty)
+            _ = try await history.perform(.capture(ComposedSupport.textCapture(
+                "newer paging companion", observedAt: Date(timeIntervalSinceReferenceDate: 14)
+            )))
+            let firstCommandPage = try result(await runClient(Data(), arguments: ["recent", "--limit", "1"]))
+            let nextCommandCursor = try XCTUnwrap(firstCommandPage["nextCursor"] as? String)
+            let nextCommandPage = try result(await runClient(Data(), arguments: [
+                "recent", "--limit", "1", "--cursor", nextCommandCursor
+            ]))
+            let nextCommandItems = try XCTUnwrap(nextCommandPage["items"] as? [[String: Any]])
+            XCTAssertEqual(nextCommandItems.count, 1)
+            XCTAssertEqual(nextCommandItems.first?["title"] as? String, literalQuery)
             _ = try await ingress.setCapability(.readEffectiveContent, enabled: false, clientDirectory: clientDirectory)
             let deniedRaw = try await runClient(binaryRead, arguments: ["--raw", "--type", "org.clipy.test-binary"])
             XCTAssertEqual(deniedRaw.exitCode, 3)
@@ -233,6 +261,109 @@ final class LocalAutomationClientRuntimeTests: XCTestCase {
         }
         await controller.stop()
         XCTAssertFalse(FileManager.default.fileExists(atPath: LocalAutomationPaths.endpointURL.path))
+    }
+
+    func testRawOutputSelectsAnExactPasteboardItemAndRejectsAmbiguousType() async throws {
+        let clientDirectory = LocalAutomationPaths.clientDirectory
+        let socketDirectory = LocalAutomationPaths.endpointURL.deletingLastPathComponent()
+        guard !FileManager.default.fileExists(atPath: clientDirectory.path),
+              !FileManager.default.fileExists(atPath: socketDirectory.path) else {
+            throw XCTSkip("Local Automation paths already exist; preserving the user's service and credential.")
+        }
+        try FileManager.default.createDirectory(
+            at: clientDirectory.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        guard Darwin.mkdir(clientDirectory.path, 0o700) == 0 else {
+            throw XCTSkip("The client directory became occupied before the fixture could create it.")
+        }
+        guard Darwin.mkdir(socketDirectory.path, 0o700) == 0 else {
+            try? FileManager.default.removeItem(at: clientDirectory)
+            throw XCTSkip("The socket directory became occupied before the fixture could create it.")
+        }
+        defer {
+            try? FileManager.default.removeItem(at: clientDirectory)
+            try? FileManager.default.removeItem(at: socketDirectory)
+        }
+        let serverDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clipy-server-credentials-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: serverDirectory, withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: serverDirectory) }
+        let history = try await ComposedSupport.openMemoryHistory()
+        let textType = "public.utf8-plain-text"
+        let first = Data("first\0\r\n".utf8)
+        let second = Data("second\0e\u{301}".utf8)
+        let uniqueBinary = Data([0, 0xFF, 0x80, 0])
+        _ = try await history.perform(.capture(ClipboardCapture(
+            representations: [
+                CapturedRepresentation(typeIdentifier: textType, bytes: first, pasteboardItemIndex: 0),
+                CapturedRepresentation(typeIdentifier: textType, bytes: second, pasteboardItemIndex: 1),
+                CapturedRepresentation(typeIdentifier: "org.clipy.test-binary", bytes: uniqueBinary, pasteboardItemIndex: 1),
+            ],
+            origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
+            observedAt: Date(timeIntervalSinceReferenceDate: 15)
+        )))
+        let ingress = LocalAutomationIngress(
+            authority: history.authority, gateway: history.externalGateway,
+            credentialStore: CredentialStore(directoryURL: serverDirectory)
+        )
+        _ = try await ingress.enable(clientDirectory: clientDirectory)
+        for capability in [ExternalCapability.browsePreview, .readEffectiveContent] {
+            _ = try await ingress.setCapability(capability, enabled: true, clientDirectory: clientDirectory)
+        }
+        let controller = LocalAutomationController(ingress: ingress)
+        do {
+            try await controller.startIfEnabled()
+            let page = try result(await runClient(Data(), arguments: ["recent"]))
+            let items = try XCTUnwrap(page["items"] as? [[String: Any]])
+            XCTAssertEqual(items.count, 1, "One two-item clipboard gesture remains one history entry")
+            let locator = try XCTUnwrap(items.first?["locator"] as? String)
+            let content = try result(await runClient(Data(), arguments: ["read", locator]))
+            let representations = try XCTUnwrap(content["representations"] as? [[String: Any]])
+            XCTAssertEqual(representations.count, 3)
+            let textRepresentations = representations.filter { $0["typeIdentifier"] as? String == textType }
+            XCTAssertEqual(textRepresentations.compactMap { $0["pasteboardItemIndex"] as? Int }, [0, 1])
+
+            let ambiguous = try await runClient(Data(), arguments: ["read", locator, "--raw", "--type", textType])
+            XCTAssertEqual(ambiguous.exitCode, 2)
+            XCTAssertTrue(ambiguous.stdout.isEmpty)
+            XCTAssertEqual(ambiguous.stderr, Data(
+                "clipyctl: invalid_request; multiple items match, use --item N\n".utf8
+            ))
+            for (index, expected) in [(0, first), (1, second)] {
+                let selected = try await runClient(Data(), arguments: [
+                    "read", locator, "--raw", "--type", textType, "--item", String(index)
+                ], holdInputOpen: true)
+                XCTAssertEqual(selected.exitCode, 0)
+                XCTAssertEqual(selected.stdout, expected)
+                XCTAssertTrue(selected.stderr.isEmpty)
+            }
+            let pasteRequest = try request(operation: "pasteEffective", arguments: ["locator": locator])
+            let fromStdin = try await runClient(pasteRequest, arguments: [
+                "--raw", "--type", textType, "--item", "1"
+            ])
+            XCTAssertEqual(fromStdin.exitCode, 0)
+            XCTAssertEqual(fromStdin.stdout, second)
+            XCTAssertTrue(fromStdin.stderr.isEmpty)
+            let unique = try await runClient(Data(), arguments: [
+                "read", locator, "--raw", "--type", "org.clipy.test-binary"
+            ])
+            XCTAssertEqual(unique.exitCode, 0)
+            XCTAssertEqual(unique.stdout, uniqueBinary, "A unique type does not require --item in a multi-item capture")
+            XCTAssertTrue(unique.stderr.isEmpty)
+            let missing = try await runClient(Data(), arguments: [
+                "read", locator, "--raw", "--type", textType, "--item", "31"
+            ])
+            XCTAssertEqual(missing.exitCode, 4)
+            XCTAssertTrue(missing.stdout.isEmpty)
+            XCTAssertEqual(missing.stderr, Data("clipyctl: not_found\n".utf8))
+        } catch {
+            await controller.stop()
+            throw error
+        }
+        await controller.stop()
     }
 
     func testUnclosedPartialStandardInputTimesOut() async throws {

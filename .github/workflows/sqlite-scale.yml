@@ -6,10 +6,15 @@ on:
       rows:
         description: Retained rows per disposable store
         type: choice
-        default: '1000000'
-        options: ['10000', '100000', '1000000', 'all']
+        default: '100000'
+        options: ['10000', '100000']
+      profile:
+        description: Synthetic mixture or equal-size comparison
+        type: choice
+        default: 'mixed'
+        options: ['mixed', 'fixed']
       body_bytes:
-        description: UTF-8 bytes per synthetic clipboard value
+        description: UTF-8 bytes per value in fixed profile (ignored for mixed)
         type: choice
         default: '1024'
         options: ['1024', '65536', '262144']
@@ -25,13 +30,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rows: ${{ fromJSON(inputs.rows == 'all' && '[10000,100000,1000000]' || format('[{0}]', inputs.rows)) }}
+        rows: ${{ fromJSON(format('[{0}]', inputs.rows)) }}
     env:
       NSUnbufferedIO: YES
       OS_ACTIVITY_MODE: disable
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
       SCALE_ROWS: ${{ matrix.rows }}
       SCALE_BODY_BYTES: ${{ inputs.body_bytes }}
+      SCALE_PROFILE: ${{ inputs.profile }}
     steps:
       - uses: actions/checkout@v6
       - name: Verify macOS runner
@@ -59,7 +65,7 @@ jobs:
           scale_runner="$(tail -n 1 sqlite-scale-logs/bin-path.log)/HistoryPerfRunner"
           /usr/bin/time -l -o sqlite-scale-logs/seed.time "$scale_runner" --sqlite-scale seed \
             "$RUNNER_TEMP/clipy-sqlite-scale/history.sqlite" "$SCALE_ROWS" "$SCALE_BODY_BYTES" \
-            sqlite-scale-logs/seed.json 2>&1 | tee sqlite-scale-logs/seed.log
+            sqlite-scale-logs/seed.json "$SCALE_PROFILE" 2>&1 | tee sqlite-scale-logs/seed.log
       - name: Measure in a fresh process
         shell: bash
         run: |
@@ -67,11 +73,11 @@ jobs:
           scale_runner="$(tail -n 1 sqlite-scale-logs/bin-path.log)/HistoryPerfRunner"
           /usr/bin/time -l -o sqlite-scale-logs/measure.time "$scale_runner" --sqlite-scale measure \
             "$RUNNER_TEMP/clipy-sqlite-scale/history.sqlite" "$SCALE_ROWS" "$SCALE_BODY_BYTES" \
-            sqlite-scale-logs/measure.json 2>&1 | tee sqlite-scale-logs/measure.log
+            sqlite-scale-logs/measure.json "$SCALE_PROFILE" 2>&1 | tee sqlite-scale-logs/measure.log
       - name: Upload available measurements
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: sqlite-${{ matrix.rows }}-${{ inputs.body_bytes }}-${{ github.run_id }}
+          name: sqlite-${{ matrix.rows }}-${{ inputs.profile }}-${{ inputs.body_bytes }}-${{ github.run_id }}
           path: sqlite-scale-logs/
           retention-days: 14

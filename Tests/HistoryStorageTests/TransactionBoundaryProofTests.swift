@@ -85,7 +85,7 @@ struct TransactionBoundaryProofTests {
 struct TransactionPositionSnapshot: Equatable, Sendable {
     let key: String
     let rawValue: UInt64
-    let maximumUnpinnedItems: Int
+    let maximumUnpinnedItems: Int?
     let retainedItemCount: Int
     let pinnedItemCount: Int
     let canonicalBytes: Int
@@ -146,7 +146,7 @@ struct TransactionStoreSnapshot: Equatable, Sendable {
             var positions: [TransactionPositionSnapshot] = []
             while try positionQuery.step() {
                 positions.append(try .init(key: positionQuery.text(at: 0), rawValue: sqliteUInt64(positionQuery.blob(at: 1)),
-                    maximumUnpinnedItems: Int(positionQuery.integer(at: 2)), retainedItemCount: Int(positionQuery.integer(at: 3)),
+                    maximumUnpinnedItems: positionQuery.isNull(at: 2) ? nil : Int(positionQuery.integer(at: 2)), retainedItemCount: Int(positionQuery.integer(at: 3)),
                     pinnedItemCount: Int(positionQuery.integer(at: 4)), canonicalBytes: Int(positionQuery.integer(at: 5)),
                     revisionBytes: Int(positionQuery.integer(at: 6))))
             }

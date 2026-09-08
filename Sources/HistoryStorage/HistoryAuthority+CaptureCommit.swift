@@ -34,8 +34,7 @@ extension HistoryAuthority {
         let result: PlanningResult
         do {
             result = try planCapture(
-                prepared.domain, facts: facts, retention: retention,
-                hardMaximumRetainedItems: limits.hardMaximumRetainedItems
+                prepared.domain, facts: facts, retention: retention
             )
         } catch let rejection as DomainRejection {
             if case .candidateItemIDCollision(let itemID) = rejection {

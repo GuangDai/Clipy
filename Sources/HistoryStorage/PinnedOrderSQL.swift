@@ -15,7 +15,7 @@ internal enum PinnedOrderSQL {
         guard try state.step() else { throw corrupt }
         let pinned = try state.integer(at: 0)
         let retained = try state.integer(at: 1)
-        guard pinned >= 0, pinned <= retained, retained <= Int64(limits.hardMaximumRetainedItems) else {
+        guard pinned >= 0, pinned <= retained else {
             throw corrupt
         }
         let rows = try database.prepare("""

@@ -173,11 +173,8 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         limits: HistoryLimits = .standard,
         makeCandidateID: @escaping @Sendable () -> HistoryItemID
     ) async throws -> SQLiteHistory {
-        // The public entry uses the fixed profile. V2-09 scale fixtures may
-        // override retained count through the package-only measurement opener.
-        guard limits.userMaximumUnpinnedRange.contains(
-            configuration.initialMaximumUnpinnedItems
-        ) else {
+        // Nil explicitly disables count retention; resource limits remain fixed.
+        guard configuration.initialMaximumUnpinnedItems.map(limits.userMaximumUnpinnedRange.contains) ?? true else {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
 

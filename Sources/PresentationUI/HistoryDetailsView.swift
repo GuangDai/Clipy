@@ -588,7 +588,7 @@ struct HistoryDetailsView: View {
               case .loaded(let details, _) = phase else { return }
         let representations = request.basis == .canonical ? details.canonical : details.effective
         guard let metadata = representations.first(where: {
-            $0.typeIdentifier == request.typeIdentifier
+            $0.typeIdentifier == request.typeIdentifier && $0.pasteboardItemIndex == request.pasteboardItemIndex
         }) else { return }
         previewRequest = request
         let generation = loadFence.generation
@@ -1007,8 +1007,8 @@ private struct DetailsBody: View {
                 PanelActionsCopy.text("Effective lists what pasting produces now; Canonical lists every retained original type.", bundle: copyBundle)
             )
 
-            ForEach(representations, id: \.typeIdentifier) { representation in
-                let request = basis.representation(typeIdentifier: representation.typeIdentifier, in: details)
+            ForEach(representations, id: \.identity) { representation in
+                let request = basis.representation(typeIdentifier: representation.typeIdentifier, in: details, pasteboardItemIndex: representation.pasteboardItemIndex)
                 let selected = previewRequest == request
                 RepresentationRow(
                     representation: representation,
@@ -1017,7 +1017,7 @@ private struct DetailsBody: View {
                     // `.hide`).
                     isHiddenFromEffective: basis == .canonical
                         && !effectiveTypeIdentifiers.contains(
-                            representation.typeIdentifier
+                            representation.identity
                         ),
                     isExporting: isExporting,
                     preview: selected ? representationPreview : nil,
@@ -1027,7 +1027,8 @@ private struct DetailsBody: View {
                     onExport: {
                         if let raw = basis.representation(
                             typeIdentifier: representation.typeIdentifier,
-                            in: details
+                            in: details,
+                            pasteboardItemIndex: representation.pasteboardItemIndex
                         ) {
                             onExport(raw)
                         }
@@ -1090,8 +1091,8 @@ private struct DetailsBody: View {
         basis == .effective ? content.effective : content.canonical
     }
 
-    private var effectiveTypeIdentifiers: Set<String> {
-        Set(details.effective.map(\.typeIdentifier))
+    private var effectiveTypeIdentifiers: Set<RepresentationIdentity> {
+        Set(details.effective.map(\.representationIdentity))
     }
 }
 
@@ -1125,6 +1126,10 @@ private struct RepresentationRow: View {
                         .foregroundStyle(.secondary)
                         .accessibilityHidden(true)
                 }
+                if representation.pasteboardItemIndex > 0 {
+                    Text("\(representation.pasteboardItemIndex + 1) ·")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text(representation.typeIdentifier)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -1155,19 +1160,19 @@ private struct RepresentationRow: View {
             }
             .controlSize(.small)
             .disabled(isExporting)
-            .accessibilityIdentifier("clipy.details.save-as." + representation.typeIdentifier)
-            .accessibilityLabel(PanelActionsCopy.format("Save %@ As…", representation.typeIdentifier, bundle: copyBundle))
+            .accessibilityIdentifier("clipy.details.save-as." + representation.identity.accessibilitySuffix)
+            .accessibilityLabel(PanelActionsCopy.format("Save %@ As…", representation.identity.accessibilityLabel, bundle: copyBundle))
             .accessibilityHint(PanelActionsCopy.text("Saves the complete bytes of this displayed representation to a file you choose.", bundle: copyBundle))
             Button(action: onPreview) {
                 Label(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle),
                       systemImage: isLoading ? "xmark.circle" : "eye")
             }
-            .accessibilityIdentifier("clipy.details.show-preview." + representation.typeIdentifier)
+            .accessibilityIdentifier("clipy.details.show-preview." + representation.identity.accessibilitySuffix)
             .accessibilityLabel(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle)
-                + ": " + representation.typeIdentifier)
+                + ": " + representation.identity.accessibilityLabel)
             if isLoading { ProgressView().controlSize(.small) }
             if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
-            if case .some(.plainText(let preview)) = preview {
+            if case .some(.plainText(let preview, let wasTruncated)) = preview {
                 ScrollView {
                     Text(preview)
                         .font(.system(.callout, design: .monospaced))
@@ -1176,7 +1181,7 @@ private struct RepresentationRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityIdentifier(
                             "clipy.details.text-preview."
-                                + representation.typeIdentifier
+                                + representation.identity.accessibilitySuffix
                         )
                 }
                 // The preview box tracks the resizable main column's width
@@ -1200,14 +1205,48 @@ private struct RepresentationRow: View {
                     .strokeBorder(Color.primary.opacity(0.12))
                 }
                 .accessibilityLabel(
-                    PanelActionsCopy.format("Text preview of %@", representation.typeIdentifier, bundle: copyBundle)
+                    PanelActionsCopy.format("Text preview of %@", representation.identity.accessibilityLabel, bundle: copyBundle)
                 )
+                if wasTruncated {
+                    Text(PreviewCopy.text(
+                        "Preview truncated. Copying the item keeps its complete content.",
+                        bundle: copyBundle
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("clipy.details.truncation-notice." + representation.identity.accessibilitySuffix)
+                }
             }
-            if case .some(.image(let raster)) = preview,
+            if let raster = preview?.raster,
                let image = PreviewRasterDisplay.image(raster, scale: 1,
-                   label: Text(PanelActionsCopy.format("Preview of %@", representation.typeIdentifier, bundle: copyBundle))) {
+                   label: Text(PanelActionsCopy.format("Preview of %@", representation.identity.accessibilityLabel, bundle: copyBundle))) {
                 image.resizable().scaledToFit().frame(maxHeight: 160)
-                    .accessibilityIdentifier("clipy.details.image-preview." + representation.typeIdentifier)
+                    .accessibilityIdentifier("clipy.details.image-preview." + representation.identity.accessibilitySuffix)
+            }
+            if case .some(.pdf(let pdf)) = preview {
+                Text(PreviewCopy.pdfPageDisclosure(
+                    pageNumber: pdf.pageNumber, pageCount: pdf.pageCount,
+                    bundle: copyBundle, locale: locale
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("clipy.details.pdf-page-notice." + representation.identity.accessibilitySuffix)
+            }
+            if case .some(.image(let raster)) = preview, raster.sourceImageCount > 1 {
+                Text(PreviewCopy.multiImageDisclosure(bundle: copyBundle))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("clipy.details.multi-image-notice." + representation.identity.accessibilitySuffix)
+            }
+            if case .some(.reference(let reference)) = preview {
+                // The same inert address/path presentation as the large pane;
+                // Details does not request a file load or open a destination.
+                ReferencePreviewView(reference: reference)
+                    .frame(height: 160)
+                    .accessibilityIdentifier("clipy.details.reference-preview." + representation.identity.accessibilitySuffix)
             }
             if preview == .metadataOnly {
                 Label(PanelActionsCopy.text("Preview unavailable", bundle: copyBundle), systemImage: "doc")
@@ -1293,28 +1332,36 @@ internal enum ContentBasis: String, Hashable {
     /// The user exports the displayed basis, never the bounded preview or a
     /// later History read. Canonical includes representations hidden by edits.
     func representation(
-        typeIdentifier: String, in details: HistoryDetails
+        typeIdentifier: String, in details: HistoryDetails, pasteboardItemIndex: Int = 0
     ) -> HistoryRepresentationRequest? {
         let values = self == .effective ? details.effective : details.canonical
-        guard values.contains(where: { $0.typeIdentifier == typeIdentifier }) else { return nil }
+        guard values.contains(where: { $0.typeIdentifier == typeIdentifier && $0.pasteboardItemIndex == pasteboardItemIndex }) else { return nil }
         return HistoryRepresentationRequest(item: details.item,
-            basis: self == .effective ? .effective : .canonical, typeIdentifier: typeIdentifier)
+            basis: self == .effective ? .effective : .canonical, typeIdentifier: typeIdentifier,
+            pasteboardItemIndex: pasteboardItemIndex)
     }
 }
 
-/// Details' complete text-preview decision for one representation row.
-///
-/// Exact UTF-8 and native/external UTF-16 plain text use their declared byte
-/// order, matching the large preview. Valid UTF-8 bytes under RTF, HTML,
-/// abstract `public.text`, or encoding-unspecified `public.plain-text` remain
-/// opaque; a sibling exact
-/// plain-text representation is rendered independently by its own row. This
-/// path performs no document import or external-resource work (review TYPE-2;
-/// content-types review §3.4).
+/// Details' bounded preview for one explicitly selected representation.
+/// Exact UTF-8/UTF-16 text keeps the editor's strict codec; rich text, images,
+/// PDF and inert references retain ContentPreview's artifacts and disclosure
+/// facts. Other identifiers never acquire semantics merely from UTF-8-looking
+/// bytes. Each row addresses its own Canonical/Effective source (V2-09 §5;
+/// review TYPE-2), independently of sibling formats and the item's thumbnail.
 package enum DetailsRepresentationPresentation: Equatable, Sendable {
-    case plainText(String)
+    case plainText(String, wasTruncated: Bool = false)
     case image(PreviewRaster)
+    case pdf(PreviewPDF)
+    case reference(PreviewReference)
     case metadataOnly
+
+    package var raster: PreviewRaster? {
+        switch self {
+        case .image(let raster): raster
+        case .pdf(let pdf): pdf.raster
+        case .plainText, .reference, .metadataOnly: nil
+        }
+    }
 
     /// One explicit row preview uses the renderer's existing metadata limits
     /// before reading bytes (V2-09 §5). Opaque and over-budget representations
@@ -1350,9 +1397,10 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
         ))
         try Task.checkCancellation()
         switch outcome {
-        case .content(.text(let text)): return .plainText(String(text.text.prefix(500)))
+        case .content(.text(let text)): return excerpt(text.text, wasTruncated: text.wasTruncated)
         case .content(.raster(let raster)): return .image(raster)
-        case .content(.pdf(let pdf)): return .image(pdf.raster)
+        case .content(.pdf(let pdf)): return .pdf(pdf)
+        case .content(.reference(let reference)): return .reference(reference)
         default: return .metadataOnly
         }
     }
@@ -1368,7 +1416,14 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
         else {
             return .metadataOnly
         }
-        return .plainText(String(text.prefix(500)))
+        return excerpt(text)
+    }
+
+    /// Keep truncation separate from selectable text. A renderer may already
+    /// have truncated rich text before Details applies its shorter excerpt.
+    private static func excerpt(_ text: String, wasTruncated: Bool = false) -> Self {
+        let end = text.index(text.startIndex, offsetBy: 500, limitedBy: text.endIndex) ?? text.endIndex
+        return .plainText(String(text[..<end]), wasTruncated: wasTruncated || end != text.endIndex)
     }
 }
 
@@ -1378,6 +1433,10 @@ package enum DetailsRepresentationPresentation: Equatable, Sendable {
 package struct DetailsContentPresentation: Sendable {
     package struct Representation: Sendable {
         package let typeIdentifier: String
+        package let pasteboardItemIndex: Int
+        package var identity: RepresentationIdentity {
+            RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+        }
         package let byteCount: Int
         package let presentation: DetailsRepresentationPresentation
         package let isImage: Bool
@@ -1409,6 +1468,7 @@ package struct DetailsContentPresentation: Sendable {
             try Task.checkCancellation()
             return Representation(
                 typeIdentifier: representation.typeIdentifier,
+                pasteboardItemIndex: representation.pasteboardItemIndex,
                 byteCount: representation.byteCount,
                 presentation: .metadataOnly,
                 isImage: isImageType(representation.typeIdentifier)

@@ -20,7 +20,7 @@
 "Load File" = "加载文件";
 "Cancel" = "取消";
 "Back to File Reference" = "返回文件引用";
-"Showing the file’s current contents. Copying still copies the original file reference." = "当前显示文件的现有内容。复制操作仍会复制原始文件引用。";
+"Showing the file contents loaded for this preview. Copying still copies the original file reference." = "正在显示此次预览载入的文件内容，复制操作仍复制原始文件引用。";
 "Clipy will read this local file once to show a preview. Its current contents are not added to clipboard history. No website will be opened." = "Clipy 将读取一次此本地文件以显示预览。文件的现有内容不会加入剪贴板历史，也不会打开任何网站。";
 "This is not a local file reference." = "这不是本地文件引用。";
 "The file could not be read. It may have moved or been deleted." = "无法读取文件。文件可能已移动或删除。";

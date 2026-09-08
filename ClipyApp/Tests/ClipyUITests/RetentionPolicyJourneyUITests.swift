@@ -683,9 +683,12 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             if isFullyVisible() {
                 return true
             }
-            let deltaY: CGFloat = element.frame.midY < scrollView.frame.midY
-                ? 50
-                : -50
+            // Follow the control's actual distance, bounded to less than a
+            // viewport per wheel action. A fixed 8 × 50-point travel budget
+            // stopped above Apply after the count-retention section grew.
+            let distance = element.frame.midY - scrollView.frame.midY
+            let step = min(abs(distance), scrollView.frame.height * 0.75)
+            let deltaY: CGFloat = distance < 0 ? step : -step
             scrollCoordinate.scroll(byDeltaX: 0, deltaY: deltaY)
         }
         let result = isFullyVisible()

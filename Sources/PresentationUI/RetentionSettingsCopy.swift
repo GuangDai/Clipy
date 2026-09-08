@@ -20,6 +20,19 @@ internal enum RetentionSettingsCopy {
         "settings.retention.items.section",
         "Items"
     )
+    internal static let countToggle = plain(
+        "settings.retention.items.toggle",
+        "Limit unpinned item count"
+    )
+    internal static let countInputHint = plain(
+        "settings.retention.items.input-hint",
+        "Enter a positive whole number."
+    )
+    internal static let countEnforcementNote = plain(
+        "settings.retention.items.enforcement-note",
+        "Turn off to keep unpinned items without a count limit. Age, storage and revision limits "
+            + "still apply when enabled. Pinned items are not removed by the count limit."
+    )
     internal static let itemsKeepAtMost = plain(
         "settings.retention.items.keep-at-most",
         "Keep at most"

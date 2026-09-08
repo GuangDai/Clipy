@@ -60,29 +60,54 @@ internal enum SQLiteSearchIndex {
         return grams.map { "g" + String($0, radix: 16) }.joined(separator: " AND ")
     }
 
-    /// FTS5's own posting statistics choose the driving table without reading
-    /// all matching rowids. A sparse search visits only candidate items; a
-    /// dense ordered search probes membership while walking recent rows, so
-    /// a common term does not first materialize/sort a million candidate IDs.
+    /// Choose the driving table from limited posting reads. fts5vocab's row
+    /// mode computes doc counts by traversing the entire posting list, even
+    /// for a SELECT 1 existence check, so it is not used on this read path.
+    /// Sparse searches visit only candidate items; dense ordered searches
+    /// probe membership while walking recent rows.
     internal static func prefersSparseCandidates(expression: String, in database: SQLiteDatabase) throws -> Bool {
-        let isUnion = expression.contains(" OR ")
-        var estimate: Int64 = isUnion ? 0 : Int64.max
+        if expression.contains(" OR ") {
+            // Count actual union outputs, including overlap only once. OR
+            // can stop as soon as the sparse threshold has been exceeded.
+            return try hasAtMostSparseCandidateLimit(expression: expression, in: database)
+        }
+        var termCount = 0
         for token in expression.split(separator: " ") where token.first == "g" || token.first == "f" {
-            let statement = try database.prepare(
-                "SELECT doc FROM history_search_terms WHERE term = ?", bindings: [.text(String(token))]
-            )
-            defer { statement.finalize() }
-            let frequency = try statement.step() ? statement.integer(at: 0) : 0
-            if isUnion {
-                // Sum is a conservative upper bound even when postings
-                // overlap. Saturate at the choice threshold, not store size.
-                estimate = min(4_097, estimate + min(4_097, frequency))
-            } else {
-                estimate = min(estimate, frequency)
-                if estimate == 0 { return true }
+            termCount += 1
+            // An AND result is a subset of every individual posting list.
+            // A sparse constituent proves the whole expression sparse
+            // without first computing its intersection with common terms.
+            if try hasAtMostSparseCandidateLimit(expression: String(token), in: database) {
+                return true
             }
         }
-        return estimate <= 4_096
+        guard termCount > 1 else { return false }
+        // Common constituents do not imply a common intersection. Compute
+        // it once here: leaving a sparse/empty intersection on the dense
+        // correlated path would restart that work for every outer row.
+        // Finding even the first AND result may traverse substantial postings;
+        // LIMIT bounds outputs, not that internal intersection work.
+        return try hasAtMostSparseCandidateLimit(expression: expression, in: database)
+    }
+
+    private static func hasAtMostSparseCandidateLimit(expression: String, in database: SQLiteDatabase) throws -> Bool {
+        try Task.checkCancellation()
+        let statement = try database.prepare(
+            """
+            SELECT count(*) FROM (
+                SELECT rowid FROM history_search WHERE history_search MATCH ? LIMIT 4097
+            )
+            """,
+            bindings: [.text(expression)]
+        )
+        defer { statement.finalize() }
+        guard try statement.step() else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        try Task.checkCancellation()
+        // SQLite counts only the limited subquery. One scalar crosses into
+        // Swift, and the request's native progress callback remains active.
+        return try statement.integer(at: 0) <= 4_096
     }
 
     /// Fuse counts edits in lowercased Characters. If any normalized scalar
@@ -90,6 +115,7 @@ internal enum SQLiteSearchIndex {
     /// Character must cost an edit in every possible hit. The resulting
     /// score floor lets a full best-score page stop in default row order;
     /// postings remain only a necessary-condition proof, never the matcher.
+    /// For ASCII queries, an absent necessary gram also rules out zero edits.
     internal static func lowestPossibleFuzzyScore(term: String, in database: SQLiteDatabase) throws -> Double {
         let characters = Array(term.lowercased())
         guard !characters.isEmpty else { return 0 }
@@ -102,19 +128,41 @@ internal enum SQLiteSearchIndex {
                 if let known = presence[scalar.value] {
                     exists = known
                 } else {
-                    let statement = try database.prepare(
-                        "SELECT 1 FROM history_search_terms WHERE term = ?",
-                        bindings: [.text("f" + String(UInt64(scalar.value) + 1, radix: 16))]
+                    exists = try postingExists(
+                        "f" + String(UInt64(scalar.value) + 1, radix: 16), in: database
                     )
-                    defer { statement.finalize() }
-                    exists = try statement.step()
                     presence[scalar.value] = exists
                 }
                 if !exists { mustCostEdit = true; break }
             }
             if mustCostEdit { missing += 1 }
         }
+        if missing == 0, characters.count >= 2, term.utf8.allSatisfy({ $0 < 128 }),
+           let expression = matchExpression(term: term, mode: .exact) {
+            // A zero-edit ASCII Fuse match contains the complete lowercased
+            // query in consecutive Characters, and therefore every necessary
+            // exact gram. An absent gram proves at least one edit even when
+            // unrelated body words contain all individual query letters.
+            // One edit can destroy several grams, so never add their counts.
+            // Non-ASCII queries retain the existing scalar-only proof.
+            for token in expression.split(separator: " ") where token.first == "g" {
+                if try !postingExists(String(token), in: database) {
+                    missing = 1
+                    break
+                }
+            }
+        }
         return Double(missing) / Double(characters.count)
+    }
+
+    private static func postingExists(_ token: String, in database: SQLiteDatabase) throws -> Bool {
+        try Task.checkCancellation()
+        let statement = try database.prepare(
+            "SELECT rowid FROM history_search WHERE history_search MATCH ? LIMIT 1",
+            bindings: [.text(token)]
+        )
+        defer { statement.finalize() }
+        return try statement.step()
     }
 
     private static func documentTokens(title: String, body: String) -> String {

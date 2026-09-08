@@ -36,7 +36,7 @@ internal struct RetentionSettingsDraft {
     }
 
     internal struct CountSubmission: Sendable {
-        internal let maximumUnpinnedItems: Int
+        internal let maximumUnpinnedItems: Int?
         fileprivate let editGeneration: UInt64
         fileprivate let countEditGeneration: UInt64
     }
@@ -54,6 +54,8 @@ internal struct RetentionSettingsDraft {
     internal static let ageEnforcementExplanation =
         RetentionSettingsCopy.ageEnforcementNote
 
+    internal private(set) var countEnabled = true
+    internal private(set) var countToggleIsDirty = false
     internal private(set) var maximumUnpinnedText =
         String(HistoryLimits.standard.defaultMaximumUnpinnedItems)
 
@@ -76,7 +78,7 @@ internal struct RetentionSettingsDraft {
     internal private(set) var revisionCountToggleIsDirty = false
     internal private(set) var revisionBytesToggleIsDirty = false
 
-    private var configuredMaximumUnpinnedItems =
+    private var configuredMaximumUnpinnedItems: Int? =
         HistoryLimits.standard.defaultMaximumUnpinnedItems
     private var configuredPolicies = HistoryRetentionPolicies(
         age: nil,
@@ -120,15 +122,15 @@ internal struct RetentionSettingsDraft {
     }
 
     internal var maximumUnpinnedInputIsValid: Bool {
-        maximumUnpinnedItems != nil
+        !countEnabled || maximumUnpinnedItems != nil
     }
 
     /// Apply availability follows the proposed value, not edit history: a
     /// user who changes a field and then restores the configured count has no
     /// pending write (`V2-07` §6.3; deep review Card 10A).
     internal var hasCountChanges: Bool {
-        guard let maximumUnpinnedItems else { return false }
-        return maximumUnpinnedItems != configuredMaximumUnpinnedItems
+        guard maximumUnpinnedInputIsValid else { return false }
+        return (countEnabled ? maximumUnpinnedItems : nil) != configuredMaximumUnpinnedItems
     }
 
     /// Exact policy comparison preserves the raw seconds/bytes baseline kept
@@ -177,8 +179,11 @@ internal struct RetentionSettingsDraft {
     ) -> Bool {
         guard isCurrent(request) else { return false }
         configuredMaximumUnpinnedItems = configuration.maximumUnpinnedItems
-        if !maximumUnpinnedValueIsDirty {
-            maximumUnpinnedText = formatted(configuration.maximumUnpinnedItems)
+        if !countToggleIsDirty {
+            countEnabled = configuration.maximumUnpinnedItems != nil
+        }
+        if let count = configuration.maximumUnpinnedItems, !maximumUnpinnedValueIsDirty {
+            maximumUnpinnedText = formatted(count)
         }
         return acceptLoaded(
             configuration.policies,
@@ -245,6 +250,13 @@ internal struct RetentionSettingsDraft {
         ageEnabled = enabled
         ageToggleIsDirty = true
         recordEdit()
+    }
+
+    internal mutating func setCountEnabled(_ enabled: Bool) {
+        guard countEnabled != enabled else { return }
+        countEnabled = enabled
+        countToggleIsDirty = true
+        recordEdit(isCountEdit: true)
     }
 
     internal mutating func setMaximumUnpinnedText(_ text: String) {
@@ -328,9 +340,9 @@ internal struct RetentionSettingsDraft {
     }
 
     internal func countSubmission() -> CountSubmission? {
-        guard let maximumUnpinnedItems else { return nil }
+        guard maximumUnpinnedInputIsValid else { return nil }
         return CountSubmission(
-            maximumUnpinnedItems: maximumUnpinnedItems,
+            maximumUnpinnedItems: countEnabled ? maximumUnpinnedItems : nil,
             editGeneration: editGeneration,
             countEditGeneration: countEditGeneration
         )
@@ -347,7 +359,7 @@ internal struct RetentionSettingsDraft {
     internal func maximumUnpinnedRequiresTightening(
         for submission: CountSubmission
     ) -> Bool {
-        submission.maximumUnpinnedItems < configuredMaximumUnpinnedItems
+        Self.tightens(submission.maximumUnpinnedItems, from: configuredMaximumUnpinnedItems)
     }
 
     /// Returns true when any enabled candidate threshold is stricter than
@@ -418,6 +430,7 @@ internal struct RetentionSettingsDraft {
     ) -> Bool {
         configuredMaximumUnpinnedItems = submission.maximumUnpinnedItems
         if submission.countEditGeneration == countEditGeneration {
+            countToggleIsDirty = false
             maximumUnpinnedValueIsDirty = false
         }
         guard isCurrent(submission) else { return false }

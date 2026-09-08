@@ -87,6 +87,47 @@ final class LocalAutomationSocketTests: XCTestCase {
         }
     }
 
+    func testMultiItemEffectiveReadAndRevisionKeepRepeatedTypesSeparate() async throws {
+        try await withFixture { fixture in
+            _ = try await fixture.history.perform(.capture(.init(
+                representations: [
+                    .init(typeIdentifier: "public.utf8-plain-text", bytes: Data("multi-alpha".utf8)),
+                    .init(typeIdentifier: "public.utf8-plain-text", bytes: Data("multi-beta".utf8), pasteboardItemIndex: 1),
+                ], origin: .init(sourceApplication: nil, lineageHint: nil),
+                observedAt: Date(timeIntervalSince1970: 1_800_000_010)
+            )))
+            for capability in [ExternalCapability.browsePreview, .readEffectiveContent, .reviseContent] {
+                try await fixture.history.grantCapability(capability, to: fixture.connection)
+            }
+            let pageOutput = try await fixture.send(Self.json(arguments: ["limit": 1]))
+            let page = try Self.result(pageOutput)
+            let items = try XCTUnwrap(page["items"] as? [[String: Any]])
+            let locator = try XCTUnwrap(items.first?["locator"] as? String)
+            let readRequest = try Self.json(operation: "detailsEffective", arguments: ["locator": locator])
+            let beforeOutput = try await fixture.send(readRequest)
+            let before = try Self.result(beforeOutput)
+            let beforeValues = try XCTUnwrap(before["representations"] as? [[String: Any]])
+            XCTAssertEqual(beforeValues.compactMap { $0["pasteboardItemIndex"] as? Int }, [0, 1])
+            let version = try XCTUnwrap(before["contentVersion"] as? UInt64)
+            let desired: [[String: Any]] = [
+                ["typeIdentifier": "public.utf8-plain-text", "bytesBase64": Data("multi-alpha".utf8).base64EncodedString(), "pasteboardItemIndex": 0],
+                ["typeIdentifier": "public.utf8-plain-text", "bytesBase64": Data([0, 255, 10]).base64EncodedString(), "pasteboardItemIndex": 1],
+            ]
+            let writeOutput = try await fixture.send(Self.json(operation: "reviseContent", arguments: [
+                "locator": locator, "expectedContentVersion": version, "representations": desired,
+            ]))
+            XCTAssertEqual(writeOutput.exitCode, 0)
+            let afterOutput = try await fixture.send(readRequest)
+            let after = try Self.result(afterOutput)
+            let values = try XCTUnwrap(after["representations"] as? [[String: Any]])
+            XCTAssertEqual(values.count, 2)
+            XCTAssertEqual(values[0]["pasteboardItemIndex"] as? Int, 0)
+            XCTAssertEqual(values[1]["pasteboardItemIndex"] as? Int, 1)
+            XCTAssertEqual(values[0]["bytesBase64"] as? String, Data("multi-alpha".utf8).base64EncodedString())
+            XCTAssertEqual(values[1]["bytesBase64"] as? String, Data([0, 255, 10]).base64EncodedString())
+        }
+    }
+
     func testPartialAndOversizedFramesCloseWithoutDispatchingHistory() async throws {
         try await withFixture { fixture in
             for oversized in [false, true] {
@@ -151,10 +192,10 @@ final class LocalAutomationSocketTests: XCTestCase {
             let afterOutput = try await fixture.send(readRequest)
             let after = try Self.result(afterOutput)
             XCTAssertTrue(after["contentVersion"] as? UInt64 == version + 1)
-            let representations = try XCTUnwrap(after["representations"] as? [[String: String]])
+            let representations = try XCTUnwrap(after["representations"] as? [[String: Any]])
             XCTAssertTrue(representations.count == 2)
             for (type, expected) in [("public.utf8-plain-text", literal), ("com.clipy.tests.binary", binary)] {
-                let encoded = try XCTUnwrap(representations.first { $0["typeIdentifier"] == type }?["bytesBase64"])
+                let encoded = try XCTUnwrap(representations.first { $0["typeIdentifier"] as? String == type }?["bytesBase64"] as? String)
                 XCTAssertTrue(Data(base64Encoded: encoded) == expected)
             }
             let stale = try await fixture.send(writeRequest)
@@ -182,7 +223,11 @@ final class LocalAutomationSocketTests: XCTestCase {
             let hiddenReadOutput = try await fixture.send(readRequest)
             let hiddenRead = try Self.result(hiddenReadOutput)
             XCTAssertTrue(hiddenRead["contentVersion"] as? UInt64 == version + 2)
-            XCTAssertTrue(hiddenRead["representations"] as? [[String: String]] == binaryOnly)
+            let hiddenValues = try XCTUnwrap(hiddenRead["representations"] as? [[String: Any]])
+            XCTAssertEqual(hiddenValues.count, 1)
+            XCTAssertEqual(hiddenValues.first?["typeIdentifier"] as? String, "com.clipy.tests.binary")
+            XCTAssertEqual(hiddenValues.first?["bytesBase64"] as? String, binary.base64EncodedString())
+            XCTAssertEqual(hiddenValues.first?["pasteboardItemIndex"] as? Int, 0)
             let afterHideRequest = try Self.json(operation: "reviseContent", arguments: [
                 "locator": locator, "expectedContentVersion": version + 2, "representations": binaryOnly,
             ])

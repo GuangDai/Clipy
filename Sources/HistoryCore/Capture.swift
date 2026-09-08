@@ -9,10 +9,13 @@ import Foundation
 ///
 /// docs/03a-instruction-set.md §4
 public struct CapturedRepresentation: Sendable, Hashable {
+    /// Zero-based position of the original system pasteboard item.
+    public let pasteboardItemIndex: Int
     public let typeIdentifier: String
     public let bytes: Data
 
-    public init(typeIdentifier: String, bytes: Data) {
+    public init(typeIdentifier: String, bytes: Data, pasteboardItemIndex: Int = 0) {
+        self.pasteboardItemIndex = pasteboardItemIndex
         self.typeIdentifier = typeIdentifier
         self.bytes = bytes
     }
@@ -45,8 +48,9 @@ public struct CopyOriginObservation: Sendable, Hashable {
 ///
 /// This is an observation, not trusted Domain state — it contains no
 /// fingerprint, item ID to create, or version to mint. `HistoryStorage`
-/// validates and prepares it. `isConcealed` describes the whole pasteboard
-/// item: concealed content must never be retained even when its ordinary data
+/// validates and prepares it. The representations retain their constituent
+/// item positions. `isConcealed` describes the whole copy gesture: concealed
+/// content must never be retained even when its ordinary data
 /// appears in a sibling representation.
 ///
 /// docs/03a-instruction-set.md §4

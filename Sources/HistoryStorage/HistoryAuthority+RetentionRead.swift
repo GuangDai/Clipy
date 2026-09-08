@@ -16,8 +16,8 @@ extension HistoryAuthority {
                     throw HistoryFailure.persistence(.invariantViolation)
                 }
                 _ = try sqliteUInt64(statement.blob(at: 1))
-                guard let maximumUnpinnedItems = Int(exactly: try statement.integer(at: 2)),
-                      limits.userMaximumUnpinnedRange.contains(maximumUnpinnedItems) else {
+                let maximumUnpinnedItems = try statement.isNull(at: 2) ? nil : HistoryItemRowHydration.integer(statement, 2)
+                guard maximumUnpinnedItems.map(limits.userMaximumUnpinnedRange.contains) ?? true else {
                     throw HistoryFailure.persistence(.corruptStoredValue)
                 }
                 guard try !statement.step() else {

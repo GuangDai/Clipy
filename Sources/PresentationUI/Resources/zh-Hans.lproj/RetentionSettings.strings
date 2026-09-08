@@ -45,3 +45,6 @@
 "settings.retention.storage.toggle" = "限制存储空间";
 "settings.retention.storage.toggle-hint" = "移除最早的未置顶项目，直到历史记录满足限额。";
 "settings.retention.tab-title" = "保留";
+"settings.retention.items.toggle" = "限制未置顶项目数量";
+"settings.retention.items.input-hint" = "请输入正整数。";
+"settings.retention.items.enforcement-note" = "关闭后，未置顶项目不受条数限制。已启用的时间、存储空间和修订版本限制仍然生效。条数限制不会移除已置顶项目。";

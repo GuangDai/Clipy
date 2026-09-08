@@ -27,8 +27,7 @@ extension HistoryAuthority {
             else {
                 throw PerformanceFixtureSeedError.storeNotEmpty
             }
-            guard finalRetainedCount <= retention.maximumUnpinnedItems,
-                  finalRetainedCount <= limits.hardMaximumRetainedItems
+            guard retention.maximumUnpinnedItems.map({ finalRetainedCount <= $0 }) ?? true
             else {
                 throw PerformanceFixtureSeedError.capacityExceeded
             }
@@ -95,8 +94,7 @@ extension HistoryAuthority {
             else {
                 throw PerformanceFixtureSeedError.stateChanged
             }
-            guard nextRetainedCount <= retention.maximumUnpinnedItems,
-                  nextRetainedCount <= limits.hardMaximumRetainedItems
+            guard retention.maximumUnpinnedItems.map({ nextRetainedCount <= $0 }) ?? true
             else {
                 throw PerformanceFixtureSeedError.capacityExceeded
             }

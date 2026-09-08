@@ -60,7 +60,8 @@ struct SQLiteMetadataReadTests {
         }
         #expect(result.position.rawValue == UInt64.max)
         #expect(result.retention.maximumUnpinnedItems == 321)
-        try database.execute("UPDATE history_state SET maximumUnpinnedItems = 5001")
+        try database.execute("PRAGMA ignore_check_constraints = ON")
+        try database.execute("UPDATE history_state SET maximumUnpinnedItems = -1")
         #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
             try HistoryAuthority.decodePositionRow(
                 HistoryAuthority.fetchExactlyOnePositionRow(in: database), limits: .standard
