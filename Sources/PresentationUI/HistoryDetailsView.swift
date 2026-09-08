@@ -1205,7 +1205,7 @@ private struct RepresentationRow: View {
                     .strokeBorder(Color.primary.opacity(0.12))
                 }
                 .accessibilityLabel(
-                    PanelActionsCopy.format("Text preview of %@", representation.typeIdentifier, bundle: copyBundle)
+                    PanelActionsCopy.format("Text preview of %@", representation.identity.accessibilityLabel, bundle: copyBundle)
                 )
                 if wasTruncated {
                     Text(PreviewCopy.text(
@@ -1215,7 +1215,7 @@ private struct RepresentationRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("clipy.details.truncation-notice." + representation.typeIdentifier)
+                    .accessibilityIdentifier("clipy.details.truncation-notice." + representation.identity.accessibilitySuffix)
                 }
             }
             if let raster = preview?.raster,
@@ -1232,21 +1232,21 @@ private struct RepresentationRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("clipy.details.pdf-page-notice." + representation.typeIdentifier)
+                .accessibilityIdentifier("clipy.details.pdf-page-notice." + representation.identity.accessibilitySuffix)
             }
             if case .some(.image(let raster)) = preview, raster.sourceImageCount > 1 {
                 Text(PreviewCopy.multiImageDisclosure(bundle: copyBundle))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("clipy.details.multi-image-notice." + representation.typeIdentifier)
+                    .accessibilityIdentifier("clipy.details.multi-image-notice." + representation.identity.accessibilitySuffix)
             }
             if case .some(.reference(let reference)) = preview {
                 // The same inert address/path presentation as the large pane;
                 // Details does not request a file load or open a destination.
                 ReferencePreviewView(reference: reference)
                     .frame(height: 160)
-                    .accessibilityIdentifier("clipy.details.reference-preview." + representation.typeIdentifier)
+                    .accessibilityIdentifier("clipy.details.reference-preview." + representation.identity.accessibilitySuffix)
             }
             if preview == .metadataOnly {
                 Label(PanelActionsCopy.text("Preview unavailable", bundle: copyBundle), systemImage: "doc")
