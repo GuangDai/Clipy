@@ -62,6 +62,8 @@ struct HistoryListView: View {
         self.onShowDetails = onShowDetails
     }
 
+    @State private var dragSource = HistoryListDraggingView()
+
     var body: some View {
         // One list-owned timeline refreshes idle relative metadata each
         // minute. Its scheduled date may predate newly captured rows, so
@@ -128,6 +130,12 @@ struct HistoryListView: View {
         }
         .listStyle(.inset)
         .scrollContentBackground(.hidden)
+        .coordinateSpace(name: "clipy.history.drag")
+        .background {
+            HistoryListDragSource(view: dragSource) { reference in
+                try await viewState.dragPayload(for: reference)
+            }
+        }
     }
 
     private func rowContent(
@@ -164,13 +172,29 @@ struct HistoryListView: View {
                 onFocusHistory()
             }
         )
-        // Drag-out loads its bytes lazily from the History paste read
-        // (`HistoryViewState.dragItemProvider`), never from row state.
-        // `onDrag(_:)` is the NSItemProvider-based drag API on macOS (the
-        // `draggable(_:)` NSItemProvider overload is iOS/Catalyst-only);
-        // the modifier attaches no AX surface, so the row's combined-element
-        // contract is unchanged.
-        .onDrag { viewState.dragItemProvider(for: row.item) }
+        // The list owns one native drag session/monitor. A row supplies only
+        // the currently hovered rectangle; no row map or payload cache exists.
+        .background {
+            GeometryReader { geometry in
+                Color.clear
+                    .onHover { hovering in
+                        dragSource.hover(
+                            row.item, frame: geometry.frame(in: .named("clipy.history.drag")),
+                            isInside: hovering
+                        )
+                    }
+                    .onGeometryChange(for: CGRect.self) { proxy in
+                        proxy.frame(in: .named("clipy.history.drag"))
+                    } action: { frame in
+                        dragSource.refresh(row.item, frame: frame)
+                    }
+                    .onChange(of: row.item) { old, new in
+                        dragSource.retire(old)
+                        dragSource.refresh(new, frame: geometry.frame(in: .named("clipy.history.drag")))
+                    }
+                    .onDisappear { dragSource.retire(row.item) }
+            }
+        }
         .onAppear {
             viewState.prefetchNextPageIfNeeded(appearingRowID: row.item.id)
         }

@@ -162,6 +162,65 @@ struct PasteboardLazyProviderTests {
     }
 
     #if DEBUG
+    @Test(arguments: [false, true]) @MainActor
+    func stoppingDuringAPromisedReadAbandonsRemainingItemsAndMetadata(restart: Bool) throws {
+        let pasteboard = Self.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let types = ["public.utf8-plain-text", "com.clipy.fixture.lazy", PasteboardLineageHint.typeIdentifier]
+        let provider = LazyPasteboardProvider(bytesByType: [
+            types[0]: Data("old text".utf8), types[1]: Data([0x01, 0x02]),
+            types[2]: PasteboardLineageHint.encode(HistoryItemID(rawValue: UUID())),
+        ])
+        let items = try (0..<2).map { _ in
+            let item = NSPasteboardItem()
+            try #require(item.setDataProvider(provider, forTypes: types.map { NSPasteboard.PasteboardType($0) }))
+            return item
+        }
+        try #require(pasteboard.writeObjects(items))
+        let generation = pasteboard.changeCount
+        var reads = 0
+        var received: [CaptureOutcome] = []
+        weak var activeObserver: PasteboardObserver?
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadCompletionHook = { _ in
+            reads += 1
+            guard reads == 1 else { return }
+            // Model the observer stop allowed by a promised provider's
+            // nested main run loop. Ownership stays unchanged, so the
+            // changeCount checks alone cannot suppress the five next reads.
+            activeObserver?.stop()
+            if restart {
+                activeObserver?.start(captureCurrent: false) { received.append($0) }
+            }
+        }
+        let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+        activeObserver = observer
+        defer { observer.stop() }
+        withExtendedLifetime(provider) {
+            observer.start { received.append($0) }
+        }
+        #expect(pasteboard.changeCount == generation)
+        #expect(reads == 1)
+        #expect(received.isEmpty)
+        if !restart { observer.start(captureCurrent: false) { received.append($0) } }
+        observer.pollForTesting()
+        #expect(reads == 1)
+        #expect(received.isEmpty)
+
+        pasteboard.clearContents()
+        try #require(pasteboard.setString("after resume", forType: .string))
+        observer.pollForTesting()
+        #expect(reads == 2)
+        #expect(received.count == 1)
+        guard case let .complete(complete) = try #require(received.first) else {
+            Issue.record("Only the complete generation copied after resume should be delivered")
+            return
+        }
+        #expect(complete.capture.representations == [CapturedRepresentation(
+            typeIdentifier: "public.utf8-plain-text", bytes: Data("after resume".utf8)
+        )])
+    }
+
     @Test @MainActor
     func ownerReplacementAfterLazyReadRetriesWholeItemAndDoesNotRedeliver() throws {
         let pasteboard = Self.makePasteboard()

@@ -553,71 +553,17 @@ final class HistoryViewState {
 
     // MARK: - Drag-out (01 §5.6; 03b §9)
 
-    /// One lazily-loading drag provider for a displayed row. The bytes
-    /// resolve on drop through the same `pastePayload(for:)` Effective
-    /// Content read that backs the composition root's paste hand-off
-    /// (docs/01-architecture.md §5.6; docs/03b-instruction-set.md §9) —
-    /// never from row display state. Every advertised type is available to
-    /// the receiver, including opaque bytes; plain text and the preferred
-    /// raster types are offered first. The read returns current Effective
-    /// Content by ID (03b §9 / 04 §8 DEC-PASTE-REFERENCE); an advertised type
-    /// hidden before that first read reports item-unavailable. Failures go
-    /// to the drop completion, without changing the panel banner.
-    /// The first representation request resolves one immutable payload for
-    /// the entire drag. Other formats share that result even if History
-    /// changes between receiver requests; constructing the provider does
-    /// not read or retain clipboard bytes.
-    /// `NSItemProvider` is Foundation, so
-    /// PresentationUI's no-AppKit rule (01 §6) is preserved.
-    func dragItemProvider(
-        for reference: HistoryItemReference
-    ) -> NSItemProvider {
-        let provider = NSItemProvider()
-        guard let row = rows.first(where: { $0.item == reference && isDisplayed($0) }) else {
-            return provider
-        }
-        let advertised = row.typeIdentifiers
-        let preferred = Self.dragTypePreference.filter { advertised.contains($0) }
-        let remaining = advertised.filter { !Self.dragTypePreference.contains($0) }
-        let payloadRead = DragPayloadRead(history: history, itemID: reference.id)
-        for typeIdentifier in preferred + remaining {
-            provider.registerDataRepresentation(
-                forTypeIdentifier: typeIdentifier,
-                visibility: .all
-            ) { completion in
-                Task {
-                    do {
-                        let payload = try await payloadRead.value()
-                        // This SwiftUI drag surface supplies one provider.
-                        // Multi-item transfers use Paste, which preserves all
-                        // item boundaries; never export a partial gesture.
-                        guard Set(payload.representations.map(\.pasteboardItemIndex)).count == 1,
-                              let bytes = payload.representations
-                            .first(where: { $0.typeIdentifier == typeIdentifier })?.bytes else {
-                            completion(nil, NSError(
-                                domain: NSItemProvider.errorDomain,
-                                code: NSItemProvider.ErrorCode.itemUnavailableError.rawValue
-                            ))
-                            return
-                        }
-                        completion(bytes, nil)
-                    } catch {
-                        completion(nil, error)
-                    }
-                }
-                return nil
-            }
-        }
-        return provider
+    /// One drag gesture freezes current Effective Content before AppKit starts
+    /// its native multi-item session (03b §9; V2-09 §11). Only an exact displayed
+    /// row can begin this read. The returned immutable payload owns every item
+    /// and format for the session, independent of later revisions or panel close.
+    func dragPayload(for reference: HistoryItemReference) async throws -> PastePayload? {
+        try Task.checkCancellation()
+        guard rows.contains(where: { $0.item == reference && isDisplayed($0) }) else { return nil }
+        let payload = try await history.pastePayload(for: reference.id)
+        try Task.checkCancellation()
+        return payload
     }
-
-    /// Registration preference only; other representations remain available
-    /// as their exact identifiers and bytes, without guessed text semantics.
-    private static let dragTypePreference: [String] = [
-        "public.utf8-plain-text",
-        "public.png",
-        "public.tiff",
-    ]
 
     /// Pins or reorders; typed failures land in `failure`.
     func pin(_ id: HistoryItemID, at placement: PinnedPlacement = .first) {
@@ -1158,28 +1104,5 @@ final class HistoryViewState {
         case .mutation, nil:
             break
         }
-    }
-}
-
-/// One lazy History read for one drag gesture. Its provider's format
-/// callbacks share both the in-flight task and its immutable success/failure;
-/// a receiver cannot combine representations from different revisions.
-private actor DragPayloadRead {
-    private let history: any ClipboardHistory
-    private let itemID: HistoryItemID
-    private var task: Task<PastePayload, Error>?
-
-    init(history: any ClipboardHistory, itemID: HistoryItemID) {
-        self.history = history
-        self.itemID = itemID
-    }
-
-    func value() async throws -> PastePayload {
-        if let task { return try await task.value }
-        let history = history
-        let itemID = itemID
-        let task = Task { try await history.pastePayload(for: itemID) }
-        self.task = task
-        return try await task.value
     }
 }

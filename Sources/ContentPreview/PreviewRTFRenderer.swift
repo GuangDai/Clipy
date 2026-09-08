@@ -186,7 +186,12 @@ private struct Parser {
             state.expectsUnicodeDestination = false
             state.ignorableDestination = false
         }
-        if word == "pict" || word == "object" || word == "NeXTGraphic" {
+        if word == "pict" || word == "shppict" || word == "object" || word == "NeXTGraphic" {
+            // Microsoft RTF §Pictures: Word wraps the primary picture in
+            // {\*\shppict{\pict ...}} and may append a nonshppict fallback.
+            // Represent the complete primary destination once, even with
+            // its ignorable marker; nested pict and compatibility copies
+            // remain skipped instead of disappearing or being counted twice.
             if state.isVisible {
                 attachmentCount += 1
                 guard attachmentCount <= 128 else { throw ParseFailure.resource }

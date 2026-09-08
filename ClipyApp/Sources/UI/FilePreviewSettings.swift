@@ -17,6 +17,7 @@ struct FilePreviewSettings: Sendable {
 enum FilePreviewFailure: Error, Equatable, Sendable {
     case invalidReference
     case unavailable
+    case changedDuringRead
     case permissionDenied
     case tooLarge
     case unsupported

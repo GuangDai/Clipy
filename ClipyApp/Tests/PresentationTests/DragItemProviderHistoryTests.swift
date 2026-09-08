@@ -1,166 +1,113 @@
-/// Real capture/revision/removal through the public provider callback. A drag
-/// reads current-by-ID once, then keeps that payload across format requests
-/// (03b §9 / 04 §8 DEC-PASTE-REFERENCE).
+import AppKit
 import Foundation
 @testable import HistoryCore
 @testable import HistoryStorage
 @testable import ClipyApp
 import Testing
 
+/// Real History capture/revision reads reach the same native pasteboard writers
+/// passed to NSDraggingItem. The receiver observes independent ordered items.
 @MainActor
 struct DragItemProviderHistoryTests {
-    @Test func hiddenTypeFailsWhileNULAndOpaqueSiblingsKeepTheFirstCurrentPayload() async throws {
-        let history = try await SQLiteHistory.open(
-            configuration: HistoryConfiguration(persistence: .temporary)
-        )
-        let original = try await Self.capture(history)
-        let state = HistoryViewState(history: history)
-        state.activate()
-        defer { state.deactivate() }
-        try #require(await pollUntil { state.rows.first?.item == original })
-        let provider = state.dragItemProvider(for: original)
-        #expect(Set(provider.registeredTypeIdentifiers) == Set(Self.types))
-
-        let firstRevision = try await Self.revise(
-            history, reference: original, hidden: true,
-            nulBytes: Data([0x00]), opaqueBytes: Data([0xFF, 0x00, 0x80])
-        )
-        // No provider data has been requested yet. Its initially advertised
-        // text is absent from the current payload, not an empty success.
-        let missing = await Self.load(provider, type: Self.types[0])
-        #expect(missing.bytes == nil)
-        #expect(missing.errorDomain == NSItemProvider.errorDomain)
-        #expect(missing.errorCode == NSItemProvider.ErrorCode.itemUnavailableError.rawValue)
-        let nul = await Self.load(provider, type: Self.types[1])
-        #expect(nul.bytes == Data([0x00]))
-        #expect(nul.errorDomain == nil)
-
-        let secondRevision = try await Self.revise(
-            history, reference: firstRevision, hidden: false,
-            nulBytes: Data([0x01]), opaqueBytes: Data([0x02, 0x03])
-        )
-        let current = try await history.pastePayload(for: original.id)
-        #expect(current.item == secondRevision)
-        #expect(current.representations.first { $0.typeIdentifier == Self.types[2] }?.bytes == Data([0x02, 0x03]))
-        state.deactivate()
-
-        // A previously unrequested format still belongs to the first read,
-        // even after another revision and after the panel has closed.
-        let opaque = await Self.load(provider, type: Self.types[2])
-        #expect(opaque.bytes == Data([0xFF, 0x00, 0x80]))
-        #expect(opaque.errorDomain == nil)
-        let stillMissing = await Self.load(provider, type: Self.types[0])
-        #expect(stillMissing.bytes == nil)
-        #expect(stillMissing.errorDomain != nil)
-        #expect(state.failure == nil)
-    }
-
-    @Test func removedItemFailsEveryAdvertisedFormatWithoutChangingThePanelBanner() async throws {
-        let history = try await SQLiteHistory.open(
-            configuration: HistoryConfiguration(persistence: .temporary)
-        )
-        let original = try await Self.capture(history)
-        let state = HistoryViewState(history: history)
-        state.activate()
-        defer { state.deactivate() }
-        try #require(await pollUntil { state.rows.first?.item == original })
-        let provider = state.dragItemProvider(for: original)
-        _ = try await history.perform(.remove(original.id))
-
-        for type in Self.types {
-            let result = await Self.load(provider, type: type)
-            #expect(result.bytes == nil)
-            #expect(result.errorDomain != nil)
-        }
-        #expect(state.failure == nil)
-    }
-
-    @Test func multiItemDragRejectsInsteadOfExportingOnlyTheFirstItemsBytes() async throws {
+    @Test func multiItemDragPreservesFilesRepeatedTypesAndOpaqueBytes() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
-        let receipt = try await history.perform(.capture(ClipboardCapture(
-            representations: [
-                CapturedRepresentation(typeIdentifier: Self.types[0], bytes: Data("first".utf8)),
-                CapturedRepresentation(typeIdentifier: Self.types[0], bytes: Data("second".utf8), pasteboardItemIndex: 1)
-            ],
-            origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
-            observedAt: Date(timeIntervalSince1970: 1)
-        )))
-        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
-            Issue.record("Expected the complete multi-item capture")
-            return
-        }
+        let original = try await capture(history, representations: [
+            .init(typeIdentifier: "public.file-url", bytes: Data("file:///tmp/first.txt".utf8)),
+            .init(typeIdentifier: "com.clipy.tests.opaque", bytes: Data([0, 255, 1])),
+            .init(typeIdentifier: "public.file-url", bytes: Data("file:///tmp/second.txt".utf8), pasteboardItemIndex: 1),
+            .init(typeIdentifier: "com.clipy.tests.opaque", bytes: Data([255, 0, 2]), pasteboardItemIndex: 1),
+        ])
         let state = HistoryViewState(history: history)
         state.activate()
         defer { state.deactivate() }
-        try #require(await pollUntil { state.rows.first?.item == item })
-        let result = await Self.load(state.dragItemProvider(for: item), type: Self.types[0])
-        #expect(result.bytes == nil)
-        #expect(result.errorDomain == NSItemProvider.errorDomain)
-        #expect(result.errorCode == NSItemProvider.ErrorCode.itemUnavailableError.rawValue)
-        #expect(state.failure == nil)
+        try #require(await pollUntil { state.rows.first?.item == original })
+        let payload = try #require(try await state.dragPayload(for: original))
+        let writers = try HistoryListDraggingView.pasteboardItems(for: payload)
+        let board = NSPasteboard(name: .init("clipy.drag-test.\(UUID().uuidString)"))
+        defer { board.releaseGlobally() }
+        #expect(board.writeObjects(writers))
+        let items = try #require(board.pasteboardItems)
+        #expect(items.count == 2)
+        #expect(items[0].data(forType: .fileURL) == Data("file:///tmp/first.txt".utf8))
+        #expect(items[1].data(forType: .fileURL) == Data("file:///tmp/second.txt".utf8))
+        #expect(items[0].data(forType: .init("com.clipy.tests.opaque")) == Data([0, 255, 1]))
+        #expect(items[1].data(forType: .init("com.clipy.tests.opaque")) == Data([255, 0, 2]))
+        #expect(items.allSatisfy { $0.types.count == 2 })
     }
 
-    private static let types = [
-        "public.utf8-plain-text", "com.clipy.tests.drag-nul", "com.clipy.tests.drag-opaque",
-    ]
-
-    private static func capture(_ history: SQLiteHistory) async throws -> HistoryItemReference {
-        let receipt = try await history.perform(.capture(ClipboardCapture(
-            representations: [
-                CapturedRepresentation(typeIdentifier: types[0], bytes: Data("original text".utf8)),
-                CapturedRepresentation(typeIdentifier: types[1], bytes: Data([0x00])),
-                CapturedRepresentation(typeIdentifier: types[2], bytes: Data([0x7F])),
-            ],
-            origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
-            observedAt: Date(timeIntervalSinceReferenceDate: 700_094_000)
-        )))
-        let reference: HistoryItemReference?
-        if case let .committed(commit) = receipt, case let .inserted(item) = commit.outcome {
-            reference = item
-        } else {
-            reference = nil
+    @Test func oneItemOffersOnlyItsExactDynamicTypesWithoutGuessedUTF8() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let representations: [CapturedRepresentation] = [
+            .init(typeIdentifier: "public.url", bytes: Data("https://example.invalid/".utf8)),
+            .init(typeIdentifier: "public.utf16-plain-text", bytes: Data([0x41, 0])),
+            .init(typeIdentifier: "dyn.clipy.opaque", bytes: Data([0, 255, 128])),
+        ]
+        let original = try await capture(history, representations: representations)
+        let state = HistoryViewState(history: history)
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.first?.item == original })
+        let payload = try #require(try await state.dragPayload(for: original))
+        let items = try HistoryListDraggingView.pasteboardItems(for: payload)
+        #expect(items.count == 1)
+        #expect(Set(items[0].types.map(\.rawValue)) == Set(representations.map(\.typeIdentifier)))
+        #expect(!items[0].types.contains(.string))
+        for representation in representations {
+            #expect(items[0].data(forType: .init(representation.typeIdentifier)) == representation.bytes)
         }
-        return try #require(reference)
     }
 
-    private static func revise(
-        _ history: SQLiteHistory,
-        reference: HistoryItemReference,
-        hidden: Bool,
-        nulBytes: Data,
-        opaqueBytes: Data
-    ) async throws -> HistoryItemReference {
-        let receipt = try await history.perform(.revise(RevisionRequest(
-            itemID: reference.id, expected: reference.contentVersion,
-            intent: .replace(RevisionDraft(decisions: [
-                RevisionDecision(typeIdentifier: types[0], action: hidden ? .hide : .inheritCanonical),
-                RevisionDecision(typeIdentifier: types[1], action: .replace(bytes: nulBytes)),
-                RevisionDecision(typeIdentifier: types[2], action: .replace(bytes: opaqueBytes)),
+    @Test func oneFrozenDragKeepsAllFormatsAfterRevisionAndRemoval() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let original = try await capture(history, representations: [
+            .init(typeIdentifier: "public.utf8-plain-text", bytes: Data("first\0".utf8)),
+            .init(typeIdentifier: "public.utf8-plain-text", bytes: Data("second\0".utf8), pasteboardItemIndex: 1),
+        ])
+        let state = HistoryViewState(history: history)
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.first?.item == original })
+        let payload = try #require(try await state.dragPayload(for: original))
+        let writers = try HistoryListDraggingView.pasteboardItems(for: payload)
+        _ = try await history.perform(.revise(.init(
+            itemID: original.id, expected: original.contentVersion,
+            intent: .replace(.init(decisions: [
+                .init(typeIdentifier: "public.utf8-plain-text", action: .replace(bytes: Data("changed".utf8))),
+                .init(typeIdentifier: "public.utf8-plain-text", action: .inheritCanonical, pasteboardItemIndex: 1),
             ]))
         )))
-        let revised: HistoryItemReference?
-        if case let .committed(commit) = receipt, case let .revised(item) = commit.outcome {
-            revised = item
-        } else {
-            revised = nil
-        }
-        return try #require(revised)
+        _ = try await history.perform(.remove(original.id))
+        #expect(writers[0].data(forType: .string) == Data("first\0".utf8))
+        #expect(writers[1].data(forType: .string) == Data("second\0".utf8))
+        #expect(state.failure == nil)
     }
 
-    private static func load(_ provider: NSItemProvider, type: String) async -> LoadResult {
-        await withCheckedContinuation { continuation in
-            _ = provider.loadDataRepresentation(forTypeIdentifier: type) { bytes, error in
-                let platformError = error as NSError?
-                continuation.resume(returning: LoadResult(
-                    bytes: bytes, errorDomain: platformError?.domain, errorCode: platformError?.code
-                ))
-            }
-        }
+    @Test func hiddenOrStaleRowsCannotBeginANativeDrag() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let original = try await capture(history, representations: [
+            .init(typeIdentifier: "public.utf8-plain-text", bytes: Data("visible".utf8)),
+        ])
+        let state = HistoryViewState(history: history)
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.first?.item == original })
+        let stale = HistoryItemReference(id: original.id, contentVersion: .init(rawValue: 2))
+        #expect(try await state.dragPayload(for: stale) == nil)
+        state.typeFilter = .images
+        #expect(try await state.dragPayload(for: original) == nil)
+        state.deactivate()
+        #expect(try await state.dragPayload(for: original) == nil)
+        #expect(state.failure == nil)
     }
 
-    private struct LoadResult: Sendable {
-        let bytes: Data?
-        let errorDomain: String?
-        let errorCode: Int?
+    private func capture(_ history: SQLiteHistory, representations: [CapturedRepresentation]) async throws -> HistoryItemReference {
+        let receipt = try await history.perform(.capture(.init(
+            representations: representations,
+            origin: .init(sourceApplication: nil, lineageHint: nil), observedAt: Date()
+        )))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        return item
     }
 }

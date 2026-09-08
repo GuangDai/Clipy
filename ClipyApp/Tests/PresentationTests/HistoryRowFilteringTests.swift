@@ -245,49 +245,6 @@ struct HistoryRowFilteringTests {
         await history.finishObservation()
     }
 
-    // MARK: - Drag-out provider (01 §5.6; 03b §9)
-
-    /// Register the actual row types without inventing UTF-8 for a URL or
-    /// UTF-16 representation; references absent from the display offer none.
-    @Test func dragProviderRegistersActualAdvertisedTypes() async {
-        let (state, history) = activatedMixedState()
-        #expect(await pollUntil { state.rows.count == 5 })
-
-        // Rows are the fixture page in order (03b §8 lane ordering is a list
-        // concern; `rows` itself is the page order).
-        #expect(
-            state.dragItemProvider(for: state.rows[0].item)
-                .registeredTypeIdentifiers == ["public.utf8-plain-text"]
-        )
-        // A URL remains a URL; it is not a guessed UTF-8 representation.
-        #expect(
-            state.dragItemProvider(for: state.rows[1].item)
-                .registeredTypeIdentifiers == ["public.url"]
-        )
-        // UTF-16 is offered with its exact encoding identifier.
-        #expect(
-            state.dragItemProvider(for: state.rows[2].item)
-                .registeredTypeIdentifiers == ["public.utf16-plain-text"]
-        )
-        #expect(
-            state.dragItemProvider(for: state.rows[3].item)
-                .registeredTypeIdentifiers == ["public.png"]
-        )
-        let stranger = HistoryItemReference(
-            id: HistoryItemID(
-                rawValue: UUID(uuidString: "00000000-0000-0000-0000-0000000000F0")!
-            ),
-            contentVersion: ContentVersion(rawValue: 1)
-        )
-        #expect(
-            state.dragItemProvider(for: stranger)
-                .registeredTypeIdentifiers.isEmpty
-        )
-
-        state.deactivate()
-        await history.finishObservation()
-    }
-
     // MARK: - Fixtures
 
     /// One activated view state over a five-row mixed-type page (two pinned,

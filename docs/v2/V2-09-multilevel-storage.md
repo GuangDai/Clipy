@@ -373,3 +373,17 @@ metadata details 和显式 representation 请求同样携带它。list 的类型
 拒绝整次 capture。Local Automation 的 Effective JSON 每个 representation
 输出 `pasteboardItemIndex`；revision 输入按 `(pasteboardItemIndex,typeIdentifier)`
 区分，省略位置表示单项位置 0。App Intents 仍消费同一个完整 PastePayload。
+
+### 11.1 从历史行拖出多项内容
+
+列表用一个 AppKit drag source 发起原生 `NSDraggingSession`。行只提供当前
+hover 的 exact reference 和矩形；mouse-down 必须命中同一窗口中的该行，
+移动越过拖动阈值后才读取一次完整的当前 `PastePayload`。原生拖拽开始前，
+按 `pasteboardItemIndex` 顺序建立每项自己的 `NSPasteboardItem` 和
+`NSDraggingItem`，逐格式原样写入 Data；不拼接文本，不打开文件 URL，也不
+声明并不存在的格式。只允许 copy，不把拖到 Trash/接收方的 move 请求变成删除。
+
+松手、Esc、滚动、行卸载或列表离开窗口会取消尚未开始的读取；一旦开始，
+系统 session 使用已经冻结的完整内容，之后的修订、移除和面板关闭不会把
+不同版本的格式混到一次拖拽中。列表只有一个事件 monitor，不随可见行数
+增加，不保留全列表 payload cache。SwiftUI 保留原有选择、双击和右键行为。

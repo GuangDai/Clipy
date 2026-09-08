@@ -203,7 +203,10 @@ public final class PasteboardObserver {
         observing activeTimer: Timer,
         observedChangeCount: Int
     ) -> CaptureOutcome? {
-        guard let firstOutcome = adapter.captureOutcome() else { return nil }
+        let shouldContinue: @MainActor () -> Bool = {
+            self.timer === activeTimer && self.lastChangeCount == observedChangeCount
+        }
+        guard let firstOutcome = adapter.captureOutcome(shouldContinue: shouldContinue) else { return nil }
         guard case .changedDuringRead = firstOutcome else {
             return firstOutcome
         }
@@ -223,7 +226,7 @@ public final class PasteboardObserver {
               lastChangeCount == observedChangeCount,
               accessBehavior == .allowed else { return nil }
 
-        guard let retryOutcome = adapter.captureOutcome() else {
+        guard let retryOutcome = adapter.captureOutcome(shouldContinue: shouldContinue) else {
             return firstOutcome
         }
         switch retryOutcome {

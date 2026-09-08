@@ -198,3 +198,8 @@ Exit status is `0` for success, `2` for invalid input, `3` for denied access,
 `4` for missing/stale items or cursors, `5` for temporary unavailability or an
 unknown outcome, and `6` for a persistence failure. stderr contains only a
 short error code. Revoke access in Settings to disable further operations.
+
+A local `output_unavailable` diagnostic means stdout could not accept the reply
+(for example, a closed pipe). Exit status is 5. The CLI does not append a second
+JSON reply to partially written output or resend the request. A mutation already
+committed by History remains committed; an output error does not undo it.

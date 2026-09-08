@@ -416,7 +416,15 @@ final class PreviewContentLoader {
         switch scope {
         case .all: clear()
         case .unpinned:
-            if !isPinned || loadedFileReference != nil || fileLoadConfirmation != nil { clear() }
+            if !isPinned {
+                clear()
+            } else if loadedFileReference != nil {
+                // The pinned History reference survives. Retire its external
+                // file read without losing the unchanged view task's target.
+                showFileReference()
+            } else {
+                cancelFilePreviewConfirmation()
+            }
         case .item(let id):
             if requestedItem.id == id { clear() }
         case .revision(let old, _):

@@ -31,3 +31,4 @@
 "Previous PDF Page" = "上一页 PDF";
 "Next PDF Page" = "下一页 PDF";
 "Page %@ of %@" = "第 %@ 页，共 %@ 页";
+"The file changed while it was being read. Return to the file reference to load it again." = "文件在读取过程中发生了变化。请返回文件引用后重新加载。";

@@ -12,6 +12,9 @@ struct HTMLCharacterReferencePreviewTests {
         ("&#0; &#xD800; &#1114112; &#xFFFFFFFFFFFFFFFF;", "� � � �"),
         ("&#; &#x; &#XG1; &#-65; &unknown;", "&#; &#x; &#XG1; &#-65; &unknown;"),
         ("&copycat &ampersand; &reg=1 &nbspx", "©cat &ersand; ®=1 \u{A0}x"),
+        ("&eacute &AElig &notit &notin; &century", "é Æ ¬it ∉ ¢ury"),
+        ("&COPY &REG &brvbar &macr &ordf &ordm", "© ® ¦ ¯ ª º"),
+        ("&eacutex &eacute; &eacute=1 &EACUTE", "éx é é=1 &EACUTE"),
         ("&amp;copy; &#38;copy; &#x3C;b&#62;", "&copy; &copy; <b>"),
     ])
     func copiedHTMLUsesReferencePrefixesWithoutConsumingTheFollowingText(
