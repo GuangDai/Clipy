@@ -803,7 +803,7 @@ struct HistoryPanelView: View {
     }
 
     /// The free-drag preview-width handle (V2-07 §3/§9: the strip keeps an
-    /// AX identity for the running-app journey). A zero-distance DragGesture
+    /// AX identity for the running-app journey). A DragGesture
     /// resizes the column LIVE: the raw proposal follows the pointer past
     /// the persisted 240 floor down to `previewDragVisualFloor` so the
     /// drag-to-collapse affordance reads, while the 480 ceiling and the
@@ -812,7 +812,7 @@ struct HistoryPanelView: View {
     /// release width below `previewCollapseThreshold` closes the
     /// pane through the manual-toggle path (a width below the floor is
     /// never persisted); anything else settles at the clamped, guarded,
-    /// snapped width and persists. A simultaneous double click restores and
+    /// snapped width and persists. An exclusive double click restores and
     /// persists the default `PanelGeometry.previewWidth`. The trade happens
     /// entirely inside the window (the browsing column flexes), so no
     /// AppKit `setFrame` runs; the next preview open/close re-syncs the
@@ -824,78 +824,83 @@ struct HistoryPanelView: View {
             .contentShape(Rectangle())
             .pointerStyle(.columnResize)
             .gesture(
-                // The handle moves while it resizes the columns. Measure
-                // from the stationary content space, not its moving local
-                // origin. The release position alone decides collapse.
-                DragGesture(minimumDistance: 0, coordinateSpace: .global)
-                    .onChanged { value in
-                        // A click belongs to the simultaneous double-tap
-                        // reset; it must not capture or rewrite its old width.
-                        guard value.translation.width != 0 else { return }
-                        let startWidth = previewDragStartWidth
-                            ?? renderedPreviewColumnWidth
-                        previewDragStartWidth = startWidth
-                        previewColumnWidth = draggedPreviewColumnWidth(
-                            from: startWidth,
-                            translation: value.translation.width
-                        )
-                    }
-                    .onEnded { value in
-                        let dragStart = previewDragStartWidth
-                        previewDragStartWidth = nil
-                        // Ignore a pure click without overwriting a Tap(2)
-                        // reset. A real drag back to its origin still settles
-                        // at its actual zero-delta release using the old start.
-                        guard dragStart != nil || value.translation.width != 0 else { return }
-                        let startWidth = dragStart ?? renderedPreviewColumnWidth
-                        switch PanelGeometry.previewDragOutcome(
-                            startWidth: startWidth,
-                            translation: value.translation.width,
-                            placement: previewPlacement
-                        ) {
-                        case .collapse:
-                            // The dragged width was never persisted:
-                            // restore the persisted width for the next
-                            // open, then close through the same manual
-                            // toggle ⌃Space uses (a manual close suppresses
-                            // auto-open until the selection changes).
-                            previewColumnWidth =
-                                PanelGeometry.persistedPreviewColumnWidth(
-                                    from: .standard
-                                )
-                            previewState.togglePreview(
-                                for: previewSelection.reference
-                            )
-                        case .settle:
-                            // Use the actual release, which can advance past
-                            // the last onChanged event. Keep the same live
-                            // clamp/guard/snap chain, then the persisted floor.
-                            previewColumnWidth =
-                                PanelGeometry.clampedPreviewColumnWidth(
-                                    draggedPreviewColumnWidth(
-                                        from: startWidth,
-                                        translation: value.translation.width
-                                    )
-                                )
-                            PanelGeometry.persistPreviewColumnWidth(
-                                previewColumnWidth,
-                                to: .standard
-                            )
-                        }
-                    }
-            )
-            .simultaneousGesture(
+                // Reset and resize both write the width. Only one may win:
+                // a simultaneous zero-distance drag can settle the old width
+                // after the double click resets it, or capture click jitter.
+                // SwiftUI gives the first gesture precedence until it fails.
                 TapGesture(count: 2)
                     .onEnded { _ in
+                        previewDragStartWidth = nil
                         previewColumnWidth = PanelGeometry.previewWidth
                         PanelGeometry.persistPreviewColumnWidth(
                             PanelGeometry.previewWidth,
                             to: .standard
                         )
                     }
+                    .exclusively(before: previewDividerDrag)
             )
             .accessibilityLabel(PanelFooterCopy.text("Resize preview"))
             .accessibilityIdentifier("clipy.panel.previewDivider")
+    }
+
+    private var previewDividerDrag: some Gesture {
+        // The handle moves while it resizes the columns. Measure
+        // from the stationary content space, not its moving local
+        // origin. Use the standard drag threshold so a double click
+        // doesn't resize the columns on tiny pointer movements.
+        DragGesture(coordinateSpace: .global)
+            .onChanged { value in
+                guard value.translation.width != 0 else { return }
+                let startWidth = previewDragStartWidth
+                    ?? renderedPreviewColumnWidth
+                previewDragStartWidth = startWidth
+                previewColumnWidth = draggedPreviewColumnWidth(
+                    from: startWidth,
+                    translation: value.translation.width
+                )
+            }
+            .onEnded { value in
+                let dragStart = previewDragStartWidth
+                previewDragStartWidth = nil
+                // A drag back to its origin still settles at its
+                // actual zero-delta release using the original width.
+                guard dragStart != nil || value.translation.width != 0 else { return }
+                let startWidth = dragStart ?? renderedPreviewColumnWidth
+                switch PanelGeometry.previewDragOutcome(
+                    startWidth: startWidth,
+                    translation: value.translation.width,
+                    placement: previewPlacement
+                ) {
+                case .collapse:
+                    // The dragged width was never persisted:
+                    // restore the persisted width for the next
+                    // open, then close through the same manual
+                    // toggle ⌃Space uses (a manual close suppresses
+                    // auto-open until the selection changes).
+                    previewColumnWidth =
+                        PanelGeometry.persistedPreviewColumnWidth(
+                            from: .standard
+                        )
+                    previewState.togglePreview(
+                        for: previewSelection.reference
+                    )
+                case .settle:
+                    // Use the actual release, which can advance past
+                    // the last onChanged event. Keep the same live
+                    // clamp/guard/snap chain, then the persisted floor.
+                    previewColumnWidth =
+                        PanelGeometry.clampedPreviewColumnWidth(
+                            draggedPreviewColumnWidth(
+                                from: startWidth,
+                                translation: value.translation.width
+                            )
+                        )
+                    PanelGeometry.persistPreviewColumnWidth(
+                        previewColumnWidth,
+                        to: .standard
+                    )
+                }
+            }
     }
 
     /// The closed-pane edge opener (V2-07 §3): a thin invisible strip just
