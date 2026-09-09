@@ -18,8 +18,8 @@ import Foundation
 
 /// The history-row density: `compact` trades thumbnail size, vertical
 /// padding, and — under the default `.automatic` snippet-line setting —
-/// the second snippet line for more rows per panel height; `comfortable`
-/// is the product default (today's row layout). Package (GOV-3): the
+/// the second snippet line for more rows per panel height. `compact`
+/// is the product default; `comfortable` adds breathing room. Package (GOV-3): the
 /// density consumers — the Settings appearance tab, the list/row views,
 /// the theme metrics — are all in-package.
 ///
@@ -120,7 +120,7 @@ struct PanelAppearanceSettings: Equatable, Sendable {
     /// `HistoryPanelView.swift`'s public/package initializers).
     init() {
         self.init(
-            rowDensity: .comfortable,
+            rowDensity: .compact,
             snippetLineCount: .automatic,
             rowFontSize: .medium,
             isPreviewAutoOpenEnabled: true,
@@ -132,7 +132,7 @@ struct PanelAppearanceSettings: Equatable, Sendable {
     /// auto-open are Settings-tab vocabulary; the literals mirror the
     /// package defaults and the public `init()` above.
     init(
-        rowDensity: HistoryRowDensity = .comfortable,
+        rowDensity: HistoryRowDensity = .compact,
         snippetLineCount: HistorySnippetLineCount = .automatic,
         rowFontSize: HistoryRowFontSize = .medium,
         isPreviewAutoOpenEnabled: Bool = true,

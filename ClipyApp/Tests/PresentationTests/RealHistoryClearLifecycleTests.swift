@@ -87,6 +87,12 @@ private actor ParkedClearReceiptHistory: ClipboardHistory {
     }
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage { try await base.browse(request) }
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        try await base.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails { try await base.details(for: id) }
     func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
         try await base.representation(request)

@@ -25,7 +25,7 @@ struct AppearanceSettingsTab: View {
     /// projection of the same UserDefaults keys `PanelAppearanceSettings`
     /// owns. The wrapped defaults below are the documented product defaults.
     @AppStorage(PanelAppearanceSettings.rowDensityDefaultsKey)
-    private var rowDensity: HistoryRowDensity = .comfortable
+    private var rowDensity: HistoryRowDensity = PanelAppearanceSettings().rowDensity
     @AppStorage(PanelAppearanceSettings.snippetLineCountDefaultsKey)
     private var snippetLineCount: HistorySnippetLineCount = .automatic
     @AppStorage(PanelAppearanceSettings.rowFontSizeDefaultsKey)

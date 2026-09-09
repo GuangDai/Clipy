@@ -502,6 +502,16 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         }
     }
 
+    public func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        do {
+            return try await authority.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
+        } catch {
+            throw Self.translatedFailure(error)
+        }
+    }
+
     public func representation(
         _ request: HistoryRepresentationRequest
     ) async throws -> HistoryRepresentation {

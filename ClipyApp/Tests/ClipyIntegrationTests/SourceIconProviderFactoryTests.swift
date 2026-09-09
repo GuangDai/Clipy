@@ -17,11 +17,13 @@ struct SourceIconProviderFactoryTests {
         #expect(second.width == 64)
         #expect(second.height == 64)
         #expect(first !== second)
+        #expect(provider.loadName("com.apple.finder")?.isEmpty == false)
     }
 
     @Test @MainActor
     func unknownApplicationHasNoSourceIcon() {
         let provider = SourceIconProviderFactory.makeProvider()
         #expect(provider.loadIcon("com.clipy.tests.uninstalled-source-icon") == nil)
+        #expect(provider.loadName("com.clipy.tests.uninstalled-source-icon") == nil)
     }
 }

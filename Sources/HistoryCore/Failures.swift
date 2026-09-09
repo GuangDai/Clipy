@@ -60,7 +60,7 @@ public enum InvalidInputReason: Sendable, Equatable {
     case incoherentRevisionDraft
     /// A search term is not a valid regular expression.
     case invalidRegularExpression
-    /// A browse/observation limit is outside the allowed range.
+    /// A browse/observation limit or source-page offset is outside its allowed range.
     case invalidPageLimit
     /// A thumbnail pixel size is outside the allowed range.
     case invalidPixelSize

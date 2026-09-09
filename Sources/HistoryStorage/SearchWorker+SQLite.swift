@@ -415,13 +415,13 @@ private extension SearchCorpusRow {
             id: id, contentVersion: contentVersion, title: title, searchBody: body,
             debugTitleUTF8Bytes: debugTitleUTF8Bytes, debugSearchBodyUTF8Bytes: debugSearchBodyUTF8Bytes,
             typeIdentifiers: typeIdentifiers, lastCopiedAt: lastCopiedAt, copyCount: copyCount,
-            lastSource: lastSource, pinOrdinal: pinOrdinal
+            lastSource: lastSource, pinOrdinal: pinOrdinal, sourceCount: sourceCount
         )
 #else
         SearchCorpusRow(
             id: id, contentVersion: contentVersion, title: title, searchBody: body,
             typeIdentifiers: typeIdentifiers, lastCopiedAt: lastCopiedAt, copyCount: copyCount,
-            lastSource: lastSource, pinOrdinal: pinOrdinal
+            lastSource: lastSource, pinOrdinal: pinOrdinal, sourceCount: sourceCount
         )
 #endif
     }
@@ -535,7 +535,8 @@ private final class SQLiteSearchRows {
                 let candidateBindings = candidateExpression.map { [SQLiteValue.text($0)] } ?? []
                 statement = try database.prepare("""
                     SELECT id,contentVersion,titleUTF8,searchBodyUTF8,effectiveTypeIdentifiersBlob,
-                           lastCopiedAt,copyCount,lastSource,pinOrdinal,revisionCount
+                           lastCopiedAt,copyCount,lastSource,pinOrdinal,revisionCount,
+                           sourceCount
                     FROM history_items WHERE (\(range.condition)) AND (\(predicate.sql)) AND (\(candidateSQL))
                     ORDER BY \(range.order)
                     """, bindings: range.bindings + predicate.bindings + candidateBindings)
@@ -582,6 +583,10 @@ private final class SQLiteSearchRows {
                 let copiedAt = Date(timeIntervalSinceReferenceDate: try statement.real(at: 5))
                 let copyCount = try sqliteUInt64(statement.blob(at: 6))
                 let source = try statement.optionalText(at: 7)
+                let sourceCount = try HistoryItemRowHydration.integer(statement, 10)
+                guard sourceCount >= 0, UInt64(sourceCount) <= copyCount else {
+                    throw HistoryFailure.persistence(.corruptStoredValue)
+                }
                 let ordinal = try statement.isNull(at: 8) ? nil : Int(exactly: statement.integer(at: 8))
                 try RevisionStateBlobCodec.validateFiniteLastCopiedAt(copiedAt)
                 try RevisionStateBlobCodec.validateCopyCount(copyCount)
@@ -591,13 +596,15 @@ private final class SQLiteSearchRows {
                     id: HistoryItemID(rawValue: uuid), contentVersion: version, title: title, searchBody: body,
                     debugTitleUTF8Bytes: titleBytes, debugSearchBodyUTF8Bytes: bodyBytes,
                     typeIdentifiers: types, lastCopiedAt: copiedAt, copyCount: copyCount,
-                    lastSource: source, pinOrdinal: pin
+                    lastSource: source, pinOrdinal: pin,
+                    sourceCount: sourceCount
                 )
 #else
                 return SearchCorpusRow(
                     id: HistoryItemID(rawValue: uuid), contentVersion: version, title: title, searchBody: body,
                     typeIdentifiers: types, lastCopiedAt: copiedAt, copyCount: copyCount,
-                    lastSource: source, pinOrdinal: pin
+                    lastSource: source, pinOrdinal: pin,
+                    sourceCount: sourceCount
                 )
 #endif
             }

@@ -25,6 +25,11 @@ enum SourceIconProviderFactory {
     static func makeProvider() -> SourceIconProvider {
         SourceIconProvider(loadIcon: { bundleID in
             rasterizeIcon(for: bundleID)
+        }, loadName: { bundleID in
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            else { return nil }
+            let name = FileManager.default.displayName(atPath: url.path)
+            return name.hasSuffix(".app") ? String(name.dropLast(4)) : name
         })
     }
 

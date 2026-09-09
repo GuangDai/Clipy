@@ -1,6 +1,6 @@
 /// HistoryRowView.swift — content-first history rows. Titles and search
-/// excerpts share the available column width; source, occurrence count and
-/// relative time sit together below. Native List selection owns selection
+/// excerpts share the available column width. Copy provenance lives in the
+/// expanded preview; a small accessory identifies multi-source items. Native List selection owns selection
 /// contrast, while pointer hover supplies a quieter secondary highlight.
 /// Owning spec: docs/01-architecture.md §5.2 (gesture actions), §5.7
 /// (thumbnail is requested by exact `HistoryItemReference`);
@@ -49,7 +49,6 @@ struct HistoryRowView: View {
     private let fontSize: HistoryRowFontSize
     private let isSelected: Bool
     private let thumbnails: ThumbnailStore
-    private let sourceIcons: SourceIconStore?
     private let dragSource: HistoryListDraggingView?
     private let onCopy: (HistoryItemReference) -> Void
     private let onPin: (HistoryItemID, PinnedPlacement) -> Void
@@ -67,12 +66,11 @@ struct HistoryRowView: View {
         row: HistoryRow,
         now: Date,
         pinnedOrdinal: Int?,
-        density: HistoryRowDensity = .comfortable,
+        density: HistoryRowDensity = .compact,
         snippetLineCount: HistorySnippetLineCount = .automatic,
         fontSize: HistoryRowFontSize = .medium,
         isSelected: Bool = false,
         thumbnails: ThumbnailStore,
-        sourceIcons: SourceIconStore? = nil,
         dragSource: HistoryListDraggingView? = nil,
         onCopy: @escaping (HistoryItemReference) -> Void,
         onPin: @escaping (HistoryItemID, PinnedPlacement) -> Void,
@@ -88,7 +86,6 @@ struct HistoryRowView: View {
         self.fontSize = fontSize
         self.isSelected = isSelected
         self.thumbnails = thumbnails
-        self.sourceIcons = sourceIcons
         self.dragSource = dragSource
         self.onCopy = onCopy
         self.onPin = onPin
@@ -104,6 +101,13 @@ struct HistoryRowView: View {
                 HStack(alignment: .firstTextBaseline, spacing: PanelTheme.spacingXSmall) {
                     title
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    if row.sourceCount > 1 {
+                        Image(systemName: "square.on.square")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .help(PreviewCopy.text("Multiple Applications"))
+                            .accessibilityLabel(PreviewCopy.text("Multiple Applications"))
+                    }
                     pinBadge
                 }
                 if let search = row.search, let snippet = search.snippet {
@@ -113,7 +117,6 @@ struct HistoryRowView: View {
                         .lineLimit(snippetLineCount.baseLineLimit(density: density))
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                metadataLine
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -143,7 +146,9 @@ struct HistoryRowView: View {
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("clipy.history.row.\(row.item.id.description)")
         .accessibilityAddTraits(.isButton)
-        .accessibilityValue(copyAccessibilityLabel)
+        .accessibilityValue(
+            "\(HistoryRowRenderingModel(row: row, now: now, locale: locale, timeZone: timeZone).absoluteDateTimeText), \(copyAccessibilityLabel)"
+        )
         .accessibilityAction {
             performAccessibilityAction(.paste)
         }
@@ -210,12 +215,6 @@ struct HistoryRowView: View {
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-            } else if let sourceIcon {
-                Image(decorative: sourceIcon, scale: 2)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .padding(PanelTheme.spacingXXSmall)
-                    .accessibilityHidden(true)
             } else {
                 Image(systemName: Self.typeSymbol(for: row.typeIdentifiers))
                     .font(.system(size: 15, weight: .medium))
@@ -233,19 +232,13 @@ struct HistoryRowView: View {
         .clipShape(RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
         .onAppear {
             thumbnails.setDisplayed(row.item, true)
-            if let source = row.lastSource { sourceIcons?.setDisplayed(source, true) }
         }
         .onDisappear {
             thumbnails.setDisplayed(row.item, false)
-            if let source = row.lastSource { sourceIcons?.setDisplayed(source, false) }
         }
         .onChange(of: row.item) { old, new in
             thumbnails.setDisplayed(old, false)
             thumbnails.setDisplayed(new, true)
-        }
-        .onChange(of: row.lastSource) { old, new in
-            if let old { sourceIcons?.setDisplayed(old, false) }
-            if let new { sourceIcons?.setDisplayed(new, true) }
         }
         .onChange(of: thumbnails.isPrefetchSuspended) { _, suspended in
             if !suspended, ThumbnailStore.likelyThumbnailable(row.typeIdentifiers) {
@@ -257,40 +250,13 @@ struct HistoryRowView: View {
                 thumbnails.prefetch(row.item)
             }
         }
-        .onChange(of: sourceIcons?.isPrefetchSuspended) { _, suspended in
-            if suspended == false, let source = row.lastSource {
-                sourceIcons?.icon(forBundleID: source)
-            }
-        }
-        .onChange(of: sourceIcons?.isSurfaceActive) { _, active in
-            if active == true, let source = row.lastSource {
-                sourceIcons?.icon(forBundleID: source)
-            }
-        }
         .task(id: row.item) {
             guard !Task.isCancelled else { return }
             if ThumbnailStore.likelyThumbnailable(row.typeIdentifiers) {
                 thumbnails.prefetch(row.item)
             }
         }
-        .task(id: row.lastSource) {
-            guard !Task.isCancelled else { return }
-            if let lastSource = row.lastSource {
-                // Resolution mutates the store, so it runs here rather than
-                // in body evaluation. Coalescing can change lastSource while
-                // preserving row.item, so this task follows the source itself.
-                sourceIcons?.icon(forBundleID: lastSource)
-            }
-        }
         .accessibilityHidden(true)
-    }
-
-    /// The retained source-app icon for the row's observed bundle identifier,
-    /// consulted only while the slot has no thumbnail raster. A pure read:
-    /// provider resolution runs in the slot's `.task` above.
-    private var sourceIcon: CGImage? {
-        guard let lastSource = row.lastSource else { return nil }
-        return sourceIcons?.cachedIcon(forBundleID: lastSource)
     }
 
     /// Keep the pin position beside the title, outside the decorative icon,
@@ -329,48 +295,6 @@ struct HistoryRowView: View {
             return AttributedString(row.title)
         }
         return MatchHighlighting.highlighted(row.title, ranges: search.matchedRanges)
-    }
-
-    // MARK: Secondary metadata
-
-    private var metadataLine: some View {
-        let rendering = HistoryRowRenderingModel(
-            row: row, now: now, locale: locale, timeZone: timeZone
-        )
-        let absoluteDateTime = rendering.absoluteDateTimeText
-        return HStack(spacing: PanelTheme.spacingXSmall) {
-            if let source = rendering.sourceDisplayName {
-                Text(source)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .layoutPriority(-1)
-                    .help(row.lastSource ?? source)
-            }
-            if row.copyCount > 1 {
-                Text(copyCountText)
-                    .lineLimit(1)
-                    .monospacedDigit()
-                    .help(copyAccessibilityLabel)
-                    // The combined row's value always supplies the exact
-                    // count, including when the visual line has little room.
-                    .accessibilityHidden(true)
-            }
-            Spacer(minLength: PanelTheme.spacingXXSmall)
-            Text(rendering.relativeTimeText)
-                .lineLimit(1)
-                .monospacedDigit()
-                .fixedSize(horizontal: true, vertical: false)
-                .help(absoluteDateTime)
-                .accessibilityLabel(absoluteDateTime)
-        }
-        .font(PanelTheme.metadataFont(for: fontSize))
-        .foregroundStyle(.secondary)
-    }
-
-    /// Keep the full UInt64 occurrence range while honoring locale grouping
-    /// and digits; row count presentation never changes the stored value.
-    private var copyCountText: String {
-        HistoryRowCopy.copyCount(row.copyCount, locale: locale)
     }
 
     /// The same count with translated plural-aware VoiceOver copy (§9/§10).

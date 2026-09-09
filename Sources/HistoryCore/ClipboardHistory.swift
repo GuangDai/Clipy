@@ -74,6 +74,13 @@ public protocol ClipboardHistory: Sendable {
         for id: HistoryItemID
     ) async throws -> HistoryDetails
 
+    /// Up to 32 application copy summaries for one item, read only when
+    /// requested. An occurrence-count change expires the page so an offset
+    /// cannot silently skip/repeat sources after recency reorders them.
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage
+
     /// Reads only the requested representation. The item must still exist at
     /// the supplied Content Version before any payload access. A stale request
     /// throws `.staleContent`; an absent representation throws

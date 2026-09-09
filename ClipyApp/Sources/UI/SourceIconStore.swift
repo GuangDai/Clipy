@@ -1,5 +1,5 @@
 /// SourceIconStore.swift — bounded per-surface retention of source-app icons
-/// shown in a row's leading slot while no thumbnail raster exists for it.
+/// shown beside application names in the expanded copy information.
 ///
 /// Same admission posture as `ThumbnailStore`'s bounded retention (see that
 /// file's header): this is per-surface DISPLAY STATE — one store per browsing
@@ -32,9 +32,11 @@ final class SourceIconStore {
     /// Replacing the dictionary value publishes through Observation.
     private final class Entry {
         let icon: CGImage?
+        let name: String?
 
-        init(icon: CGImage?) {
+        init(icon: CGImage?, name: String? = nil) {
             self.icon = icon
+            self.name = name
         }
     }
 
@@ -70,11 +72,15 @@ final class SourceIconStore {
     }
 
     /// The retained icon for one bundle ID, or `nil` when unresolved or
-    /// recorded negative. A pure read for row bodies: view body evaluation
+    /// recorded negative. A pure read for application-label bodies: view body evaluation
     /// must not mutate observable state, so provider resolution happens in
     /// the row's `.task` via `icon(forBundleID:)`.
     func cachedIcon(forBundleID bundleID: String) -> CGImage? {
         entries[bundleID]?.icon
+    }
+
+    func cachedName(forBundleID bundleID: String) -> String? {
+        entries[bundleID]?.name
     }
 
     /// Resolves and retains the icon for one bundle ID, consulting the
@@ -95,10 +101,11 @@ final class SourceIconStore {
             entries.removeValue(forKey: insertionOrder.removeFirst())
         }
         let resolved = provider.loadIcon(bundleID)
+        let name = provider.loadName(bundleID)
         // Nested loads may evict this entry and then resolve the same bundle
         // again. Only this resolution's own entry may accept its result.
         if entries[bundleID] === entry {
-            entries[bundleID] = Entry(icon: resolved)
+            entries[bundleID] = Entry(icon: resolved, name: name)
         }
         return resolved
     }

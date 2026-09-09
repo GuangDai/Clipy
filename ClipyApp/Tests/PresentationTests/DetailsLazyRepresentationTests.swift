@@ -172,6 +172,12 @@ private actor DetailsReadRecorder: ClipboardHistory {
     func observe(_ request: HistoryObservationRequest) async -> AsyncThrowingStream<HistoryPage, Error> {
         await history.observe(request)
     }
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        try await history.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails { try await history.details(for: id) }
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload { try await history.pastePayload(for: id) }
     func thumbnail(for item: HistoryItemReference, pixels: PixelSize) async throws -> ThumbnailPayload? {

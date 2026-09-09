@@ -104,6 +104,12 @@ private actor PreviewReadRecorder: ClipboardHistory {
     func observe(_ request: HistoryObservationRequest) async -> AsyncThrowingStream<HistoryPage, Error> {
         await history.observe(request)
     }
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        try await history.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails { try await history.details(for: id) }
     func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
         representationRequests.append(request)

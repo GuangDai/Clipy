@@ -15,13 +15,15 @@ internal struct ScalarReadRow {
     internal let lastCopiedAt: Date
     internal let copyCount: UInt64
     internal let lastSource: String?
+    internal let sourceCount: Int
     internal let pinOrdinal: PinOrdinal?
 
     /// Both lanes select precisely this layout. Keeping payload columns out
     /// of the SELECT prevents their materialization, including lookahead rows.
     internal static let columns = """
         id, contentVersion, titleUTF8, effectiveTypeIdentifiersBlob,
-        lastCopiedAt, copyCount, lastSource, pinOrdinal
+        lastCopiedAt, copyCount, lastSource, pinOrdinal,
+        sourceCount
         """
 
     internal init(_ statement: SQLiteStatement, limits: HistoryLimits) throws {
@@ -58,6 +60,10 @@ internal struct ScalarReadRow {
         lastCopiedAt = date
         copyCount = count
         lastSource = source
+        sourceCount = try HistoryItemRowHydration.integer(statement, 8)
+        guard sourceCount >= 0, UInt64(sourceCount) <= count else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
         pinOrdinal = try mapCodecFailure { try RevisionStateBlobCodec.decodePinOrdinal(ordinal) }
     }
 
@@ -102,7 +108,7 @@ internal struct ScalarReadRow {
             copyCount: copyCount,
             lastSource: lastSource,
             pinnedPosition: pinOrdinal?.rawValue,
-            search: nil
+            search: nil, sourceCount: sourceCount
         )
     }
 }

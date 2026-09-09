@@ -110,6 +110,39 @@ public struct CopyOccurrenceSummary: Sendable, Hashable {
     }
 }
 
+/// One application's copy history for a retained item. Repeated copies
+/// update this summary; clipboard payload identity remains byte-exact.
+public struct CopySourceSummary: Sendable, Hashable {
+    public let application: String?
+    public let firstCopiedAt: Date
+    public let lastCopiedAt: Date
+    public let count: UInt64
+
+    package init(application: String?, firstCopiedAt: Date, lastCopiedAt: Date, count: UInt64) {
+        self.application = application
+        self.firstCopiedAt = firstCopiedAt
+        self.lastCopiedAt = lastCopiedAt
+        self.count = count
+    }
+}
+
+/// A bounded window of source records. All values belong to one item and
+/// occurrence state; sources are ordered by latest copy then source identity.
+public struct HistoryCopySourcePage: Sendable, Hashable {
+    public let item: HistoryItemReference
+    public let occurrence: CopyOccurrenceSummary
+    public let sources: [CopySourceSummary]
+    public let nextOffset: Int?
+
+    package init(item: HistoryItemReference, occurrence: CopyOccurrenceSummary,
+                 sources: [CopySourceSummary], nextOffset: Int?) {
+        self.item = item
+        self.occurrence = occurrence
+        self.sources = sources
+        self.nextOffset = nextOffset
+    }
+}
+
 /// Metadata for one item, including immutable revision summaries. No content
 /// payload is materialized by this read, including Canonical/current payloads.
 /// Explicit reads use `HistoryRepresentationRequest` (V2-09 §5).

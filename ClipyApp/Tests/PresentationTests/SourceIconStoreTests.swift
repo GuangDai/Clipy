@@ -7,6 +7,30 @@ import Testing
 
 @MainActor
 struct SourceIconStoreTests {
+    @Test func applicationNamesShareIconLifetimeIncludingMissingIcons() {
+        let calls = IconProviderCalls()
+        let store = SourceIconStore(provider: SourceIconProvider(loadIcon: { bundleID in
+            calls.bundleIDs.append("icon:" + bundleID)
+            return nil
+        }, loadName: { bundleID in
+            calls.bundleIDs.append("name:" + bundleID)
+            return "Text Editor"
+        }))
+        #expect(store.cachedName(forBundleID: "editor") == nil)
+        store.icon(forBundleID: "editor")
+        store.icon(forBundleID: "editor")
+        #expect(store.cachedName(forBundleID: "editor") == "Text Editor")
+        #expect(calls.bundleIDs == ["icon:editor", "name:editor"])
+        store.setDisplayed("editor", true)
+        store.respondToMemoryPressure(.warning)
+        #expect(store.cachedName(forBundleID: "editor") == "Text Editor")
+        store.respondToMemoryPressure(.critical)
+        #expect(store.cachedName(forBundleID: "editor") == nil)
+        store.respondToMemoryPressure(.normal)
+        store.icon(forBundleID: "editor")
+        #expect(calls.bundleIDs == ["icon:editor", "name:editor", "icon:editor", "name:editor"])
+    }
+
     @Test
     func pressurePreservesDisplayedIconsAndNormalResumesResolution() throws {
         let calls = IconProviderCalls()

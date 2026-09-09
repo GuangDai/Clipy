@@ -727,6 +727,7 @@ struct HistoryPanelView: View {
                     viewState: viewState,
                     previewState: previewState,
                     item: quickLookItem,
+                    sourceIcons: sourceIcons,
                     onDismiss: { surfaceState.quickLookReference = nil }
                 )
                 // Removed/revised content must not remain visible as a
@@ -755,7 +756,8 @@ struct HistoryPanelView: View {
         HistoryPreviewView(
             viewState: viewState,
             previewState: previewState,
-            selection: previewSelection
+            selection: previewSelection,
+            sourceIcons: sourceIcons
         )
         // The divider handle's live width, full window height: the browsing
         // column alone absorbs both the drag and the user's window resize —
@@ -1022,7 +1024,6 @@ struct HistoryPanelView: View {
                     fontSize: appearance.rowFontSize,
                     isSearchFieldFocused: isSearchFieldFocused,
                     selection: $surfaceState.selection,
-                    sourceIcons: sourceIcons,
                     onFocusHistory: { isSearchFieldFocused = false },
                     onShowDetails: { item in surfaceState.detailsPath.append(item) }
                 )
