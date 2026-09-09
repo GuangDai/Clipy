@@ -127,7 +127,6 @@ struct HistoryListView: View {
         }
         .listStyle(.inset)
         .environment(\.defaultMinListRowHeight, 28)
-        .listRowSpacing(0)
         .scrollContentBackground(.hidden)
         .background {
             HistoryListDragSource(view: dragSource) { reference in

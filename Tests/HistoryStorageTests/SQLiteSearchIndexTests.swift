@@ -38,7 +38,7 @@ struct SQLiteSearchIndexTests {
                 id: row.item.id, contentVersion: row.item.contentVersion, title: row.title, searchBody: body,
                 debugTitleUTF8Bytes: row.title.utf8.count, debugSearchBodyUTF8Bytes: body.utf8.count,
                 typeIdentifiers: row.typeIdentifiers, lastCopiedAt: row.lastCopiedAt, copyCount: row.copyCount,
-                lastSource: row.lastSource, pinOrdinal: nil
+                lastSource: row.lastSource, pinOrdinal: nil, sourceCount: row.sourceCount
             )
         }
         let worker = SearchWorker()
