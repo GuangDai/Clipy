@@ -61,6 +61,8 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
 
         let preview = panel.descendants(matching: .any)["clipy.preview.root"]
         let divider = panel.descendants(matching: .any)["clipy.panel.previewDivider"]
+        let compactWidth: CGFloat = 360
+        let expandedWidth: CGFloat = 681
         for side in ["Right", "Left"] {
             let isRight = side == "Right"
             openAppearance(in: app)
@@ -77,7 +79,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
             let reset = app.buttons["clipy.settings.appearance.reset-panel-size"]
             XCTAssertTrue(reset.waitForExistence(timeout: 5), app.debugDescription)
             reset.click()
-            // A 400-point main column at x=40 has space to expand right;
+            // A 360-point main column at x=40 has space to expand right;
             // at x=400 it has space to expand left on the 1024-point runner.
             // Keep the real pointer in place through Cmd-W and keyboard summon.
             sideControl.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
@@ -112,9 +114,9 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
             XCTAssertTrue(preview.waitForExistence(timeout: 5), app.debugDescription)
             XCTAssertTrue(divider.waitForExistence(timeout: 5), app.debugDescription)
 
-            let expectedOffset: CGFloat = isRight ? 360.5 : 320.5
+            let expectedOffset: CGFloat = isRight ? compactWidth + 0.5 : 320.5
             XCTAssertTrue(waitUntil(timeout: 5) {
-                abs(panel.frame.width - 681) <= 3
+                abs(panel.frame.width - expandedWidth) <= 3
                     && abs(divider.frame.midX - panel.frame.minX - expectedOffset) <= 3
                     && abs(preview.frame.width - 320) <= 3
                     && (isRight
@@ -161,14 +163,14 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
             // window owns at its border; the strip's center is 9 pt in.
             XCTAssertTrue(waitUntil(timeout: 5) {
                 !preview.exists && edge.exists && edge.isHittable
-                    && abs(panel.frame.width - 400) <= 3
+                    && abs(panel.frame.width - compactWidth) <= 3
                     && abs(edge.frame.midX - (isRight
                         ? panel.frame.maxX - 9
                         : panel.frame.minX + 9)) <= 1
             }, "\(side) closed preview must keep its physical pull edge.\n\(app.debugDescription)")
             assertFrame(panel.frame, equals: CGRect(
-                x: isRight ? baseline.minX : baseline.maxX - 400,
-                y: baseline.minY, width: 400, height: baseline.height
+                x: isRight ? baseline.minX : baseline.maxX - compactWidth,
+                y: baseline.minY, width: compactWidth, height: baseline.height
             ))
             let edgeStart = edge.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             edgeStart.click(
