@@ -146,9 +146,7 @@ struct HistoryRowView: View {
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("clipy.history.row.\(row.item.id.description)")
         .accessibilityAddTraits(.isButton)
-        .accessibilityValue(
-            "\(HistoryRowRenderingModel(row: row, now: now, locale: locale, timeZone: timeZone).absoluteDateTimeText), \(copyAccessibilityLabel)"
-        )
+        .accessibilityValue(copyAccessibilityLabel)
         .accessibilityAction {
             performAccessibilityAction(.paste)
         }

@@ -97,7 +97,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
             // Reset Panel Size does not reset the independently persisted
             // preview width, and divider reset deliberately leaves the window
             // frame fixed. Reopen after both resets so this side's measured
-            // baseline uses 400 + 1 + 320 even if a prior run left width 260.
+            // baseline uses 360 + 1 + 320 even if a prior run left width 260.
             openAppearance(in: app)
             XCTAssertTrue(reset.waitForExistence(timeout: 5), app.debugDescription)
             reset.click()
@@ -112,9 +112,9 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
             XCTAssertTrue(preview.waitForExistence(timeout: 5), app.debugDescription)
             XCTAssertTrue(divider.waitForExistence(timeout: 5), app.debugDescription)
 
-            let expectedOffset: CGFloat = isRight ? 400.5 : 320.5
+            let expectedOffset: CGFloat = isRight ? 360.5 : 320.5
             XCTAssertTrue(waitUntil(timeout: 5) {
-                abs(panel.frame.width - 721) <= 3
+                abs(panel.frame.width - 681) <= 3
                     && abs(divider.frame.midX - panel.frame.minX - expectedOffset) <= 3
                     && abs(preview.frame.width - 320) <= 3
                     && (isRight
@@ -187,7 +187,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         }
 
         // Each side has already restored preview width 320 without changing
-        // the 400-point main column. Leave the shared settings at their
+        // the 360-point main column. Leave the shared settings at their
         // normal side/position and tab for the next running-app journey.
         openAppearance(in: app)
         choose("Automatic", in: app.descendants(matching: .any)[
