@@ -730,6 +730,12 @@ private actor OverlappingPreviewHistory: ClipboardHistory {
         AsyncThrowingStream { continuation in continuation.finish() }
     }
 
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        throw HistoryFailure.notFound(id)
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         let payload: PastePayload = try await withCheckedThrowingContinuation { continuation in
             continuations.append(continuation)

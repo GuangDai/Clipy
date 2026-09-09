@@ -7,7 +7,7 @@ struct SQLiteMetadataReadTests {
     @Test func scalarPageValuesKeepLiteralTextAndFullUnsignedCounters() throws {
         let database = try SQLiteDatabase(url: nil)
         let values = try Self.validValues()
-        let statement = try database.prepare("SELECT ?, ?, ?, ?, ?, ?, ?, ?", bindings: values)
+        let statement = try database.prepare("SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?", bindings: values)
         defer { statement.finalize() }
         try #require(try statement.step())
         let row = try ScalarReadRow(statement, limits: .standard).toHistoryRow(limits: .standard)
@@ -18,6 +18,7 @@ struct SQLiteMetadataReadTests {
         #expect(row.lastCopiedAt == Date(timeIntervalSinceReferenceDate: 4))
         #expect(row.lastSource == "com.example.source")
         #expect(row.pinnedPosition == 3)
+        #expect(row.sourceCount == 2)
     }
 
     @Test func wrongSQLTypesAndInvalidMetadataAreRejectedWithoutCoercion() throws {
@@ -33,11 +34,12 @@ struct SQLiteMetadataReadTests {
             (6, .blob(Data("source".utf8))),
             (6, .text(String(repeating: "s", count: HistoryLimits.standard.maximumSourceApplicationObservationUTF8Bytes + 1))),
             (7, .real(3)), (7, .integer(-1)),
+            (8, .real(2)), (8, .integer(-1)), (8, .text("2")),
         ]
         for (column, value) in corruptions {
             var values = try Self.validValues()
             values[column] = value
-            let statement = try database.prepare("SELECT ?, ?, ?, ?, ?, ?, ?, ?", bindings: values)
+            let statement = try database.prepare("SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?", bindings: values)
             defer { statement.finalize() }
             try #require(try statement.step())
             #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
@@ -91,7 +93,7 @@ struct SQLiteMetadataReadTests {
             .text("10000000-0000-0000-0000-00000000000A"), .blob(sqliteUInt64(UInt64.max)),
             .blob(Data("\u{FEFF}literal\u{0}".utf8)),
             .blob(try EffectiveTypeIdentifiersBlobCodec.encode(["public.utf8-plain-text"])),
-            .real(4), .blob(sqliteUInt64(UInt64.max)), .text("com.example.source"), .integer(3),
+            .real(4), .blob(sqliteUInt64(UInt64.max)), .text("com.example.source"), .integer(3), .integer(2),
         ]
     }
 }

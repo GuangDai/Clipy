@@ -452,7 +452,7 @@ internal actor SearchWorker {
             title: row.title, typeIdentifiers: row.typeIdentifiers,
             lastCopiedAt: row.lastCopiedAt, copyCount: row.copyCount,
             lastSource: row.lastSource, pinnedPosition: row.pinOrdinal?.rawValue,
-            search: search
+            search: search, sourceCount: row.sourceCount
         )
     }
 

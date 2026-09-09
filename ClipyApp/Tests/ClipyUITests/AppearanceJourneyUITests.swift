@@ -33,7 +33,7 @@ final class AppearanceJourneyUITests: XCTestCase {
 
     /// The density switch persists through `@AppStorage` and applies live;
     /// this journey proves the wiring end-to-end across a resummon: after
-    /// switching to Compact, the resummoned panel still renders the captured
+    /// switching to Comfortable, the resummoned panel still renders the captured
     /// row. Density pixels are not AX-assertable.
     @MainActor
     func testRowDensitySwitchPersistsAcrossSummons() throws {
@@ -50,7 +50,7 @@ final class AppearanceJourneyUITests: XCTestCase {
             "clipy.settings.appearance.row-density"
         ]
         assertExists(density, timeout: 5, in: app, context: "row density control")
-        chooseOption("Compact", in: density, app: app, context: "row density")
+        chooseOption("Comfortable", in: density, app: app, context: "row density")
 
         closeSettingsAndSummonPanel(control: density, panel: panel, app: app)
         assertRowCount(
@@ -64,8 +64,7 @@ final class AppearanceJourneyUITests: XCTestCase {
             diagnostic(app, context: "density journey row title")
         )
 
-        // Restore Comfortable so later journeys sharing the runner's real
-        // defaults domain are not left on compact metrics.
+        // Restore the compact product default for later journeys.
         openAppearanceTab(in: app)
         let restoreDensity = app.descendants(matching: .any)[
             "clipy.settings.appearance.row-density"
@@ -77,7 +76,7 @@ final class AppearanceJourneyUITests: XCTestCase {
             context: "row density restore control"
         )
         chooseOption(
-            "Comfortable",
+            "Compact",
             in: restoreDensity,
             app: app,
             context: "row density restore"

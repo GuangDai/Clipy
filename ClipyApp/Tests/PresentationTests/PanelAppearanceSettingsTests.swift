@@ -15,7 +15,7 @@ struct PanelAppearanceSettingsTests {
         let settings = PanelAppearanceSettings.load(from: defaults)
 
         #expect(settings == PanelAppearanceSettings())
-        #expect(settings.rowDensity == .comfortable)
+        #expect(settings.rowDensity == .compact)
         #expect(settings.snippetLineCount == .automatic)
         #expect(settings.rowFontSize == .medium)
         #expect(settings.isPreviewAutoOpenEnabled)
@@ -90,7 +90,7 @@ struct PanelAppearanceSettingsTests {
         #expect(PanelGeometry.clampedContentWidth(720) == 720)
         #expect(PanelGeometry.clampedContentWidth(100) == 360)
         #expect(PanelGeometry.clampedContentWidth(10_000) == 10_000)
-        #expect(PanelGeometry.clampedContentWidth(400) == PanelGeometry.contentWidth)
+        #expect(PanelGeometry.clampedContentWidth(360) == PanelGeometry.contentWidth)
     }
 
     @Test("height clamps at, below, and above the resizable bounds")
@@ -100,7 +100,7 @@ struct PanelAppearanceSettingsTests {
         #expect(PanelGeometry.clampedHeight(1_000) == 1_000)
         #expect(PanelGeometry.clampedHeight(100) == 420)
         #expect(PanelGeometry.clampedHeight(2_000) == 2_000)
-        #expect(PanelGeometry.clampedHeight(560) == PanelGeometry.height)
+        #expect(PanelGeometry.clampedHeight(420) == PanelGeometry.height)
     }
 
     @Test func finitePreferencesAndLivePreviewFittingAreIndependent() throws {
@@ -172,7 +172,7 @@ struct PanelAppearanceSettingsTests {
             PanelGeometry.persistedPreviewColumnWidth(from: defaults)
                 == PanelGeometry.previewWidth
         )
-        #expect(PanelGeometry.totalWidth(previewOpen: true) == 721)
+        #expect(PanelGeometry.totalWidth(previewOpen: true) == 681)
     }
 
     @Test("persistPreviewColumnWidth stores clamped values that read back")

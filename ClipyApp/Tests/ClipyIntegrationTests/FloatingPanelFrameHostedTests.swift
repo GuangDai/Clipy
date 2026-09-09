@@ -54,24 +54,24 @@ struct FloatingPanelFrameHostedTests {
             )
         )
         let trailingMainSurface = panel.frame
-        #expect(trailingMainSurface.width == 400)
+        #expect(trailingMainSurface.width == 360)
 
         panel.setPreviewVisible(true)
         let trailingExpandedFrame = panel.frame
         #expect(panel.previewPlacement == .trailing)
-        #expect(trailingExpandedFrame.width == 721)
+        #expect(trailingExpandedFrame.width == 681)
         #expect(
             NSRect(
                 x: trailingExpandedFrame.minX,
                 y: trailingExpandedFrame.minY,
-                width: 400,
+                width: 360,
                 height: trailingExpandedFrame.height
             ) == trailingMainSurface
         )
 
         panel.setPreviewVisible(false)
         #expect(panel.frame == trailingMainSurface)
-        #expect(panel.frame.width == 400)
+        #expect(panel.frame.width == 360)
 
         panel.open(
             at: .statusItem,
@@ -83,25 +83,25 @@ struct FloatingPanelFrameHostedTests {
             )
         )
         let leadingMainSurface = panel.frame
-        #expect(leadingMainSurface.width == 400)
+        #expect(leadingMainSurface.width == 360)
         #expect(leadingMainSurface.maxX == visibleFrame.maxX)
 
         panel.setPreviewVisible(true)
         let leadingExpandedFrame = panel.frame
         #expect(panel.previewPlacement == .leading)
-        #expect(leadingExpandedFrame.width == 721)
+        #expect(leadingExpandedFrame.width == 681)
         #expect(
             NSRect(
-                x: leadingExpandedFrame.maxX - 400,
+                x: leadingExpandedFrame.maxX - 360,
                 y: leadingExpandedFrame.minY,
-                width: 400,
+                width: 360,
                 height: leadingExpandedFrame.height
             ) == leadingMainSurface
         )
 
         panel.setPreviewVisible(false)
         #expect(panel.frame == leadingMainSurface)
-        #expect(panel.frame.width == 400)
+        #expect(panel.frame.width == 360)
     }
 
     /// The closed-edge opener consumes the same published physical placement
@@ -136,13 +136,13 @@ struct FloatingPanelFrameHostedTests {
             previewSide: side
         )
         let mainFrame = panel.frame
-        #expect(mainFrame.width == 400)
+        #expect(mainFrame.width == 360)
         panel.setPreviewVisible(true)
         #expect(panel.previewPlacement == expectedPlacement)
         #expect(publishedPlacement == expectedPlacement)
         #expect(panel.frame == NSRect(
             x: mainFrame.minX - (side == .leading ? 321 : 0),
-            y: mainFrame.minY, width: 721, height: mainFrame.height
+            y: mainFrame.minY, width: 681, height: mainFrame.height
         ))
 
         panel.setPreviewVisible(false)
@@ -186,14 +186,14 @@ struct FloatingPanelFrameHostedTests {
                 height: 1
             )
         )
-        #expect(panel.frame.width == 400)
+        #expect(panel.frame.width == 360)
 
         panel.setPreviewVisible(true)
         #expect(panel.previewPlacement == .trailing)
-        #expect(panel.frame.width == 801)
+        #expect(panel.frame.width == 761)
 
         panel.setPreviewVisible(false)
-        #expect(panel.frame.width == 400)
+        #expect(panel.frame.width == 360)
     }
 
     @Test
@@ -226,8 +226,8 @@ struct FloatingPanelFrameHostedTests {
             )
         )
         // No persisted keys: the open size is the PanelGeometry default.
-        #expect(panel.frame.width == 400)
-        #expect(panel.frame.height == 560)
+        #expect(panel.frame.width == 360)
+        #expect(panel.frame.height == 420)
 
         // The settle boundary an interactive drag ends at: the frame has
         // already moved (AppKit resizes live), then the delegate is told

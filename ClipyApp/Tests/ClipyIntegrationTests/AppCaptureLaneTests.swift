@@ -708,6 +708,12 @@ private actor FirstCaptureLowDiskFailingHistory: ClipboardHistory {
         await base.observe(request)
     }
 
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        try await base.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         try await base.details(for: id)
     }
@@ -875,6 +881,12 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
         _ request: HistoryObservationRequest
     ) async -> AsyncThrowingStream<HistoryPage, Error> {
         await base.observe(request)
+    }
+
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        try await base.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
     }
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {

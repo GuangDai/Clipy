@@ -10,7 +10,8 @@ extension HistoryAuthority {
     internal func executeCommitTransaction(
         _ plan: StampedCommitPlan,
         expectedPreviousPosition: ChangePosition,
-        in database: SQLiteDatabase
+        in database: SQLiteDatabase,
+        captureObservation: (application: String?, copiedAt: Date)? = nil
     ) throws {
         var publishedNewFiles = false
         var committed = false
@@ -26,6 +27,15 @@ extension HistoryAuthority {
                 )
                 for (index, mutation) in plan.mutations.enumerated() {
                     try apply(mutation, published: published[index], in: database)
+                }
+                if let captureObservation {
+                    let item: HistoryItemReference
+                    switch plan.receiptOutcome {
+                    case .inserted(let value), .coalesced(let value): item = value
+                    default: throw HistoryFailure.persistence(.invariantViolation)
+                    }
+                    try recordCopySource(itemID: item.id, application: captureObservation.application,
+                                         copiedAt: captureObservation.copiedAt)
                 }
                 if plan.requiresFinalPinOrderValidation {
                     try validateFinalPinOrder(in: database)

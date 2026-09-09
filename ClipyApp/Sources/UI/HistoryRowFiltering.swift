@@ -113,10 +113,17 @@ extension HistoryTypeFilter {
 /// instead. `.none` keeps previews and tests icon-free without a nil store.
 struct SourceIconProvider: Sendable {
     var loadIcon: @MainActor @Sendable (String) -> CGImage?
+    var loadName: @MainActor @Sendable (String) -> String?
 
     init(loadIcon: @escaping @MainActor @Sendable (String) -> CGImage?) {
-        self.loadIcon = loadIcon
+        self.init(loadIcon: loadIcon, loadName: { _ in nil })
     }
 
-    static let none: SourceIconProvider = SourceIconProvider(loadIcon: { _ in nil })
+    init(loadIcon: @escaping @MainActor @Sendable (String) -> CGImage?,
+         loadName: @escaping @MainActor @Sendable (String) -> String?) {
+        self.loadIcon = loadIcon
+        self.loadName = loadName
+    }
+
+    static let none = SourceIconProvider(loadIcon: { _ in nil })
 }

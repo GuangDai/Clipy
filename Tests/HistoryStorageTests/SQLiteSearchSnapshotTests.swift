@@ -42,7 +42,8 @@ struct SQLiteSearchSnapshotTests {
                 debugSearchBodyUTF8Bytes: fixture.bodies[row.item.id]!.utf8.count,
                 typeIdentifiers: row.typeIdentifiers, lastCopiedAt: row.lastCopiedAt,
                 copyCount: row.copyCount, lastSource: row.lastSource,
-                pinOrdinal: row.pinnedPosition.map { PinOrdinal(rawValue: $0) }
+                pinOrdinal: row.pinnedPosition.map { PinOrdinal(rawValue: $0) },
+                sourceCount: row.sourceCount
             )
         }
         let kind = HistoryBrowseKind.search(text: "needle", mode: mode)

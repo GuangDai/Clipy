@@ -32,3 +32,19 @@
 "Next PDF Page" = "Next PDF Page";
 "Page %@ of %@" = "Page %@ of %@";
 "The file changed while it was being read. Return to the file reference to load it again." = "The file changed while it was being read. Return to the file reference to load it again.";
+
+"Last Copied" = "Last copied";
+
+"First Copied" = "First copied";
+
+"Copy Sources" = "Copy sources";
+
+"Multiple Applications" = "Copied from multiple applications";
+
+"Unknown Application" = "Unknown application";
+
+"Retry Copy Information" = "Retry copy information";
+
+"Previous Sources" = "Previous";
+
+"More Sources" = "More sources";

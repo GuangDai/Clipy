@@ -11,13 +11,13 @@ internal enum SQLiteHistorySchema {
                 'history_state', 'history_items', 'contents', 'representations',
                 'retention_policies', 'connections', 'grants', 'operation_records',
                 'gateway_config', 'history_change_records', 'journal_config', 'history_search',
-                'history_search_terms'
+                'history_search_terms', 'copy_sources'
             )
             """)
         guard try existing.step() else { throw HistoryFailure.persistence(.openStore) }
         let currentTableCount = try existing.integer(at: 0)
         existing.finalize()
-        if currentTableCount == 13 {
+        if currentTableCount == 14 {
             // The aggregate density proof relies on this actual constraint,
             // not merely a familiar table/name in an older database file.
             let pinIndex = try database.prepare("""
@@ -82,12 +82,25 @@ internal enum SQLiteHistorySchema {
             copyCount BLOB NOT NULL CHECK (length(copyCount) = 8),
             firstSource TEXT,
             lastSource TEXT,
+            sourceCount INTEGER NOT NULL DEFAULT 0 CHECK (sourceCount >= 0),
             pinOrdinal INTEGER CHECK (pinOrdinal >= 0),
             canonicalBytes INTEGER NOT NULL CHECK (canonicalBytes >= 0),
             revisionCount INTEGER NOT NULL CHECK (revisionCount >= 0),
             revisionBytes INTEGER NOT NULL CHECK (revisionBytes >= 0)
         )
         """,
+        """
+        CREATE TABLE copy_sources (
+            itemID TEXT NOT NULL REFERENCES history_items(id) ON DELETE CASCADE,
+            sourceKey TEXT NOT NULL,
+            application TEXT,
+            firstCopiedAt REAL NOT NULL,
+            lastCopiedAt REAL NOT NULL,
+            copyCount BLOB NOT NULL CHECK (length(copyCount) = 8),
+            PRIMARY KEY (itemID, sourceKey)
+        ) WITHOUT ROWID
+        """,
+        "CREATE INDEX copy_sources_recency ON copy_sources(itemID,lastCopiedAt DESC,sourceKey)",
         // System FTS5 stores compressed postings for our reversible Unicode
         // scalar grams, not word-tokenized clipboard text or a second corpus.
         // Contentless-delete supports atomic replace and ordinary item DELETE.

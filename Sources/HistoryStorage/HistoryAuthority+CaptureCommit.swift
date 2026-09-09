@@ -77,7 +77,10 @@ extension HistoryAuthority {
         let transactionStart = clock.now
         storageLifecycleDebugProbe.record(phase: .captureTransactionBegin)
 #endif
-        let receipt = try executeStampedPlan(stamped, expectedPreviousPosition: currentPosition, in: database)
+        let receipt = try executeStampedPlan(
+            stamped, expectedPreviousPosition: currentPosition, in: database,
+            captureObservation: (prepared.domain.origin.sourceApplication, prepared.domain.observedAt)
+        )
 #if DEBUG
         storageLifecycleDebugProbe.record(
             phase: .captureTransactionComplete, elapsed: transactionStart.duration(to: clock.now)
@@ -92,9 +95,11 @@ extension HistoryAuthority {
     internal func executeStampedPlan(
         _ stamped: StampedCommitPlan,
         expectedPreviousPosition: ChangePosition,
-        in database: SQLiteDatabase
+        in database: SQLiteDatabase,
+        captureObservation: (application: String?, copiedAt: Date)? = nil
     ) throws -> HistoryReceipt {
-        try executeCommitTransaction(stamped, expectedPreviousPosition: expectedPreviousPosition, in: database)
+        try executeCommitTransaction(stamped, expectedPreviousPosition: expectedPreviousPosition, in: database,
+                                     captureObservation: captureObservation)
         return publishCommittedHistory(HistoryCommit(
             position: stamped.position, outcome: stamped.receiptOutcome,
             hasDestructiveRetentionEffects: stamped.hasDestructiveRetentionEffects

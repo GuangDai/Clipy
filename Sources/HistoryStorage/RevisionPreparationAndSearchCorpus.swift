@@ -107,6 +107,7 @@ internal struct SearchCorpusRow: Sendable {
     let lastSource: String?
     /// Pinned order; `nil` is unpinned.
     let pinOrdinal: PinOrdinal?
+    var sourceCount: Int = 0
 }
 
 /// Revision-preparation worker (docs/05-authority-kernel.md §6.2): the

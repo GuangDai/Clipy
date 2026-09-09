@@ -66,6 +66,12 @@ struct PreviewClipboardHistory: ClipboardHistory, Sendable {
         }
     }
 
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        throw HistoryFailure.notFound(id)
+    }
+
     func details(
         for id: HistoryItemID
     ) async throws -> HistoryDetails {

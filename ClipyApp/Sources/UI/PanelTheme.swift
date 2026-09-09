@@ -28,8 +28,8 @@ enum PanelTheme {
         for density: HistoryRowDensity
     ) -> CGFloat {
         switch density {
-        case .compact: return 28
-        case .comfortable: return 36
+        case .compact: return 20
+        case .comfortable: return 28
         }
     }
 
@@ -37,8 +37,8 @@ enum PanelTheme {
         for density: HistoryRowDensity
     ) -> CGFloat {
         switch density {
-        case .compact: return 3
-        case .comfortable: return 6
+        case .compact: return 2
+        case .comfortable: return 4
         }
     }
 
@@ -83,7 +83,7 @@ enum PanelTheme {
     // MARK: Header, footer, and banner chrome
 
     static let headerHorizontalPadding: CGFloat = 12
-    static let headerTopPadding: CGFloat = 10
+    static let headerTopPadding: CGFloat = 8
     static let headerBottomPadding: CGFloat = 6
     static let footerHorizontalPadding: CGFloat = 12
     static let footerVerticalPadding: CGFloat = 8

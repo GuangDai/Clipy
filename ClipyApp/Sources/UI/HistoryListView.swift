@@ -34,19 +34,17 @@ struct HistoryListView: View {
     private let fontSize: HistoryRowFontSize
     private let isSearchFieldFocused: Bool
     private let selection: Binding<HistoryItemID?>
-    private let sourceIcons: SourceIconStore?
     private let onFocusHistory: () -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
     init(
         viewState: HistoryViewState,
         thumbnails: ThumbnailStore,
-        density: HistoryRowDensity = .comfortable,
+        density: HistoryRowDensity = .compact,
         snippetLineCount: HistorySnippetLineCount = .automatic,
         fontSize: HistoryRowFontSize = .medium,
         isSearchFieldFocused: Bool,
         selection: Binding<HistoryItemID?>,
-        sourceIcons: SourceIconStore? = nil,
         onFocusHistory: @escaping () -> Void = {},
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
@@ -57,7 +55,6 @@ struct HistoryListView: View {
         self.fontSize = fontSize
         self.isSearchFieldFocused = isSearchFieldFocused
         self.selection = selection
-        self.sourceIcons = sourceIcons
         self.onFocusHistory = onFocusHistory
         self.onShowDetails = onShowDetails
     }
@@ -129,6 +126,7 @@ struct HistoryListView: View {
             }
         }
         .listStyle(.inset)
+        .environment(\.defaultMinListRowHeight, 28)
         .scrollContentBackground(.hidden)
         .background {
             HistoryListDragSource(view: dragSource) { reference in
@@ -151,7 +149,6 @@ struct HistoryListView: View {
             fontSize: fontSize,
             isSelected: selection.wrappedValue == row.item.id,
             thumbnails: thumbnails,
-            sourceIcons: sourceIcons,
             dragSource: dragSource,
             onCopy: { viewState.requestPasteFromDisplayedRow($0) },
             onPin: { id, placement in viewState.pin(id, at: placement) },

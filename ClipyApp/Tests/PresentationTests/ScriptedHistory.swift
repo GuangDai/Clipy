@@ -257,6 +257,12 @@ actor ScriptedHistory: ClipboardHistory {
         return stream
     }
 
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        throw HistoryFailure.notFound(id)
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         throw HistoryFailure.notFound(id)
     }
@@ -351,6 +357,12 @@ actor ThumbnailScriptHistory: ClipboardHistory {
         AsyncThrowingStream { continuation in
             continuation.finish()
         }
+    }
+
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        throw HistoryFailure.notFound(id)
     }
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
@@ -463,6 +475,12 @@ actor PausablePreviewHistory: ClipboardHistory {
         AsyncThrowingStream { continuation in
             continuation.finish()
         }
+    }
+
+    func copySources(
+        for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
+    ) async throws -> HistoryCopySourcePage {
+        throw HistoryFailure.notFound(id)
     }
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {

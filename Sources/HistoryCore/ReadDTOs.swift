@@ -41,6 +41,7 @@ public struct HistoryRow: Sendable, Hashable {
     public let lastCopiedAt: Date
     public let copyCount: UInt64
     public let lastSource: String?
+    public let sourceCount: Int
     public let pinnedPosition: Int?
     public let search: SearchPresentation?
 
@@ -52,7 +53,8 @@ public struct HistoryRow: Sendable, Hashable {
         copyCount: UInt64,
         lastSource: String?,
         pinnedPosition: Int?,
-        search: SearchPresentation?
+        search: SearchPresentation?,
+        sourceCount: Int = 0
     ) {
         self.item = item
         self.title = title
@@ -62,6 +64,7 @@ public struct HistoryRow: Sendable, Hashable {
         self.lastSource = lastSource
         self.pinnedPosition = pinnedPosition
         self.search = search
+        self.sourceCount = sourceCount
     }
 }
 

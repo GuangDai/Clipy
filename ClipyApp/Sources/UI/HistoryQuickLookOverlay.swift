@@ -27,17 +27,20 @@ struct HistoryQuickLookOverlay: View {
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
     private let item: HistoryItemReference
+    private let sourceIcons: SourceIconStore?
     private let onDismiss: () -> Void
 
     init(
         viewState: HistoryViewState,
         previewState: PreviewPaneState,
         item: HistoryItemReference,
+        sourceIcons: SourceIconStore? = nil,
         onDismiss: @escaping () -> Void
     ) {
         self.viewState = viewState
         self.previewState = previewState
         self.item = item
+        self.sourceIcons = sourceIcons
         self.onDismiss = onDismiss
     }
 
@@ -68,7 +71,8 @@ struct HistoryQuickLookOverlay: View {
             HistoryPreviewView(
                 viewState: viewState,
                 previewState: previewState,
-                item: item
+                item: item,
+                sourceIcons: sourceIcons
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)

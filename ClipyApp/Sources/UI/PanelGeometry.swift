@@ -14,14 +14,14 @@ enum PreviewDragOutcome: Equatable {
 }
 
 /// The panel's default dimensions (the pre-preview contract was a hard-coded
-/// 400×560 frame on `HistoryPanelView`; the preview column adds
+/// 360×420 frame on `HistoryPanelView`; the preview column adds
 /// `dividerWidth` plus its persisted width — default `previewWidth` — on the
 /// selected side when open). The browsing-column width and the height are
 /// user-resizable within the bounds below; every consumer derives the live
 /// size through the clamping helpers.
 enum PanelGeometry {
     /// The browsing column (search header + list + footer) default width.
-    static let contentWidth: CGFloat = 400
+    static let contentWidth: CGFloat = 360
 
     /// The preview column's default width when the preview pane is open.
     /// The divider drags the column to any width within the preview bounds
@@ -33,7 +33,7 @@ enum PanelGeometry {
     static let dividerWidth: CGFloat = 1
 
     /// The default panel height (both columns).
-    static let height: CGFloat = 560
+    static let height: CGFloat = 420
 
     /// The total window width at the default content width for a given
     /// preview visibility — the single source of truth for both the SwiftUI

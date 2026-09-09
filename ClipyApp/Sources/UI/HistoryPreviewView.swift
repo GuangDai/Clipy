@@ -516,6 +516,7 @@ struct HistoryPreviewView: View {
     private let previewState: PreviewPaneState
     private let selectionSource: SelectionSource
 
+    private let sourceIcons: SourceIconStore?
     @State private var loader: PreviewContentLoader
     @State private var retryGeneration = 0
     @State private var fileConfirmationPresented = false
@@ -542,9 +543,10 @@ struct HistoryPreviewView: View {
     }
 
     /// Standalone entry point: PreviewPaneState owns the exact target.
-    init(viewState: HistoryViewState, previewState: PreviewPaneState) {
+    init(viewState: HistoryViewState, previewState: PreviewPaneState, sourceIcons: SourceIconStore? = nil) {
         self.viewState = viewState
         self.previewState = previewState
+        self.sourceIcons = sourceIcons
         selectionSource = .paneState
         _loader = State(
             initialValue: PreviewContentLoader(
@@ -559,10 +561,12 @@ struct HistoryPreviewView: View {
     init(
         viewState: HistoryViewState,
         previewState: PreviewPaneState,
-        selection: PreviewSelectionResolution
+        selection: PreviewSelectionResolution,
+        sourceIcons: SourceIconStore? = nil
     ) {
         self.viewState = viewState
         self.previewState = previewState
+        self.sourceIcons = sourceIcons
         selectionSource = .observedRows(selection)
         _loader = State(
             initialValue: PreviewContentLoader(
@@ -579,10 +583,12 @@ struct HistoryPreviewView: View {
     init(
         viewState: HistoryViewState,
         previewState: PreviewPaneState,
-        item: HistoryItemReference
+        item: HistoryItemReference,
+        sourceIcons: SourceIconStore? = nil
     ) {
         self.viewState = viewState
         self.previewState = previewState
+        self.sourceIcons = sourceIcons
         selectionSource = .exactItem(item)
         _loader = State(
             initialValue: PreviewContentLoader(
@@ -903,6 +909,8 @@ struct HistoryPreviewView: View {
     private var metadataBar: some View {
         if let occurrence = PreviewFooterMetadata(item: targetItem, row: observedRow) {
             HStack(spacing: 8) {
+                SourceApplicationLabel(application: occurrence.lastSource, store: sourceIcons)
+
                 Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
                     .lineLimit(1)
                 Spacer(minLength: 4)
@@ -922,25 +930,9 @@ struct HistoryPreviewView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(PreviewPresentationCopy.text("Preview Information"))
                             .font(.headline)
-                        if let source = occurrence.lastSource {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(PreviewPresentationCopy.text("Source"))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                Text(verbatim: source)
-                                    .textSelection(.enabled)
-                                    .accessibilityIdentifier("clipy.preview.information.source")
-                            }
-                        }
-                        Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(PreviewPresentationCopy.text("Last Copied"))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(occurrence.lastCopiedAt, style: .date)
-                                .accessibilityIdentifier("clipy.preview.information.date")
-                            Text(occurrence.lastCopiedAt, style: .time)
-                                .accessibilityIdentifier("clipy.preview.information.time")
+                        if let row = observedRow {
+                            PreviewMetadataView(history: viewState.history, row: row, sourceIcons: sourceIcons)
+                                .id(row.item)
                         }
                     }
                     .font(.callout)
