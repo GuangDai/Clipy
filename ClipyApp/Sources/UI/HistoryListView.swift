@@ -138,10 +138,12 @@ struct HistoryListView: View {
                 }
             }
         }
-        .listStyle(.inset)
-        // The native inset list otherwise adds its own vertical margins on
-        // top of our row insets, clipping a one-row content-fitted panel.
+        // macOS inset lists retain extra internal margins even when scroll
+        // content margins are zero. A plain list keeps the first and last
+        // row inside the content-fitted viewport; horizontal inset is explicit.
+        .listStyle(.plain)
         .contentMargins(.vertical, 0, for: .scrollContent)
+        .padding(.horizontal, PanelContentFit.listRowHorizontalInset)
         .environment(\.defaultMinListRowHeight, 0)
         .environment(\.defaultMinListHeaderHeight, 0)
         .scrollContentBackground(.hidden)
