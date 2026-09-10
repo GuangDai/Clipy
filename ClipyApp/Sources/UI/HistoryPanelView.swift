@@ -625,6 +625,14 @@ struct HistoryPanelView: View {
                 previewState.isAutoOpenPreferenceEnabled =
                     newAppearance.isPreviewAutoOpenEnabled
             }
+            // The input-mode machine gates the preview's pointer
+            // lifecycle: sessions begin in keyboard mode and only a REAL
+            // mouse movement flips to pointer control, so a synthesized
+            // `.onHover` exit during window/frame churn can never cancel
+            // the selection dwell while no pointer is over the panel.
+            .onChange(of: surfaceState.inputMode, initial: true) { _, mode in
+                previewState.isPointerInteractionActive = mode == .mouse
+            }
             // The content-fit oracle: any change to the displayed rows,
             // typography, or chrome republishes the analytic height demand;
             // the composition root coalesces and fits the hosting window.

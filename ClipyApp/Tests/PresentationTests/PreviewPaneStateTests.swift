@@ -597,9 +597,15 @@ struct PreviewPaneStateTests {
     // MARK: Pointer lifecycle (both windows)
 
     /// Zero grace preserves the same scheduling-only boundary as the
-    /// zero-delay dwell helper.
+    /// zero-delay dwell helper. The pointer lifecycle is gated on the
+    /// panel's input mode — fresh states start inert (keyboard mode,
+    /// every session's start) — so these mouse-semantics tests activate
+    /// pointer interaction explicitly, exactly like the panel view's
+    /// input-mode push does on the first real mouse movement.
     private func makePointerState() -> PreviewPaneState {
-        PreviewPaneState(autoOpenDelay: .zero, pointerExitGrace: .zero)
+        let state = PreviewPaneState(autoOpenDelay: .zero, pointerExitGrace: .zero)
+        state.isPointerInteractionActive = true
+        return state
     }
 
     @Test func pointerExitHidesAnOpenPreviewAfterTheGrace() async {
@@ -726,6 +732,128 @@ struct PreviewPaneStateTests {
         await Task.yield()
         #expect(!state.isOpen)
         #expect(state.previewedItem == nil)
+    }
+
+    // MARK: Input-mode gate and membership guard
+
+    /// The CI regression root cause: `.onHover` delivers SYNTHESIZED exit
+    /// events during window/frame churn (the content-fit resize fires
+    /// ~40 ms after summon) while the pointer was never over the panel.
+    /// With an empty presence that exit must be a strict no-op — it
+    /// retires no pending dwell — so the 200 ms dwell survives the churn
+    /// and fires.
+    @Test func synthesizedExitWithEmptyPresenceRetiresNoPendingDwell() async {
+        let state = makePointerState()
+        var events: [PreviewPaneState.FloatingPreviewTransition] = []
+        state.onFloatingPreviewTransition = { events.append($0) }
+        let item = reference()
+        state.handleSelectionChange(item)
+
+        // No pointerEntered ever happened; presence is empty.
+        state.pointerExited(.mainPanel)
+        state.pointerExited(.preview)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+        #expect(events == [.show(item)])
+    }
+
+    /// The same membership guard keeps a synthesized exit from starting
+    /// the grace hide under an OPEN pane the pointer never entered.
+    @Test func synthesizedExitWithEmptyPresenceNeverGraceHidesAnOpenPane() async {
+        let state = makePointerState()
+        let item = reference()
+        state.togglePreview(for: item)
+        #expect(state.isOpen)
+
+        state.pointerExited(.mainPanel)
+        state.pointerExited(.preview)
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isOpen, "a foreign exit starts no grace hide")
+        #expect(state.previewedItem == item)
+    }
+
+    /// Keyboard mode — every session's start and the XCUI-deterministic
+    /// state: pointer events mutate nothing at all. Enter+exit churn
+    /// while a dwell is pending leaves it intact, and an open pane never
+    /// grace-hides from pointer events (it stays until Esc/panel close).
+    @Test func pointerLifecycleIsInertInKeyboardMode() async {
+        let state = PreviewPaneState(autoOpenDelay: .zero, pointerExitGrace: .zero)
+        #expect(!state.isPointerInteractionActive, "sessions begin in keyboard mode")
+        var events: [PreviewPaneState.FloatingPreviewTransition] = []
+        state.onFloatingPreviewTransition = { events.append($0) }
+        let item = reference()
+
+        state.handleSelectionChange(item)
+        state.pointerEntered(.mainPanel)
+        state.pointerExited(.mainPanel)
+        state.pointerExited(.preview)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+        #expect(events == [.show(item)])
+
+        state.pointerExited(.mainPanel)
+        state.pointerEntered(.mainPanel)
+        state.pointerExited(.mainPanel)
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isOpen)
+        #expect(state.previewedItem == item)
+    }
+
+    /// Flipping into pointer interaction mid-session — the first real
+    /// mouse movement — restores the documented mouse semantics: an exit
+    /// retires the pending dwell, and re-entry re-dwells the current
+    /// selection.
+    @Test func pointerModeActivationMidSessionReenablesThePointerLifecycle() async {
+        let state = PreviewPaneState(autoOpenDelay: .zero, pointerExitGrace: .zero)
+        let item = reference()
+
+        // Keyboard mode first: the exit cannot retire the pending dwell.
+        state.handleSelectionChange(item)
+        state.pointerExited(.mainPanel)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.dismissPreview())
+
+        // Pointer control: the same sequence now cancels on exit and
+        // re-dwells on re-entry.
+        state.isPointerInteractionActive = true
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(item)
+        state.pointerExited(.mainPanel)
+        await Task.yield()
+        await Task.yield()
+        #expect(!state.isOpen, "in pointer mode an absent pointer retires the dwell")
+
+        state.pointerEntered(.mainPanel)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+    }
+
+    /// Deactivating pointer interaction retires presence and any pending
+    /// grace on the spot: a grace hide already in flight cannot close the
+    /// pane once the user is back on the keyboard, and reactivation
+    /// starts from a clean presence so a synthesized exit stays a no-op.
+    @Test func pointerModeDeactivationCancelsAnInFlightGraceHide() async {
+        let state = makePointerState()
+        let item = reference()
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(item)
+        await waitForScheduledDwell { state.isOpen }
+
+        state.pointerExited(.mainPanel)
+        state.isPointerInteractionActive = false
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isOpen, "keyboard mode cancels the in-flight grace hide")
+        #expect(state.previewedItem == item)
+
+        state.isPointerInteractionActive = true
+        state.pointerExited(.mainPanel)
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isOpen, "reactivation starts from an empty presence")
+        #expect(state.previewedItem == item)
     }
 
     @Test func togglingWithNoSelectionKeepsThePaneClosed() {
