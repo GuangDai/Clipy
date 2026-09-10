@@ -127,7 +127,7 @@ struct SearchHeaderView: View {
             }
         }
         .padding(.horizontal, PanelTheme.spacingSmall)
-        .padding(.vertical, PanelTheme.spacingXSmall)
+        .frame(height: PanelContentFit.searchFieldHeight)
         .background(
             .quaternary,
             in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
@@ -170,6 +170,7 @@ struct SearchHeaderView: View {
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
+        .foregroundStyle(viewState.searchMode == .fuzzy ? Color.secondary : Color.accentColor)
         .fixedSize()
         .help(modeName(viewState.searchMode))
         .accessibilityIdentifier("clipy.search.mode")

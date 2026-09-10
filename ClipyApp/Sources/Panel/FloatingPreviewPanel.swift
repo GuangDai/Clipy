@@ -5,7 +5,7 @@
 /// geometry never changes for preview.
 ///
 /// Geometry (PopupPositionGeometry.floatingPreviewFrame): fixed width, the
-/// main panel's height with a 420pt minimum, top edges aligned, trailing
+/// rendered content's height, top edges aligned, trailing
 /// side when the screen's visible frame has room, otherwise leading; clamped into the
 /// visible frame. Placement applies with an instant, non-animated
 /// `setFrame`; the SwiftUI content's own opacity fade is the only motion.
@@ -24,6 +24,13 @@ final class FloatingPreviewPanel: NSPanel {
 
     /// Whether the pane is currently on screen.
     private(set) var isPresented = false
+    private var contentHeight: CGFloat?
+
+    func fitToContent(height: CGFloat) {
+        guard height.isFinite, height > 0, contentHeight != height else { return }
+        contentHeight = height
+        if let parent, isPresented { present(beside: parent) }
+    }
 
     init(rootView: FloatingPreviewRootView) {
         super.init(
@@ -56,6 +63,7 @@ final class FloatingPreviewPanel: NSPanel {
         setAccessibilityIdentifier("clipy.panel.floatingPreview")
 
         let hostingView = NSHostingView(rootView: rootView)
+        hostingView.sizingOptions = []
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 12
         hostingView.layer?.masksToBounds = true
@@ -72,7 +80,8 @@ final class FloatingPreviewPanel: NSPanel {
     func present(beside mainPanel: NSWindow) {
         let placement = PopupPositionGeometry.floatingPreviewFrame(
             beside: mainPanel.frame,
-            in: mainPanel.screen?.visibleFrame
+            in: mainPanel.screen?.visibleFrame,
+            previewHeight: contentHeight
         )
         setFrame(placement.frame, display: isPresented)
         if mainPanel.childWindows?.contains(self) != true {
@@ -122,17 +131,22 @@ struct FloatingPreviewRootView: View {
                 HistoryPreviewView(
                     viewState: composition.viewState,
                     previewState: appDelegate.previewState,
-                    sourceIcons: sourceIcons
+                    sourceIcons: sourceIcons,
+                    maximumHeight: appDelegate.previewState.availablePreviewHeight
                 )
                 .id(item)
-                .transition(.opacity)
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.size.height.rounded(.up)
+                } action: { height in
+                    appDelegate.floatingPreviewContentHeightDidChange(height, for: item)
+                }
+                // Retargeting removes the old content immediately, including
+                // sensitive text and pending file confirmations.
+                .transition(.identity)
             }
         }
-        .animation(
-            .easeOut(duration: 0.12),
-            value: appDelegate.previewState.previewedItem
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         // The window is transparent; the content carries the material so
         // the rounded corners show material, not the desktop behind it.
         .background(.regularMaterial)

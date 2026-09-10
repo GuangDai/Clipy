@@ -77,22 +77,21 @@ struct PanelAppearanceSettingsTests {
 
     @Test("content width clamps at, below, and above the resizable bounds")
     func contentWidthClampsIntoBounds() {
-        #expect(PanelGeometry.minimumContentWidth == 360)
+        #expect(PanelGeometry.minimumContentWidth == 0)
         #expect(PanelGeometry.clampedContentWidth(360) == 360)
         #expect(PanelGeometry.clampedContentWidth(720) == 720)
-        #expect(PanelGeometry.clampedContentWidth(100) == 360)
+        #expect(PanelGeometry.clampedContentWidth(100) == 100)
         #expect(PanelGeometry.clampedContentWidth(10_000) == 10_000)
         #expect(PanelGeometry.clampedContentWidth(360) == PanelGeometry.contentWidth)
     }
 
     @Test("height clamps at, below, and above the resizable bounds")
     func heightClampsIntoBounds() {
-        // The height minimum is the content-fit floor (header + one text
-        // row + slack), no longer the 420 default.
+        // A short user size is meaningful; there is no aesthetic floor.
         #expect(PanelGeometry.minimumHeight == PanelContentFit.minimumHeight)
         #expect(PanelGeometry.clampedHeight(420) == 420)
         #expect(PanelGeometry.clampedHeight(1_000) == 1_000)
-        #expect(PanelGeometry.clampedHeight(10) == PanelGeometry.minimumHeight)
+        #expect(PanelGeometry.clampedHeight(10) == 10)
         #expect(PanelGeometry.clampedHeight(2_000) == 2_000)
         #expect(PanelGeometry.clampedHeight(420) == PanelGeometry.height)
     }
@@ -126,7 +125,7 @@ struct PanelAppearanceSettingsTests {
         PanelGeometry.persistSize(contentWidth: 10_000, height: 10, to: defaults)
         size = PanelGeometry.persistedSize(from: defaults)
         #expect(size.contentWidth == 10_000)
-        #expect(size.height == PanelGeometry.minimumHeight)
+        #expect(size.height == 10)
     }
 
     @Test("out-of-bounds or invalid persisted values clamp or default on load")
@@ -138,12 +137,12 @@ struct PanelAppearanceSettingsTests {
         defaults.set(10.0, forKey: PanelGeometry.panelHeightDefaultsKey)
         var size = PanelGeometry.persistedSize(from: defaults)
         #expect(size.contentWidth == 10_000)
-        #expect(size.height == PanelGeometry.minimumHeight)
+        #expect(size.height == 10)
 
         defaults.set("wide", forKey: PanelGeometry.panelContentWidthDefaultsKey)
         size = PanelGeometry.persistedSize(from: defaults)
         #expect(size.contentWidth == PanelGeometry.contentWidth)
-        #expect(size.height == PanelGeometry.minimumHeight)
+        #expect(size.height == 10)
     }
 
     /// One fresh, empty UserDefaults suite per test — the same isolation

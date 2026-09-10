@@ -27,22 +27,17 @@ enum PanelGeometry {
     /// side pane; it never resizes the main panel).
     static let floatingPreviewWidth: CGFloat = 340
 
-    /// File actions, PDF paging and recovery need a usable viewport even
-    /// when a single history row shrinks the browsing panel to 111pt.
-    static let floatingPreviewMinimumHeight: CGFloat = 420
-
     /// The gap between the main panel and the floating preview pane.
     static let floatingPreviewGap: CGFloat = 8
 
     // MARK: User resizing
 
     /// The narrowest browsing column the user can resize to.
-    static let minimumContentWidth: CGFloat = 360
+    static let minimumContentWidth: CGFloat = 0
 
-    /// The shortest panel height the user can resize to — the content-fit
-    /// floor (header + one text row + slack), shared with the oracle so a
-    /// live resize and an auto-fit agree on the same minimum.
-    static let minimumHeight: CGFloat = PanelContentFit.minimumHeight
+    /// No aesthetic size floor. Content determines the fitted height, and
+    /// the user's saved size is only a ceiling (V2-11).
+    static let minimumHeight: CGFloat = 0
 
     /// The UserDefaults key for the persisted browsing-column width.
     static let panelContentWidthDefaultsKey = "clipy.panelContentWidth"

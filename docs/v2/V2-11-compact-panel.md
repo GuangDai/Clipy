@@ -100,7 +100,18 @@ settings are removed. Panel height now fits the displayed content, with
 the persisted height as the ceiling rather than a fixed size. Image rows
 render 44/56 pt thumbnails (compact/comfortable).
 
-The floating preview keeps a 420 pt minimum height independently of a short
-history list, capped by the screen's visible height. It aligns to the main
-panel's top edge when possible and stays inside the visible screen. This
-keeps file actions, recovery and PDF controls usable with one retained item.
+User correction, 2026-09-10: no minimum panel or preview height, and no forced
+minimum browsing width. The saved size is a ceiling; the content determines
+the footprint. The floating preview measures its rendered content separately
+from the main list. Short text, unavailable states and small images shrink;
+long text and references scroll only when they reach the saved/screen ceiling.
+Metadata and frequently used Copy/Pin actions stay in a compact footer.
+
+The local Maccy `HistoryRowLayout`, `ListItemView`, `HeaderView`,
+`PreviewItemView`, `ToolbarView`, `ContentView` and `Popup` informed this pass:
+compact 24 pt text rows, stable thumbnail geometry, short control strips and
+secondary information revealed on demand. Maccy's percentage-height floor is
+intentionally not adopted. A single list section has no redundant heading;
+Pinned/Recent headings appear only when they distinguish two visible groups.
+The search field and adjacent controls share a 24 pt line. Empty/error states
+use compact messages, not large placeholder illustrations.

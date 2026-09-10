@@ -155,6 +155,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         applyResizeLimits()
 
         let hostingView = NSHostingView(rootView: rootView)
+        hostingView.sizingOptions = []
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 12
         hostingView.layer?.masksToBounds = true

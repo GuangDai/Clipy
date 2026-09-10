@@ -28,8 +28,8 @@ enum PanelTheme {
         for density: HistoryRowDensity
     ) -> CGFloat {
         switch density {
-        case .compact: return 20
-        case .comfortable: return 28
+        case .compact: return 16
+        case .comfortable: return 24
         }
     }
 
@@ -58,17 +58,17 @@ enum PanelTheme {
 
     static func titleFont(for size: HistoryRowFontSize) -> Font {
         switch size {
-        case .small: return .callout
-        case .medium: return .body
-        case .large: return .title3
+        case .small: return .system(size: 11)
+        case .medium: return .system(size: 13)
+        case .large: return .system(size: 15)
         }
     }
 
     static func snippetFont(for size: HistoryRowFontSize) -> Font {
         switch size {
-        case .small: return .footnote
-        case .medium: return .subheadline
-        case .large: return .callout
+        case .small: return .system(size: 11)
+        case .medium: return .system(size: 12)
+        case .large: return .system(size: 13)
         }
     }
 
@@ -94,9 +94,9 @@ enum PanelTheme {
 
     // MARK: Header, footer, and banner chrome
 
-    static let headerHorizontalPadding: CGFloat = 12
-    static let headerTopPadding: CGFloat = 8
-    static let headerBottomPadding: CGFloat = 6
+    static let headerHorizontalPadding: CGFloat = 8
+    static let headerTopPadding: CGFloat = 6
+    static let headerBottomPadding: CGFloat = 4
     static let footerHorizontalPadding: CGFloat = 12
     static let footerVerticalPadding: CGFloat = 8
     static let footerSpacing: CGFloat = 8

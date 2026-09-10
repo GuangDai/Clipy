@@ -25,7 +25,7 @@ enum PopupPositionGeometry {
 
     /// The floating preview pane's frame beside the presented main panel
     /// (the redesign's transient preview: fixed width, the main panel's
-    /// height with a 420pt minimum, top edges aligned when the screen allows,
+    /// measured content height, top edges aligned when the screen allows,
     /// never a main-panel resize).
     /// The pane goes on the trailing side when the screen's visible frame
     /// has room for width + gap there, otherwise the leading side; the
@@ -35,9 +35,10 @@ enum PopupPositionGeometry {
         beside mainPanelFrame: NSRect,
         in screenVisibleFrame: NSRect?,
         previewWidth: CGFloat = PanelGeometry.floatingPreviewWidth,
+        previewHeight: CGFloat? = nil,
         gap: CGFloat = PanelGeometry.floatingPreviewGap
     ) -> (frame: NSRect, placement: PreviewPlacement) {
-        let desiredHeight = max(mainPanelFrame.height, PanelGeometry.floatingPreviewMinimumHeight)
+        let desiredHeight = previewHeight ?? mainPanelFrame.height
         let size = NSSize(
             width: previewWidth,
             height: screenVisibleFrame.map { min(desiredHeight, $0.height) } ?? desiredHeight

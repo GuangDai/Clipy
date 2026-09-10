@@ -8,6 +8,7 @@ import SwiftUI
 struct ReferencePreviewView: View {
     let reference: PreviewReference
     var requestFileLoad: (() -> Void)? = nil
+    var maximumHeight: CGFloat? = nil
 
     private var name: String {
         if let path = reference.filePath {
@@ -19,16 +20,16 @@ struct ReferencePreviewView: View {
 
     var body: some View {
         let title = PreviewCopy.text(reference.kind == .file ? "File Reference" : "URL Reference")
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+        ContentFittingScrollView(maximumHeight: maximumHeight) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top, spacing: 10) {
                     Image(systemName: reference.kind == .file ? "doc" : "link")
-                        .font(.title2)
+                        .font(.body)
                         .foregroundStyle(.tertiary)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(verbatim: name)
-                            .font(.headline)
+                            .font(.body.weight(.medium))
                             .lineLimit(2)
                             .truncationMode(.middle)
                             .textSelection(.enabled)
@@ -40,7 +41,7 @@ struct ReferencePreviewView: View {
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
                     if let filePath = reference.filePath {
                         field(
                             label: PreviewCopy.text("File Path"), value: filePath,
@@ -86,7 +87,7 @@ struct ReferencePreviewView: View {
             }
             .frame(maxWidth: 600, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
+            .padding(12)
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.preview.reference")

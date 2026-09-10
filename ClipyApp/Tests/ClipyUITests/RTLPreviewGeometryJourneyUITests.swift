@@ -97,7 +97,6 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         XCTAssertTrue(content.descendants(matching: .any)["clipy.preview.text"].waitForExistence(timeout: 5))
         let compactWidth: CGFloat = 360
         let paneWidth: CGFloat = 340
-        let minimumPaneHeight: CGFloat = 420
         let gap: CGFloat = 8
         // Under RTL the pane still goes to the PHYSICAL trailing (right)
         // side: top edges align, the panel keeps its compact width, and the
@@ -107,7 +106,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
                 && abs(pane.frame.width - paneWidth) <= 3
                 && abs(pane.frame.minX - panel.frame.maxX - gap) <= 3
                 && abs(pane.frame.minY - panel.frame.minY) <= 3
-                && abs(pane.frame.height - max(panel.frame.height, minimumPaneHeight)) <= 3
+                && pane.frame.height > 0 && pane.frame.height < 140
         }, "trailing floating pane under RTL.\n\(app.debugDescription)")
 
         // Esc dismisses the floating pane first (a manual close); the panel

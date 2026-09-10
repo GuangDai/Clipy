@@ -221,11 +221,7 @@ struct FloatingPanelFrameHostedTests {
             )
         )
 
-        // 200×40 is below both minimums (the height floor is the content-fit
-        // floor, header + one text row + slack — no longer 420). AppKit may
-        // already have clamped the programmatic frame to `contentMinSize`;
-        // either way the settle boundary persists and settles at the
-        // PanelGeometry minimums.
+        // A user-owned 200×40 size stays small across settle and reopen.
         var settledFrame = panel.frame
         settledFrame.size = NSSize(width: 200, height: 40)
         panel.setFrame(settledFrame, display: false)
@@ -233,11 +229,11 @@ struct FloatingPanelFrameHostedTests {
             Notification(name: NSWindow.didEndLiveResizeNotification, object: panel)
         )
 
-        #expect(panel.frame.width == PanelGeometry.minimumContentWidth)
-        #expect(panel.frame.height == PanelGeometry.minimumHeight)
+        #expect(panel.frame.width == 200)
+        #expect(panel.frame.height == 40)
         let persisted = PanelGeometry.persistedSize(from: .standard)
-        #expect(persisted.contentWidth == PanelGeometry.minimumContentWidth)
-        #expect(persisted.height == PanelGeometry.minimumHeight)
+        #expect(persisted.contentWidth == 200)
+        #expect(persisted.height == 40)
 
         panel.close()
         panel.open(
@@ -249,8 +245,8 @@ struct FloatingPanelFrameHostedTests {
                 height: 1
             )
         )
-        #expect(panel.frame.width == PanelGeometry.minimumContentWidth)
-        #expect(panel.frame.height == PanelGeometry.minimumHeight)
+        #expect(panel.frame.width == 200)
+        #expect(panel.frame.height == 40)
     }
 
     /// The content fit applies instantly, pins the panel's TOP edge, and
@@ -289,9 +285,9 @@ struct FloatingPanelFrameHostedTests {
         #expect(panel.frame.height == 200)
         #expect(panel.frame.maxY == top)
 
-        // Below the floor the panel still fits at the floor, top-pinned.
+        // A short demand remains short, with no aesthetic minimum.
         panel.fitToContent(idealHeight: 10)
-        #expect(panel.frame.height == PanelGeometry.minimumHeight)
+        #expect(panel.frame.height == 10)
         #expect(panel.frame.maxY == top)
 
         // Above the persisted ceiling (the default 420 with no persisted
@@ -410,7 +406,7 @@ struct FloatingPanelFrameHostedTests {
 
     /// The floating preview pane follows a content-fit height change: the
     /// panel's frame-change hook re-places it at the pure geometry's frame
-    /// (same side logic and top alignment, with a usable preview minimum).
+    /// (same side logic and top alignment, independently measured content).
     @Test
     func floatingPreviewFollowsAFittedMainPanelHeight() throws {
         let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
@@ -454,14 +450,17 @@ struct FloatingPanelFrameHostedTests {
         defer { preview.dismiss() }
         preview.present(beside: panel)
         #expect(preview.frame.height == panel.frame.height)
+        preview.fitToContent(height: 74)
+        #expect(preview.frame.height == 74)
 
         panel.fitToContent(idealHeight: 200)
         #expect(panel.frame.height == 200)
-        #expect(preview.frame.height == PanelGeometry.floatingPreviewMinimumHeight)
+        #expect(preview.frame.height == 74)
         #expect(preview.frame.maxY == panel.frame.maxY)
         let expected = PopupPositionGeometry.floatingPreviewFrame(
             beside: panel.frame,
-            in: visibleFrame
+            in: visibleFrame,
+            previewHeight: 74
         )
         #expect(preview.frame == expected.frame)
     }

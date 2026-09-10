@@ -95,7 +95,7 @@ struct HistoryRowView: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: PanelTheme.spacingMedium) {
+        HStack(alignment: .center, spacing: PanelTheme.spacingSmall) {
             thumbnail
             VStack(alignment: .leading, spacing: PanelTheme.spacingXXSmall) {
                 HStack(alignment: .firstTextBaseline, spacing: PanelTheme.spacingXSmall) {
@@ -122,6 +122,12 @@ struct HistoryRowView: View {
         }
         .padding(.vertical, PanelTheme.rowVerticalPadding(for: density))
         .padding(.horizontal, PanelTheme.spacingXSmall)
+        // Like Maccy's ListItemView, the row's dimensions depend only on
+        // content kind/typography, never on the asynchronous thumbnail.
+        .frame(height: PanelContentFit.rowHeight(
+            .init(row: row, snippetLineLimit: snippetLineCount.baseLineLimit(density: density)),
+            density: density, fontSize: fontSize
+        ) - 2 * PanelContentFit.listRowVerticalInset)
         .background {
             RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
                 .fill(isHovered && !isSelected ? Color.primary.opacity(0.045) : .clear)

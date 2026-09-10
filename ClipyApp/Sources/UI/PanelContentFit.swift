@@ -87,12 +87,12 @@ enum PanelContentFit {
     /// `.textFieldStyle(.plain)` field at the platform's default text
     /// size). The view derives it from the platform control, so the value
     /// is hoisted here and pinned by PanelContentFitTests.
-    static let searchFieldTextHeight: CGFloat = 22
+    static let searchFieldTextHeight: CGFloat = 16
 
     /// SearchHeaderView's field: its text line plus the vertical
     /// `PanelTheme.spacingXSmall` padding the field applies.
     static let searchFieldHeight: CGFloat =
-        searchFieldTextHeight + 2 * PanelTheme.spacingXSmall
+        searchFieldTextHeight + 2 * PanelTheme.spacingXXSmall
 
     /// The complete search-header strip: the field plus the
     /// HistoryPanelView header padding (`PanelTheme.headerTopPadding` /
@@ -136,9 +136,9 @@ enum PanelContentFit {
     /// small → .callout, medium → .body, large → .title3.
     static func titleLineHeight(for size: HistoryRowFontSize) -> CGFloat {
         switch size {
-        case .small: return 19
-        case .medium: return 21
-        case .large: return 25
+        case .small: return 14
+        case .medium: return 16
+        case .large: return 18
         }
     }
 
@@ -146,9 +146,9 @@ enum PanelContentFit {
     /// small → .footnote, medium → .subheadline, large → .callout.
     static func snippetLineHeight(for size: HistoryRowFontSize) -> CGFloat {
         switch size {
-        case .small: return 16
-        case .medium: return 18
-        case .large: return 19
+        case .small: return 14
+        case .medium: return 15
+        case .large: return 16
         }
     }
 
@@ -185,18 +185,10 @@ enum PanelContentFit {
     /// existing clamp instead of a new parameter.
     static let fullHeightDemand: CGFloat = .greatestFiniteMagnitude
 
-    /// The content-fit floor: header + ONE text row + slack at the product
-    /// default appearance (compact density, medium type). Empty content
-    /// still fits at the floor; `PanelGeometry.minimumHeight` is this same
-    /// value, so a user resize can never go below it either.
-    static let minimumHeight: CGFloat =
-        headerHeight
-            + rowHeight(
-                RowDescriptor(isImageRow: false, snippetLineCount: 0),
-                density: .compact,
-                fontSize: .medium
-            )
-            + bottomSlack
+    /// No fixed window floor. Empty states contribute their own compact
+    /// message, just as a real row contributes its content height (V2-11).
+    static let minimumHeight: CGFloat = 0
+    static let emptyStateHeight: CGFloat = 52
 
     /// The ideal content height for the displayed rows and chrome: header
     /// (+ filter chip when visible), the windowed-navigation bar when
@@ -210,20 +202,26 @@ enum PanelContentFit {
     static func idealHeight(_ input: Input) -> CGFloat {
         guard !input.prefersFullHeight else { return fullHeightDemand }
         var height = headerHeight + bottomSlack
+        if input.pinnedRows.isEmpty, input.unpinnedRows.isEmpty,
+           !input.showsPaginationControl {
+            height += emptyStateHeight
+        }
         if input.isFilterChipVisible {
             height += filterChipDelta
         }
         if input.hasWindowedPages {
             height += windowedNavigationHeight
         }
+        let showsSectionHeaders = !input.pinnedRows.isEmpty
+            && (!input.unpinnedRows.isEmpty || input.showsPaginationControl)
         if !input.pinnedRows.isEmpty {
-            height += sectionHeaderHeight
+            if showsSectionHeaders { height += sectionHeaderHeight }
             height += input.pinnedRows.reduce(0) {
                 $0 + rowHeight($1, density: input.density, fontSize: input.fontSize)
             }
         }
         if !input.unpinnedRows.isEmpty || input.showsPaginationControl {
-            height += sectionHeaderHeight
+            if showsSectionHeaders { height += sectionHeaderHeight }
             height += input.unpinnedRows.reduce(0) {
                 $0 + rowHeight($1, density: input.density, fontSize: input.fontSize)
             }

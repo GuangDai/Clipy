@@ -81,6 +81,10 @@ final class PreviewPaneState {
     /// panel surface (04 §9 fence convention).
     private(set) var previewedItem: HistoryItemReference?
 
+    /// The screen/user size ceiling for a content-fitted preview; never a
+    /// minimum and independent of the number of rows in the browsing list.
+    var availablePreviewHeight: CGFloat = PanelGeometry.height
+
     /// The AppDelegate-owned wiring to the floating preview window. Set
     /// once by the composition shell; every state transition that changes
     /// what a window must show publishes exactly one event here.

@@ -812,7 +812,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               panel.isPresented,
               floatingPreviewPanel?.isPresented == true
         else { return }
+        updatePreviewHeightCeiling()
         floatingPreviewPanel?.present(beside: panel)
+    }
+
+    func floatingPreviewContentHeightDidChange(_ height: CGFloat, for item: HistoryItemReference) {
+        guard previewState.isOpen, previewState.previewedItem == item else { return }
+        floatingPreviewPanel?.fitToContent(height: height)
+    }
+
+    private func updatePreviewHeightCeiling() {
+        let saved = PanelGeometry.persistedSize(from: .standard).height
+        previewState.availablePreviewHeight = min(saved, panel?.screen?.visibleFrame.height ?? saved)
     }
 
     /// The preview pane state publishes its show/update/hide transitions
@@ -832,6 +843,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     rootView: FloatingPreviewRootView(appDelegate: self)
                 )
             }
+            updatePreviewHeightCeiling()
             floatingPreviewPanel?.present(beside: panel)
         case .hide:
             hideFloatingPreviewPane()

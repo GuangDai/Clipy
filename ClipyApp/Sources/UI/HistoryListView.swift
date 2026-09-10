@@ -115,7 +115,7 @@ struct HistoryListView: View {
     private func list(now: Date) -> some View {
         List(selection: selection) {
             if !viewState.displayedPinnedRows.isEmpty {
-                Section(HistoryListCopy.text("Pinned")) {
+                Section {
                     ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
                         rowContent(
                             row,
@@ -123,19 +123,24 @@ struct HistoryListView: View {
                             pinnedOrdinal: (row.pinnedPosition ?? 0) + 1
                         )
                     }
+                } header: {
+                    if showsSectionHeaders { Text(HistoryListCopy.text("Pinned")) }
                 }
             }
             if !viewState.displayedUnpinnedRows.isEmpty || viewState.hasNextPage || viewState.isLoadingPage {
-                Section(HistoryListCopy.text("Recent")) {
+                Section {
                     ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
                         rowContent(row, now: now, pinnedOrdinal: nil)
                     }
                     paginationControl
+                } header: {
+                    if showsSectionHeaders { Text(HistoryListCopy.text("Recent")) }
                 }
             }
         }
         .listStyle(.inset)
-        .environment(\.defaultMinListRowHeight, 28)
+        .environment(\.defaultMinListRowHeight, 0)
+        .environment(\.defaultMinListHeaderHeight, 0)
         .scrollContentBackground(.hidden)
         .background {
             HistoryListDragSource(view: dragSource) { reference in
@@ -156,6 +161,11 @@ struct HistoryListView: View {
             return .ignored
         }
         .onPanelMouseMovement(onPointerMovement)
+    }
+
+    private var showsSectionHeaders: Bool {
+        !viewState.displayedPinnedRows.isEmpty
+            && (!viewState.displayedUnpinnedRows.isEmpty || viewState.hasNextPage || viewState.isLoadingPage)
     }
 
     private func rowContent(
@@ -247,17 +257,11 @@ struct HistoryListView: View {
         } else if viewState.typeFilter != .all || viewState.showsPinnedOnly {
             filteredEmptyState
         } else if viewState.isSearchActive {
-            ContentUnavailableView(
-                HistoryListCopy.text("No Results"),
-                systemImage: "magnifyingglass",
-                description: Text(HistoryListCopy.searchMiss(viewState.searchText))
-            )
+            emptyMessage("No Results", symbol: "magnifyingglass",
+                         description: HistoryListCopy.searchMiss(viewState.searchText))
         } else {
-            ContentUnavailableView(
-                HistoryListCopy.text("No Clipboard History"),
-                systemImage: "doc.on.clipboard",
-                description: Text(HistoryListCopy.text("Copy something and it will appear here."))
-            )
+            emptyMessage("No Clipboard History", symbol: "doc.on.clipboard",
+                         description: HistoryListCopy.text("Copy something and it will appear here."))
         }
     }
 
@@ -268,14 +272,26 @@ struct HistoryListView: View {
     /// still names the query.
     private var filteredEmptyState: some View {
         VStack {
-            ContentUnavailableView(
-                HistoryListCopy.text("No Results"),
-                systemImage: "magnifyingglass",
-                description: Text(filteredEmptyDescription)
-            )
+            emptyMessage("No Results", symbol: "magnifyingglass", description: filteredEmptyDescription)
             paginationControl
                 .padding(.bottom)
         }
+    }
+
+    private func emptyMessage(_ title: String, symbol: String, description: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(HistoryListCopy.text(title)).font(.callout.weight(.medium))
+                Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var filteredEmptyDescription: String {

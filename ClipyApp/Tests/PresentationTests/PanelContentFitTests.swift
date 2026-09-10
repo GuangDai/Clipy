@@ -23,19 +23,18 @@ struct PanelContentFitTests {
         PanelContentFit.RowDescriptor(isImageRow: true, snippetLineCount: 0)
     }
 
-    /// Compact/medium text row: max(20 slot, 21 title) + 2×2 padding +
-    /// 2×2 list insets = 29 (PanelTheme + hoisted insets).
+    /// Compact/medium: a 16pt content line plus 4pt padding and 4pt insets.
     @Test func textRowHeightAtTheDefaultAppearance() {
         #expect(
             PanelContentFit.rowHeight(
                 textRow(), density: .compact, fontSize: .medium
-            ) == 29
+            ) == 24
         )
-        // Comfortable: the 28pt slot exceeds the title block; padding is 4.
+        // Comfortable: a 24pt slot plus 8pt padding and 4pt insets.
         #expect(
             PanelContentFit.rowHeight(
                 textRow(), density: .comfortable, fontSize: .medium
-            ) == 40
+            ) == 36
         )
     }
 
@@ -54,55 +53,45 @@ struct PanelContentFitTests {
     }
 
     @Test func snippetRowsGrowByTheEffectiveLineCount() {
-        // Title block: 21 + 4 gap + 1×18 subheadline = 43, exceeding the
-        // 20pt slot; + 2×2 padding + 2×2 insets.
+        // 16pt title + 4pt gap + 15pt snippet + 8pt padding/insets.
         #expect(
             PanelContentFit.rowHeight(
                 textRow(snippetLines: 1), density: .compact, fontSize: .medium
-            ) == 51
+            ) == 43
         )
         #expect(
             PanelContentFit.rowHeight(
                 textRow(snippetLines: 2), density: .compact, fontSize: .medium
-            ) == 69
+            ) == 58
         )
     }
 
-    @Test func emptyContentClampsToTheFloor() {
-        // Empty: header (48) + bottom slack (6), below the floor.
-        #expect(PanelContentFit.idealHeight(PanelContentFit.Input()) == 54)
+    @Test func emptyContentFitsItsMessage() {
+        // 34pt toolbar + 52pt empty message + 6pt bottom breathing room.
+        #expect(PanelContentFit.idealHeight(PanelContentFit.Input()) == 92)
         #expect(
             PanelContentFit.clampedHeight(
                 PanelContentFit.idealHeight(PanelContentFit.Input()),
                 ceiling: PanelGeometry.height
-            ) == PanelContentFit.minimumHeight
+            ) == 92
         )
     }
 
-    @Test func theFloorIsHeaderPlusOneTextRowPlusSlack() {
-        #expect(
-            PanelContentFit.minimumHeight
-                == PanelContentFit.headerHeight
-                    + PanelContentFit.rowHeight(
-                        textRow(), density: .compact, fontSize: .medium
-                    )
-                    + PanelContentFit.bottomSlack
-        )
-        // Pinned literal: header 48 + row 29 + slack 6.
-        #expect(PanelContentFit.minimumHeight == 83)
-        // The window's resize minimum is the same floor.
-        #expect(PanelGeometry.minimumHeight == PanelContentFit.minimumHeight)
+    @Test func aShortDemandHasNoArtificialFloor() {
+        #expect(PanelContentFit.clampedHeight(32, ceiling: 420) == 32)
+        #expect(PanelGeometry.minimumHeight == 0)
+        #expect(PanelGeometry.minimumContentWidth == 0)
     }
 
-    @Test func rowsAndOneSectionHeaderSumIntoTheIdeal() {
+    @Test func recentOnlyRowsDoNotPayForARedundantSectionHeading() {
         var input = PanelContentFit.Input()
         input.unpinnedRows = [textRow(), textRow(), textRow()]
-        // header 48 + Recent header 28 + 3×29 + slack 6.
-        #expect(PanelContentFit.idealHeight(input) == 169)
+        // 34pt toolbar + 3×24pt rows + 6pt breathing room.
+        #expect(PanelContentFit.idealHeight(input) == 112)
         #expect(
             PanelContentFit.clampedHeight(
                 PanelContentFit.idealHeight(input), ceiling: 420
-            ) == 169
+            ) == 112
         )
     }
 
@@ -110,8 +99,8 @@ struct PanelContentFitTests {
         var input = PanelContentFit.Input()
         input.pinnedRows = [textRow()]
         input.unpinnedRows = [imageRow]
-        // header 48 + 2×28 section headers + 29 text + 52 image + slack 6.
-        #expect(PanelContentFit.idealHeight(input) == 191)
+        // 34pt toolbar + 2×28pt section headers + 24pt text + 52pt image + 6pt slack.
+        #expect(PanelContentFit.idealHeight(input) == 172)
     }
 
     @Test func chromeDeltasAddTheirOwnHeights() {
@@ -156,10 +145,8 @@ struct PanelContentFitTests {
         let ideal = PanelContentFit.idealHeight(input)
         #expect(ideal > 420)
         #expect(PanelContentFit.clampedHeight(ideal, ceiling: 420) == 420)
-        // A ceiling below the floor (a pre-floor defaults value) still
-        // yields the floor.
-        #expect(PanelContentFit.clampedHeight(ideal, ceiling: 40) == 83)
-        #expect(PanelContentFit.clampedHeight(10, ceiling: 420) == 83)
+        #expect(PanelContentFit.clampedHeight(ideal, ceiling: 40) == 40)
+        #expect(PanelContentFit.clampedHeight(10, ceiling: 420) == 10)
     }
 
     /// A pushed Details/editor destination or the quick-look overlay fills
@@ -170,18 +157,17 @@ struct PanelContentFitTests {
     @Test func fullHeightDestinationDemandsThePersistedCeiling() {
         var input = PanelContentFit.Input()
         input.unpinnedRows = [textRow(), textRow()]
-        // header 48 + Recent header 28 + 2×29 + slack 6.
+        // 34pt toolbar + 2×24pt rows + 6pt slack.
         let rowFit = PanelContentFit.clampedHeight(
             PanelContentFit.idealHeight(input), ceiling: 420
         )
-        #expect(rowFit == 140)
+        #expect(rowFit == 88)
 
         input.prefersFullHeight = true
         let fullHeight = PanelContentFit.idealHeight(input)
         #expect(fullHeight == PanelContentFit.fullHeightDemand)
         #expect(PanelContentFit.clampedHeight(fullHeight, ceiling: 420) == 420)
-        // A sub-floor legacy ceiling still yields the floor.
-        #expect(PanelContentFit.clampedHeight(fullHeight, ceiling: 40) == 83)
+        #expect(PanelContentFit.clampedHeight(fullHeight, ceiling: 40) == 40)
 
         // Popping the destination / dismissing the overlay refits to rows.
         input.prefersFullHeight = false
