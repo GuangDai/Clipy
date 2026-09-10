@@ -9,19 +9,20 @@ the list.
 
 ## Information hierarchy
 
-- Default browsing surface: 360 × 420 pt; minimum 360 × 420 pt.
-  Existing explicit size preferences remain meaningful. The preview retains
-  its independently adjustable 320 pt default width.
-- Compact rows: 20 pt content/type slot, regular system body title, 2 pt vertical
-  padding plus 2 pt list insets. Comfortable density uses a 28 pt slot.
+- Default browsing width: 360 pt, user-resizable with no forced minimum.
+  The default 420 pt height is a ceiling, never a minimum. Both the list and
+  the independent 340 pt floating preview fit their own content.
+- Compact rows: 16 pt content/type slot, 13 pt system title, 2 pt vertical
+  padding plus 2 pt list insets: 24 pt total. Comfortable density uses a 24 pt slot.
   Search snippets appear only when they provide body-match evidence.
 - Row accessories: multiple-source indicator and pin ordinal. Source icons,
   bundle identifiers, timestamps and occurrence counters leave the list.
 - Search: one stable field and two 24 pt icon controls. Search mode remains
   available through the menu and Command-1/2/3; active filtering and nondefault
-  search mode use the accent color. Counts remain in the footer.
-- Expanded pane: content first, then latest application icon/name and total
-  copies. The native information popover contains last-copy time and (for
+  search mode use the accent color. Counts and infrequent actions live in More.
+- Expanded pane: content first, then latest application icon/name, repeat
+  count when greater than one, and direct Copy/Pin controls. The native
+  information popover contains last-copy time and (for
   repeats) first-copy time. Multiple sources have a closed disclosure with
   per-application counts and first/last times; it scrolls within 140 pt. Full bundle identity and
   precise timestamps remain available in help.
@@ -84,13 +85,10 @@ UI code follows the current app-owned layout under `ClipyApp/Sources/UI`;
 the native drag bridge, adaptive settings, removable filter summary and
 preview information dismissal behavior from master are retained.
 
-Implementation is in progress. This Linux workspace has no Swift/Xcode or
-WindowServer; the native build, storage tests and running-app visual checks
-have not run. The existing correctness workflow remains the validation lane.
-Local checks covered actual source pagination SQL/index use, source
-upsert/rollback/cascade SQL, and icon dimensions and alpha. Native validation
-runs through the existing macOS correctness workflow; local checks are not
-substitutes for Swift or running-app tests.
+This Linux workspace has no Swift/Xcode or WindowServer. Native validation
+runs through the existing macOS correctness workflow, including real
+short/long-content geometry and direct-action journeys. Test screenshots are
+exported with the existing application artifacts for visual inspection.
 
 ## Addendum — 2026-09-10
 

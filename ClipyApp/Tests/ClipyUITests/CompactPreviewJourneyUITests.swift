@@ -44,6 +44,12 @@ final class CompactPreviewJourneyUITests: XCTestCase {
                 && panel.frame.height > 30 && panel.frame.height < 100
         }, app.debugDescription)
         XCTAssertFalse(panel.staticTexts["Recent"].exists)
+        let initialRow = panel.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "clipy.history.row."
+        )).firstMatch
+        XCTAssertTrue(waitUntil {
+            initialRow.exists && initialRow.frame.maxY <= panel.frame.maxY
+        }, "The compact list must not clip its last row.\n\(app.debugDescription)")
         let shortHeight = preview.frame.height
         let shortPanelHeight = panel.frame.height
         let shortImage = XCTAttachment(screenshot: app.screenshot())
@@ -62,8 +68,10 @@ final class CompactPreviewJourneyUITests: XCTestCase {
         // A long capture grows its own preview while the two-row history
         // stays small. Clearing the selection's search is not required.
         let long = "A longer thought.\n" + String(repeating: "Content earns its space.\n", count: 80)
+        let longItem = NSPasteboardItem()
+        XCTAssertTrue(longItem.setString(long, forType: .string))
         pasteboard.clearContents()
-        XCTAssertTrue(pasteboard.setString(long, forType: .string))
+        XCTAssertTrue(pasteboard.writeObjects([longItem]))
         let longRow = panel.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
             "clipy.history.row.", "A longer thought."
@@ -96,6 +104,8 @@ final class CompactPreviewJourneyUITests: XCTestCase {
         XCTAssertTrue(pasteboard.writeObjects([sentinel]))
         let copy = preview.buttons["clipy.preview.copy"]
         XCTAssertTrue(copy.exists && copy.isHittable)
+        XCTAssertGreaterThanOrEqual(copy.frame.width, 24)
+        XCTAssertGreaterThanOrEqual(copy.frame.height, 24)
         copy.click()
         XCTAssertTrue(waitUntil { !panel.exists && pasteboard.string(forType: .string) == short })
     }

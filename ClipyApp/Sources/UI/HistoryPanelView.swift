@@ -1052,6 +1052,7 @@ struct HistoryPanelView: View {
             .accessibilityIdentifier("clipy.panel.more-actions")
         }
         .controlSize(.small)
+        .frame(height: PanelContentFit.searchFieldHeight)
     }
 
     private var itemCountText: String {

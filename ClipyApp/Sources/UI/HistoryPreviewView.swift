@@ -990,26 +990,32 @@ struct HistoryPreviewView: View {
                         }
                     } label: {
                         Image(systemName: row.pinnedPosition == nil ? "pin" : "pin.fill")
+                            .font(.system(size: 12))
                             .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
                     .help(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin") + "  ⌘P")
                     .accessibilityLabel(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin"))
                     .accessibilityIdentifier("clipy.preview.pin")
                     Button { viewState.requestPasteFromDisplayedRow(row.item) } label: {
                         Image(systemName: "doc.on.doc")
+                            .font(.system(size: 12))
                             .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
                     .help(PanelActionsCopy.text("Copy to Clipboard") + "  ↵")
                     .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard"))
                     .accessibilityIdentifier("clipy.preview.copy")
                 }
                 Button { previewState.isInformationPresented.toggle() } label: {
                     Image(systemName: "info.circle")
+                        .font(.system(size: 12))
                         .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .controlSize(.mini)
                 .help(PreviewPresentationCopy.text("Preview Information"))
                 .accessibilityLabel(PreviewPresentationCopy.text("Preview Information"))

@@ -820,6 +820,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func floatingPreviewContentHeightDidChange(_ height: CGFloat, for item: HistoryItemReference) {
+        guard previewState.isOpen, previewState.previewedItem == item else { return }
         floatingPreviewFitTask?.cancel()
         floatingPreviewFitTask = Task { @MainActor [weak self] in
             // Apply window geometry after SwiftUI finishes measuring. The

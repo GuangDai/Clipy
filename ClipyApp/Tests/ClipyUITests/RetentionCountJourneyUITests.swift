@@ -55,8 +55,12 @@ final class RetentionCountJourneyUITests: XCTestCase {
             diagnostic(app, context: "oldest row label")
         )
 
+        // Publish fully prepared bytes, as the product paste writer does.
+        // clearContents/setString can expose an empty generation to polling.
+        let newestItem = NSPasteboardItem()
+        XCTAssertTrue(newestItem.setString(newest, forType: .string))
         pasteboard.clearContents()
-        XCTAssertTrue(pasteboard.setString(newest, forType: .string))
+        XCTAssertTrue(pasteboard.writeObjects([newestItem]))
         assertRowCount(2, in: rows, app: app, context: "second capture")
         let capturedLabels = rows.allElementsBoundByIndex.map(\.label)
         XCTAssertTrue(

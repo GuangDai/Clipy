@@ -139,6 +139,9 @@ struct HistoryListView: View {
             }
         }
         .listStyle(.inset)
+        // The native inset list otherwise adds its own vertical margins on
+        // top of our row insets, clipping a one-row content-fitted panel.
+        .contentMargins(.vertical, 0, for: .scrollContent)
         .environment(\.defaultMinListRowHeight, 0)
         .environment(\.defaultMinListHeaderHeight, 0)
         .scrollContentBackground(.hidden)
