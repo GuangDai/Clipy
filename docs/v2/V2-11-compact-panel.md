@@ -99,3 +99,8 @@ The in-window 320 pt preview column is superseded by a transient floating
 settings are removed. Panel height now fits the displayed content, with
 the persisted height as the ceiling rather than a fixed size. Image rows
 render 44/56 pt thumbnails (compact/comfortable).
+
+The floating preview keeps a 420 pt minimum height independently of a short
+history list, capped by the screen's visible height. It aligns to the main
+panel's top edge when possible and stays inside the visible screen. This
+keeps file actions, recovery and PDF controls usable with one retained item.

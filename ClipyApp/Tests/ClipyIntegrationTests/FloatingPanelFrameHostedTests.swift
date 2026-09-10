@@ -358,7 +358,7 @@ struct FloatingPanelFrameHostedTests {
         let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
         let visibleFrame = screen.visibleFrame
         try #require(visibleFrame.width >= 721)
-        try #require(visibleFrame.height >= 720)
+        try #require(visibleFrame.height >= 640)
 
         let restorePersistedSize = isolatePersistedPanelGeometryKeys()
         defer { restorePersistedSize() }
@@ -385,6 +385,7 @@ struct FloatingPanelFrameHostedTests {
         // demand — suspended, so the dragged frame stands.
         var draggedFrame = panel.frame
         draggedFrame.size.height = 640
+        draggedFrame.origin.y = panel.frame.maxY - draggedFrame.height
         panel.setFrame(draggedFrame, display: false)
         panel.fitToContent(idealHeight: 300)
         #expect(panel.frame.height == 640)
@@ -409,7 +410,7 @@ struct FloatingPanelFrameHostedTests {
 
     /// The floating preview pane follows a content-fit height change: the
     /// panel's frame-change hook re-places it at the pure geometry's frame
-    /// (same side logic, the panel's live height, top edges aligned).
+    /// (same side logic and top alignment, with a usable preview minimum).
     @Test
     func floatingPreviewFollowsAFittedMainPanelHeight() throws {
         let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
@@ -456,7 +457,7 @@ struct FloatingPanelFrameHostedTests {
 
         panel.fitToContent(idealHeight: 200)
         #expect(panel.frame.height == 200)
-        #expect(preview.frame.height == 200)
+        #expect(preview.frame.height == PanelGeometry.floatingPreviewMinimumHeight)
         #expect(preview.frame.maxY == panel.frame.maxY)
         let expected = PopupPositionGeometry.floatingPreviewFrame(
             beside: panel.frame,

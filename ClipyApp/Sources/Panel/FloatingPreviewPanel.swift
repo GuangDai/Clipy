@@ -5,8 +5,8 @@
 /// geometry never changes for preview.
 ///
 /// Geometry (PopupPositionGeometry.floatingPreviewFrame): fixed width, the
-/// main panel's current height, top edges aligned, trailing side when the
-/// screen's visible frame has room, otherwise leading; clamped into the
+/// main panel's height with a 420pt minimum, top edges aligned, trailing
+/// side when the screen's visible frame has room, otherwise leading; clamped into the
 /// visible frame. Placement applies with an instant, non-animated
 /// `setFrame`; the SwiftUI content's own opacity fade is the only motion.
 ///
@@ -50,6 +50,10 @@ final class FloatingPreviewPanel: NSPanel {
         // The pane is reused across dismissals — never let AppKit release
         // it out from under the AppDelegate.
         isReleasedWhenClosed = false
+        // Keep window identity on the native window. A second SwiftUI
+        // identifier on the transparent root Group replaces the content's
+        // `clipy.preview.root` in the accessibility tree (CI preview journeys).
+        setAccessibilityIdentifier("clipy.panel.floatingPreview")
 
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.wantsLayer = true
@@ -132,8 +136,6 @@ struct FloatingPreviewRootView: View {
         // The window is transparent; the content carries the material so
         // the rounded corners show material, not the desktop behind it.
         .background(.regularMaterial)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("clipy.panel.floatingPreview")
         // The pane's half of the two-window pointer presence: leaving BOTH
         // windows hides the preview after its grace; re-entry cancels.
         .onHover { isInside in

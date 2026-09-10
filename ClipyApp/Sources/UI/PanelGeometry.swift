@@ -27,6 +27,10 @@ enum PanelGeometry {
     /// side pane; it never resizes the main panel).
     static let floatingPreviewWidth: CGFloat = 340
 
+    /// File actions, PDF paging and recovery need a usable viewport even
+    /// when a single history row shrinks the browsing panel to 111pt.
+    static let floatingPreviewMinimumHeight: CGFloat = 420
+
     /// The gap between the main panel and the floating preview pane.
     static let floatingPreviewGap: CGFloat = 8
 

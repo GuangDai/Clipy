@@ -25,7 +25,8 @@ enum PopupPositionGeometry {
 
     /// The floating preview pane's frame beside the presented main panel
     /// (the redesign's transient preview: fixed width, the main panel's
-    /// current height, top edges aligned, never a main-panel resize).
+    /// height with a 420pt minimum, top edges aligned when the screen allows,
+    /// never a main-panel resize).
     /// The pane goes on the trailing side when the screen's visible frame
     /// has room for width + gap there, otherwise the leading side; the
     /// result is clamped into the visible frame either way. A `nil` visible
@@ -36,7 +37,11 @@ enum PopupPositionGeometry {
         previewWidth: CGFloat = PanelGeometry.floatingPreviewWidth,
         gap: CGFloat = PanelGeometry.floatingPreviewGap
     ) -> (frame: NSRect, placement: PreviewPlacement) {
-        let size = NSSize(width: previewWidth, height: mainPanelFrame.height)
+        let desiredHeight = max(mainPanelFrame.height, PanelGeometry.floatingPreviewMinimumHeight)
+        let size = NSSize(
+            width: previewWidth,
+            height: screenVisibleFrame.map { min(desiredHeight, $0.height) } ?? desiredHeight
+        )
         let trailingX = mainPanelFrame.maxX + gap
         let leadingX = mainPanelFrame.minX - gap - previewWidth
 
@@ -49,12 +54,12 @@ enum PopupPositionGeometry {
             placement = .trailing
         }
 
-        // Top edges align: AppKit origins are bottom-left and both panes
-        // share the height, so the origins share the panel's minY.
+        // Top edges align before the screen clamp. A short browsing panel
+        // must not compress the independent preview's controls and content.
         var frame = NSRect(
             origin: NSPoint(
                 x: placement == .trailing ? trailingX : leadingX,
-                y: mainPanelFrame.minY
+                y: mainPanelFrame.maxY - size.height
             ),
             size: size
         )

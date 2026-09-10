@@ -44,12 +44,12 @@ struct PanelContentFitTests {
         #expect(
             PanelContentFit.rowHeight(
                 imageRow, density: .compact, fontSize: .medium
-            ) == 44 + 4 + 4
+            ) == 52
         )
         #expect(
             PanelContentFit.rowHeight(
                 imageRow, density: .comfortable, fontSize: .medium
-            ) == 56 + 8 + 4
+            ) == 68
         )
     }
 
@@ -59,12 +59,12 @@ struct PanelContentFitTests {
         #expect(
             PanelContentFit.rowHeight(
                 textRow(snippetLines: 1), density: .compact, fontSize: .medium
-            ) == 43 + 4 + 4
+            ) == 51
         )
         #expect(
             PanelContentFit.rowHeight(
                 textRow(snippetLines: 2), density: .compact, fontSize: .medium
-            ) == 43 + 18 + 4 + 4
+            ) == 69
         )
     }
 
@@ -98,7 +98,7 @@ struct PanelContentFitTests {
         var input = PanelContentFit.Input()
         input.unpinnedRows = [textRow(), textRow(), textRow()]
         // header 48 + Recent header 28 + 3×29 + slack 6.
-        #expect(PanelContentFit.idealHeight(input) == 48 + 28 + 87 + 6)
+        #expect(PanelContentFit.idealHeight(input) == 169)
         #expect(
             PanelContentFit.clampedHeight(
                 PanelContentFit.idealHeight(input), ceiling: 420
@@ -111,7 +111,7 @@ struct PanelContentFitTests {
         input.pinnedRows = [textRow()]
         input.unpinnedRows = [imageRow]
         // header 48 + 2×28 section headers + 29 text + 52 image + slack 6.
-        #expect(PanelContentFit.idealHeight(input) == 48 + 56 + 29 + 52 + 6)
+        #expect(PanelContentFit.idealHeight(input) == 191)
     }
 
     @Test func chromeDeltasAddTheirOwnHeights() {
@@ -174,7 +174,7 @@ struct PanelContentFitTests {
         let rowFit = PanelContentFit.clampedHeight(
             PanelContentFit.idealHeight(input), ceiling: 420
         )
-        #expect(rowFit == 48 + 28 + 58 + 6)
+        #expect(rowFit == 140)
 
         input.prefersFullHeight = true
         let fullHeight = PanelContentFit.idealHeight(input)
