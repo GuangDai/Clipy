@@ -976,8 +976,10 @@ struct HistoryPreviewView: View {
             HStack(spacing: 8) {
                 SourceApplicationLabel(application: occurrence.lastSource, store: sourceIcons)
 
-                Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
-                    .lineLimit(1)
+                if occurrence.count > 1 {
+                    Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 4)
                 if let row = observedRow {
                     Button {

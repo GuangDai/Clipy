@@ -76,7 +76,8 @@ final class FloatingPreviewPanel: NSPanel {
 
     /// Shows the pane beside `mainPanel` (or re-positions an already
     /// visible pane), without animation. Recomputing the frame on every
-    /// call keeps the pane glued to the main panel's live height and side.
+    /// call keeps the pane aligned to the main panel while retaining its
+    /// independently measured content height.
     func present(beside mainPanel: NSWindow) {
         let placement = PopupPositionGeometry.floatingPreviewFrame(
             beside: mainPanel.frame,
@@ -104,9 +105,8 @@ final class FloatingPreviewPanel: NSPanel {
 /// composition and preview state through `@Observable` tracking and renders
 /// the existing `HistoryPreviewView` for the exact previewed item — the
 /// same fenced loader, typed failure taxonomy, and `clipy.preview.*`
-/// identifiers the quick-look overlay uses. The pane fades in with an
-/// opacity-only 0.12 s easeOut on show and on item change (Maccy's lesson:
-/// animate opacity, never window geometry).
+/// identifiers the quick-look overlay uses. Content and window geometry
+/// update without retaining a fading copy of the previously selected item.
 struct FloatingPreviewRootView: View {
     let appDelegate: AppDelegate
 
@@ -147,6 +147,11 @@ struct FloatingPreviewRootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .environment(\.displayMemoryPressure, appDelegate.panelSurfaceState?.memoryPressure ?? .normal)
+        .environment(\.displayMemoryPressureGeneration, appDelegate.panelSurfaceState?.memoryPressureGeneration ?? 0)
+        .onChange(of: appDelegate.panelSurfaceState?.memoryPressureGeneration, initial: true) { _, _ in
+            sourceIcons?.respondToMemoryPressure(appDelegate.panelSurfaceState?.memoryPressure ?? .normal)
+        }
         // The window is transparent; the content carries the material so
         // the rounded corners show material, not the desktop behind it.
         .background(.regularMaterial)

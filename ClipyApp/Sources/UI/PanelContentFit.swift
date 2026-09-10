@@ -1,6 +1,6 @@
 /// PanelContentFit.swift — the panel's analytic content-height oracle
 /// (Maccy's content-fitting popup: the panel is exactly as tall as its
-/// displayed content between a floor and the persisted height ceiling).
+/// displayed content, up to the persisted height ceiling).
 /// SwiftUI List laziness makes runtime measurement unreliable, so the
 /// ideal height is COMPUTED from the same sources of truth the views use:
 /// PanelTheme metrics for slots/padding, the hoisted list-row insets the
@@ -15,7 +15,7 @@ import HistoryCore
 
 /// Analytic height math for the browsing surface. `Input` is the complete
 /// content/chrome snapshot; `idealHeight(_:)` is a pure function of it;
-/// `clampedHeight(_:ceiling:)` applies the floor/ceiling contract. The
+/// `clampedHeight(_:ceiling:)` applies the user's size ceiling. The
 /// AppKit side (`FloatingPanel.fitToContent`) owns the actual frame change.
 enum PanelContentFit {
 
@@ -90,7 +90,7 @@ enum PanelContentFit {
     static let searchFieldTextHeight: CGFloat = 16
 
     /// SearchHeaderView's field: its text line plus the vertical
-    /// `PanelTheme.spacingXSmall` padding the field applies.
+    /// `PanelTheme.spacingXXSmall` padding the field applies.
     static let searchFieldHeight: CGFloat =
         searchFieldTextHeight + 2 * PanelTheme.spacingXXSmall
 
@@ -132,8 +132,7 @@ enum PanelContentFit {
 
     // MARK: Row typography (PanelTheme's Font mappings)
 
-    /// Title line heights behind `PanelTheme.titleFont(for:)`:
-    /// small → .callout, medium → .body, large → .title3.
+    /// Line boxes for the 11/13/15pt system title fonts in PanelTheme.
     static func titleLineHeight(for size: HistoryRowFontSize) -> CGFloat {
         switch size {
         case .small: return 14
@@ -142,8 +141,7 @@ enum PanelContentFit {
         }
     }
 
-    /// Snippet line heights behind `PanelTheme.snippetFont(for:)`:
-    /// small → .footnote, medium → .subheadline, large → .callout.
+    /// Line boxes for the 11/12/13pt system snippet fonts in PanelTheme.
     static func snippetLineHeight(for size: HistoryRowFontSize) -> CGFloat {
         switch size {
         case .small: return 14
@@ -235,10 +233,7 @@ enum PanelContentFit {
         return height
     }
 
-    /// The fit contract: the ideal height clamped to [floor, ceiling]. The
-    /// ceiling is the persisted height (a MAXIMUM, never a fixed height);
-    /// a ceiling below the floor (a defaults value predating the floor)
-    /// still yields the floor.
+    /// A user-controlled ceiling, with no aesthetic minimum.
     static func clampedHeight(_ ideal: CGFloat, ceiling: CGFloat) -> CGFloat {
         min(max(ideal, minimumHeight), max(ceiling, minimumHeight))
     }

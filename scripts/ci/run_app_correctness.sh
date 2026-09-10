@@ -71,6 +71,7 @@ export CLIPY_FIXTURES_DIR="$fixture_root/clipy-fixtures-v1"
 xcodebuild -list -json -project "$project" > "$log_dir/project-list.json"
 
 set -o pipefail
+test_exit_code=0
 xcodebuild \
   -project "$project" -scheme ClipyApp \
   -configuration Debug -destination 'platform=macOS,arch=arm64' \
@@ -78,4 +79,13 @@ xcodebuild \
   -resultBundlePath "$result_dir/app.xcresult" \
   "${test_arguments[@]}" \
   CODE_SIGNING_ALLOWED=NO \
-  test 2>&1 | tee "$log_dir/app-build-test.log"
+  test 2>&1 | tee "$log_dir/app-build-test.log" || test_exit_code=$?
+
+# Keep the native UI journey screenshots directly viewable alongside the
+# result bundle, including on a failing run. Preserve the original test result.
+if [[ -d "$result_dir/app.xcresult" ]]; then
+  xcrun xcresulttool export attachments \
+    --path "$result_dir/app.xcresult" --output-path "$log_dir/app-attachments" \
+    || echo "Could not export UI attachments; the result bundle is retained." >&2
+fi
+exit "$test_exit_code"

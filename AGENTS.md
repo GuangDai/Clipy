@@ -133,7 +133,7 @@ Post-step-9 additions: the perf/AB helper proofs live in the separate
 `HistoryPerfTests` target/lane (the default `swift test` skips them), and the
 panel is a Maccy-style AppDelegate-owned floating `NSPanel` (Carbon ⇧⌘C
 summon, cursor/status-item/center/last-position placement, content-fitting
-height between a computed floor and the persisted height ceiling, a
+height up to the persisted height ceiling without an aesthetic minimum, a
 dwell-driven transient floating 340 pt preview pane beside the panel,
 hover selection arbitrated by a mouse/keyboard input mode, and 44/56 pt
 image-row thumbnails; user-resizable within `PanelGeometry`'s min/max

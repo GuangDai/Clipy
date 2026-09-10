@@ -202,7 +202,7 @@ struct HistoryRowView: View {
 
     // MARK: Leading thumbnail
 
-    /// Density-sized leading slot: 20pt compact / 28pt comfortable for text
+    /// Density-sized leading slot: 16pt compact / 24pt comfortable for text
     /// and type rows (`PanelTheme.thumbnailSize(for:)`), a generous 44/56pt
     /// content height for image rows
     /// (`PanelTheme.imageThumbnailHeight(for:)`). The slot height is fixed
@@ -269,9 +269,9 @@ struct HistoryRowView: View {
         )
     }
 
-    /// Image rows present the decoded thumbnail aspect-fit at the
-    /// density-owned content height with a flexible width — no fixed-width
-    /// cropping, no letterbox backing behind a loaded image. Rounded
+    /// Image rows use a stable aspect-fit slot. A panorama must not consume
+    /// the entire title, and a decoded thumbnail must not shift its start.
+    /// Rounded
     /// continuous corners plus a hairline separator-toned stroke keep white
     /// images readable on the material background.
     @ViewBuilder
@@ -281,7 +281,7 @@ struct HistoryRowView: View {
             image
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(height: height)
+                .frame(width: height * 1.5, height: height)
                 .clipShape(
                     RoundedRectangle(
                         cornerRadius: PanelTheme.cornerRadiusMedium,
@@ -303,7 +303,7 @@ struct HistoryRowView: View {
             Image(systemName: Self.typeSymbol(for: row.typeIdentifiers))
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: height, height: height)
+                .frame(width: height * 1.5, height: height)
                 .background {
                     RoundedRectangle(
                         cornerRadius: PanelTheme.cornerRadiusMedium,
@@ -314,9 +314,7 @@ struct HistoryRowView: View {
         }
     }
 
-    /// Text and type rows keep the original compact square slot: 15pt symbol
-    /// or a square-cropped fit of any retained raster over the .quaternary
-    /// backing.
+    /// Small unboxed type symbols stay subordinate to the title.
     @ViewBuilder
     private var standardThumbnail: some View {
         Group {
@@ -326,7 +324,7 @@ struct HistoryRowView: View {
                     .aspectRatio(contentMode: .fit)
             } else {
                 Image(systemName: Self.typeSymbol(for: row.typeIdentifiers))
-                    .font(.system(size: 15, weight: .medium))
+                    .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }
         }
@@ -334,10 +332,6 @@ struct HistoryRowView: View {
             width: PanelTheme.thumbnailSize(for: density),
             height: PanelTheme.thumbnailSize(for: density)
         )
-        .background {
-            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
-                .fill(.quaternary)
-        }
         .clipShape(RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
     }
 
