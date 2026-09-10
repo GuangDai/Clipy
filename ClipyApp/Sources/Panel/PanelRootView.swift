@@ -36,7 +36,6 @@ struct PanelRootView: View {
                         viewState: composition.viewState,
                         previewState: appDelegate.previewState,
                         surfaceState: surfaceState,
-                        previewPlacement: appDelegate.previewPlacement,
                         onPauseCapture: pauseCaptureAction,
                         onOpenSettings: {
                             // Activate first (the old `openSettingsWindow`
@@ -48,9 +47,6 @@ struct PanelRootView: View {
                         },
                         onQuit: { NSApp.terminate(nil) },
                         onRequestClose: { appDelegate.closePanel() },
-                        onPreviewVisibilityChange: { isOpen in
-                            appDelegate.previewVisibilityDidChange(isOpen)
-                        },
                         appearance: appDelegate.panelAppearance,
                         keepPanelOpenIsActive: appDelegate.isPanelKeepOpenActive,
                         onToggleKeepPanelOpen: {
@@ -61,7 +57,13 @@ struct PanelRootView: View {
                         // 01 §8); the view owns the per-surface store it
                         // builds from this public provider.
                         sourceIconProvider:
-                            SourceIconProviderFactory.makeProvider()
+                            SourceIconProviderFactory.makeProvider(),
+                        // The analytic content-fit demand flows back to the
+                        // AppKit owner, which coalesces and fits the
+                        // window's height (`FloatingPanel.fitToContent`).
+                        onContentFitChange: { input in
+                            appDelegate.panelContentFitDidChange(input)
+                        }
                     )
                 }
             } else if let openFailure = appDelegate.openFailure {
@@ -171,7 +173,7 @@ struct PanelRootView: View {
         }
         .padding(20)
         // Fill the hosting panel: the pane must track the user-resizable
-        // window rather than pin the default 400×560 frame.
+        // window rather than pin the default 360×420 frame.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.store.open.failure")
@@ -344,7 +346,7 @@ struct PanelRootView: View {
         }
         .padding(20)
         // Fill the hosting panel: the empty state must track the
-        // user-resizable window rather than pin the default 400×560 frame.
+        // user-resizable window rather than pin the default 360×420 frame.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.panel.root")

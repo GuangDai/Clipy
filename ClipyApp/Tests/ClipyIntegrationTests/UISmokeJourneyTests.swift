@@ -313,7 +313,7 @@ struct UISmokeJourneyTests {
     /// docs/04-coherence.md §9): a REAL 4K JPEG (images/photo4k-b.jpg,
     /// 189,348 bytes per manifest.json) frozen from a PRIVATE pasteboard by
     /// the real adapter; details expose the stored bytes unchanged; the real
-    /// `ThumbnailStore` materializes an eager raster inside the requested 72 px
+    /// `ThumbnailStore` materializes an eager raster inside the requested 112 px
     /// box; and the reference-exact fence holds — after a byte-changing
     /// revision, the reference at the NEW Content Version never sees the old
     /// pixels, then fetches its own.
@@ -356,7 +356,7 @@ struct UISmokeJourneyTests {
         )
 
         // The UTI heuristic admits the row (04 §9), the size read never
-        // fetches, and `prefetch` lands decoded pixels in the 72 px box.
+        // fetches, and `prefetch` lands decoded pixels in the 112 px box.
         let store = ThumbnailStore(history: history)
         #expect(
             ThumbnailStore.likelyThumbnailable(["public.jpeg"]),
@@ -369,8 +369,8 @@ struct UISmokeJourneyTests {
         }
         #expect(decoded, "image smoke: the 4K JPEG thumbnail materialized")
         let image = try #require(store.imagePixelSize(for: inserted))
-        #expect(image.width > 0 && image.width <= 72)
-        #expect(image.height > 0 && image.height <= 72)
+        #expect(image.width > 0 && image.width <= 112)
+        #expect(image.height > 0 && image.height <= 112)
 
         // The fence (04 §9): revise with a different real JPEG
         // (crop-02-1024x1024.jpg); the new reference must NOT see the

@@ -98,7 +98,6 @@ struct FloatingPanelMarkedTextEventTests {
         let panel = FloatingPanel(
             rootView: PanelRootView(appDelegate: appDelegate),
             previewState: appDelegate.previewState,
-            onPreviewPlacementChange: { _ in },
             isSelectionSubmissionEnabled: { true },
             onSubmitSelection: { submissionCount += 1 },
             onClosed: {}
@@ -219,12 +218,11 @@ struct PopupPositionGeometryTests {
         // The pointer is inside the synthetic left-hand display and near its
         // bottom-right corner. Both axes clamp against that display's literal
         // visible-frame edges rather than the primary display's zero origin;
-        // the width is the real expanded panel width, not the 400-point main
-        // surface alone.
-        let expandedPanelSize = NSSize(width: 721, height: 560)
+        // the width is a user-resized wide panel, not the 400-point default.
+        let widePanelSize = NSSize(width: 721, height: 560)
         let origin = PopupPositionGeometry.origin(
             for: .cursor,
-            panelSize: expandedPanelSize,
+            panelSize: widePanelSize,
             statusItemButtonScreenFrame: nil,
             mouseLocation: NSPoint(x: -5, y: -195),
             screens: [mainFrame, negativeOriginFrame].map { (frame: $0, visibleFrame: $0) },
@@ -233,9 +231,9 @@ struct PopupPositionGeometryTests {
 
         #expect(origin == NSPoint(x: -721, y: -200))
         #expect(origin.x >= negativeOriginFrame.minX)
-        #expect(origin.x + expandedPanelSize.width <= negativeOriginFrame.maxX)
+        #expect(origin.x + widePanelSize.width <= negativeOriginFrame.maxX)
         #expect(origin.y >= negativeOriginFrame.minY)
-        #expect(origin.y + expandedPanelSize.height <= negativeOriginFrame.maxY)
+        #expect(origin.y + widePanelSize.height <= negativeOriginFrame.maxY)
     }
 
     @Test func centerModeCentersInThePointerScreen() {
@@ -280,9 +278,6 @@ struct PopupPositionGeometryTests {
         let original = NSRect(x: 520, y: 315, width: 400, height: 560)
         let anchor = PopupPositionGeometry.normalizedAnchor(
             forPanelFrame: original,
-            previewPlacement: .trailing,
-            previewVisible: false,
-            mainSurfaceWidth: 400,
             in: mainFrame
         )
         #expect(abs(anchor.x - 0.5) < 0.000_001)
@@ -293,292 +288,11 @@ struct PopupPositionGeometryTests {
         #expect(abs(origin.y - original.minY) < 0.000_001)
     }
 
-    @Test func lastPositionUsesTheMainSurfaceWhenPreviewOpenedRight() {
-        // Main surface: x 520...920. Preview occupies x 921...1,241.
-        let previewPanel = NSRect(x: 520, y: 315, width: 721, height: 560)
-        let anchor = PopupPositionGeometry.normalizedAnchor(
-            forPanelFrame: previewPanel,
-            previewPlacement: .trailing,
-            previewVisible: true,
-            mainSurfaceWidth: 400,
-            in: mainFrame
-        )
-
-        #expect(anchor == NSPoint(x: 0.5, y: 1))
-        let reopened = panelOrigin(
-            .lastPosition,
-            mouse: .zero,
-            anchor: anchor
-        )
-        #expect(reopened == NSPoint(x: 520, y: 315))
-    }
-
-    @Test func previewAtRightEdgeOpensLeadingWithoutMovingTheMainSurface() {
-        let mainSurface = NSRect(x: 1_000, y: 200, width: 360, height: 560)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: mainFrame
-        )
-
-        #expect(expansion.placement == .leading)
-        #expect(expansion.panelFrame == NSRect(x: 679, y: 200, width: 681, height: 560))
-        let collapsedFrame = PopupPositionGeometry.mainSurfaceFrame(
-            in: expansion.panelFrame,
-            previewPlacement: expansion.placement,
-            previewVisible: true
-        )
-        #expect(collapsedFrame == mainSurface)
-    }
-
-    @Test func previewUsesTrailingWhenTheRightSideHasSpace() {
-        let mainSurface = NSRect(x: 100, y: 200, width: 360, height: 560)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: mainFrame
-        )
-
-        #expect(expansion.placement == .trailing)
-        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 681, height: 560))
-        #expect(
-            PopupPositionGeometry.mainSurfaceFrame(
-                in: expansion.panelFrame,
-                previewPlacement: expansion.placement,
-                previewVisible: true
-            ) == mainSurface
-        )
-    }
-
-    @Test func negativeOriginLeftEdgePreviewCycleUsesTrailingAndKeepsTheMainSurface() {
-        let mainSurface = NSRect(x: -1_600, y: -200, width: 360, height: 560)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: negativeOriginFrame
-        )
-
-        #expect(expansion.placement == .trailing)
-        #expect(expansion.panelFrame == NSRect(x: -1_600, y: -200, width: 681, height: 560))
-        #expect(expansion.panelFrame.minX == negativeOriginFrame.minX)
-        #expect(expansion.panelFrame.maxX <= negativeOriginFrame.maxX)
-        #expect(expansion.panelFrame.minY == negativeOriginFrame.minY)
-        #expect(expansion.panelFrame.maxY <= negativeOriginFrame.maxY)
-
-        let collapsedFrame = PopupPositionGeometry.mainSurfaceFrame(
-            in: expansion.panelFrame,
-            previewPlacement: expansion.placement,
-            previewVisible: true
-        )
-        #expect(collapsedFrame == mainSurface)
-    }
-
-    @Test func negativeOriginRightEdgePreviewCycleUsesLeadingAndKeepsTheMainSurface() {
-        let mainSurface = NSRect(x: -360, y: 240, width: 360, height: 560)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: negativeOriginFrame
-        )
-
-        #expect(expansion.placement == .leading)
-        #expect(expansion.panelFrame == NSRect(x: -681, y: 240, width: 681, height: 560))
-        #expect(expansion.panelFrame.minX >= negativeOriginFrame.minX)
-        #expect(expansion.panelFrame.maxX == negativeOriginFrame.maxX)
-        #expect(expansion.panelFrame.minY >= negativeOriginFrame.minY)
-        #expect(expansion.panelFrame.maxY == negativeOriginFrame.maxY)
-
-        let collapsedFrame = PopupPositionGeometry.mainSurfaceFrame(
-            in: expansion.panelFrame,
-            previewPlacement: expansion.placement,
-            previewVisible: true
-        )
-        #expect(collapsedFrame == mainSurface)
-    }
-
-    @Test func previewConservativelyUsesTrailingWithoutAScreen() {
-        let mainSurface = NSRect(x: 1_000, y: 200, width: 360, height: 560)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: nil
-        )
-
-        #expect(expansion.placement == .trailing)
-        #expect(expansion.panelFrame.origin == mainSurface.origin)
-    }
-
-    @Test func previewSideLeadingIsHonoredWhenTheLeftSideHasSpace() {
-        // The x 520...880 main surface from
-        // `lastPositionUsesActualMainSurfaceWhenExpandedWindowShiftedLeft`:
-        // an explicit leading preference pins the pane left (x 199...519)
-        // while preserving the main surface exactly.
-        let mainSurface = NSRect(x: 520, y: 200, width: 360, height: 560)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: mainFrame,
-            previewSide: .leading
-        )
-
-        #expect(expansion.placement == .leading)
-        #expect(expansion.panelFrame == NSRect(x: 199, y: 200, width: 681, height: 560))
-        #expect(
-            PopupPositionGeometry.mainSurfaceFrame(
-                in: expansion.panelFrame,
-                previewPlacement: expansion.placement,
-                previewVisible: true
-            ) == mainSurface
-        )
-    }
-
-    @Test func previewSideTrailingIsHonoredWhenTheRightSideHasSpace() {
-        let mainSurface = NSRect(x: 100, y: 200, width: 360, height: 560)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: mainFrame,
-            previewSide: .trailing
-        )
-
-        #expect(expansion.placement == .trailing)
-        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 681, height: 560))
-        #expect(
-            PopupPositionGeometry.mainSurfaceFrame(
-                in: expansion.panelFrame,
-                previewPlacement: expansion.placement,
-                previewVisible: true
-            ) == mainSurface
-        )
-    }
-
-    @Test func previewSideLeadingFallsBackToTrailingAtTheLeftEdge() {
-        // Leading expansion would cross the screen's left edge
-        // (100 - 321 < 0), so the preference falls back to trailing — the
-        // mirror of the automatic right-edge rule.
-        let mainSurface = NSRect(x: 100, y: 200, width: 360, height: 560)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: mainFrame,
-            previewSide: .leading
-        )
-
-        #expect(expansion.placement == .trailing)
-        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 681, height: 560))
-        #expect(
-            PopupPositionGeometry.mainSurfaceFrame(
-                in: expansion.panelFrame,
-                previewPlacement: expansion.placement,
-                previewVisible: true
-            ) == mainSurface
-        )
-    }
-
-    @Test func previewSideTrailingFallsBackToLeadingAtTheRightEdge() {
-        // Same overflow as `previewAtRightEdgeOpensLeadingWithoutMovingTheMainSurface`,
-        // but pinned by an explicit preference instead of `.automatic`.
-        let mainSurface = NSRect(x: 1_000, y: 200, width: 360, height: 560)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: mainFrame,
-            previewSide: .trailing
-        )
-
-        #expect(expansion.placement == .leading)
-        #expect(expansion.panelFrame == NSRect(x: 679, y: 200, width: 681, height: 560))
-        #expect(
-            PopupPositionGeometry.mainSurfaceFrame(
-                in: expansion.panelFrame,
-                previewPlacement: expansion.placement,
-                previewVisible: true
-            ) == mainSurface
-        )
-    }
-
-    @Test func previewBorrowsExistingSpaceBeforeExpandingAUserResizedWindow() {
-        let mainSurface = NSRect(x: 100, y: 200, width: 480, height: 640)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: mainFrame
-        )
-
-        #expect(expansion.placement == .trailing)
-        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 681, height: 640))
-        #expect(
-            PopupPositionGeometry.mainSurfaceFrame(
-                in: expansion.panelFrame,
-                previewPlacement: expansion.placement,
-                previewVisible: true,
-                mainSurfaceWidth: 360
-            ) == NSRect(x: 100, y: 200, width: 360, height: 640)
-        )
-    }
-
-    @Test func widePreviewToggleDoesNotMoveOrResizeTheWindow() {
-        let original = NSRect(x: 100, y: 200, width: 900, height: 640)
-        for side in [PreviewSidePreference.leading, .trailing] {
-            let opening = PopupPositionGeometry.openingPreviewFrame(from: original,
-                in: mainFrame, previewSide: side)
-            #expect(opening.panelFrame == original)
-            #expect(opening.placement == (side == .leading ? .leading : .trailing))
-        }
-    }
-
-    @Test func previewOpeningFitsANarrowScreenWithoutOverflow() {
-        let screen = NSRect(x: -700, y: 0, width: 700, height: 800)
-        let opening = PopupPositionGeometry.openingPreviewFrame(
-            from: NSRect(x: -650, y: 100, width: 600, height: 560), in: screen,
-            previewColumnWidth: 900)
-        #expect(screen.contains(opening.panelFrame))
-        #expect(opening.panelFrame.width == screen.width)
-    }
-
-    @Test func previewExpansionUsesAnExplicitFreeFormPreviewColumnWidth() {
-        // The same expansion rule with the divider's persisted free-form
-        // width instead of the 320 default: the panel grows by
-        // dividerWidth + previewColumnWidth and the main surface is
-        // preserved exactly.
-        let mainSurface = NSRect(x: 100, y: 200, width: 360, height: 560)
-
-        let expansion = PopupPositionGeometry.openingPreviewFrame(
-            from: mainSurface,
-            in: mainFrame,
-            previewColumnWidth: 400
-        )
-
-        #expect(expansion.placement == .trailing)
-        #expect(expansion.panelFrame == NSRect(x: 100, y: 200, width: 761, height: 560))
-        #expect(
-            PopupPositionGeometry.mainSurfaceFrame(
-                in: expansion.panelFrame,
-                previewPlacement: expansion.placement,
-                previewVisible: true
-            ) == mainSurface
-        )
-    }
-
-    @Test func lastPositionUsesActualMainSurfaceWhenExpandedWindowShiftedLeft() {
-        // Leading preview: preview x 199...519, main x 520...920. The
-        // persisted anchor follows the actual main surface, not panel.minX.
-        let previewPanel = NSRect(x: 199, y: 315, width: 721, height: 560)
-        let anchor = PopupPositionGeometry.normalizedAnchor(
-            forPanelFrame: previewPanel,
-            previewPlacement: .leading,
-            previewVisible: true,
-            mainSurfaceWidth: 400,
-            in: mainFrame
-        )
-
-        let reopened = panelOrigin(
-            .lastPosition,
-            mouse: .zero,
-            anchor: anchor
-        )
-        #expect(reopened == NSPoint(x: 520, y: 315))
-    }
+    // The preview is no longer an in-window expansion: the transient
+    // floating pane's pure side-picking and clamping math
+    // (`PopupPositionGeometry.floatingPreviewFrame`) is covered by
+    // PresentationTests/FloatingPreviewPlacementTests, and the hosted
+    // pane/panel frame proof lives in FloatingPanelFrameHostedTests.
 
     @Test func lastPositionFallsBackToCursorWithoutAnAnchor() {
         let mouse = NSPoint(x: 500, y: 800)

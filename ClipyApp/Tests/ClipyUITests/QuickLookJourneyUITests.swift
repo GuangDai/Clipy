@@ -48,8 +48,12 @@ final class QuickLookJourneyUITests: XCTestCase {
             format: "identifier BEGINSWITH %@", "clipy.history.row."
         ))
         XCTAssertTrue(waitUntil { rows.count == 1 }, app.debugDescription)
+        // Prepare the entire item before publishing a generation that the
+        // running observer can see, matching the real product paste writer.
+        let betaItem = NSPasteboardItem()
+        XCTAssertTrue(betaItem.setString(beta, forType: .string))
         pasteboard.clearContents()
-        XCTAssertTrue(pasteboard.setString(beta, forType: .string))
+        XCTAssertTrue(pasteboard.writeObjects([betaItem]))
         XCTAssertTrue(waitUntil { rows.count == 2 }, app.debugDescription)
         let alphaRow = rows.matching(NSPredicate(format: "label CONTAINS %@", alpha)).firstMatch
         let betaRow = rows.matching(NSPredicate(format: "label CONTAINS %@", beta)).firstMatch

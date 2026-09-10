@@ -107,7 +107,7 @@ struct ThumbnailMeasurementTests {
         #expect(records[1].event == .completed)
         #expect(records.allSatisfy { $0.refID == "00000000-0000-0000-0000-0000000000A1" })
         #expect(records.allSatisfy { $0.contentVersion == 3 })
-        #expect(records.allSatisfy { $0.pixelsWidth == 72 && $0.pixelsHeight == 72 })
+        #expect(records.allSatisfy { $0.pixelsWidth == 112 && $0.pixelsHeight == 112 })
         // The start event carries no segments or outcome.
         #expect(records[0].fetchMs == nil)
         #expect(records[0].rasterMs == nil)

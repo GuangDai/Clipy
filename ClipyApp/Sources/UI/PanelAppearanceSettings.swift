@@ -1,15 +1,15 @@
 /// PanelAppearanceSettings.swift — the panel's presentation preferences
-/// (row density, preview auto-open, preview side, and the row-typography
-/// pair of snippet line count and font size), the panel-chrome half of
-/// the Settings consolidation surface (docs/v2/V2-07-ux.md §6).
+/// (row density, preview auto-open, and the row-typography pair of snippet
+/// line count and font size), the panel-chrome half of the Settings
+/// consolidation surface (docs/v2/V2-07-ux.md §6).
 ///
 /// These are framework-neutral immutable snapshots with product defaults,
 /// not policy: every UserDefaults read fails open to the default value, so
 /// a missing or unrecognized persisted entry can never break the panel.
 ///
 /// Access split (GOV-3 contraction; docs/v2/V2-07-ux.md §6): the snapshot
-/// type, its `load(from:)` seam, `previewSide`, and the default `init()` the
-/// public `HistoryPanelView` initializer's default argument evaluates in the
+/// type, its `load(from:)` seam, and the default `init()` the public
+/// `HistoryPanelView` initializer's default argument evaluates in the
 /// caller's module are public — that is exactly the configuration vocabulary
 /// the ClipyApp composition root names. The density/auto-open/typography
 /// half of the vocabulary is package: the Settings appearance tab that
@@ -76,23 +76,15 @@ enum HistoryRowFontSize: String, CaseIterable, Sendable {
     case large
 }
 
-/// The preferred preview-pane side. `automatic` keeps the composition
-/// root's screen-geometry choice (today's `PreviewPlacement` behavior);
-/// `leading` and `trailing` pin the pane to one side.
-enum PreviewSidePreference: String, CaseIterable, Sendable {
-    case automatic
-    case leading
-    case trailing
-}
-
 /// One immutable panel-appearance snapshot plus its UserDefaults
 /// persistence. Each key is independent: an absent or unrecognized value
 /// falls back to that preference's product default, never to a neighbor's.
 ///
-/// The retired preview-width-stop preference lived under
-/// "clipy.appearance.previewWidth"; the free-drag divider replaced it with
-/// `PanelGeometry.previewColumnWidthDefaultsKey`. A leftover value in an
-/// upgraded user's defaults is simply never read, so no migration is needed.
+/// The retired preview-side preference lived under
+/// "clipy.appearance.previewSide" and the retired divider preview width
+/// under "clipy.panel.previewColumnWidth"; the floating preview pane
+/// replaced both. Leftover values in an upgraded user's defaults are simply
+/// never read, so no migration is needed.
 struct PanelAppearanceSettings: Equatable, Sendable {
     /// Package (GOV-3): `load(from:)` below is the only cross-module reader
     /// of these keys and the Settings tab stores through the same module —
@@ -104,13 +96,11 @@ struct PanelAppearanceSettings: Equatable, Sendable {
         "clipy.appearance.rowFontSize"
     static let previewAutoOpenDefaultsKey =
         "clipy.appearance.previewAutoOpen"
-    static let previewSideDefaultsKey = "clipy.appearance.previewSide"
 
     var rowDensity: HistoryRowDensity
     var snippetLineCount: HistorySnippetLineCount
     var rowFontSize: HistoryRowFontSize
     var isPreviewAutoOpenEnabled: Bool
-    var previewSide: PreviewSidePreference
 
     /// The public default snapshot. The public `HistoryPanelView`
     /// initializer's `appearance: PanelAppearanceSettings = ...` default
@@ -123,8 +113,7 @@ struct PanelAppearanceSettings: Equatable, Sendable {
             rowDensity: .compact,
             snippetLineCount: .automatic,
             rowFontSize: .medium,
-            isPreviewAutoOpenEnabled: true,
-            previewSide: .automatic
+            isPreviewAutoOpenEnabled: true
         )
     }
 
@@ -135,14 +124,12 @@ struct PanelAppearanceSettings: Equatable, Sendable {
         rowDensity: HistoryRowDensity = .compact,
         snippetLineCount: HistorySnippetLineCount = .automatic,
         rowFontSize: HistoryRowFontSize = .medium,
-        isPreviewAutoOpenEnabled: Bool = true,
-        previewSide: PreviewSidePreference = .automatic
+        isPreviewAutoOpenEnabled: Bool = true
     ) {
         self.rowDensity = rowDensity
         self.snippetLineCount = snippetLineCount
         self.rowFontSize = rowFontSize
         self.isPreviewAutoOpenEnabled = isPreviewAutoOpenEnabled
-        self.previewSide = previewSide
     }
 
     /// Loads the persisted preferences. Raw strings no case recognizes
@@ -171,14 +158,10 @@ struct PanelAppearanceSettings: Equatable, Sendable {
         ) as? Bool {
             settings.isPreviewAutoOpenEnabled = autoOpen
         }
-        if let rawSide = defaults.string(forKey: previewSideDefaultsKey),
-           let side = PreviewSidePreference(rawValue: rawSide) {
-            settings.previewSide = side
-        }
         return settings
     }
 
-    /// Persists the snapshot under the five keys above. Package (GOV-3):
+    /// Persists the snapshot under the four keys above. Package (GOV-3):
     /// the Settings appearance tab owns the store; the composition root only
     /// `load(from:)`s.
     func store(to defaults: UserDefaults) {
@@ -195,6 +178,5 @@ struct PanelAppearanceSettings: Equatable, Sendable {
             isPreviewAutoOpenEnabled,
             forKey: Self.previewAutoOpenDefaultsKey
         )
-        defaults.set(previewSide.rawValue, forKey: Self.previewSideDefaultsKey)
     }
 }

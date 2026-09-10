@@ -9,19 +9,20 @@ the list.
 
 ## Information hierarchy
 
-- Default browsing surface: 360 × 420 pt; minimum 360 × 420 pt.
-  Existing explicit size preferences remain meaningful. The preview retains
-  its independently adjustable 320 pt default width.
-- Compact rows: 20 pt content/type slot, regular system body title, 2 pt vertical
-  padding plus 2 pt list insets. Comfortable density uses a 28 pt slot.
+- Default browsing width: 360 pt, user-resizable with no forced minimum.
+  The default 420 pt height is a ceiling, never a minimum. Both the list and
+  the independent 340 pt floating preview fit their own content.
+- Compact rows: 16 pt content/type slot, 13 pt system title, 2 pt vertical
+  padding plus 2 pt list insets: 24 pt total. Comfortable density uses a 24 pt slot.
   Search snippets appear only when they provide body-match evidence.
 - Row accessories: multiple-source indicator and pin ordinal. Source icons,
   bundle identifiers, timestamps and occurrence counters leave the list.
 - Search: one stable field and two 24 pt icon controls. Search mode remains
   available through the menu and Command-1/2/3; active filtering and nondefault
-  search mode use the accent color. Counts remain in the footer.
-- Expanded pane: content first, then latest application icon/name and total
-  copies. The native information popover contains last-copy time and (for
+  search mode use the accent color. Counts and infrequent actions live in More.
+- Expanded pane: content first, then latest application icon/name, repeat
+  count when greater than one, and direct Copy/Pin controls. The native
+  information popover contains last-copy time and (for
   repeats) first-copy time. Multiple sources have a closed disclosure with
   per-application counts and first/last times; it scrolls within 140 pt. Full bundle identity and
   precise timestamps remain available in help.
@@ -84,10 +85,37 @@ UI code follows the current app-owned layout under `ClipyApp/Sources/UI`;
 the native drag bridge, adaptive settings, removable filter summary and
 preview information dismissal behavior from master are retained.
 
-Implementation is in progress. This Linux workspace has no Swift/Xcode or
-WindowServer; the native build, storage tests and running-app visual checks
-have not run. The existing correctness workflow remains the validation lane.
-Local checks covered actual source pagination SQL/index use, source
-upsert/rollback/cascade SQL, and icon dimensions and alpha. Native validation
-runs through the existing macOS correctness workflow; local checks are not
-substitutes for Swift or running-app tests.
+This Linux workspace has no Swift/Xcode or WindowServer. Native validation
+runs through the existing macOS correctness workflow, including real
+short/long-content geometry and direct-action journeys. Test screenshots are
+exported with the existing application artifacts for visual inspection.
+
+## Addendum — 2026-09-10
+
+The in-window 320 pt preview column is superseded by a transient floating
+340 pt pane beside the panel; the previewSide and preview-column-width
+settings are removed. Panel height now fits the displayed content, with
+the persisted height as the ceiling rather than a fixed size. Image rows
+render 44/56 pt thumbnails (compact/comfortable).
+
+User correction, 2026-09-10: no minimum panel or preview height, and no forced
+minimum browsing width. The saved size is a ceiling; the content determines
+the footprint. The floating preview measures its rendered content separately
+from the main list. Short text, unavailable states and small images shrink;
+long text and references scroll only when they reach the saved/screen ceiling.
+Metadata and frequently used Copy/Pin actions stay in a compact footer.
+Dragging only the window's width preserves the saved height ceiling; a short
+content-fitted height must never silently become a new user preference.
+
+The local Maccy `HistoryRowLayout`, `ListItemView`, `HeaderView`,
+`PreviewItemView`, `ToolbarView`, `ContentView` and `Popup` informed this pass:
+compact 24 pt text rows, stable thumbnail geometry, short control strips and
+secondary information revealed on demand. Maccy's percentage-height floor is
+intentionally not adopted. A single list section has no redundant heading;
+Pinned/Recent headings appear only when they distinguish two visible groups.
+The search field and adjacent controls share a 24 pt line. Empty/error states
+use compact messages, not large placeholder illustrations.
+Keyboard selection and explicit row clicks update an open preview immediately. Hover selection
+dwells before switching content; entering the preview cancels a crossed row's
+pending demand and restores selection to the previewed item. Copy, Pin and
+Information therefore operate on the content the user approached.

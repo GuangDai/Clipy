@@ -30,7 +30,6 @@
 "Launch at Login is unavailable for this app." = "Launch at Login is unavailable for this app.";
 "The Launch at Login setting couldn't be changed." = "The Launch at Login setting couldn't be changed.";
 "Panel position" = "Panel position";
-"Preview side" = "Preview side";
 "Open preview automatically" = "Open preview automatically";
 "Reset Panel Size to Default" = "Reset Panel Size to Default";
 "Panel" = "Panel";
@@ -39,9 +38,6 @@
 "Row density" = "Row density";
 "Snippet lines" = "Snippet lines";
 "Font size" = "Font size";
-"Automatic" = "Automatic";
-"Left" = "Left";
-"Right" = "Right";
 "Compact" = "Compact";
 "Comfortable" = "Comfortable";
 "Auto" = "Auto";

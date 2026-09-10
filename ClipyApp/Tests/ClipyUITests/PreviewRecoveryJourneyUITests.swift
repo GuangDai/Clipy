@@ -1,8 +1,10 @@
 /// PreviewRecoveryJourneyUITests.swift — Card 9D/Card 15 running-app
-/// acceptance for the real preview column. The DEBUG launch switch replaces
+/// acceptance for the floating preview pane. The DEBUG launch switch replaces
 /// only one loader-local details result; Retry, authoritative History read,
 /// ContentPreview rendering, SwiftUI publication, and keyboard routing remain
-/// production paths.
+/// production paths. The pane is a separate child window that never becomes
+/// key, so its content is queried app-wide and ⌘R reaches it through the
+/// main panel's republished shortcut.
 import AppKit
 import XCTest
 
@@ -165,16 +167,13 @@ final class PreviewRecoveryJourneyUITests: XCTestCase {
             diagnostic(app, context: "captured preview row")
         )
 
-        // The selected row normally opens Preview through the production
-        // 200 ms dwell. If it has not yet fired, use the product's documented
-        // Control-Space toggle rather than a DEBUG summon method.
+        // The selected row opens the floating preview pane through the
+        // production 200 ms dwell; there is no manual preview chord anymore
+        // (the pane dismisses through Esc and re-arms on selection change).
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
-        if !preview.waitForExistence(timeout: 3) {
-            app.typeKey(.space, modifierFlags: .control)
-        }
         XCTAssertTrue(
-            preview.waitForExistence(timeout: 5),
-            diagnostic(app, context: "preview column")
+            preview.waitForExistence(timeout: 10),
+            diagnostic(app, context: "floating preview pane")
         )
         return app
     }

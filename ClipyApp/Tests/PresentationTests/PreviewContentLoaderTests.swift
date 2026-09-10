@@ -96,16 +96,15 @@ struct PreviewContentLoaderTests {
     }
 #endif
 
-    /// The pane already holds rendered A while a different selection B is
-    /// dwelling. B's revision changes dwell ownership but not the exact
-    /// `.task` target. This proves the stable target and retained loader
-    /// result; SwiftUI instance identity itself is a source-wiring obligation.
-    @Test func pendingRevisionKeepsTheAppliedPreviewAndItsLoadTarget() async throws {
+    /// An open pane follows selection immediately, including a revision
+    /// receipt that arrives before the selected row's observation update.
+    @Test func openSelectionRetargetLoadsItsLatestRevision() async throws {
         let a = reference("00000000-0000-0000-0000-0000000001A8", version: 1)
         let b = reference("00000000-0000-0000-0000-0000000001B8", version: 1)
         let revisedB = HistoryItemReference(id: b.id, contentVersion: ContentVersion(rawValue: 2))
         let history = PausablePreviewHistory()
         await history.scriptPayload(payload(for: a, text: "already visible A"))
+        await history.scriptPayload(payload(for: revisedB, text: "revised B"))
         let loader = PreviewContentLoader(history: history)
         let pane = PreviewPaneState(autoOpenDelay: .seconds(3_600))
         defer { pane.panelClosed() }
@@ -123,17 +122,23 @@ struct PreviewContentLoaderTests {
                 fixtureRow(id: b.id.rawValue.uuidString, title: "B"),
             ]
         )
-        #expect(selection.previewTarget(previewedItem: pane.previewedItem) == a)
+        #expect(selection.previewTarget(previewedItem: pane.previewedItem) == b)
         pane.purge(.revision(old: b, new: revisedB))
 
         #expect(pane.purgeGeneration == 1)
-        #expect(selection.previewTarget(previewedItem: pane.previewedItem) == a)
-        #expect(loader.requestedItem == a)
-        #expect(loader.phase == .content(.text("already visible A")))
-        #expect(await history.payloadRequests == [a.id])
+        let target = selection.previewTarget(previewedItem: pane.previewedItem)
+        try #require(target == revisedB)
+        let revisedLoad = Task { await loader.load(item: target) }
+        try #require(await pollUntil { await history.payloadRequests.count == 2 })
+        #expect(loader.requestedItem == revisedB)
+        #expect(loader.phase == .loading)
+        await history.resumePayload(for: b.id)
+        await revisedLoad.value
+        #expect(loader.phase == .content(.text("revised B")))
+        #expect(await history.payloadRequests == [a.id, b.id])
     }
 
-    @Test func independentlyPreviewedItemAdvancesWhileAnotherRowIsSelected() async throws {
+    @Test func selectedPreviewRevisionRejectsLateContentAndRemovalClearsWithoutReading() async throws {
         let a1 = reference("00000000-0000-0000-0000-0000000001A9", version: 1)
         let a2 = HistoryItemReference(id: a1.id, contentVersion: ContentVersion(rawValue: 2))
         let b = reference("00000000-0000-0000-0000-0000000001B9", version: 1)
@@ -149,8 +154,8 @@ struct PreviewContentLoaderTests {
         defer { pane.panelClosed() }
         pane.isAutoOpenPreferenceEnabled = false
         pane.togglePreview(for: a1)
-        pane.handleSelectionChange(b)
-        let initialSelection = PreviewSelectionResolution.resolve(selectedID: b.id, rows: oldRows)
+        pane.handleSelectionChange(a1)
+        let initialSelection = PreviewSelectionResolution.resolve(selectedID: a1.id, rows: oldRows)
         let history = OverlappingPreviewHistory()
         let loader = PreviewContentLoader(history: history)
         let olderLoad = Task {
@@ -158,13 +163,13 @@ struct PreviewContentLoaderTests {
         }
         try #require(await pollUntil { await history.requestCount == 1 })
 
-        let latestSelection = PreviewSelectionResolution.resolve(selectedID: b.id, rows: latestRows)
+        let latestSelection = PreviewSelectionResolution.resolve(selectedID: a1.id, rows: latestRows)
         let target = try #require(latestSelection.previewTarget(previewedItem: pane.previewedItem))
         #expect(latestSelection != initialSelection)
-        #expect(latestSelection.reference == b)
-        #expect(target == a2)
+        #expect(latestSelection.reference == a2)
+        try #require(target == a2)
         // HistoryPanelView's resolved-target callback records the new visible
-        // version even though the list's selected B reference did not change.
+        // version even though the list's selected ID did not change.
         pane.refreshOpenPreview(target)
         let newerLoad = Task { await loader.load(item: target) }
         try #require(await pollUntil { await history.requestCount == 2 })
@@ -177,11 +182,16 @@ struct PreviewContentLoaderTests {
         #expect(loader.phase == .content(.text("current A")))
         #expect(pane.previewedItem == a2)
         #expect(initialSelection.previewTarget(previewedItem: pane.previewedItem) == a2)
-        let removedA = PreviewSelectionResolution.resolve(selectedID: b.id, rows: [oldRows[1]])
-        await loader.load(item: removedA.previewTarget(previewedItem: pane.previewedItem))
-        #expect(removedA.reference == b)
+        let removedA = PreviewSelectionResolution.resolve(selectedID: a1.id, rows: [oldRows[1]])
+        let removedTarget = removedA.previewTarget(previewedItem: pane.previewedItem)
+        // A non-nil target would start another deliberately suspended read.
+        // Fail at the violated precondition instead of hanging the entire lane.
+        try #require(removedTarget == nil)
+        await loader.load(item: removedTarget)
+        #expect(removedA.reference == nil)
         #expect(loader.requestedItem == nil)
         #expect(loader.phase == .unsupported)
+        #expect(await history.requestCount == 2)
     }
 
     /// A→B selection with A completing LATE: B publishes; A's late result is

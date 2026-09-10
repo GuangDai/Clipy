@@ -59,7 +59,9 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(panel.waitForExistence(timeout: 10))
 
-        let preview = panel.descendants(matching: .any)["clipy.preview.root"]
+        // The preview is the floating child pane now — a separate window, so
+        // its queries scope to the app, never to the main panel.
+        let preview = app.descendants(matching: .any)["clipy.preview.root"]
         let notice = preview.descendants(matching: .any)["clipy.preview.truncation-notice"]
         XCTAssertTrue(waitUntil(timeout: 10) {
             notice.exists && notice.isHittable

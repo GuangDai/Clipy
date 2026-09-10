@@ -36,17 +36,13 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         ))
         XCTAssertTrue(waitUntil { rows.count == 1 }, app.debugDescription)
 
-        // Set the real preference so the compact view remains a list while
-        // selecting its image. No fixture-only preview visibility is injected.
+        // The preview is now a transient FLOATING pane beside the panel: it
+        // never changes the panel's width, so the compact/wide captures need
+        // no preview preference at all. Only the panel position is set here.
         app.typeKey(",", modifierFlags: .command)
         let appearance = app.buttons["clipy.settings.category.appearance"]
         XCTAssertTrue(appearance.waitForExistence(timeout: 10), app.debugDescription)
         appearance.click()
-        let autoOpen = app.switches["clipy.settings.appearance.preview-auto-open"]
-        XCTAssertTrue(autoOpen.waitForExistence(timeout: 5), app.debugDescription)
-        let wasAutoOpen = (autoOpen.value as? Int) == 1
-        if wasAutoOpen { autoOpen.click() }
-        XCTAssertTrue(waitUntil { (autoOpen.value as? Int) == 0 }, app.debugDescription)
         let position = app.descendants(matching: .any)["clipy.settings.appearance.panel-position"]
         XCTAssertTrue(position.waitForExistence(timeout: 5), app.debugDescription)
         let appearanceForm = app.scrollViews.containing(
@@ -57,7 +53,6 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         let center = position.menuItems["At Screen Center"]
         XCTAssertTrue(center.waitForExistence(timeout: 5), app.debugDescription)
         center.click()
-        SettingsJourneyControls.scroll(autoOpen, into: appearanceForm, app: app)
         let settingsWindow = app.windows.containing(
             .button, identifier: "clipy.settings.category.appearance"
         ).firstMatch
@@ -81,11 +76,11 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil { rows.count == 3 }, app.debugDescription)
         let imageRow = try XCTUnwrap(rows.allElementsBoundByIndex.first { !previousIDs.contains($0.identifier) })
         imageRow.click()
-        let preview = panel.descendants(matching: .any)["clipy.preview.root"]
-        if preview.exists {
-            app.typeKey(.space, modifierFlags: .control)
-            XCTAssertTrue(waitUntil { !preview.exists }, app.debugDescription)
-        }
+        // The preview is the floating child pane now — a separate window, so
+        // scope its content queries to the app, not the panel. Auto-open
+        // dwells from the selection; the pane never touches the panel's
+        // width, so the compact/wide captures need no preview juggling.
+        let preview = app.descendants(matching: .any)["clipy.preview.root"]
 
         resize(panel, toWidth: 400)
         XCTAssertTrue(waitUntil { abs(panel.frame.width - 400) <= 4 && rows.count == 3 }, app.debugDescription)
@@ -96,15 +91,18 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         attach(panel, named: "History — Wide")
 
         imageRow.click()
-        app.typeKey(.space, modifierFlags: .control)
         let image = preview.descendants(matching: .any)["clipy.preview.image"]
         XCTAssertTrue(waitUntil { preview.exists && image.exists && image.isHittable }, app.debugDescription)
-        attach(panel, named: "History — Image preview")
+        // The floating pane sits beside the panel: capture the whole app so
+        // the attachment shows both windows.
+        attach(app, named: "History — Floating image preview")
         let information = preview.buttons["clipy.preview.information"]
         XCTAssertTrue(information.exists && information.isHittable, app.debugDescription)
         information.click()
         let informationContent = app.descendants(matching: .any)["clipy.preview.information.content"]
         XCTAssertTrue(informationContent.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(image.exists,
+                      "Crossing another row to open Information must not replace the selected image.\n\(app.debugDescription)")
         attach(app, named: "Preview — Information popover")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil { !informationContent.exists }, app.debugDescription)
@@ -119,15 +117,6 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         let pin = details.buttons["clipy.details.pin-toggle"]
         XCTAssertTrue(waitUntil { pin.exists && pin.isEnabled }, app.debugDescription)
         attach(panel, named: "Details — Image and actions")
-
-        // Restore the preference through its user-facing control for the next
-        // journey on this runner; all captures live only in our temporary store.
-        app.typeKey(",", modifierFlags: .command)
-        XCTAssertTrue(appearance.waitForExistence(timeout: 10), app.debugDescription)
-        appearance.click()
-        XCTAssertTrue(autoOpen.waitForExistence(timeout: 5), app.debugDescription)
-        if ((autoOpen.value as? Int) == 1) != wasAutoOpen { autoOpen.click() }
-        XCTAssertTrue(waitUntil { ((autoOpen.value as? Int) == 1) == wasAutoOpen }, app.debugDescription)
     }
 
     @MainActor

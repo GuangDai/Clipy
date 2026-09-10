@@ -2,82 +2,72 @@
 /// `PopupPosition.origin(size:statusBarButton:)` + `NSScreen+ForPopup`
 /// replicated), written as a pure function over explicit inputs so the
 /// geometry is testable headlessly without an `NSScreen`/`NSStatusItem`.
-/// The AppKit-side callers (AppDelegate/FloatingPanel) gather the inputs;
-/// the mode value itself comes from PresentationUI's `PopupPositionMode`.
+/// The AppKit-side callers (AppDelegate/FloatingPanel/FloatingPreviewPanel)
+/// gather the inputs; the mode value itself comes from PresentationUI's
+/// `PopupPositionMode`.
 import AppKit
 import Foundation
 
+/// Which side of the main panel displays the floating preview pane.
+/// `PopupPositionGeometry.floatingPreviewFrame` chooses this from screen
+/// geometry; `FloatingPreviewPanel` applies it without ever resizing the
+/// main panel.
+enum PreviewPlacement: Equatable, Sendable {
+    case leading
+    case trailing
+}
+
 /// Pure panel-origin geometry for `PopupPositionMode` (Maccy
 /// `PopupPosition.origin` semantics, plus a uniform visible-frame clamp so
-/// no mode can spill the panel off the active screen).
+/// no mode can spill the panel off the active screen), plus the floating
+/// preview pane's beside-the-panel placement.
 enum PopupPositionGeometry {
 
-    /// Opens a preview within existing window space before growing toward
-    /// the preferred side. Compact windows retain their list width; wider
-    /// windows lend surplus space above the default comfortable list width.
-    /// Screen fitting is transient and never changes persisted preferences.
-    static func openingPreviewFrame(
-        from mainSurfaceFrame: NSRect,
+    /// The floating preview pane's frame beside the presented main panel
+    /// (the redesign's transient preview: fixed width, the main panel's
+    /// measured content height, top edges aligned when the screen allows,
+    /// never a main-panel resize).
+    /// The pane goes on the trailing side when the screen's visible frame
+    /// has room for width + gap there, otherwise the leading side; the
+    /// result is clamped into the visible frame either way. A `nil` visible
+    /// frame conservatively picks trailing without a clamp.
+    static func floatingPreviewFrame(
+        beside mainPanelFrame: NSRect,
         in screenVisibleFrame: NSRect?,
-        previewSide: PreviewSidePreference = .automatic,
-        previewColumnWidth: CGFloat = PanelGeometry.previewWidth
-    ) -> (panelFrame: NSRect, placement: PreviewPlacement) {
-        // Use a wide window's existing space first. A compact window grows
-        // only enough to keep a comfortable list beside the preferred pane.
-        let paneWidth = PanelGeometry.dividerWidth + PanelGeometry.clampedPreviewColumnWidth(previewColumnWidth)
-        let fitsExistingWidth = mainSurfaceFrame.width >= PanelGeometry.minimumContentWidth + paneWidth
-        let desiredWidth = fitsExistingWidth ? mainSurfaceFrame.width
-            : min(mainSurfaceFrame.width, PanelGeometry.contentWidth) + paneWidth
-        let fittedWidth = min(desiredWidth, screenVisibleFrame?.width ?? desiredWidth)
-        let previewExtension = max(0, fittedWidth - mainSurfaceFrame.width)
-        var expandedFrame = mainSurfaceFrame
-        expandedFrame.size.width = fittedWidth
-
-        let trailingFits: Bool
-        let leadingFits: Bool
-        if let screenVisibleFrame {
-            trailingFits = expandedFrame.maxX <= screenVisibleFrame.maxX
-            leadingFits = mainSurfaceFrame.minX - previewExtension
-                >= screenVisibleFrame.minX
-        } else {
-            trailingFits = true
-            leadingFits = true
-        }
+        previewWidth: CGFloat = PanelGeometry.floatingPreviewWidth,
+        previewHeight: CGFloat? = nil,
+        gap: CGFloat = PanelGeometry.floatingPreviewGap
+    ) -> (frame: NSRect, placement: PreviewPlacement) {
+        let desiredHeight = previewHeight ?? mainPanelFrame.height
+        let size = NSSize(
+            width: previewWidth,
+            height: screenVisibleFrame.map { min(desiredHeight, $0.height) } ?? desiredHeight
+        )
+        let trailingX = mainPanelFrame.maxX + gap
+        let leadingX = mainPanelFrame.minX - gap - previewWidth
 
         let placement: PreviewPlacement
-        switch previewSide {
-        case .automatic, .trailing:
-            placement = trailingFits ? .trailing : .leading
-        case .leading:
-            placement = leadingFits ? .leading : .trailing
-        }
-
-        if placement == .leading {
-            expandedFrame.origin.x -= previewExtension
-        }
         if let screenVisibleFrame {
-            expandedFrame.origin = clamped(expandedFrame.origin, size: expandedFrame.size, into: screenVisibleFrame)
+            placement = trailingX + previewWidth <= screenVisibleFrame.maxX
+                ? .trailing
+                : .leading
+        } else {
+            placement = .trailing
         }
-        return (expandedFrame, placement)
-    }
 
-    /// Resolves the stable history column's real screen frame from the panel
-    /// frame and the same placement value used by HistoryPanelView.
-    static func mainSurfaceFrame(
-        in panelFrame: NSRect,
-        previewPlacement: PreviewPlacement,
-        previewVisible: Bool,
-        mainSurfaceWidth: CGFloat = PanelGeometry.contentWidth
-    ) -> NSRect {
-        let leadingWidth = previewVisible && previewPlacement == .leading
-            ? panelFrame.width - mainSurfaceWidth
-            : 0
-        return NSRect(
-            x: panelFrame.minX + leadingWidth,
-            y: panelFrame.minY,
-            width: mainSurfaceWidth,
-            height: panelFrame.height
+        // Top edges align before the screen clamp. A short browsing panel
+        // must not compress the independent preview's controls and content.
+        var frame = NSRect(
+            origin: NSPoint(
+                x: placement == .trailing ? trailingX : leadingX,
+                y: mainPanelFrame.maxY - size.height
+            ),
+            size: size
         )
+        if let screenVisibleFrame {
+            frame.origin = clamped(frame.origin, size: size, into: screenVisibleFrame)
+        }
+        return (frame, placement)
     }
 
     /// Computes the panel's top-left screen-space origin (AppKit window
@@ -87,8 +77,7 @@ enum PopupPositionGeometry {
     /// - Parameters:
     ///   - mode: the placement mode (status-item clicks pass `.statusItem`
     ///     directly, like Maccy's `performStatusItemClick`).
-    ///   - panelSize: the panel's full size (preview column included when
-    ///     open).
+    ///   - panelSize: the panel's full size.
     ///   - statusItemButtonScreenFrame: the status-item button's frame in
     ///     screen coordinates; `nil` when unavailable (falls back to
     ///     `.cursor`, Maccy's behavior).
@@ -97,7 +86,7 @@ enum PopupPositionGeometry {
     ///     Menu-bar and Dock points belong to the full frame, even though the
     ///     resulting panel must fit within that screen's visible frame.
     ///   - lastPositionAnchor: the persisted normalized anchor (top-middle
-    ///     of the stable main surface within its screen's visible frame) for
+    ///     of the panel within its screen's visible frame) for
     ///     `.lastPosition`; `nil` falls back to `.cursor`.
     static func origin(
         for mode: PopupPositionMode,
@@ -134,8 +123,8 @@ enum PopupPositionGeometry {
             guard let anchor = lastPositionAnchor else {
                 return cursorOrigin(panelSize: panelSize, mouseLocation: mouseLocation, frame: targetFrame)
             }
-            // The anchor is the stable main surface's TOP-MIDDLE point. A
-            // main-only reopen makes that surface identical to the panel.
+            // The anchor is the panel's TOP-MIDDLE point within its screen's
+            // visible frame.
             let raw = NSPoint(
                 x: targetFrame.minX + targetFrame.width * anchor.x - panelSize.width / 2,
                 y: targetFrame.minY + targetFrame.height * anchor.y - panelSize.height
@@ -178,29 +167,18 @@ enum PopupPositionGeometry {
     }
 
     /// The normalized (0…1) anchor persisted for `.lastPosition` — the
-    /// stable main surface's top-middle point within its screen's visible
-    /// frame (`mainSurfaceWidth` carries the live, possibly user-resized
-    /// browsing-column width). The expanded window may shift at a screen
-    /// edge, but transient preview width must not move a later main-only
-    /// reopen (review Card 9F).
+    /// panel's top-middle point within its screen's visible frame. The
+    /// transient floating preview never shares this frame, so the anchor
+    /// always describes the whole panel.
     static func normalizedAnchor(
         forPanelFrame panelFrame: NSRect,
-        previewPlacement: PreviewPlacement,
-        previewVisible: Bool,
-        mainSurfaceWidth: CGFloat,
         in screenVisibleFrame: NSRect
     ) -> NSPoint {
         guard screenVisibleFrame.width > 0, screenVisibleFrame.height > 0 else {
             return NSPoint(x: 0.5, y: 1)
         }
-        let mainSurface = mainSurfaceFrame(
-            in: panelFrame,
-            previewPlacement: previewPlacement,
-            previewVisible: previewVisible,
-            mainSurfaceWidth: mainSurfaceWidth
-        )
         return NSPoint(
-            x: (mainSurface.midX - screenVisibleFrame.minX)
+            x: (panelFrame.midX - screenVisibleFrame.minX)
                 / screenVisibleFrame.width,
             y: (panelFrame.maxY - screenVisibleFrame.minY) / screenVisibleFrame.height
         )

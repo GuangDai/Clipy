@@ -517,6 +517,12 @@ struct HistoryPreviewView: View {
     private let selectionSource: SelectionSource
 
     private let sourceIcons: SourceIconStore?
+    private var maximumHeight: CGFloat? = nil
+    @State private var contentWidth: CGFloat = PanelGeometry.floatingPreviewWidth
+    @State private var metadataHeight: CGFloat = 0
+    @State private var fileHeaderHeight: CGFloat = 0
+    @State private var imageFooterHeight: CGFloat = 0
+    @State private var textNoticeHeight: CGFloat = 0
     @State private var loader: PreviewContentLoader
     @State private var retryGeneration = 0
     @State private var fileConfirmationPresented = false
@@ -543,10 +549,16 @@ struct HistoryPreviewView: View {
     }
 
     /// Standalone entry point: PreviewPaneState owns the exact target.
-    init(viewState: HistoryViewState, previewState: PreviewPaneState, sourceIcons: SourceIconStore? = nil) {
+    init(
+        viewState: HistoryViewState,
+        previewState: PreviewPaneState,
+        sourceIcons: SourceIconStore? = nil,
+        maximumHeight: CGFloat? = nil
+    ) {
         self.viewState = viewState
         self.previewState = previewState
         self.sourceIcons = sourceIcons
+        self.maximumHeight = maximumHeight
         selectionSource = .paneState
         _loader = State(
             initialValue: PreviewContentLoader(
@@ -619,6 +631,12 @@ struct HistoryPreviewView: View {
         return viewState.rows.first { $0.item == targetItem }
     }
 
+    private var bodyMaximumHeight: CGFloat? {
+        maximumHeight.map { max(0, $0 - metadataHeight - fileHeaderHeight) }
+    }
+
+    private var flexibleHeight: CGFloat? { maximumHeight == nil ? .infinity : nil }
+
     var body: some View {
         VStack(spacing: 0) {
             if loader.requestedItem == targetItem, let file = loader.loadedFileReference {
@@ -648,18 +666,28 @@ struct HistoryPreviewView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 8)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height + 1 } action: {
+                    fileHeaderHeight = $0
+                }
+                .onDisappear { fileHeaderHeight = 0 }
                 Divider()
             }
             previewBody
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: flexibleHeight)
                 .layoutPriority(1)
             if PreviewFooterMetadata(item: targetItem, row: observedRow) != nil {
-                Divider().opacity(0.5)
-                metadataBar
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
+                VStack(spacing: 0) {
+                    Divider().opacity(0.5)
+                    metadataBar
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { metadataHeight = $0 }
+                .onDisappear { metadataHeight = 0 }
             }
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
         // One load per exact reference, explicit page choice, or retry; the loader's fence
         // discards a late result, so a superseded selection never renders
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
@@ -677,6 +705,29 @@ struct HistoryPreviewView: View {
             previewState.isInformationPresented = false
             loader.purgePreview(purge.scope, isPinned: observedRow?.pinnedPosition != nil)
             if loader.fileLoadConfirmation == nil { fileConfirmationPresented = false }
+        }
+        // The floating pane is never key, so its Retry button's ⌘R
+        // shortcut cannot fire there; the main panel republishes the chord
+        // through the pane state, applied exactly like the button.
+        .onChange(of: previewState.previewRetryRequestGeneration) { _, _ in
+            if loader.phase == .failed, loader.canRetryFailure {
+                retryGeneration += 1
+            }
+        }
+        // The same republish covers the PDF pager's ⌥⌘←/→ chords; the
+        // request is applied exactly like the pager buttons, so
+        // `selectPDFPage`'s own bounds/file guards keep an out-of-range
+        // step inert.
+        .onChange(of: previewState.previewPagerRequestGeneration) { _, _ in
+            guard let page = loader.pdfPageNumber,
+                  loader.pdfPageCount != nil
+            else { return }
+            switch previewState.previewPagerRequestDirection {
+            case .previous:
+                selectPDFPage(page - 1)
+            case .next:
+                selectPDFPage(page + 1)
+            }
         }
         .onDisappear {
             previewState.isInformationPresented = false
@@ -784,14 +835,22 @@ struct HistoryPreviewView: View {
                             // Keep a small image at its natural size and let
                             // larger artifacts shrink into the available pane.
                             .frame(maxWidth: CGFloat(raster.width), maxHeight: CGFloat(raster.height))
-                            .padding(16)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .frame(height: bodyMaximumHeight.map {
+                                min(
+                                    CGFloat(raster.height),
+                                    max(0, contentWidth - 24) * CGFloat(raster.height) / CGFloat(raster.width),
+                                    max(0, $0 - imageFooterHeight - 24)
+                                )
+                            })
+                            .padding(12)
+                            .frame(maxWidth: .infinity, maxHeight: flexibleHeight)
                             .accessibilityIdentifier("clipy.preview.image")
-                        if let page = loader.pdfPageNumber, let count = loader.pdfPageCount {
-                            pdfNavigation(page: page, count: count)
-                        }
-                        if let notice = loader.appliedRasterNotice(locale: locale) {
-                            Text(notice)
+                        VStack(spacing: 0) {
+                            if let page = loader.pdfPageNumber, let count = loader.pdfPageCount {
+                                pdfNavigation(page: page, count: count)
+                            }
+                            if let notice = loader.appliedRasterNotice(locale: locale) {
+                                Text(notice)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(2)
@@ -802,26 +861,29 @@ struct HistoryPreviewView: View {
                                 .accessibilityIdentifier(loader.pdfPageCount == nil
                                     ? "clipy.preview.multi-image-notice"
                                     : "clipy.preview.pdf-page-notice")
+                            }
                         }
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { imageFooterHeight = $0 }
                     }
                 } else {
                     failedBody
                 }
             case .content(.text(let text, let wasTruncated)):
                 VStack(spacing: 0) {
-                    ScrollView(.vertical) {
+                    ContentFittingScrollView(maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) }) {
                         Text(verbatim: text)
                             .font(.body)
-                            .lineSpacing(4)
+                            .lineSpacing(2)
                             .textSelection(.enabled)
                             .frame(maxWidth: 720, alignment: .leading)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(16)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(12)
                             .accessibilityIdentifier("clipy.preview.text")
                     }
                     // The body scrolls independently; the disclosure stays
                     // visible and never becomes part of selectable content.
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: flexibleHeight)
                     if wasTruncated {
                         Text(PreviewCopy.text(
                             "Preview truncated. Copying the item keeps its complete content."
@@ -834,16 +896,19 @@ struct HistoryPreviewView: View {
                         .padding(.vertical, 6)
                         .background(Color.secondary.opacity(0.06))
                         .accessibilityIdentifier("clipy.preview.truncation-notice")
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { textNoticeHeight = $0 }
+                        .onDisappear { textNoticeHeight = 0 }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: flexibleHeight)
             case .content(.reference(let reference)):
                 ReferencePreviewView(
                     reference: reference,
                     requestFileLoad: loader.canLoadFilePreview ? {
                         loader.requestFilePreview()
                         fileConfirmationPresented = loader.fileLoadConfirmation != nil
-                    } : nil
+                    } : nil,
+                    maximumHeight: bodyMaximumHeight
                 )
             case .failed:
                 failedBody
@@ -861,9 +926,9 @@ struct HistoryPreviewView: View {
     }
 
     private var unavailableBody: some View {
-        VStack(spacing: 8) {
+        HStack(spacing: 8) {
             Image(systemName: "eye.slash")
-                .font(.title3)
+                .font(.body)
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
             Text(PreviewCopy.text("No Preview"))
@@ -871,17 +936,17 @@ struct HistoryPreviewView: View {
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.preview.unsupported")
         }
-        .multilineTextAlignment(.center)
-        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
     }
 
     /// Retry is offered only when the failed episode's typed outcome admits
     /// replay. Stable unsupported, malformed, resource, invalid, and stale
     /// outcomes therefore never present this control (review Card 9D).
     private var failedBody: some View {
-        VStack(spacing: 8) {
+        HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle")
-                .font(.title3)
+                .font(.body)
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
             Text(loader.filePreviewFailure.map(PreviewCopy.fileFailure) ?? PreviewCopy.text("Preview Unavailable"))
@@ -899,8 +964,8 @@ struct HistoryPreviewView: View {
                 .controlSize(.small)
             }
         }
-        .multilineTextAlignment(.center)
-        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
     }
 
     // MARK: - Metadata bar
@@ -911,14 +976,46 @@ struct HistoryPreviewView: View {
             HStack(spacing: 8) {
                 SourceApplicationLabel(application: occurrence.lastSource, store: sourceIcons)
 
-                Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
-                    .lineLimit(1)
+                if occurrence.count > 1 {
+                    Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
+                        .lineLimit(1)
+                }
                 Spacer(minLength: 4)
+                if let row = observedRow {
+                    Button {
+                        if row.pinnedPosition == nil {
+                            viewState.pin(row.item.id, at: .first)
+                        } else {
+                            viewState.unpin(row.item.id)
+                        }
+                    } label: {
+                        Image(systemName: row.pinnedPosition == nil ? "pin" : "pin.fill")
+                            .font(.system(size: 12))
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin") + "  ⌘P")
+                    .accessibilityLabel(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin"))
+                    .accessibilityIdentifier("clipy.preview.pin")
+                    Button { viewState.requestPasteFromDisplayedRow(row.item) } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 12))
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(PanelActionsCopy.text("Copy to Clipboard") + "  ↵")
+                    .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard"))
+                    .accessibilityIdentifier("clipy.preview.copy")
+                }
                 Button { previewState.isInformationPresented.toggle() } label: {
                     Image(systemName: "info.circle")
-                        .padding(3)
+                        .font(.system(size: 12))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
                 .controlSize(.mini)
                 .help(PreviewPresentationCopy.text("Preview Information"))
                 .accessibilityLabel(PreviewPresentationCopy.text("Preview Information"))
