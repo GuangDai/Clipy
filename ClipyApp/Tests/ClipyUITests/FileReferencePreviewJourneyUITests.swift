@@ -84,7 +84,9 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
 
-        let preview = panel.descendants(matching: .any)["clipy.preview.root"]
+        // The preview is the floating child pane now — a separate window, so
+        // its queries scope to the app, never to the main panel.
+        let preview = app.descendants(matching: .any)["clipy.preview.root"]
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
         let reference = preview.descendants(matching: .any)["clipy.preview.reference"]
         XCTAssertTrue(reference.waitForExistence(timeout: 10), app.debugDescription)
@@ -159,7 +161,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         app.typeKey(.space, modifierFlags: [])
         XCTAssertTrue(quickLook.waitForExistence(timeout: 10), app.debugDescription)
         // Both surfaces expose the same field IDs. Scope every assertion
-        // below the overlay so the already-open side pane cannot satisfy it.
+        // below the overlay so the already-open floating pane cannot satisfy it.
         let quickReference = quickLook.descendants(matching: .any)["clipy.preview.reference"]
         let quickTitle = quickReference.descendants(matching: .any)["clipy.preview.reference.title"]
         let quickPath = quickReference.descendants(matching: .any)["clipy.preview.reference.path"]
@@ -229,11 +231,11 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
             NSPredicate(format: "identifier BEGINSWITH %@", "clipy.history.row.")
         )
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 }, app.debugDescription)
-        let preview = panel.descendants(matching: .any)["clipy.preview.root"]
-        if !preview.waitForExistence(timeout: 3) {
-            app.typeKey(.space, modifierFlags: .control)
-        }
-        XCTAssertTrue(preview.waitForExistence(timeout: 5), app.debugDescription)
+        let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        // The launch selection's production 200 ms dwell presents the
+        // floating pane; there is no manual preview chord anymore (the pane
+        // dismisses through Esc and re-arms on selection change).
+        XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
         let request = preview.buttons["clipy.preview.file.request"]
         let address = preview.descendants(matching: .any)["clipy.preview.reference.address"]
         let renderedText = preview.descendants(matching: .any)["clipy.preview.text"]
@@ -326,10 +328,10 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
             NSPredicate(format: "identifier BEGINSWITH %@", "clipy.history.row.")
         )
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 }, app.debugDescription)
-        let preview = panel.descendants(matching: .any)["clipy.preview.root"]
-        if !preview.waitForExistence(timeout: 3) {
-            app.typeKey(.space, modifierFlags: .control)
-        }
+        let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        // Same floating-pane trigger as the sibling journey: the launch
+        // selection's dwell; no manual preview chord exists anymore.
+        XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
         let request = preview.buttons["clipy.preview.file.request"]
         XCTAssertTrue(request.waitForExistence(timeout: 10), app.debugDescription)
         let image = preview.descendants(matching: .any)["clipy.preview.image"]
@@ -359,7 +361,11 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                 && caption.exists && self.text(of: caption) == "Page 2 of 2"
         }, app.debugDescription)
         XCTAssertFalse(next.isEnabled)
-        app.typeKey(.leftArrow, modifierFlags: [.option, .command])
+        // The floating pane is never the key window, so the pager's ⌥⌘←
+        // shortcut cannot fire there; page back through the same button.
+        let previous = preview.buttons["clipy.preview.pdf.previous"]
+        XCTAssertTrue(previous.exists && previous.isEnabled && previous.isHittable)
+        previous.click()
         XCTAssertTrue(waitUntil(timeout: 10) {
             image.exists && image.label == "PDF preview, page 1 of 2"
         }, app.debugDescription)

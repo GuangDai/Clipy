@@ -1,5 +1,8 @@
 /// Real EN/ZH regular-expression search at the product's 360-point minimum
 /// width. Verifies compact controls, filter clearing and continuous input.
+/// The preview is a floating child window now, so the width invariant is
+/// proven while the dwell-presented pane is on screen: the pane never
+/// extends the main panel.
 import AppKit
 import XCTest
 
@@ -43,7 +46,27 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
-        let preview = panel.descendants(matching: .any)["clipy.preview.root"]
+
+        // Arm the real auto-open preference: a prior journey may have left
+        // it disabled, and the width invariant below is proven WHILE the
+        // floating preview pane is on screen. No manual preview chord
+        // substitutes for the dwell transition.
+        app.typeKey(",", modifierFlags: .command)
+        let appearance = app.buttons["clipy.settings.category.appearance"]
+        XCTAssertTrue(appearance.waitForExistence(timeout: 10), app.debugDescription)
+        appearance.click()
+        let autoOpen = app.switches["clipy.settings.appearance.preview-auto-open"]
+        XCTAssertTrue(autoOpen.waitForExistence(timeout: 5), app.debugDescription)
+        if (autoOpen.value as? Int) == 0 { autoOpen.click() }
+        XCTAssertTrue(waitUntil { (autoOpen.value as? Int) == 1 }, app.debugDescription)
+        let general = app.buttons["clipy.settings.category.general"]
+        XCTAssertTrue(general.exists, app.debugDescription)
+        general.click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(waitUntil { !general.exists }, app.debugDescription)
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
+
         if panel.frame.width > 363 {
             // Use the actual resizable NSPanel edge. Drag beyond the minimum
             // so AppKit applies the product's 360-point resize constraint.
@@ -53,12 +76,13 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
                 dx: -(panel.frame.width - 360 + 80), dy: 0
             )))
         }
-        // The preview adds its own width and one divider point to the
-        // window. The product minimum constrains the browsing column, not
-        // that complete window (e.g. 360 + 1 + 320 = 681 with preview open).
+        // The preview is a separate floating child window now
+        // (`clipy.panel.floatingPreview`): it never extends the main panel,
+        // so while the dwell-presented pane is on screen the browsing column
+        // still holds its 360-point product minimum.
+        let preview = app.descendants(matching: .any)["clipy.panel.floatingPreview"]
         XCTAssertTrue(waitUntil {
-            let previewExtension = preview.exists ? preview.frame.width + 1 : 0
-            return abs(panel.frame.width - previewExtension - 360) <= 3
+            preview.exists && abs(panel.frame.width - 360) <= 3
         }, app.debugDescription)
         let search = app.textFields["clipy.search.field"]
         let mode = panel.descendants(matching: .any)["clipy.search.mode"]

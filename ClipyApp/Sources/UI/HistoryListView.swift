@@ -35,6 +35,9 @@ struct HistoryListView: View {
     private let isSearchFieldFocused: Bool
     private let selection: Binding<HistoryItemID?>
     private let onFocusHistory: () -> Void
+    private let onHoverRow: (HistoryItemID) -> Void
+    private let onKeyboardNavigation: () -> Void
+    private let onPointerMovement: () -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
     init(
@@ -46,6 +49,9 @@ struct HistoryListView: View {
         isSearchFieldFocused: Bool,
         selection: Binding<HistoryItemID?>,
         onFocusHistory: @escaping () -> Void = {},
+        onHoverRow: @escaping (HistoryItemID) -> Void = { _ in },
+        onKeyboardNavigation: @escaping () -> Void = {},
+        onPointerMovement: @escaping () -> Void = {},
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
         self.viewState = viewState
@@ -56,6 +62,9 @@ struct HistoryListView: View {
         self.isSearchFieldFocused = isSearchFieldFocused
         self.selection = selection
         self.onFocusHistory = onFocusHistory
+        self.onHoverRow = onHoverRow
+        self.onKeyboardNavigation = onKeyboardNavigation
+        self.onPointerMovement = onPointerMovement
         self.onShowDetails = onShowDetails
     }
 
@@ -133,6 +142,20 @@ struct HistoryListView: View {
                 try await viewState.dragPayload(for: reference)
             }
         }
+        // Real mouse movement (an NSTrackingArea, never SwiftUI hover —
+        // which also fires when content scrolls beneath a STATIONARY
+        // pointer) restores pointer control of the selection; arrow keys
+        // restore keyboard intent. `.ignored` lets the List's own arrow
+        // navigation proceed.
+        .onKeyPress(.upArrow) {
+            onKeyboardNavigation()
+            return .ignored
+        }
+        .onKeyPress(.downArrow) {
+            onKeyboardNavigation()
+            return .ignored
+        }
+        .onPanelMouseMovement(onPointerMovement)
     }
 
     private func rowContent(
@@ -158,7 +181,12 @@ struct HistoryListView: View {
         )
         .tag(row.item.id)
         .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 2, trailing: 6))
+        .listRowInsets(EdgeInsets(
+            top: PanelContentFit.listRowVerticalInset,
+            leading: PanelContentFit.listRowHorizontalInset,
+            bottom: PanelContentFit.listRowVerticalInset,
+            trailing: PanelContentFit.listRowHorizontalInset
+        ))
         // Clicking even the already-selected row transfers keyboard intent
         // out of search, so Space opens Quick Look instead of editing the
         // query. Keep this simultaneous with the row's double-click Copy;
@@ -169,6 +197,13 @@ struct HistoryListView: View {
                 onFocusHistory()
             }
         )
+        // Hover selection (Maccy's HoverSelectionModifier): the surface
+        // state arbitrates pointer-vs-keyboard mode, so hover selects
+        // without scrolling only in mouse mode and otherwise defers until
+        // the mouse next moves.
+        .onHover { inside in
+            if inside { onHoverRow(row.item.id) }
+        }
         .onAppear {
             viewState.prefetchNextPageIfNeeded(appearingRowID: row.item.id)
         }

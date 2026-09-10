@@ -68,14 +68,18 @@ final class PDFPreviewJourneyUITests: XCTestCase {
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
 
-        let preview = panel.descendants(matching: .any)["clipy.preview.root"]
+        // The dwell preview is the floating child pane now — a separate,
+        // never-key window — so its queries scope to the app, not the panel.
+        let preview = app.descendants(matching: .any)["clipy.preview.root"]
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
         expectPage(1, in: preview)
         XCTAssertFalse(preview.buttons["clipy.preview.pdf.previous"].isEnabled)
         preview.buttons["clipy.preview.pdf.next"].click()
         expectPage(2, in: preview)
         XCTAssertFalse(preview.buttons["clipy.preview.pdf.next"].isEnabled)
-        app.typeKey(.leftArrow, modifierFlags: [.option, .command])
+        // The pane is never key, so the pager's ⌥⌘← shortcut cannot fire
+        // there; page back through the same button.
+        preview.buttons["clipy.preview.pdf.previous"].click()
         expectPage(1, in: preview)
 
         let row = rows.matching(NSPredicate(

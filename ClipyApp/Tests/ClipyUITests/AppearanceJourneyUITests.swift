@@ -1,17 +1,17 @@
 /// AppearanceJourneyUITests.swift — running-app proofs for the wave-2
 /// Appearance surface: the row-density switch applying live and persisting
-/// across summons, the preview auto-open preference gating the selection
-/// dwell, the search filter menu narrowing the loaded rows, and the preview
-/// divider's free drag and double-click reset. The DEBUG launch seam changes
-/// only the store path and capture-access posture; the `clipy.appearance.*`
-/// preferences live in the app's real UserDefaults domain, and every journey
-/// that edits one (density, auto-open, divider width) resets it in-test to
-/// keep the suite order-independent.
+/// across summons, the preview auto-open preference gating the floating
+/// pane's selection dwell, and the search filter menu narrowing the loaded
+/// rows. The DEBUG launch seam changes only the store path and
+/// capture-access posture; the `clipy.appearance.*` preferences live in the
+/// app's real UserDefaults domain, and every journey that edits one
+/// (density, auto-open) resets it in-test to keep the suite
+/// order-independent.
 ///
 /// Row-density points (`PanelTheme` metrics) are not published through the
-/// public accessibility tree. Divider geometry is observable through the
-/// real panel and divider frames: its relative position proves resizing and
-/// reset without reading a private preference or adding a measurement view.
+/// public accessibility tree. The preview is the transient floating pane
+/// (a separate child window, AX id clipy.panel.floatingPreview), so preview
+/// queries scope to the app, never to the main panel's descendants.
 import AppKit
 import XCTest
 
@@ -91,8 +91,10 @@ final class AppearanceJourneyUITests: XCTestCase {
     }
 
     /// With the auto-open preference off, selecting a row and outwaiting the
-    /// production 200 ms dwell must not open the preview column; the
-    /// product's documented manual toggle (⌃Space) still opens it.
+    /// production 200 ms dwell must not present the floating preview pane;
+    /// re-enabling the preference restores the dwell on the next session's
+    /// selection (PreviewPaneState's preference gate takes effect on the
+    /// next selection change, and a summon supplies one).
     @MainActor
     func testPreviewAutoOpenDisabledStopsTheDwell() throws {
         let app = try launchApp(capturing: "clipy-auto-open-dwell-check")
@@ -139,17 +141,16 @@ final class AppearanceJourneyUITests: XCTestCase {
         search.typeKey(.downArrow, modifierFlags: [])
 
         // The production dwell is 200 ms; 500 ms gives the disabled
-        // preference more than the dwell interval, so a still-absent preview
-        // is a stable negative rather than a race with the timer.
+        // preference more than the dwell interval, so a still-absent floating
+        // pane is a stable negative rather than a race with the timer. The
+        // pane is a separate child window now, so the query scopes to the
+        // app, never to the panel's descendants.
         Thread.sleep(forTimeInterval: 0.5)
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
         XCTAssertFalse(
             preview.exists,
             diagnostic(app, context: "disabled auto-open must stop the dwell")
         )
-
-        app.typeKey(.space, modifierFlags: .control)
-        assertExists(preview, timeout: 5, in: app, context: "manual preview toggle")
 
         // Restore the default-on preference so later journeys relying on the
         // production dwell are not left with auto-open disabled.
@@ -170,11 +171,19 @@ final class AppearanceJourneyUITests: XCTestCase {
             waitUntil(timeout: 5) { (restoreToggle.value as? Int) == 1 },
             diagnostic(app, context: "auto-open preference restored")
         )
-        // Same tab-neutral finish as the density restore above.
+        // Same tab-neutral finish as the density restore above, then prove
+        // the gate reopened: the resummoned panel's own selection dwell
+        // presents the floating pane without any further input.
         let generalTab = app.buttons["clipy.settings.category.general"]
         assertExists(generalTab, timeout: 5, in: app, context: "General tab")
         generalTab.click()
-        app.typeKey("w", modifierFlags: .command)
+        closeSettingsAndSummonPanel(control: generalTab, panel: panel, app: app)
+        assertExists(
+            preview,
+            timeout: 10,
+            in: app,
+            context: "re-enabled auto-open restores the selection dwell"
+        )
     }
 
     /// The menu changes the History query: with one plain-text item,
@@ -228,279 +237,6 @@ final class AppearanceJourneyUITests: XCTestCase {
             rows.firstMatch.label.contains(captured),
             diagnostic(app, context: "filter journey row title")
         )
-    }
-
-    /// The preview divider drags the column live inside the FIXED window
-    /// (the browsing column absorbs the trade; the AppKit frame never
-    /// moves), and a double click resets the width to the 320 default.
-    /// A trailing preview makes a rightward drag shrink its measured span.
-    /// The real AX frames prove movement relative to the fixed panel, then
-    /// a return to the reset baseline. Edited preferences are restored using
-    /// the same Settings controls before the journey finishes.
-    @MainActor
-    func testPreviewDividerDragAndReset() throws {
-        let app = try launchApp(capturing: "clipy-preview-divider-check")
-        defer { app.terminate() }
-
-        let panel = app.descendants(matching: .any)["clipy.panel.root"]
-
-        // Even an explicit Right preference can flip near a screen edge.
-        // A 400-point main panel centered on the 1024-point CI screen leaves
-        // only 312 points to its right, less than the 321-point preview.
-        // Use the real cursor-placement setting with space for that expansion.
-        openAppearanceTab(in: app)
-        let previewSide = app.descendants(matching: .any)[
-            "clipy.settings.appearance.preview-side"
-        ]
-        let panelPosition = app.descendants(matching: .any)[
-            "clipy.settings.appearance.panel-position"
-        ]
-        let resetPanelSize = app.buttons["clipy.settings.appearance.reset-panel-size"]
-        assertExists(previewSide, timeout: 5, in: app, context: "preview side control")
-        assertExists(panelPosition, timeout: 5, in: app, context: "panel position control")
-        assertExists(resetPanelSize, timeout: 5, in: app, context: "panel size reset control")
-        chooseOption("Right", in: previewSide, app: app, context: "trailing preview")
-        chooseOption("At Mouse Cursor", in: panelPosition, app: app, context: "cursor-placed panel")
-        resetPanelSize.click()
-        // Move only the pointer while the coordinate's real Settings
-        // control still exists. Cmd-W and the summon shortcut below keep
-        // this x=40 position, leaving room for the trailing preview.
-        previewSide.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .withOffset(CGVector(dx: 40 - previewSide.frame.midX, dy: 0))
-            .hover()
-        closeSettingsAndSummonPanel(control: previewSide, panel: panel, app: app)
-
-        // The selected row normally opens Preview through the production
-        // 200 ms dwell. If the preference left by an earlier journey has not
-        // fired it, use the product's documented Control-Space toggle.
-        let preview = app.descendants(matching: .any)["clipy.preview.root"]
-        if !preview.waitForExistence(timeout: 3) {
-            app.typeKey(.space, modifierFlags: .control)
-        }
-        assertExists(
-            preview,
-            timeout: 5,
-            in: app,
-            context: "preview open for the divider drag"
-        )
-
-        let divider = app.descendants(matching: .any)[
-            "clipy.panel.previewDivider"
-        ]
-        assertExists(divider, timeout: 5, in: app, context: "preview divider")
-
-        // Start from the real 320-point reset width, independent of an
-        // earlier run's persisted adjustment. The 1-point divider's center
-        // adds half a point to the right-side span measured from AX frames.
-        divider.doubleClick()
-        assertExists(preview, timeout: 5, in: app, context: "preview reset before resizing")
-        XCTAssertTrue(
-            waitUntil(timeout: 5) {
-                preview.frame.midX > divider.frame.midX
-                    && abs(panel.frame.maxX - divider.frame.midX - 320.5) <= 3
-            },
-            diagnostic(app, context: "trailing preview at its 320-point reset width")
-        )
-        let baselinePanelFrame = panel.frame
-        let baselineDividerOffset = divider.frame.midX - baselinePanelFrame.minX
-        let baselinePreviewSpan = baselinePanelFrame.maxX - divider.frame.midX
-
-        // Exercise the settled position with an explicit pointer velocity
-        // and endpoint hold. Only the actual release width decides collapse;
-        // a velocity prediction must not override this positioning control.
-        let dividerCenter = divider.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-        )
-        dividerCenter.click(
-            forDuration: 0.3,
-            // 320 → 260 avoids both the 240-point settled minimum and the
-            // 280 ± 8-point magnetic stop (PanelGeometry).
-            thenDragTo: dividerCenter.withOffset(CGVector(dx: 60, dy: 0)),
-            withVelocity: XCUIGestureVelocity(rawValue: 40),
-            thenHoldForDuration: 0.5
-        )
-        assertExists(
-            preview,
-            timeout: 5,
-            in: app,
-            context: "preview survives the divider drag"
-        )
-        XCTAssertTrue(
-            panel.exists,
-            diagnostic(app, context: "panel intact after the divider drag")
-        )
-        XCTAssertTrue(
-            waitUntil(timeout: 5) {
-                abs(divider.frame.midX - panel.frame.minX - baselineDividerOffset - 60) <= 3
-            },
-            diagnostic(app, context: "slow drag moves divider right from offset \(baselineDividerOffset)")
-        )
-        let draggedPanelFrame = panel.frame
-        let draggedPreviewSpan = draggedPanelFrame.maxX - divider.frame.midX
-        XCTAssertEqual(draggedPreviewSpan, baselinePreviewSpan - 60, accuracy: 3,
-                       diagnostic(app, context: "preview follows the complete pointer displacement"))
-        // The drag must settle above the 240-point floor; its observed AX
-        // displacement, not the requested pointer distance, is the proof.
-        XCTAssertGreaterThanOrEqual(draggedPreviewSpan, 237.5,
-                                    diagnostic(app, context: "preview respects settled minimum"))
-        XCTAssertEqual(draggedPanelFrame.minX, baselinePanelFrame.minX, accuracy: 3)
-        XCTAssertEqual(draggedPanelFrame.minY, baselinePanelFrame.minY, accuracy: 3)
-        XCTAssertEqual(draggedPanelFrame.width, baselinePanelFrame.width, accuracy: 3)
-        XCTAssertEqual(draggedPanelFrame.height, baselinePanelFrame.height, accuracy: 3)
-
-        divider.doubleClick()
-        assertExists(
-            preview,
-            timeout: 5,
-            in: app,
-            context: "preview survives the divider reset"
-        )
-        XCTAssertTrue(
-            panel.exists,
-            diagnostic(app, context: "panel intact after the divider reset")
-        )
-        XCTAssertTrue(
-            waitUntil(timeout: 5) {
-                abs((divider.frame.midX - panel.frame.minX) - baselineDividerOffset) <= 3
-                    && abs((panel.frame.maxX - divider.frame.midX) - baselinePreviewSpan) <= 3
-            },
-            diagnostic(app, context: "double-click restores the measured divider baseline")
-        )
-        XCTAssertEqual(panel.frame.minX, baselinePanelFrame.minX, accuracy: 3)
-        XCTAssertEqual(panel.frame.minY, baselinePanelFrame.minY, accuracy: 3)
-        XCTAssertEqual(panel.frame.width, baselinePanelFrame.width, accuracy: 3)
-        XCTAssertEqual(panel.frame.height, baselinePanelFrame.height, accuracy: 3)
-
-        // The advertised 9-point strip must admit drags on both sides of
-        // the visual separator, not only at its center. Each attempt starts
-        // after a real reset and obtains fresh frames and pointer coordinates.
-        for hitOffset in [CGFloat(-3), CGFloat(3)] {
-            let sidePanelFrame = panel.frame
-            let sideDividerOffset = divider.frame.midX - sidePanelFrame.minX
-            let sidePreviewSpan = sidePanelFrame.maxX - divider.frame.midX
-            let sideStart = divider.coordinate(
-                withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
-            ).withOffset(CGVector(dx: hitOffset, dy: 0))
-            sideStart.click(
-                forDuration: 0.3,
-                thenDragTo: sideStart.withOffset(CGVector(dx: 60, dy: 0)),
-                withVelocity: XCUIGestureVelocity(rawValue: 40),
-                thenHoldForDuration: 0.5
-            )
-            assertExists(
-                preview, timeout: 5, in: app,
-                context: "preview survives divider hit offset \(hitOffset)"
-            )
-            XCTAssertTrue(
-                waitUntil(timeout: 5) {
-                    panel.exists && divider.exists
-                        && abs(divider.frame.midX - panel.frame.minX - sideDividerOffset - 60) <= 3
-                },
-                diagnostic(app, context: "divider moves from hit offset \(hitOffset)")
-            )
-            let sideDraggedFrame = panel.frame
-            let sideDraggedSpan = sideDraggedFrame.maxX - divider.frame.midX
-            XCTAssertEqual(
-                sideDraggedSpan, sidePreviewSpan - 60, accuracy: 3,
-                diagnostic(app, context: "side hit \(hitOffset) follows the complete pointer displacement")
-            )
-            XCTAssertGreaterThanOrEqual(sideDraggedSpan, 237.5)
-            XCTAssertEqual(sideDraggedFrame.minX, sidePanelFrame.minX, accuracy: 3)
-            XCTAssertEqual(sideDraggedFrame.minY, sidePanelFrame.minY, accuracy: 3)
-            XCTAssertEqual(sideDraggedFrame.width, sidePanelFrame.width, accuracy: 3)
-            XCTAssertEqual(sideDraggedFrame.height, sidePanelFrame.height, accuracy: 3)
-
-            divider.doubleClick()
-            assertExists(
-                preview, timeout: 5, in: app,
-                context: "preview survives reset after hit offset \(hitOffset)"
-            )
-            XCTAssertTrue(
-                waitUntil(timeout: 5) {
-                    panel.exists && divider.exists
-                        && abs((divider.frame.midX - panel.frame.minX) - sideDividerOffset) <= 3
-                        && abs((panel.frame.maxX - divider.frame.midX) - sidePreviewSpan) <= 3
-                },
-                diagnostic(app, context: "double-click resets side hit \(hitOffset)")
-            )
-            XCTAssertEqual(panel.frame.minX, sidePanelFrame.minX, accuracy: 3)
-            XCTAssertEqual(panel.frame.minY, sidePanelFrame.minY, accuracy: 3)
-            XCTAssertEqual(panel.frame.width, sidePanelFrame.width, accuracy: 3)
-            XCTAssertEqual(panel.frame.height, sidePanelFrame.height, accuracy: 3)
-        }
-
-        // Header background drag moves the whole window, not either column.
-        // This proves native repositioning and event ownership, not a mapping
-        // from the complete synthesized pointer displacement to window motion.
-        // Each direction must move beyond half the nominal distance; geometry
-        // and the final return to the original position still use ±3 points.
-        // Stay horizontal: x=40 plus the 721-point panel and a 60-point move
-        // fits the 1024-point runner without invoking screen-edge clamping.
-        let searchField = app.textFields["clipy.search.field"]
-        let firstRow = historyRows(in: app).firstMatch
-        assertExists(searchField, timeout: 5, in: app, context: "search field before header drag")
-        assertExists(firstRow, timeout: 5, in: app, context: "first row below header drag")
-        let beforeHeaderDragFrame = panel.frame
-        for windowTranslation in [CGFloat(60), CGFloat(-60)] {
-            let windowFrame = panel.frame
-            let searchFrame = searchField.frame
-            let windowDividerOffset = divider.frame.midX - windowFrame.minX
-            let windowPreviewSpan = windowFrame.maxX - divider.frame.midX
-            // Use the visible empty strip above the field. Its live frame
-            // stays meaningful when the compact toolbar changes row height.
-            let headerPoint = CGPoint(
-                x: searchFrame.midX, y: (windowFrame.minY + searchFrame.minY) / 2
-            )
-            XCTAssertTrue(windowFrame.contains(headerPoint))
-            XCTAssertFalse(searchFrame.contains(headerPoint))
-            XCTAssertLessThan(headerPoint.y, firstRow.frame.minY)
-            let headerStart = panel.coordinate(
-                withNormalizedOffset: CGVector(dx: 0, dy: 0)
-            ).withOffset(CGVector(
-                dx: headerPoint.x - windowFrame.minX,
-                dy: headerPoint.y - windowFrame.minY
-            ))
-            headerStart.click(
-                forDuration: 0.3,
-                thenDragTo: headerStart.withOffset(CGVector(dx: windowTranslation, dy: 0)),
-                withVelocity: XCUIGestureVelocity(rawValue: 40),
-                thenHoldForDuration: 0.5
-            )
-            XCTAssertTrue(
-                waitUntil(timeout: 5) {
-                    guard panel.exists else { return false }
-                    let movement = panel.frame.minX - windowFrame.minX
-                    let directedMovement = windowTranslation > 0 ? movement : -movement
-                    return directedMovement > abs(windowTranslation) / 2
-                },
-                diagnostic(app, context: "header repositions window: before=\(windowFrame), nominal=\(windowTranslation), actual=\(panel.frame)")
-            )
-            assertExists(preview, timeout: 5, in: app, context: "preview survives header drag")
-            let movedWindowFrame = panel.frame
-            XCTAssertEqual(movedWindowFrame.minY, windowFrame.minY, accuracy: 3)
-            XCTAssertEqual(movedWindowFrame.width, windowFrame.width, accuracy: 3)
-            XCTAssertEqual(movedWindowFrame.height, windowFrame.height, accuracy: 3)
-            XCTAssertEqual(
-                divider.frame.midX - movedWindowFrame.minX, windowDividerOffset, accuracy: 3
-            )
-            XCTAssertEqual(
-                movedWindowFrame.maxX - divider.frame.midX, windowPreviewSpan, accuracy: 3
-            )
-        }
-        XCTAssertEqual(panel.frame.minX, beforeHeaderDragFrame.minX, accuracy: 3)
-        XCTAssertEqual(panel.frame.minY, beforeHeaderDragFrame.minY, accuracy: 3)
-        XCTAssertEqual(panel.frame.width, beforeHeaderDragFrame.width, accuracy: 3)
-        XCTAssertEqual(panel.frame.height, beforeHeaderDragFrame.height, accuracy: 3)
-
-        openAppearanceTab(in: app)
-        assertExists(previewSide, timeout: 5, in: app, context: "preview side restore control")
-        assertExists(panelPosition, timeout: 5, in: app, context: "panel position restore control")
-        chooseOption("Automatic", in: previewSide, app: app, context: "preview side restore")
-        chooseOption("At Mouse Cursor", in: panelPosition, app: app, context: "panel position restore")
-        let generalTab = app.buttons["clipy.settings.category.general"]
-        assertExists(generalTab, timeout: 5, in: app, context: "General tab")
-        generalTab.click()
-        app.typeKey("w", modifierFlags: .command)
     }
 
     @MainActor

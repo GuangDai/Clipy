@@ -33,6 +33,18 @@ enum PanelTheme {
         }
     }
 
+    /// Generous fixed content height for an image row's aspect-fit
+    /// thumbnail slot. Text and type rows keep the compact
+    /// `thumbnailSize(for:)` slot above; only image rows grow.
+    static func imageThumbnailHeight(
+        for density: HistoryRowDensity
+    ) -> CGFloat {
+        switch density {
+        case .compact: return 44
+        case .comfortable: return 56
+        }
+    }
+
     static func rowVerticalPadding(
         for density: HistoryRowDensity
     ) -> CGFloat {

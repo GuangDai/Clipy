@@ -7,15 +7,14 @@ import SwiftUI
 /// Appearance tab: the panel-chrome half of the Settings consolidation
 /// surface (`V2-07` §6). Placement rides the composition root's optional
 /// `PopupPositionMode` binding; row density, snippet line count, font size,
-/// preview auto-open, and preview side persist through `@AppStorage` under
-/// the `PanelAppearanceSettings` keys with the same product defaults its
+/// and preview auto-open persist through `@AppStorage` under the
+/// `PanelAppearanceSettings` keys with the same product defaults its
 /// `load(from:)` fails open to, so an untouched control and an absent
 /// defaults entry always agree. The preview, row-density, and typography
 /// preferences apply live; only panel position and the panel-size reset
 /// apply the next time the panel opens, which the Panel section footer
-/// discloses. The
-/// preview column's width has no control here — the panel's own divider
-/// drag owns it (`PanelGeometry.previewColumnWidthDefaultsKey`).
+/// discloses. The floating preview's side is chosen from screen geometry
+/// (PopupPositionGeometry.floatingPreviewFrame) — it has no control here.
 struct AppearanceSettingsTab: View {
 
     private let popupPosition: Binding<PopupPositionMode>?
@@ -32,8 +31,6 @@ struct AppearanceSettingsTab: View {
     private var rowFontSize: HistoryRowFontSize = .medium
     @AppStorage(PanelAppearanceSettings.previewAutoOpenDefaultsKey)
     private var isPreviewAutoOpenEnabled = true
-    @AppStorage(PanelAppearanceSettings.previewSideDefaultsKey)
-    private var previewSide: PreviewSidePreference = .automatic
 
     @State private var isShowingTextAppearance = false
 
@@ -81,16 +78,10 @@ struct AppearanceSettingsTab: View {
                     isOn: $isPreviewAutoOpenEnabled
                 )
                 .accessibilityIdentifier("clipy.settings.appearance.preview-auto-open")
-                Picker(SettingsCopy.text("Preview side"), selection: $previewSide) {
-                    ForEach(PreviewSidePreference.allCases, id: \.self) { side in
-                        Text(previewSideLabel(side)).tag(side)
-                    }
-                }
-                .accessibilityIdentifier("clipy.settings.appearance.preview-side")
             } header: {
                 Text(AdaptiveSettingsCopy.text("Preview"))
             } footer: {
-                Text(AdaptiveSettingsCopy.text("Drag the preview divider to give content more room."))
+                Text(AdaptiveSettingsCopy.text("The preview opens in a floating pane beside the panel."))
             }
             Section {
                 if let popupPosition {
@@ -133,16 +124,6 @@ struct AppearanceSettingsTab: View {
         }
         .padding(.vertical, PanelTheme.rowVerticalPadding(for: rowDensity))
         .accessibilityHidden(true)
-    }
-
-    /// The settings-picker labels. They stay view-local so the persisted
-    /// raw values remain the only cross-module vocabulary.
-    private func previewSideLabel(_ side: PreviewSidePreference) -> String {
-        switch side {
-        case .automatic: return SettingsCopy.text("Automatic")
-        case .leading: return SettingsCopy.text("Left")
-        case .trailing: return SettingsCopy.text("Right")
-        }
     }
 
     private func rowDensityLabel(_ density: HistoryRowDensity) -> String {

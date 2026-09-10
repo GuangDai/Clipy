@@ -260,4 +260,116 @@ struct PanelSessionSelectionTests {
 
         #expect(surface.selection == rows[0].item.id)
     }
+
+    // MARK: Input mode and hover selection (Maccy NavigationManager)
+
+    private func makeSurface(
+        previewState: PreviewPaneState = PreviewPaneState()
+    ) -> HistoryPanelSurfaceState {
+        HistoryPanelSurfaceState(
+            viewState: HistoryViewState(history: ScriptedHistory()),
+            previewState: previewState
+        )
+    }
+
+    /// Yields until a zero-delay scheduled dwell completes — the same
+    /// scheduling-only boundary PreviewPaneStateTests uses, independent of
+    /// wall-clock passage on a saturated runner.
+    private func waitForScheduledDwell(
+        _ condition: @MainActor () -> Bool
+    ) async {
+        for _ in 0..<10_000 {
+            if condition() { return }
+            await Task.yield()
+        }
+    }
+
+    @Test func hoverSelectsImmediatelyInMouseMode() {
+        let surface = makeSurface()
+        surface.beginSession(rows: rows)
+        surface.notePointerMovement()
+        #expect(surface.inputMode == .mouse)
+
+        surface.handleRowHover(rows[2].item.id)
+        #expect(surface.selection == rows[2].item.id)
+        #expect(surface.deferredHoverSelection == nil)
+    }
+
+    @Test func hoverDefersDuringKeyboardNavigationAndAppliesOnNextMouseMovement() {
+        let surface = makeSurface()
+        surface.beginSession(rows: rows)
+
+        // A session starts in keyboard mode: hover alone must not select.
+        #expect(surface.inputMode == .keyboard)
+        surface.handleRowHover(rows[1].item.id)
+        #expect(surface.selection == rows[0].item.id)
+        #expect(surface.deferredHoverSelection == rows[1].item.id)
+
+        // Only a real mouse movement flips back to pointer control and
+        // applies the deferral — never a scroll.
+        surface.notePointerMovement()
+        #expect(surface.inputMode == .mouse)
+        #expect(surface.selection == rows[1].item.id)
+        #expect(surface.deferredHoverSelection == nil)
+    }
+
+    @Test func arrowMovementRestoresKeyboardMode() {
+        let surface = makeSurface()
+        surface.beginSession(rows: rows)
+        surface.notePointerMovement()
+        #expect(surface.inputMode == .mouse)
+
+        surface.moveSelection(in: rows, direction: .next)
+        #expect(surface.inputMode == .keyboard)
+        #expect(surface.selection == rows[1].item.id)
+
+        surface.handleRowHover(rows[2].item.id)
+        #expect(
+            surface.selection == rows[1].item.id,
+            "hover only defers while keyboard-navigating"
+        )
+        surface.notePointerMovement()
+        #expect(surface.selection == rows[2].item.id)
+    }
+
+    @Test func endSessionRetiresInputModeAndDeferredHover() {
+        let surface = makeSurface()
+        surface.beginSession(rows: rows)
+        surface.handleRowHover(rows[1].item.id)
+        #expect(surface.deferredHoverSelection == rows[1].item.id)
+
+        surface.endSession()
+        #expect(surface.deferredHoverSelection == nil)
+
+        // The next session restarts in keyboard mode with no stale
+        // deferral able to jump the fresh preselection.
+        surface.beginSession(rows: rows)
+        #expect(surface.inputMode == .keyboard)
+        #expect(surface.selection == rows[0].item.id)
+    }
+
+    @Test func hoverSelectionDwellsAndOpensTheFloatingPreview() async {
+        let previewState = PreviewPaneState(autoOpenDelay: .zero)
+        var events: [PreviewPaneState.FloatingPreviewTransition] = []
+        previewState.onFloatingPreviewTransition = { events.append($0) }
+        let surface = makeSurface(previewState: previewState)
+
+        surface.beginSession(rows: rows)
+        // The hover → selection → dwell → show chain: hover drives the
+        // ID-only selection, then the panel's selection onChange forwards
+        // the exact reference (mirrored here) and the dwell opens the pane.
+        surface.notePointerMovement()
+        surface.handleRowHover(rows[1].item.id)
+        #expect(surface.selection == rows[1].item.id)
+
+        previewState.handleSelectionChange(
+            PreviewSelectionResolution.resolve(
+                selectedID: surface.selection,
+                rows: rows
+            ).reference
+        )
+        await waitForScheduledDwell { previewState.isOpen }
+        #expect(previewState.previewedItem == rows[1].item)
+        #expect(events == [.show(rows[1].item)])
+    }
 }

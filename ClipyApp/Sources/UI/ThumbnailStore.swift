@@ -164,8 +164,8 @@ final class ThumbnailStore {
     private let maximumEntries: Int
 
     /// Decoded-byte half of the admission bound (default 64 MiB). At the
-    /// default 72 px payload the ENTRY ceiling binds first (500 × ≈21 KB ≈
-    /// 10 MiB of decoded bitmap); the byte ceiling is the backstop that
+    /// default 112 px payload the ENTRY ceiling binds first (500 × ≈50 KB ≈
+    /// 25 MiB of decoded bitmap); the byte ceiling is the backstop that
     /// keeps larger pixel sizes (the details view's 128 px store) or
     /// row-padded bitmaps from growing a surface without bound. Injectable
     /// for the same small-scale proof as `maximumEntries`.
@@ -197,7 +197,7 @@ final class ThumbnailStore {
 
     convenience init(
         history: any ClipboardHistory,
-        pixels: PixelSize = PixelSize(width: 72, height: 72)
+        pixels: PixelSize = PixelSize(width: 112, height: 112)
     ) {
         #if DEBUG
         // A DEBUG running-app journey activates the per-surface evidence
@@ -232,7 +232,7 @@ final class ThumbnailStore {
     #if DEBUG
     init(
         history: any ClipboardHistory,
-        pixels: PixelSize = PixelSize(width: 72, height: 72),
+        pixels: PixelSize = PixelSize(width: 112, height: 112),
         maximumEntries: Int,
         maximumDecodedBytes: Int,
         measurement: ThumbnailMeasurement? = nil
@@ -247,7 +247,7 @@ final class ThumbnailStore {
     #else
     init(
         history: any ClipboardHistory,
-        pixels: PixelSize = PixelSize(width: 72, height: 72),
+        pixels: PixelSize = PixelSize(width: 112, height: 112),
         maximumEntries: Int,
         maximumDecodedBytes: Int
     ) {

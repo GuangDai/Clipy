@@ -136,7 +136,7 @@ struct HistoryDetailsView: View {
     /// Reference-exact thumbnail cache (01 §5.7; 04 §9): keyed by
     /// `HistoryItemReference`, so a revised item never shows stale pixels.
     /// 128 px ≈ 2× the 64 pt header cell, keeping the header sharp on
-    /// retina displays (the row list keeps the 72 px default).
+    /// retina displays (the row list keeps the 112 px default).
     @State private var thumbnails: ThumbnailStore
 
     @State private var phase: DetailsPhase = .loading

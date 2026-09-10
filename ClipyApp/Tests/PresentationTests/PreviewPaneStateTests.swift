@@ -375,7 +375,7 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == nil)
     }
 
-    @Test func refreshingVisibleContentPreservesAnotherItemsPendingDwell() async {
+    @Test func refreshingAClosedPreviewPreservesAPendingDwell() async {
         let state = makeState()
         defer { state.panelClosed() }
         let first = reference()
@@ -383,18 +383,20 @@ struct PreviewPaneStateTests {
         let updatedFirst = HistoryItemReference(
             id: first.id, contentVersion: ContentVersion(rawValue: 2)
         )
-        state.togglePreview(for: first)
+        // An open pane retargets immediately, so a pending dwell exists only
+        // while the pane is closed. A refresh aimed at an already-open pane
+        // is a no-op here and must not disturb the queued dwell.
         state.handleSelectionChange(second)
         state.refreshOpenPreview(updatedFirst)
-        #expect(state.previewedItem == updatedFirst)
-        // The zero-delay dwell cannot execute until this test yields the
-        // MainActor. Refreshing A must not cancel the already queued B task.
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
         await waitForScheduledDwell { state.previewedItem == second }
+        #expect(state.isOpen)
         #expect(state.previewedItem == second)
     }
 
     @Test(arguments: [false, true])
-    func purgingVisibleContentPreservesAnotherItemsPendingDwell(isRevision: Bool) async {
+    func purgingUnrelatedContentPreservesAPendingDwell(isRevision: Bool) async {
         let state = makeState()
         defer { state.panelClosed() }
         let visible = reference()
@@ -402,22 +404,20 @@ struct PreviewPaneStateTests {
         let replacement = HistoryItemReference(
             id: visible.id, contentVersion: ContentVersion(rawValue: 2)
         )
-        state.togglePreview(for: visible)
         state.handleSelectionChange(selected)
         // Apply the receipt before the selected item's zero-delay dwell can
-        // run. Only the previously visible item belongs to this purge.
+        // run. Only an unrelated item belongs to this purge.
         state.purge(isRevision
             ? .revision(old: visible, new: replacement)
             : .item(visible.id))
-        #expect(state.purgeGeneration == 1)
-        #expect(state.previewedItem == (isRevision ? replacement : nil))
+        #expect(state.purgeGeneration == 0)
 
         await waitForScheduledDwell { state.previewedItem == selected }
         #expect(state.isOpen)
         #expect(state.previewedItem == selected)
     }
 
-    @Test func dwellRetargetsAnAlreadyOpenPreview() async {
+    @Test func selectionChangeRetargetsAnOpenPreviewImmediatelyWithoutDwell() {
         let state = makeState()
         let first = reference()
         let second = reference()
@@ -426,11 +426,177 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == first)
 
         state.handleSelectionChange(second)
-        await waitForScheduledDwell {
-            state.previewedItem == second
-        }
+        // No dwell and no yield: once visible, the pane follows the
+        // selection on the spot — only the closed→open transition dwells.
+        #expect(state.isOpen)
         #expect(state.previewedItem == second)
-        #expect(state.isOpen, "retargeting keeps the pane open")
+    }
+
+    @Test func escDismissalSuppressesAutoOpenUntilTheSelectionChanges() async {
+        let state = makeState()
+        let first = reference()
+        let second = reference()
+
+        state.handleSelectionChange(first)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.dismissPreview())
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+        #expect(!state.dismissPreview(), "a closed pane has nothing to dismiss")
+
+        state.handleSelectionChange(second)
+        await waitForScheduledDwell { state.previewedItem == second }
+        #expect(state.isOpen)
+    }
+
+    @Test func floatingPreviewTransitionsTrackTheStateMachine() async {
+        let state = makeState()
+        var events: [PreviewPaneState.FloatingPreviewTransition] = []
+        state.onFloatingPreviewTransition = { events.append($0) }
+        let first = reference()
+        let second = reference()
+
+        state.handleSelectionChange(first)
+        #expect(events.isEmpty, "the closed→open transition dwells")
+        await waitForScheduledDwell { state.isOpen }
+        state.handleSelectionChange(second)
+        _ = state.dismissPreview()
+
+        #expect(events == [.show(first), .update(second), .hide])
+    }
+
+    // MARK: Pointer lifecycle (both windows)
+
+    /// Zero grace preserves the same scheduling-only boundary as the
+    /// zero-delay dwell helper.
+    private func makePointerState() -> PreviewPaneState {
+        PreviewPaneState(autoOpenDelay: .zero, pointerExitGrace: .zero)
+    }
+
+    @Test func pointerExitHidesAnOpenPreviewAfterTheGrace() async {
+        let state = makePointerState()
+        let item = reference()
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(item)
+        await waitForScheduledDwell { state.isOpen }
+
+        state.pointerExited(.mainPanel)
+        #expect(state.isOpen, "the grace, not the exit, owns the hide")
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+    }
+
+    @Test func pointerReentryCancelsTheExitGrace() async {
+        let state = makePointerState()
+        let item = reference()
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(item)
+        await waitForScheduledDwell { state.isOpen }
+
+        state.pointerExited(.mainPanel)
+        // Re-entry is synchronous with the exit: the queued grace task is
+        // cancelled before it can get a MainActor turn.
+        state.pointerEntered(.mainPanel)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(state.isOpen)
+        #expect(state.previewedItem == item)
+    }
+
+    @Test func movingFromPanelToPreviewKeepsThePaneOpen() async {
+        let state = makePointerState()
+        let item = reference()
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(item)
+        await waitForScheduledDwell { state.isOpen }
+
+        state.pointerEntered(.preview)
+        state.pointerExited(.mainPanel)
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isOpen, "the pane stays open while the pointer is over it")
+
+        state.pointerExited(.preview)
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen)
+    }
+
+    @Test func pointerReentryReDwellsTheCurrentSelectionWithoutSuppression() async {
+        let state = makePointerState()
+        var events: [PreviewPaneState.FloatingPreviewTransition] = []
+        state.onFloatingPreviewTransition = { events.append($0) }
+        let item = reference()
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(item)
+        await waitForScheduledDwell { state.isOpen }
+
+        state.pointerExited(.mainPanel)
+        await waitForScheduledDwell { !state.isOpen }
+
+        // Lightweight hide: re-entering the rows re-dwells the CURRENT
+        // selection and reopens without any selection change, proving the
+        // manual-close suppression was never engaged.
+        state.pointerEntered(.mainPanel)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+        #expect(events == [.show(item), .hide, .show(item)])
+    }
+
+    @Test func manualDismissalSuppressionSurvivesPointerReentry() async {
+        let state = makePointerState()
+        let item = reference()
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(item)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.dismissPreview())
+
+        state.pointerExited(.mainPanel)
+        state.pointerEntered(.mainPanel)
+        await Task.yield()
+        await Task.yield()
+
+        #expect(!state.isOpen, "manual close keeps its suppression across pointer cycles")
+        #expect(state.previewedItem == nil)
+    }
+
+    @Test func pointerExitBeforeTheDwellFiresRetiresIt() async {
+        let state = makePointerState()
+        let item = reference()
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(item)
+        // Synchronously before the zero-delay dwell gets a turn: an absent
+        // pointer never opens the pane.
+        state.pointerExited(.mainPanel)
+        await Task.yield()
+        await Task.yield()
+        #expect(!state.isOpen)
+
+        state.pointerEntered(.mainPanel)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+    }
+
+    @Test func panelClosedClearsPointerPresenceAndStaleSelectionDemand() async {
+        let state = makePointerState()
+        let item = reference()
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(item)
+        await waitForScheduledDwell { state.isOpen }
+
+        state.panelClosed()
+        #expect(!state.isOpen)
+
+        // A stale pointer cycle after close cannot reopen the pane: the
+        // retained selection demand was retired and auto-open is disarmed
+        // until the panel becomes key again.
+        state.pointerExited(.mainPanel)
+        state.pointerEntered(.mainPanel)
+        await Task.yield()
+        await Task.yield()
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
     }
 
     @Test func togglingWithNoSelectionKeepsThePaneClosed() {
@@ -472,5 +638,39 @@ struct PreviewPaneStateTests {
         #expect(state.purgeGeneration == 0)
         #expect(state.isOpen)
         #expect(state.previewedItem == visible)
+    }
+
+    /// The republished pager channel (the floating pane's ⌥⌘←/→ chords
+    /// arrive through the key main panel): direction sticks, the generation
+    /// advances monotonically, and pane visibility/lifecycle never touches
+    /// it — like the ⌘R retry generation, it is a pure request counter the
+    /// consuming view gates.
+    @Test func pagerRequestsRepublishDirectionAndAdvanceMonotonically() {
+        let state = makeState()
+        #expect(state.previewPagerRequestGeneration == 0)
+
+        state.requestPreviewPage(.previous)
+        #expect(state.previewPagerRequestGeneration == 1)
+        #expect(state.previewPagerRequestDirection == .previous)
+
+        state.requestPreviewPage(.next)
+        #expect(state.previewPagerRequestGeneration == 2)
+        #expect(state.previewPagerRequestDirection == .next)
+
+        // Pane lifecycle does not consume or reset the channel.
+        state.panelClosed()
+        #expect(state.previewPagerRequestGeneration == 2)
+        #expect(state.previewPagerRequestDirection == .next)
+    }
+
+    /// The retry and pager channels are independent republish counters.
+    @Test func pagerAndRetryRequestsAreIndependentChannels() {
+        let state = makeState()
+        state.requestPreviewRetry()
+        #expect(state.previewRetryRequestGeneration == 1)
+        #expect(state.previewPagerRequestGeneration == 0)
+        state.requestPreviewPage(.previous)
+        #expect(state.previewRetryRequestGeneration == 1)
+        #expect(state.previewPagerRequestGeneration == 1)
     }
 }

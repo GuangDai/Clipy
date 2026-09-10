@@ -91,3 +91,11 @@ Local checks covered actual source pagination SQL/index use, source
 upsert/rollback/cascade SQL, and icon dimensions and alpha. Native validation
 runs through the existing macOS correctness workflow; local checks are not
 substitutes for Swift or running-app tests.
+
+## Addendum — 2026-09-10
+
+The in-window 320 pt preview column is superseded by a transient floating
+340 pt pane beside the panel; the previewSide and preview-column-width
+settings are removed. Panel height now fits the displayed content, with
+the persisted height as the ceiling rather than a fixed size. Image rows
+render 44/56 pt thumbnails (compact/comfortable).

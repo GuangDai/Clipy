@@ -37,4 +37,15 @@ struct HistoryRowLayoutTests {
         )
     }
 
+    @Test("text rows keep the 20/28pt slot; image rows get 44/56pt")
+    func densityRowMetrics() {
+        #expect(PanelTheme.thumbnailSize(for: .compact) == 20)
+        #expect(PanelTheme.thumbnailSize(for: .comfortable) == 28)
+        #expect(PanelTheme.imageThumbnailHeight(for: .compact) == 44)
+        #expect(PanelTheme.imageThumbnailHeight(for: .comfortable) == 56)
+        // The taller image slot adds no vertical padding beyond density.
+        #expect(PanelTheme.rowVerticalPadding(for: .compact) == 2)
+        #expect(PanelTheme.rowVerticalPadding(for: .comfortable) == 4)
+    }
+
 }

@@ -678,6 +678,29 @@ struct HistoryPreviewView: View {
             loader.purgePreview(purge.scope, isPinned: observedRow?.pinnedPosition != nil)
             if loader.fileLoadConfirmation == nil { fileConfirmationPresented = false }
         }
+        // The floating pane is never key, so its Retry button's ⌘R
+        // shortcut cannot fire there; the main panel republishes the chord
+        // through the pane state, applied exactly like the button.
+        .onChange(of: previewState.previewRetryRequestGeneration) { _, _ in
+            if loader.phase == .failed, loader.canRetryFailure {
+                retryGeneration += 1
+            }
+        }
+        // The same republish covers the PDF pager's ⌥⌘←/→ chords; the
+        // request is applied exactly like the pager buttons, so
+        // `selectPDFPage`'s own bounds/file guards keep an out-of-range
+        // step inert.
+        .onChange(of: previewState.previewPagerRequestGeneration) { _, _ in
+            guard let page = loader.pdfPageNumber,
+                  loader.pdfPageCount != nil
+            else { return }
+            switch previewState.previewPagerRequestDirection {
+            case .previous:
+                selectPDFPage(page - 1)
+            case .next:
+                selectPDFPage(page + 1)
+            }
+        }
         .onDisappear {
             previewState.isInformationPresented = false
             pdfPageSelection = nil

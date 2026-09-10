@@ -30,7 +30,6 @@
 "Launch at Login is unavailable for this app." = "此应用无法使用登录时启动功能。";
 "The Launch at Login setting couldn't be changed." = "无法更改登录时启动设置。";
 "Panel position" = "面板位置";
-"Preview side" = "预览位置";
 "Open preview automatically" = "自动打开预览";
 "Reset Panel Size to Default" = "恢复默认面板大小";
 "Panel" = "面板";
@@ -39,9 +38,6 @@
 "Row density" = "行密度";
 "Snippet lines" = "摘要行数";
 "Font size" = "字号";
-"Automatic" = "自动";
-"Left" = "左侧";
-"Right" = "右侧";
 "Compact" = "紧凑";
 "Comfortable" = "舒适";
 "Auto" = "自动";

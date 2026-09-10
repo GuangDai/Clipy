@@ -196,38 +196,23 @@ struct HistoryRowView: View {
 
     // MARK: Leading thumbnail
 
-    /// Density-sized leading slot (36pt comfortable / 28pt compact via
-    /// `PanelTheme.thumbnailSize(for:)`). Prefetch is gated by the cheap UTI
+    /// Density-sized leading slot: 20pt compact / 28pt comfortable for text
+    /// and type rows (`PanelTheme.thumbnailSize(for:)`), a generous 44/56pt
+    /// content height for image rows
+    /// (`PanelTheme.imageThumbnailHeight(for:)`). The slot height is fixed
+    /// per row kind, so a late async decode never relayouts the row: until a
+    /// raster is retained, an image row's slot shows the type-family symbol
+    /// scaled to the larger slot. Prefetch is gated by the cheap UTI
     /// heuristic so text rows never enter the thumbnail pipeline; observable
     /// state retains only a framework-neutral eager raster (01 §6; 04 §9).
-    /// While no raster is retained, the slot shows the source-app icon when
-    /// the surface's icon store has one cached, else the type-family symbol.
     private var thumbnail: some View {
         Group {
-            if let raster = thumbnails.raster(for: row.item),
-               let image = PreviewRasterDisplay.image(
-                   raster,
-                   scale: 2,
-                   label: Text(PanelActionsCopy.text("Item thumbnail", bundle: copyBundle))
-               ) {
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
+            if isImageRow {
+                imageThumbnail
             } else {
-                Image(systemName: Self.typeSymbol(for: row.typeIdentifiers))
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(.secondary)
+                standardThumbnail
             }
         }
-        .frame(
-            width: PanelTheme.thumbnailSize(for: density),
-            height: PanelTheme.thumbnailSize(for: density)
-        )
-        .background {
-            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
-                .fill(.quaternary)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
         .onAppear {
             thumbnails.setDisplayed(row.item, true)
         }
@@ -255,6 +240,108 @@ struct HistoryRowView: View {
             }
         }
         .accessibilityHidden(true)
+    }
+
+    /// True when the row's effective identifiers classify as the image
+    /// family — the same `HistoryRowKind` vocabulary the header filter and
+    /// the fallback symbol share, so the slot choice, the symbol, and the
+    /// type filter always agree.
+    private var isImageRow: Bool {
+        HistoryRowKind.classify(
+            effectiveTypeIdentifiers: row.typeIdentifiers
+        ) == .image
+    }
+
+    /// The retained eager raster as a SwiftUI image, or nil while the fetch
+    /// is pending, unavailable, or undecodable (a pure read — never fetches).
+    private var decodedThumbnail: Image? {
+        guard let raster = thumbnails.raster(for: row.item) else { return nil }
+        return PreviewRasterDisplay.image(
+            raster,
+            scale: 2,
+            label: Text(PanelActionsCopy.text("Item thumbnail", bundle: copyBundle))
+        )
+    }
+
+    /// Image rows present the decoded thumbnail aspect-fit at the
+    /// density-owned content height with a flexible width — no fixed-width
+    /// cropping, no letterbox backing behind a loaded image. Rounded
+    /// continuous corners plus a hairline separator-toned stroke keep white
+    /// images readable on the material background.
+    @ViewBuilder
+    private var imageThumbnail: some View {
+        let height = PanelTheme.imageThumbnailHeight(for: density)
+        if let image = decodedThumbnail {
+            image
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(height: height)
+                .clipShape(
+                    RoundedRectangle(
+                        cornerRadius: PanelTheme.cornerRadiusMedium,
+                        style: .continuous
+                    )
+                )
+                .overlay {
+                    RoundedRectangle(
+                        cornerRadius: PanelTheme.cornerRadiusMedium,
+                        style: .continuous
+                    )
+                    .strokeBorder(thumbnailHairline, lineWidth: 0.5)
+                }
+        } else {
+            // The placeholder is the same fixed-height slot with the
+            // type-family symbol scaled up, so the row never shifts when
+            // the async decode lands. The .quaternary backing lives only
+            // behind this symbol fallback.
+            Image(systemName: Self.typeSymbol(for: row.typeIdentifiers))
+                .font(.system(size: 20, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: height, height: height)
+                .background {
+                    RoundedRectangle(
+                        cornerRadius: PanelTheme.cornerRadiusMedium,
+                        style: .continuous
+                    )
+                    .fill(.quaternary)
+                }
+        }
+    }
+
+    /// Text and type rows keep the original compact square slot: 15pt symbol
+    /// or a square-cropped fit of any retained raster over the .quaternary
+    /// backing.
+    @ViewBuilder
+    private var standardThumbnail: some View {
+        Group {
+            if let image = decodedThumbnail {
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Image(systemName: Self.typeSymbol(for: row.typeIdentifiers))
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(
+            width: PanelTheme.thumbnailSize(for: density),
+            height: PanelTheme.thumbnailSize(for: density)
+        )
+        .background {
+            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
+                .fill(.quaternary)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
+    }
+
+    /// Hairline separator tone for the loaded image stroke. SwiftUI exposes
+    /// no separator-color token and this view stays AppKit-free, so the
+    /// primary-tinted 12% hairline stands in: it reads on the material in
+    /// both light and dark appearances exactly where a white image would
+    /// otherwise dissolve into the background.
+    private var thumbnailHairline: Color {
+        Color.primary.opacity(0.12)
     }
 
     /// Keep the pin position beside the title, outside the decorative icon,

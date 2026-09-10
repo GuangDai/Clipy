@@ -132,16 +132,18 @@ green on `master`, within the bounded proof scope described in §7.
 Post-step-9 additions: the perf/AB helper proofs live in the separate
 `HistoryPerfTests` target/lane (the default `swift test` skips them), and the
 panel is a Maccy-style AppDelegate-owned floating `NSPanel` (Carbon ⇧⌘C
-summon, cursor/status-item/center/last-position placement, dwell-driven
-preview pane; user-resizable within `PanelGeometry`'s min/max bounds with
-the settled size persisted across opens, and row density / preview
-auto-open / preview side are user preferences under Settings ▸
-Appearance; plus a header type/pinned row filter, row drag-out via
-`HistoryViewState.dragItemProvider`, a Space quick-look overlay, a footer
-keep-open pin, a status-item right-click menu (`StatusItemMenu`),
+summon, cursor/status-item/center/last-position placement, content-fitting
+height between a computed floor and the persisted height ceiling, a
+dwell-driven transient floating 340 pt preview pane beside the panel,
+hover selection arbitrated by a mouse/keyboard input mode, and 44/56 pt
+image-row thumbnails; user-resizable within `PanelGeometry`'s min/max
+bounds with the settled size persisted across opens as the height
+ceiling, and row density / preview auto-open as user preferences under
+Settings ▸ Appearance; plus a header type/pinned row filter, row drag-out
+via `HistoryViewState.dragItemProvider`, a Space quick-look overlay, a
+footer keep-open pin, a status-item right-click menu (`StatusItemMenu`),
 source-app icons injected through the public `SourceIconProvider` seam,
-a Settings ▸ Privacy capture ignore list (`CaptureIgnoreList`), and a
-freely draggable preview column (persisted width, double-click resets)) —
+and a Settings ▸ Privacy capture ignore list (`CaptureIgnoreList`)) —
 no longer a SwiftUI `MenuBarExtra` window.
 Check `docs/PROGRESS.md` and the REVIEW status document
 (`docs/reviews/2026-08-22-clipy-maccy-deep-review/10-implementation-status.md`)

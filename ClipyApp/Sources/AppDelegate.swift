@@ -188,6 +188,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         super.init()
         installPanelAppearanceObservation()
+        previewState.onFloatingPreviewTransition = { [weak self] transition in
+            self?.handleFloatingPreviewTransition(transition)
+        }
     }
 
     init(
@@ -212,6 +215,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.revealStoreLocationOperation = revealStoreLocationOperation
         super.init()
         installPanelAppearanceObservation()
+        previewState.onFloatingPreviewTransition = { [weak self] transition in
+            self?.handleFloatingPreviewTransition(transition)
+        }
     }
 
     // MARK: - Observable state for the scenes (Settings)
@@ -294,12 +300,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// synchronously even while the panel is closed.
     private(set) var panelSurfaceState: HistoryPanelSurfaceState?
 
-    /// The side selected from the panel's current screen geometry. The hosted
-    /// HistoryPanelView reads this same value to order its columns (Card 9C).
-    private(set) var previewPlacement: PreviewPlacement = .trailing
-
     /// Live panel appearance snapshot (row density, row typography —
-    /// snippet line count and font size — preview auto-open, and side).
+    /// snippet line count and font size — and preview auto-open).
     /// Seeded once from defaults, then refreshed from
     /// `UserDefaults.didChangeNotification` so an Appearance-tab edit reaches
     /// an ALREADY-OPEN panel instead of only the next summon. The load is a
@@ -441,6 +443,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         stopSummonShortcut()
+        panelContentFitTask?.cancel()
         removeMemoryPressureObservation()
         removeWorkspaceLifecycleObservation()
         if let defaultsObserverToken {
@@ -687,18 +690,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Creates the panel lazily, positions it, and orders it front as key
     /// window. The view state's observation is re-activated per open (the
     /// panel's close deactivates it — browsing state is fresh per summon).
-    /// The preview-side preference is read from the live appearance
-    /// snapshot at open, so an Appearance-tab change applies to the next
-    /// summon (`.automatic` keeps geometry's screen-fit choice).
     private func openPanel(at mode: PopupPositionMode) {
         guard workspaceActivity.permitsProductActivity else { return }
         if panel == nil {
             panel = FloatingPanel(
                 rootView: PanelRootView(appDelegate: self),
                 previewState: previewState,
-                onPreviewPlacementChange: { [weak self] placement in
-                    self?.previewPlacement = placement
-                },
                 isSelectionSubmissionEnabled: { [weak self] in
                     guard let self,
                           let composition = self.composition,
@@ -715,14 +712,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 isKeepOpenActive: { [weak self] in
                     self?.isPanelKeepOpenActive ?? false
                 },
+                onDidChangeScreen: { [weak self] in
+                    self?.hideFloatingPreviewPane()
+                },
+                onFrameChanged: { [weak self] in
+                    self?.followMainPanelFrameWithPreview()
+                },
                 onClosed: { [weak self] in self?.panelDidClose() }
             )
         }
         composition?.viewState.activate()
         panel?.open(
             at: mode,
-            statusItemButtonScreenFrame: statusItemButtonScreenFrame(),
-            previewSide: panelAppearance.previewSide
+            statusItemButtonScreenFrame: statusItemButtonScreenFrame()
         )
         if let composition {
             panelSurfaceState?.beginSession(rows: composition.viewState.rows)
@@ -771,10 +773,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         composition?.pauseCapture()
     }
 
-    /// The preview column's visibility changed inside the SwiftUI content;
-    /// resize the window to match (single no-animation `setFrame`).
-    func previewVisibilityDidChange(_ isOpen: Bool) {
-        panel?.setPreviewVisible(isOpen)
+    /// The transient floating preview pane, created lazily once per run
+    /// like the main panel and added as its child window on every show, so
+    /// it follows the main panel's ordering and never outlives it.
+    @ObservationIgnored
+    private var floatingPreviewPanel: FloatingPreviewPanel?
+
+    /// Content-fit coalescing: row/chrome changes arrive in bursts (page
+    /// loads, banner transitions), so the latest analytic demand applies
+    /// after a short settle — the same replaceable-task discipline as the
+    /// panel's deferred focus-loss close.
+    @ObservationIgnored
+    private var panelContentFitTask: Task<Void, Never>?
+
+    /// The panel content's analytic height demand (HistoryPanelView's
+    /// `PanelContentFit.Input` reports). Coalesced ~40 ms, then applied to
+    /// the window through FloatingPanel's instant, top-edge-pinned fit;
+    /// the persisted height is the ceiling, never a fixed size.
+    func panelContentFitDidChange(_ input: PanelContentFit.Input) {
+        panelContentFitTask?.cancel()
+        panelContentFitTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(40))
+            guard !Task.isCancelled, let self else { return }
+            self.panelContentFitTask = nil
+            self.panel?.fitToContent(
+                idealHeight: PanelContentFit.idealHeight(input)
+            )
+        }
+    }
+
+    /// The floating preview pane follows every main-panel frame change
+    /// (content-fit height, live user resize, snap-back): re-placing
+    /// through the same present path recomputes its side, height, and top
+    /// alignment from the pure geometry. A hidden pane stays hidden —
+    /// visibility is owned by the preview transitions, not frame changes.
+    private func followMainPanelFrameWithPreview() {
+        guard let panel,
+              panel.isPresented,
+              floatingPreviewPanel?.isPresented == true
+        else { return }
+        floatingPreviewPanel?.present(beside: panel)
+    }
+
+    /// The preview pane state publishes its show/update/hide transitions
+    /// here; the floating pane (never the main panel's geometry) applies
+    /// them. A show/update while the main panel is not presented is dropped
+    /// — the panel's lifecycle hooks keep the state disarmed off-screen.
+    private func handleFloatingPreviewTransition(
+        _ transition: PreviewPaneState.FloatingPreviewTransition
+    ) {
+        switch transition {
+        case .show, .update:
+            guard let panel, panel.isPresented, composition != nil else {
+                return
+            }
+            if floatingPreviewPanel == nil {
+                floatingPreviewPanel = FloatingPreviewPanel(
+                    rootView: FloatingPreviewRootView(appDelegate: self)
+                )
+            }
+            floatingPreviewPanel?.present(beside: panel)
+        case .hide:
+            hideFloatingPreviewPane()
+        }
+    }
+
+    /// Orders the floating preview pane out (panel close, screen change, or
+    /// the preview's own hide transition). Idempotent.
+    private func hideFloatingPreviewPane() {
+        floatingPreviewPanel?.dismiss()
     }
 
     /// Bookkeeping after every panel close: reset the keep-open pin (it is
@@ -782,7 +849,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// disarm the preview pane, and stop observation until the next summon.
     private func panelDidClose() {
         isPanelKeepOpenActive = false
+        panelContentFitTask?.cancel()
+        panelContentFitTask = nil
         composition?.cancelPendingPaste()
+        hideFloatingPreviewPane()
         panelSurfaceState?.endSession()
         composition?.viewState.deactivate()
     }
