@@ -43,6 +43,18 @@ struct PreviewPaneStateTests {
         #expect(state.isOpen)
     }
 
+    @Test func explicitlyClickingAnotherRowRetargetsImmediatelyEvenInPointerMode() {
+        let state = PreviewPaneState(autoOpenDelay: .seconds(3_600))
+        defer { state.panelClosed() }
+        let first = reference()
+        let clicked = reference()
+        state.togglePreview(for: first)
+        state.isPointerInteractionActive = true
+        state.handleSelectionChange(clicked, isExplicit: true)
+        #expect(state.previewedItem == clicked)
+        #expect(state.isOpen)
+    }
+
     @Test func dwellingOnAnotherRowUpdatesTheOpenPreview() async {
         let state = makeState()
         defer { state.panelClosed() }

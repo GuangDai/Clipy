@@ -794,7 +794,15 @@ struct HistoryPanelView: View {
                     fontSize: appearance.rowFontSize,
                     isSearchFieldFocused: isSearchFieldFocused,
                     selection: $surfaceState.selection,
-                    onFocusHistory: { isSearchFieldFocused = false },
+                    onFocusHistory: {
+                        isSearchFieldFocused = false
+                        // An actual click is a choice, not pointer transit.
+                        // Publish it before a subsequent preview-button click.
+                        previewState.handleSelectionChange(
+                            surfaceState.selectedReference(in: viewState.displayedRows),
+                            isExplicit: true
+                        )
+                    },
                     onHoverRow: { id in surfaceState.handleRowHover(id) },
                     onKeyboardNavigation: { surfaceState.noteKeyboardNavigation() },
                     onPointerMovement: { surfaceState.notePointerMovement() },

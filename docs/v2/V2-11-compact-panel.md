@@ -115,7 +115,7 @@ intentionally not adopted. A single list section has no redundant heading;
 Pinned/Recent headings appear only when they distinguish two visible groups.
 The search field and adjacent controls share a 24 pt line. Empty/error states
 use compact messages, not large placeholder illustrations.
-Keyboard selection updates an open preview immediately. Mouse selection
+Keyboard selection and explicit row clicks update an open preview immediately. Hover selection
 dwells before switching content; entering the preview cancels a crossed row's
 pending demand and restores selection to the previewed item. Copy, Pin and
 Information therefore operate on the content the user approached.

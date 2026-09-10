@@ -215,11 +215,10 @@ final class PreviewPaneState {
 
     /// The list selection changed. Cancels any pending dwell and clears the
     /// manual-close suppression. A `nil` selection closes an open preview
-    /// immediately (nothing to preview). An OPEN preview retargets to the
-    /// new item immediately — only the closed→open transition dwells, and
-    /// only when auto-open is armed by both the panel's key status and the
-    /// user preference.
-    func handleSelectionChange(_ item: HistoryItemReference?) {
+    /// immediately (nothing to preview). Keyboard selection and an explicit
+    /// row click retarget an open preview immediately; pointer transit dwells.
+    /// Opening a closed pane still respects the user's auto-open preference.
+    func handleSelectionChange(_ item: HistoryItemReference?, isExplicit: Bool = false) {
         currentSelectionReference = item
         cancelPendingAutoOpen()
         isAutoOpenSuppressed = false
@@ -229,7 +228,7 @@ final class PreviewPaneState {
         }
         if isOpen {
             guard previewedItem != item else { return }
-            if isPointerInteractionActive, previewedItem?.id != item.id,
+            if isPointerInteractionActive, !isExplicit, previewedItem?.id != item.id,
                isAutoOpenEnabled, isAutoOpenPreferenceEnabled {
                 scheduleAutoOpen(for: item)
                 return
