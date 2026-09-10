@@ -9,8 +9,9 @@
 ///   selected item. Every selection change cancels the pending task first —
 ///   the cancel-and-reschedule pair IS the debounce, so rapid arrow-key
 ///   movement never opens intermediate items;
-/// - once the preview is OPEN, a selection change retargets the shown item
-///   IMMEDIATELY (no dwell): only the closed→open transition dwells;
+/// - an OPEN preview follows keyboard selection immediately. Mouse selection
+///   dwells before retargeting, so crossing another row on the way to the
+///   preview's actions cannot replace the content being operated on;
 /// - a manual close suppresses auto-open until the selection changes again
 ///   (`isAutoOpenSuppressed`), so the pane does not bounce back open under
 ///   the user's cursor;
@@ -228,6 +229,11 @@ final class PreviewPaneState {
         }
         if isOpen {
             guard previewedItem != item else { return }
+            if isPointerInteractionActive, previewedItem?.id != item.id,
+               isAutoOpenEnabled, isAutoOpenPreferenceEnabled {
+                scheduleAutoOpen(for: item)
+                return
+            }
             previewedItem = item
             onFloatingPreviewTransition?(.update(item))
             return
@@ -375,6 +381,12 @@ final class PreviewPaneState {
         guard isPointerInteractionActive else { return }
         pointerPresence.insert(surface)
         cancelPendingPointerExit()
+        if surface == .preview, isOpen {
+            // Keep the preview's current content while its controls are in
+            // use. A transit across another row is not a new preview intent.
+            cancelPendingAutoOpen()
+            currentSelectionReference = previewedItem
+        }
         guard surface == .mainPanel else { return }
         guard !isOpen,
               pendingAutoOpenItem == nil,
@@ -511,9 +523,10 @@ final class PreviewPaneState {
             }
             self.pendingAutoOpenItem = nil
             self.autoOpenTask = nil
+            let wasOpen = self.isOpen
             self.previewedItem = item
             self.isOpen = true
-            self.onFloatingPreviewTransition?(.show(item))
+            self.onFloatingPreviewTransition?(wasOpen ? .update(item) : .show(item))
         }
     }
 

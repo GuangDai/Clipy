@@ -160,6 +160,10 @@ struct FloatingPreviewRootView: View {
         .onHover { isInside in
             if isInside {
                 appDelegate.previewState.pointerEntered(.preview)
+                if appDelegate.previewState.isPointerInteractionActive,
+                   let item = appDelegate.previewState.previewedItem {
+                    appDelegate.panelSurfaceState?.selection = item.id
+                }
             } else {
                 appDelegate.previewState.pointerExited(.preview)
             }

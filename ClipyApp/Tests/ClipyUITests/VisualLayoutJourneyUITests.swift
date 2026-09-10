@@ -101,6 +101,8 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         information.click()
         let informationContent = app.descendants(matching: .any)["clipy.preview.information.content"]
         XCTAssertTrue(informationContent.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(image.exists,
+                      "Crossing another row to open Information must not replace the selected image.\n\(app.debugDescription)")
         attach(app, named: "Preview — Information popover")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil { !informationContent.exists }, app.debugDescription)

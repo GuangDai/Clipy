@@ -25,6 +25,41 @@ struct PreviewPaneStateTests {
         PreviewPaneState(autoOpenDelay: .zero)
     }
 
+    @Test func crossingAnotherRowToReachPreviewControlsKeepsTheVisibleItem() {
+        let state = PreviewPaneState(autoOpenDelay: .seconds(3_600))
+        defer { state.panelClosed() }
+        let visible = reference()
+        let crossed = reference()
+        state.togglePreview(for: visible)
+        state.isPointerInteractionActive = true
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(crossed)
+        #expect(state.previewedItem == visible)
+        state.pointerEntered(.preview)
+        state.pointerExited(.mainPanel)
+        state.purge(.item(crossed.id))
+        #expect(state.purgeGeneration == 0, "Entering preview retires the crossed row's pending demand")
+        #expect(state.previewedItem == visible)
+        #expect(state.isOpen)
+    }
+
+    @Test func dwellingOnAnotherRowUpdatesTheOpenPreview() async {
+        let state = makeState()
+        defer { state.panelClosed() }
+        let first = reference()
+        let next = reference()
+        var transitions: [PreviewPaneState.FloatingPreviewTransition] = []
+        state.onFloatingPreviewTransition = { transitions.append($0) }
+        state.togglePreview(for: first)
+        state.isPointerInteractionActive = true
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(next)
+        #expect(state.previewedItem == first)
+        await waitForScheduledDwell { state.previewedItem == next }
+        #expect(state.previewedItem == next)
+        #expect(transitions == [.show(first), .update(next)])
+    }
+
     @Test func normalPressureRestoresTheCurrentDwellWithoutAnotherSelectionChange() async {
         let state = makeState()
         let item = reference()
