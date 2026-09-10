@@ -104,6 +104,8 @@ the footprint. The floating preview measures its rendered content separately
 from the main list. Short text, unavailable states and small images shrink;
 long text and references scroll only when they reach the saved/screen ceiling.
 Metadata and frequently used Copy/Pin actions stay in a compact footer.
+Dragging only the window's width preserves the saved height ceiling; a short
+content-fitted height must never silently become a new user preference.
 
 The local Maccy `HistoryRowLayout`, `ListItemView`, `HeaderView`,
 `PreviewItemView`, `ToolbarView`, `ContentView` and `Popup` informed this pass:

@@ -465,6 +465,36 @@ struct FloatingPanelFrameHostedTests {
         #expect(preview.frame == expected.frame)
     }
 
+    @Test func widthOnlyResizePreservesTheContentHeightCeiling() throws {
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visibleFrame = screen.visibleFrame
+        try #require(visibleFrame.width >= 500 && visibleFrame.height >= 420)
+        let restore = isolatePersistedPanelGeometryKeys()
+        defer { restore() }
+        let appDelegate = AppDelegate()
+        let panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState, onClosed: {}
+        )
+        defer { panel.close() }
+        panel.open(at: .statusItem, statusItemButtonScreenFrame: NSRect(
+            x: visibleFrame.minX, y: visibleFrame.maxY - 1, width: 1, height: 1
+        ))
+        panel.fitToContent(idealHeight: 80)
+        panel.windowWillStartLiveResize(Notification(name: NSWindow.willStartLiveResizeNotification, object: panel))
+        var resized = panel.frame
+        resized.size.width = 500
+        panel.setFrame(resized, display: false)
+        panel.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: panel))
+        let saved = PanelGeometry.persistedSize(from: .standard)
+        #expect(saved.contentWidth == 500)
+        #expect(saved.height == 420)
+        #expect(panel.frame.height == 80)
+        // Future content can still grow into the user's original ceiling.
+        panel.fitToContent(idealHeight: 600)
+        #expect(panel.frame.height == 420)
+    }
+
     @Test func wideWindowUsesScreenLimitsAndKeepsItsSizeThroughPreview() throws {
         let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
         let visible = screen.visibleFrame

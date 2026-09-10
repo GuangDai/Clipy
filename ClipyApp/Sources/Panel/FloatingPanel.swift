@@ -93,6 +93,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// re-applies the retained demand (Maccy's popup semantics: content
     /// smaller than the new ceiling shrinks the panel).
     private var isLiveResizeActive = false
+    private var liveResizeStartingHeight: CGFloat?
 
     /// AppKit can notify the parent that it resigned key before
     /// `beginSheetModal` has made `attachedSheet` observable. Defer the close
@@ -337,6 +338,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// active the retained demand is kept but not applied.
     func windowWillStartLiveResize(_ notification: Notification) {
         isLiveResizeActive = true
+        liveResizeStartingHeight = frame.height
     }
 
     /// Persists the user-settled panel size through PanelGeometry's single
@@ -352,9 +354,14 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         isLiveResizeActive = false
         let contentWidth = PanelGeometry.clampedContentWidth(frame.width)
         let height = PanelGeometry.clampedHeight(frame.height)
+        // A width-only drag must not turn a content-fitted short list into
+        // a permanent height ceiling for future history and previews.
+        let heightCeiling = liveResizeStartingHeight == frame.height
+            ? PanelGeometry.persistedSize(from: .standard).height : height
+        liveResizeStartingHeight = nil
         PanelGeometry.persistSize(
             contentWidth: contentWidth,
-            height: height,
+            height: heightCeiling,
             to: .standard
         )
         let clampedSize = NSSize(
@@ -369,6 +376,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         }
         persistAnchor()
         applyContentFit()
+        onFrameChanged()
     }
 
     /// The panel's frame changed (content fit, user resize, snap-back).
