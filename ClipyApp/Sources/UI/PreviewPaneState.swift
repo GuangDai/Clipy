@@ -412,7 +412,7 @@ final class PreviewPaneState {
         pointerPresence.remove(surface)
         guard pointerPresence.isEmpty else { return }
         cancelPendingAutoOpen()
-        guard isOpen else { return }
+        guard isOpen, !isInformationPresented else { return }
         cancelPendingPointerExit()
         let grace = pointerExitGrace
         // Same MainActor/weak-self discipline as the dwell task.
@@ -420,7 +420,8 @@ final class PreviewPaneState {
             if grace > .zero {
                 try? await Task.sleep(for: grace)
             }
-            guard !Task.isCancelled, let self, self.pointerPresence.isEmpty
+            guard !Task.isCancelled, let self, self.pointerPresence.isEmpty,
+                  !self.isInformationPresented
             else { return }
             self.pointerExitTask = nil
             // Lightweight hide: no manual-close suppression — pointer

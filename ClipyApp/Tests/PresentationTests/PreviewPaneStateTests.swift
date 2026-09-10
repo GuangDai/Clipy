@@ -643,6 +643,35 @@ struct PreviewPaneStateTests {
         return state
     }
 
+    @Test func informationPopoverKeepsItsPreviewAliveOutsideBothWindowSurfaces() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        let item = reference()
+        state.togglePreview(for: item)
+        state.pointerEntered(.preview)
+        state.isInformationPresented = true
+        state.pointerExited(.preview)
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isOpen)
+        #expect(state.previewedItem == item)
+        // Escape's first step dismisses information, preserving the preview.
+        state.isInformationPresented = false
+        #expect(state.isOpen)
+    }
+
+    @Test func openingInformationCancelsTheEffectOfAnAlreadyQueuedExit() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        state.togglePreview(for: reference())
+        state.pointerEntered(.preview)
+        state.pointerExited(.preview)
+        state.isInformationPresented = true
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isOpen)
+    }
+
     @Test func pointerExitHidesAnOpenPreviewAfterTheGrace() async {
         let state = makePointerState()
         let item = reference()
