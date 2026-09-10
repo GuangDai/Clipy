@@ -786,6 +786,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @ObservationIgnored
     private var panelContentFitTask: Task<Void, Never>?
 
+    @ObservationIgnored
+    private var floatingPreviewFitTask: Task<Void, Never>?
+
     /// The panel content's analytic height demand (HistoryPanelView's
     /// `PanelContentFit.Input` reports). Coalesced ~40 ms, then applied to
     /// the window through FloatingPanel's instant, top-edge-pinned fit;
@@ -817,8 +820,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func floatingPreviewContentHeightDidChange(_ height: CGFloat, for item: HistoryItemReference) {
-        guard previewState.isOpen, previewState.previewedItem == item else { return }
-        floatingPreviewPanel?.fitToContent(height: height)
+        floatingPreviewFitTask?.cancel()
+        floatingPreviewFitTask = Task { @MainActor [weak self] in
+            // Apply window geometry after SwiftUI finishes measuring. The
+            // rendered height is independent of the window proposal, and
+            // repeated measurements in one pass collapse to the latest one.
+            await Task.yield()
+            guard !Task.isCancelled, let self,
+                  self.previewState.isOpen, self.previewState.previewedItem == item else { return }
+            self.floatingPreviewFitTask = nil
+            self.floatingPreviewPanel?.fitToContent(height: height)
+        }
     }
 
     private func updatePreviewHeightCeiling() {
@@ -853,6 +865,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Orders the floating preview pane out (panel close, screen change, or
     /// the preview's own hide transition). Idempotent.
     private func hideFloatingPreviewPane() {
+        floatingPreviewFitTask?.cancel()
+        floatingPreviewFitTask = nil
         floatingPreviewPanel?.dismiss()
     }
 
