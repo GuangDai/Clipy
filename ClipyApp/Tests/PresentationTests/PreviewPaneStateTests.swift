@@ -92,8 +92,11 @@ struct PreviewPaneStateTests {
                 state.panelClosed()
                 state.panelBecameKey()
             case "resign key":
+                // Resigning key retires the pressure-suspended demand. The
+                // inverse direction — becoming key re-dwelling the retained
+                // current selection — is the summon-ordering contract
+                // covered by the panelBecameKey tests below.
                 state.panelResignedKey()
-                state.panelBecameKey()
             default:
                 state.handleSelectionChange(nil)
             }
@@ -231,6 +234,127 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == item)
     }
 
+    // MARK: Key-status re-dwell (summon ordering)
+
+    /// The summon ordering proof (the floating-preview redesign regression):
+    /// the session's preselection reaches `handleSelectionChange` BEFORE
+    /// AppKit's windowDidBecomeKey rearms auto-open, so the selection change
+    /// is dropped by the dwell gate and no later selection change follows.
+    /// Becoming key must itself re-dwell the retained current selection.
+    @Test func panelBecameKeyReDwellsASelectionDroppedWhileDisarmed() async {
+        let state = makeState()
+        var events: [PreviewPaneState.FloatingPreviewTransition] = []
+        state.onFloatingPreviewTransition = { events.append($0) }
+        let item = reference()
+
+        // Post-close ordering: disarmed, the preselection arrives and is
+        // dropped by the dwell gate — and nothing else follows.
+        state.panelResignedKey()
+        state.handleSelectionChange(item)
+        await Task.yield()
+        #expect(!state.isOpen)
+        #expect(events.isEmpty)
+
+        state.panelBecameKey()
+        #expect(!state.isOpen, "becoming key dwells; it never opens synchronously")
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+        #expect(events == [.show(item)])
+    }
+
+    /// The re-dwell keeps every veto the selection-change gate has: a
+    /// manual (Esc) close's suppression, a disabled user preference, and an
+    /// already-open pane (no duplicate show) all survive key cycling.
+    @Test func panelBecameKeyReDwellKeepsSuppressionPreferenceAndOpenVetoes() async {
+        // Manual-close suppression keeps its veto across key status.
+        do {
+            let state = makeState()
+            let item = reference()
+            state.handleSelectionChange(item)
+            await waitForScheduledDwell { state.isOpen }
+            #expect(state.dismissPreview())
+            state.panelResignedKey()
+            state.panelBecameKey()
+            await Task.yield()
+            await Task.yield()
+            #expect(!state.isOpen, "manual close suppression survives key cycling")
+            #expect(state.previewedItem == nil)
+        }
+        // The disabled preference gates the re-dwell exactly like a
+        // selection change.
+        do {
+            let state = makeState()
+            let item = reference()
+            state.isAutoOpenPreferenceEnabled = false
+            state.handleSelectionChange(item)
+            state.panelResignedKey()
+            state.panelBecameKey()
+            await Task.yield()
+            await Task.yield()
+            #expect(!state.isOpen)
+            #expect(state.previewedItem == nil)
+        }
+        // An already-open pane is not re-shown: becoming key publishes no
+        // second show event.
+        do {
+            let state = makeState()
+            var events: [PreviewPaneState.FloatingPreviewTransition] = []
+            state.onFloatingPreviewTransition = { events.append($0) }
+            let item = reference()
+            state.handleSelectionChange(item)
+            await waitForScheduledDwell { state.isOpen }
+            state.panelResignedKey()
+            state.panelBecameKey()
+            await Task.yield()
+            await Task.yield()
+            #expect(state.isOpen)
+            #expect(events == [.show(item)])
+        }
+    }
+
+    /// Losing key cancels the armed dwell before it fires; regaining key
+    /// restarts it for the same retained selection.
+    @Test func resigningKeyCancelsTheArmedDwellAndBecomingKeyRestartsIt() async {
+        let state = makeState()
+        let item = reference()
+        state.handleSelectionChange(item)
+        // The armed dwell is pending; losing key cancels it before the
+        // zero-delay task gets a MainActor turn.
+        state.panelResignedKey()
+        await Task.yield()
+        await Task.yield()
+        #expect(!state.isOpen)
+
+        state.panelBecameKey()
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+    }
+
+    /// A dwell from one session can never fire into the next: panelClosed
+    /// retires the retained selection demand, so becoming key after a close
+    /// finds nothing to re-dwell until the new session's selection arrives.
+    @Test func panelClosedRetiresDemandSoNoStaleDwellLeaksIntoTheNextSession() async {
+        let state = makeState()
+        var events: [PreviewPaneState.FloatingPreviewTransition] = []
+        state.onFloatingPreviewTransition = { events.append($0) }
+        let item = reference()
+        state.handleSelectionChange(item)
+        // Close before the armed zero-delay dwell runs; it must never fire.
+        state.panelClosed()
+        state.panelBecameKey()
+        await Task.yield()
+        await Task.yield()
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+        #expect(events.isEmpty)
+
+        // The next session's preselection dwells normally from here.
+        state.handleSelectionChange(item)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+        #expect(events == [.show(item)])
+    }
+
     @Test func disabledAutoOpenPreferenceNeverSchedulesTheDwell() async {
         let state = makeState()
         let item = reference()
@@ -316,7 +440,7 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == second)
     }
 
-    @Test func panelClosedDisarmsAutoOpenUntilThePanelBecomesKeyAgain() {
+    @Test func panelClosedDisarmsAutoOpenUntilThePanelBecomesKeyAgain() async {
         let state = makeState()
         let first = reference()
         let second = reference()
@@ -330,18 +454,23 @@ struct PreviewPaneStateTests {
         #expect(!state.isAutoOpenEnabled)
 
         // A selection published by the hidden panel must not reopen or queue
-        // a preview for the next session.
+        // a preview on its own; it is retained as the current selection.
         state.handleSelectionChange(second)
+        await Task.yield()
+        await Task.yield()
         #expect(!state.isOpen)
         #expect(state.previewedItem == nil)
 
         // AppKit's windowDidBecomeKey callback is the sole lifecycle input
-        // that re-arms selection-driven preview opening. Reactivation alone
-        // does not synthesize a selection change or reopen the pane.
+        // that re-arms selection-driven preview opening. Reactivation does
+        // not synthesize a selection change — it re-dwells the retained
+        // current selection instead (the summon preselection can arrive
+        // while still disarmed), so the pane opens after the dwell with no
+        // further selection change.
         state.panelBecameKey()
         #expect(state.isAutoOpenEnabled)
-        #expect(!state.isOpen)
-        #expect(state.previewedItem == nil)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == second)
     }
 
     @Test func clearingTheSelectionClosesAnOpenPreviewImmediately() {

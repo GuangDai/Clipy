@@ -15,8 +15,13 @@
 ///   (`isAutoOpenSuppressed`), so the pane does not bounce back open under
 ///   the user's cursor;
 /// - the panel's key status arms/disarms auto-open
-///   (`panelBecameKey`/`panelResignedKey`); panel close leaves auto-open
-///   disarmed until the next key-window activation;
+///   (`panelBecameKey`/`panelResignedKey`); becoming key also RE-DWELLS the
+///   retained current selection, because a summon publishes its preselected
+///   row without any ordering guarantee against AppKit's key-window
+///   callback (a selection change that arrives while still disarmed is
+///   dropped by the dwell gate, and no later selection change follows);
+///   panel close leaves auto-open disarmed until the next key-window
+///   activation;
 /// - the user's preview auto-open preference
 ///   (`isAutoOpenPreferenceEnabled`, default on) gates dwell scheduling
 ///   independently of key status: while off, selection changes never open
@@ -285,9 +290,19 @@ final class PreviewPaneState {
 
     // MARK: - Panel lifecycle (Maccy FloatingPanel ⇄ SlideoutController)
 
-    /// The panel became key: arm dwell auto-open.
+    /// The panel became key: arm dwell auto-open, then re-dwell the CURRENT
+    /// selection when the pane is closed. The session's preselected row can
+    /// reach `handleSelectionChange` before AppKit delivers this callback
+    /// (a re-summon after `panelClosed` finds auto-open disarmed), and no
+    /// later selection change follows in that flow — so key status is itself
+    /// a dwell trigger, Maccy's becoming-key re-dwell of the lead selection.
+    /// An already-pending dwell keeps its schedule (becoming key must not
+    /// postpone it), manual-close suppression and the user preference keep
+    /// their veto, and `scheduleAutoOpen` applies the critical-pressure
+    /// deferral exactly like a selection change.
     func panelBecameKey() {
         isAutoOpenEnabled = true
+        armAndDwellCurrentSelection()
     }
 
     /// The panel lost key: disarm dwell auto-open and drop any pending fire.
@@ -416,6 +431,22 @@ final class PreviewPaneState {
     }
 
     // MARK: - Private
+
+    /// The one key-status re-dwell trigger for the retained current
+    /// selection, called only from `panelBecameKey` — never from the
+    /// selection binding, so a binding echo cannot restart a dwell. The
+    /// gates mirror `handleSelectionChange`'s closed→open path (arming was
+    /// just applied by the caller); a pending dwell — including one
+    /// retained for memory-pressure recovery — is left untouched.
+    private func armAndDwellCurrentSelection() {
+        guard !isOpen,
+              pendingAutoOpenItem == nil,
+              let currentSelectionReference,
+              isAutoOpenPreferenceEnabled,
+              !isAutoOpenSuppressed
+        else { return }
+        scheduleAutoOpen(for: currentSelectionReference)
+    }
 
     private func scheduleAutoOpen(for item: HistoryItemReference) {
         pendingAutoOpenItem = item

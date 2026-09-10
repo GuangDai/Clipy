@@ -63,6 +63,11 @@ enum PanelContentFit {
         var isFilterChipVisible = false
         /// The browsing column's typed-failure banner.
         var isFailureBannerVisible = false
+        /// A pushed destination (Details/editor) or the quick-look overlay
+        /// fills the whole panel: row-derived shrink-to-fit would clip it.
+        /// While set the demand is the full persisted ceiling
+        /// (`fullHeightDemand`); clearing it refits to the rows.
+        var prefersFullHeight = false
     }
 
     // MARK: Hoisted view metrics (single source of truth)
@@ -172,6 +177,14 @@ enum PanelContentFit {
 
     // MARK: Oracle
 
+    /// The demand a full-height destination (`Input.prefersFullHeight`)
+    /// publishes: an unbounded ideal that `clampedHeight` resolves to the
+    /// persisted ceiling (still floored against a legacy sub-floor ceiling).
+    /// The oracle stays ceiling-agnostic — the AppKit side owns the
+    /// persisted value — so the flag maps to the ceiling through the
+    /// existing clamp instead of a new parameter.
+    static let fullHeightDemand: CGFloat = .greatestFiniteMagnitude
+
     /// The content-fit floor: header + ONE text row + slack at the product
     /// default appearance (compact density, medium type). Empty content
     /// still fits at the floor; `PanelGeometry.minimumHeight` is this same
@@ -191,7 +204,11 @@ enum PanelContentFit {
     /// pinned rows display; Recent when unpinned rows or the pagination
     /// control display — the list's exact conditions), the rows, the
     /// trailing pagination control, the failure banner, and bottom slack.
+    /// `prefersFullHeight` short-circuits all of it: a pushed
+    /// Details/editor destination or the quick-look overlay demands the
+    /// whole persisted ceiling (`fullHeightDemand`).
     static func idealHeight(_ input: Input) -> CGFloat {
+        guard !input.prefersFullHeight else { return fullHeightDemand }
         var height = headerHeight + bottomSlack
         if input.isFilterChipVisible {
             height += filterChipDelta

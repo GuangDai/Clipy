@@ -162,6 +162,36 @@ struct PanelContentFitTests {
         #expect(PanelContentFit.clampedHeight(10, ceiling: 420) == 83)
     }
 
+    /// A pushed Details/editor destination or the quick-look overlay fills
+    /// the whole panel: while `prefersFullHeight` is set the demand clamps
+    /// to the persisted ceiling instead of the row-derived height (a short
+    /// list grows the panel, top-edge-pinned), and clearing the flag refits
+    /// to the rows.
+    @Test func fullHeightDestinationDemandsThePersistedCeiling() {
+        var input = PanelContentFit.Input()
+        input.unpinnedRows = [textRow(), textRow()]
+        // header 48 + Recent header 28 + 2×29 + slack 6.
+        let rowFit = PanelContentFit.clampedHeight(
+            PanelContentFit.idealHeight(input), ceiling: 420
+        )
+        #expect(rowFit == 48 + 28 + 58 + 6)
+
+        input.prefersFullHeight = true
+        let fullHeight = PanelContentFit.idealHeight(input)
+        #expect(fullHeight == PanelContentFit.fullHeightDemand)
+        #expect(PanelContentFit.clampedHeight(fullHeight, ceiling: 420) == 420)
+        // A sub-floor legacy ceiling still yields the floor.
+        #expect(PanelContentFit.clampedHeight(fullHeight, ceiling: 40) == 83)
+
+        // Popping the destination / dismissing the overlay refits to rows.
+        input.prefersFullHeight = false
+        #expect(
+            PanelContentFit.clampedHeight(
+                PanelContentFit.idealHeight(input), ceiling: 420
+            ) == rowFit
+        )
+    }
+
     @Test func rowDescriptorsMapTheSameClassificationAsTheRowView() {
         let reference = HistoryItemReference(
             id: HistoryItemID(rawValue: UUID()),

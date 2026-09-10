@@ -836,7 +836,12 @@ struct HistoryPanelView: View {
     /// The analytic height oracle's input: the displayed section rows
     /// mapped to height descriptors, the row typography, and the chrome
     /// flags — the exact conditions the search header, list, and failure
-    /// banner render with, so the fit cannot drift from the layout.
+    /// banner render with, so the fit cannot drift from the layout. A
+    /// pushed Details/editor destination or the quick-look overlay renders
+    /// across the whole panel while the list rows stay behind it, so those
+    /// states report the full-height demand instead of the row-derived one
+    /// (the overlay condition is the same resolved reference the ZStack
+    /// renders with, keeping demand and rendering in lockstep).
     private var contentFitInput: PanelContentFit.Input {
         let snippetLineLimit = appearance.snippetLineCount.baseLineLimit(
             density: appearance.rowDensity
@@ -859,7 +864,13 @@ struct HistoryPanelView: View {
                 viewState.hasNextPage || viewState.isLoadingPage,
             isFilterChipVisible:
                 viewState.typeFilter != .all || viewState.showsPinnedOnly,
-            isFailureBannerVisible: isFailureBannerVisible
+            isFailureBannerVisible: isFailureBannerVisible,
+            prefersFullHeight:
+                !surfaceState.detailsPath.isEmpty
+                    || surfaceState.resolvedQuickLookReference(
+                        in: displayedSelectionRows,
+                        hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
+                    ) != nil
         )
     }
 

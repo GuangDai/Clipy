@@ -302,6 +302,53 @@ struct FloatingPanelFrameHostedTests {
         #expect(panel.frame.maxY == top)
     }
 
+    /// The full-height destination demand (Details/quick-look publishes
+    /// `PanelContentFit.fullHeightDemand`) clamps to the persisted ceiling
+    /// through the real window: a row-fitted panel grows to the ceiling,
+    /// top-pinned, and a later row-derived demand refits it back down.
+    @Test
+    func fullHeightDestinationDemandClampsToThePersistedCeiling() throws {
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visibleFrame = screen.visibleFrame
+        try #require(visibleFrame.width >= 721)
+        try #require(visibleFrame.height >= 560)
+
+        let restorePersistedSize = isolatePersistedPanelGeometryKeys()
+        defer { restorePersistedSize() }
+
+        let appDelegate = AppDelegate()
+        let panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState,
+            onClosed: {}
+        )
+        defer { panel.close() }
+
+        panel.open(
+            at: .statusItem,
+            statusItemButtonScreenFrame: NSRect(
+                x: visibleFrame.minX,
+                y: visibleFrame.maxY - 1,
+                width: 1,
+                height: 1
+            )
+        )
+        panel.fitToContent(idealHeight: 200)
+        #expect(panel.frame.height == 200)
+        let top = panel.frame.maxY
+
+        // Entering a full-height destination: the unbounded demand stops at
+        // the persisted ceiling (the default 420 with no persisted keys).
+        panel.fitToContent(idealHeight: PanelContentFit.fullHeightDemand)
+        #expect(panel.frame.height == PanelGeometry.height)
+        #expect(panel.frame.maxY == top)
+
+        // Leaving the destination refits to the row-derived demand.
+        panel.fitToContent(idealHeight: 200)
+        #expect(panel.frame.height == 200)
+        #expect(panel.frame.maxY == top)
+    }
+
     /// During the user's live resize the fit is suspended; at the settle
     /// boundary the dragged height persists as the new ceiling and the
     /// retained demand re-applies (content smaller than the new ceiling
