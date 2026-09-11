@@ -6,15 +6,13 @@
 import Foundation
 
 internal enum PreviewRTFRenderer {
-    internal static func render(_ bytes: Data) -> PreviewOutcome {
+    internal static func render(_ bytes: Data, textConfiguration: PreviewTextConfiguration = .init()) -> PreviewOutcome {
         guard bytes.count <= 1_048_576 else { return .failed(.resourceLimit) }
         do {
             var parser = Parser(bytes: Array(bytes))
             let decoded = try parser.parse()
-            let end = decoded.index(decoded.startIndex, offsetBy: PreviewText.maximumCharacters,
-                                    limitedBy: decoded.endIndex) ?? decoded.endIndex
             return .content(.text(PreviewText(
-                text: String(decoded[..<end]), wasTruncated: end != decoded.endIndex
+                text: decoded, wasTruncated: false, configuration: textConfiguration
             )))
         } catch let failure as ParseFailure {
             switch failure {

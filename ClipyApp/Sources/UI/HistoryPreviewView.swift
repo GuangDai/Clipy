@@ -152,6 +152,7 @@ final class PreviewContentLoader {
     private let history: any ClipboardHistory
 
     private let renderer = ContentPreview()
+    private var textConfiguration = PreviewTextConfiguration()
 
 #if DEBUG
     /// Running-app acceptance can make only this loader's first metadata read
@@ -191,7 +192,7 @@ final class PreviewContentLoader {
               canRetryFailure,
               let requestedItem
         else { return }
-        await load(item: requestedItem, pdfPage: requestedPDFPage)
+        await load(item: requestedItem, pdfPage: requestedPDFPage, textConfiguration: textConfiguration)
     }
 
     /// View disappearance releases applied content immediately, including
@@ -216,13 +217,15 @@ final class PreviewContentLoader {
     /// retarget cancels the previous load's task, and the fence covers the
     /// case where cancellation arrives late or the awaited work does not
     /// throw on cancellation.
-    func load(item: HistoryItemReference?, pdfPage: Int = 1) async {
+    func load(item: HistoryItemReference?, pdfPage: Int = 1,
+              textConfiguration: PreviewTextConfiguration = .init()) async {
         guard !Task.isCancelled else { return }
         guard let item else {
             clear()
             return
         }
         retireFileLoad()
+        self.textConfiguration = textConfiguration
         requestGeneration += 1
         let generation = requestGeneration
         requestedItem = item
@@ -242,6 +245,7 @@ final class PreviewContentLoader {
 #endif
             let outcome = try await Self.renderPayload(
                 for: item, pdfPage: pdfPage, history: history, renderer: renderer,
+                textConfiguration: textConfiguration,
                 isCurrent: { [weak self] in
                     self?.requestGeneration == generation && self?.requestedItem == item
                 }
@@ -342,7 +346,7 @@ final class PreviewContentLoader {
                 guard let self, self.requestGeneration == generation, self.requestedItem == item else { return }
                 let outcome = await self.renderer.renderHistoryPane([
                     PreviewRepresentation(typeIdentifier: representation.typeIdentifier, bytes: representation.bytes)
-                ])
+                ], textConfiguration: self.textConfiguration)
                 try Task.checkCancellation()
                 guard self.requestGeneration == generation, self.requestedItem == item else { return }
                 if case .content(.pdf(let pdf)) = outcome, pdf.pageCount > 1 {
@@ -457,6 +461,7 @@ final class PreviewContentLoader {
         pdfPage: Int,
         history: any ClipboardHistory,
         renderer: ContentPreview,
+        textConfiguration: PreviewTextConfiguration,
         isCurrent: @MainActor @Sendable () -> Bool
     ) async throws -> PreviewOutcome? {
         let details = try await history.details(for: item.id)
@@ -486,7 +491,7 @@ final class PreviewContentLoader {
                 guard await isCurrent() else { return nil }
                 outcome = await renderer.renderSelectedHistoryPane(source, representation: PreviewRepresentation(
                     typeIdentifier: representation.typeIdentifier, bytes: representation.bytes
-                ), pdfPage: pdfPage)
+                ), pdfPage: pdfPage, textConfiguration: textConfiguration)
                 try Task.checkCancellation()
                 guard await isCurrent() else { return nil }
                 if case .content = outcome { return outcome }
@@ -533,6 +538,10 @@ struct HistoryPreviewView: View {
     @State private var retryGeneration = 0
     @State private var fileConfirmationPresented = false
     @State private var pdfPageSelection: PDFPageSelection?
+    @AppStorage(PreviewTextSettings.maximumCharactersKey)
+    private var maximumTextCharacters = PreviewTextSettings.defaultMaximumCharacters
+    @AppStorage(PreviewTextSettings.isLengthLimitedKey)
+    private var isTextLengthLimited = true
 
     /// Page selection belongs to this exact content version, including when
     /// the observed target changes before SwiftUI invokes onChange.
@@ -552,6 +561,8 @@ struct HistoryPreviewView: View {
         let item: HistoryItemReference?
         let retryGeneration: Int
         let pdfPage: Int
+        let maximumTextCharacters: Int
+        let isTextLengthLimited: Bool
     }
 
     /// Standalone entry point: PreviewPaneState owns the exact target.
@@ -697,8 +708,11 @@ struct HistoryPreviewView: View {
         // One load per exact reference, explicit page choice, or retry; the loader's fence
         // discards a late result, so a superseded selection never renders
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
-        .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration, pdfPage: requestedPDFPage)) {
-            await loader.load(item: targetItem, pdfPage: requestedPDFPage)
+        .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration, pdfPage: requestedPDFPage,
+                              maximumTextCharacters: maximumTextCharacters, isTextLengthLimited: isTextLengthLimited)) {
+            await loader.load(item: targetItem, pdfPage: requestedPDFPage,
+                textConfiguration: PreviewTextSettings.configuration(
+                    maximumCharacters: maximumTextCharacters, isLengthLimited: isTextLengthLimited))
         }
         .onChange(of: targetItem) { _, target in
             previewState.isInformationPresented = false

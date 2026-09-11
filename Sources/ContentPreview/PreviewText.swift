@@ -4,31 +4,27 @@ import Foundation
 /// text-layout operation; joining them reproduces `text` byte for byte.
 /// Segmenting never reduces how much content can be read or copied.
 public struct PreviewText: Equatable, Sendable {
-    // ContentPreview's text parameters live together here. The retained
-    // preview length is the existing history-pane policy. The separate
-    // UTF-16 budget is a layout work unit, not a document-length limit:
-    // increasing it trades fewer segments for longer main-thread shaping.
-    package static let maximumCharacters = 50_000
-    package static let segmentUTF16Budget = 1_024
-
     public let text: String
     public let wasTruncated: Bool
     public let displaySegments: [String]
 
-    internal init(text: String, wasTruncated: Bool) {
-        self.text = text
-        self.wasTruncated = wasTruncated
-        self.displaySegments = Self.segment(text)
+    internal init(text: String, wasTruncated: Bool, configuration: PreviewTextConfiguration = .init()) {
+        let end = configuration.maximumCharacters.flatMap {
+            text.index(text.startIndex, offsetBy: $0, limitedBy: text.endIndex)
+        } ?? text.endIndex
+        self.text = String(text[..<end])
+        self.wasTruncated = wasTruncated || end != text.endIndex
+        self.displaySegments = Self.segment(self.text, budget: configuration.segmentUTF16Budget)
     }
 
-    private static func segment(_ text: String) -> [String] {
+    private static func segment(_ text: String, budget: Int) -> [String] {
         var segments: [String] = []
         var segment = ""
         var units = 0
         for character in text {
             let count = character.utf16.count
-            if count <= segmentUTF16Budget {
-                if units + count > segmentUTF16Budget {
+            if count <= budget {
+                if units + count > budget {
                     segments.append(segment)
                     segment = ""
                     units = 0
@@ -43,7 +39,7 @@ public struct PreviewText: Equatable, Sendable {
                 // is discarded, normalized, or replaced.
                 for scalar in character.unicodeScalars {
                     let width = scalar.value > 0xFFFF ? 2 : 1
-                    if units + width > segmentUTF16Budget {
+                    if units + width > budget {
                         segments.append(segment)
                         segment = ""
                         units = 0

@@ -7,7 +7,8 @@ internal enum PreviewHTMLRenderer {
     internal static func render(
         _ bytes: Data,
         maximumInputBytes: Int,
-        maximumOutputBytes: Int
+        maximumOutputBytes: Int,
+        textConfiguration: PreviewTextConfiguration = .init()
     ) -> PreviewOutcome {
         guard bytes.count <= maximumInputBytes, maximumOutputBytes > 0 else {
             return .failed(.resourceLimit)
@@ -15,7 +16,7 @@ internal enum PreviewHTMLRenderer {
         guard !Task.isCancelled else { return .failed(.cancelled) }
         guard let source = decode(bytes) else { return .failed(.malformedRepresentation) }
         do {
-            var parser = Parser(source, maximumOutputBytes: maximumOutputBytes)
+            var parser = Parser(source, maximumOutputBytes: maximumOutputBytes, textConfiguration: textConfiguration)
             return .content(.text(try parser.render()))
         } catch {
             return .failed(.cancelled)
@@ -47,6 +48,7 @@ internal enum PreviewHTMLRenderer {
         let scalars: String.UnicodeScalarView
         var index: String.Index
         let maximumOutputBytes: Int
+        let textConfiguration: PreviewTextConfiguration
         var output = ""
         var outputBytes = 0
         var consumed = 0
@@ -65,10 +67,11 @@ internal enum PreviewHTMLRenderer {
         var ignoreLeadingNewline = false
         var isSuppressed: Bool { headDepth > 0 || templateDepth > 0 }
 
-        init(_ source: String, maximumOutputBytes: Int) {
+        init(_ source: String, maximumOutputBytes: Int, textConfiguration: PreviewTextConfiguration) {
             scalars = source.unicodeScalars
             index = scalars.startIndex
             self.maximumOutputBytes = maximumOutputBytes
+            self.textConfiguration = textConfiguration
         }
 
         mutating func render() throws -> PreviewText {
@@ -138,13 +141,10 @@ internal enum PreviewHTMLRenderer {
                 }
             }
             try Task.checkCancellation()
-            let end = output.index(
-                output.startIndex, offsetBy: PreviewText.maximumCharacters,
-                limitedBy: output.endIndex
-            ) ?? output.endIndex
             return PreviewText(
-                text: String(output[..<end]),
-                wasTruncated: truncated || end != output.endIndex
+                text: output,
+                wasTruncated: truncated,
+                configuration: textConfiguration
             )
         }
 
@@ -361,7 +361,8 @@ internal enum PreviewHTMLRenderer {
             // entire growing prefix. The byte budget remains authoritative,
             // and render() still cuts the exact 50,000-Character prefix.
             if outputScalars >= nextCharacterCheck {
-                if output.count > PreviewText.maximumCharacters { truncated = true }
+                if let maximum = textConfiguration.maximumCharacters,
+                   output.count > maximum { truncated = true }
                 nextCharacterCheck *= 2
             }
         }

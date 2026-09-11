@@ -6,7 +6,7 @@
 import Foundation
 
 internal enum PreviewRTFDRenderer {
-    internal static func render(_ bytes: Data) -> PreviewOutcome {
+    internal static func render(_ bytes: Data, textConfiguration: PreviewTextConfiguration = .init()) -> PreviewOutcome {
         guard !Task.isCancelled else { return .failed(.cancelled) }
         guard bytes.count <= 1_048_576 else { return .failed(.resourceLimit) }
         guard let wrapper = FileWrapper(serializedRepresentation: bytes),
@@ -28,6 +28,6 @@ internal enum PreviewRTFDRenderer {
         guard let rtf = document.regularFileContents else {
             return .failed(.malformedRepresentation)
         }
-        return PreviewRTFRenderer.render(rtf)
+        return PreviewRTFRenderer.render(rtf, textConfiguration: textConfiguration)
     }
 }
