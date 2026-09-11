@@ -871,16 +871,7 @@ struct HistoryPreviewView: View {
                 }
             case .content(.text(let text, let wasTruncated)):
                 VStack(spacing: 0) {
-                    ContentFittingScrollView(maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) }) {
-                        Text(verbatim: text)
-                            .font(.body)
-                            .lineSpacing(2)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: 720, alignment: .leading)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(12)
-                            .accessibilityIdentifier("clipy.preview.text")
-                    }
+                    PreviewTextBody(text: text, maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) })
                     // The body scrolls independently; the disclosure stays
                     // visible and never becomes part of selectable content.
                     .frame(maxWidth: .infinity, maxHeight: flexibleHeight)
