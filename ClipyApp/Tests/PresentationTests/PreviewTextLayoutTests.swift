@@ -23,6 +23,8 @@ struct PreviewTextLayoutTests {
 
         for source in [String(repeating: "x", count: 50_000),
                        String(repeating: "长文本预览测试。\n", count: 5_000),
+                       String(repeating: "中文快速预览。\n", count: 5_000),
+                       String(repeating: "\n", count: 20_000),
                        "Prefix\ne" + String(repeating: "\u{301}", count: 20_000)] {
             let outcome = await ContentPreview().renderHistoryPane([
                 PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(source.utf8))

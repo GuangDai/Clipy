@@ -3,6 +3,20 @@ import Foundation
 import Testing
 
 struct PreviewTextResourceTests {
+    @Test func manyShortLinesAreAlsoSmallLayoutOperations() async {
+        let source = String(repeating: "一二三\r\n", count: 200)
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(source.utf8))
+        ], textConfiguration: PreviewTextConfiguration(maximumCharacters: nil, segmentLineBreakBudget: 8))
+        guard case .content(.text(let text)) = outcome else {
+            Issue.record("Expected the complete multiline text")
+            return
+        }
+        #expect(text.displaySegments.count == 25)
+        #expect(text.displaySegments.allSatisfy { $0 == String(repeating: "一二三\r\n", count: 8) })
+        #expect(Data(text.displaySegments.joined().utf8) == Data(source.utf8))
+        #expect(!text.wasTruncated)
+    }
     @Test(arguments: [nil, 10_000, 80_000] as [Int?])
     func configuredLengthCanRetainCompleteTextOrAnyChosenPrefix(limit: Int?) async {
         let source = String(repeating: "x", count: 60_000) + "COMPLETE-TAIL"

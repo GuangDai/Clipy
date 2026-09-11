@@ -14,24 +14,28 @@ public struct PreviewText: Equatable, Sendable {
         } ?? text.endIndex
         self.text = String(text[..<end])
         self.wasTruncated = wasTruncated || end != text.endIndex
-        self.displaySegments = Self.segment(self.text, budget: configuration.segmentUTF16Budget)
+        self.displaySegments = Self.segment(self.text,
+            budget: configuration.segmentUTF16Budget, lineBreakBudget: configuration.segmentLineBreakBudget)
     }
 
-    private static func segment(_ text: String, budget: Int) -> [Substring] {
+    private static func segment(_ text: String, budget: Int, lineBreakBudget: Int) -> [Substring] {
         var segments: [Substring] = []
         var start = text.startIndex
         var index = start
         var units = 0
+        var lineBreaks = 0
         while index != text.endIndex {
             let next = text.index(after: index)
             let count = text[index..<next].utf16.count
+            if units > 0, units + min(count, budget) > budget || lineBreaks >= lineBreakBudget {
+                segments.append(text[start..<index])
+                start = index
+                units = 0
+                lineBreaks = 0
+            }
             if count <= budget {
-                if units + count > budget {
-                    segments.append(text[start..<index])
-                    start = index
-                    units = 0
-                }
                 units += count
+                if text[index].isNewline { lineBreaks += 1 }
             } else {
                 // Preserve ordinary graphemes. An arbitrarily long combining
                 // sequence is split at scalar boundaries, without dropping or
@@ -45,6 +49,7 @@ public struct PreviewText: Equatable, Sendable {
                         segments.append(text[start..<scalarIndex])
                         start = scalarIndex
                         units = 0
+                        lineBreaks = 0
                     }
                     units += width
                     text.unicodeScalars.formIndex(after: &scalarIndex)
