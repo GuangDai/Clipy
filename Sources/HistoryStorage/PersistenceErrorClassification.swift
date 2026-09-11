@@ -7,7 +7,14 @@ import HistoryCore
 /// transaction fails. It inspects platform domains/codes only: localized
 /// descriptions are presentation text and never determine behavior.
 internal enum PersistenceErrorClassification {
+    #if DEBUG
+    @TaskLocal internal static var failureObserver: (@Sendable (any Error) -> Void)?
+    #endif
+
     internal static func transactionFailure(for error: any Error) -> HistoryFailure {
+        #if DEBUG
+        failureObserver?(error)
+        #endif
         if let failure = error as? SQLiteFailure { return failure.historyFailure }
         if let failure = error as? HistoryFailure { return failure }
         emitRuntimeDiagnostics(for: error)
