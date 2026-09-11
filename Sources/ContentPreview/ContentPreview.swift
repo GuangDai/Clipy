@@ -57,18 +57,6 @@ public struct PreviewSource: Sendable {
     }
 }
 
-public struct PreviewText: Equatable, Sendable {
-    package static let maximumCharacters = 50_000
-
-    public let text: String
-    public let wasTruncated: Bool
-
-    internal init(text: String, wasTruncated: Bool) {
-        self.text = text
-        self.wasTruncated = wasTruncated
-    }
-}
-
 /// Fixed eager display artifact: premultiplied BGRA8 in the sRGB color space.
 /// The renderer constructs it after validation; the per-surface pixel cache
 /// may reconstruct the same layout from independently copied cached bytes.
@@ -205,7 +193,8 @@ public actor ContentPreview {
     /// It uses exactly the same metadata preparation and selected renderer as
     /// History's lazy representation reader; it owns no second source policy.
     public func renderHistoryPane(
-        _ representations: [PreviewRepresentation], pdfPage: Int = 1
+        _ representations: [PreviewRepresentation], pdfPage: Int = 1,
+        textConfiguration: PreviewTextConfiguration = .init()
     ) async -> PreviewOutcome {
         guard !Task.isCancelled else { return .failed(.cancelled) }
         // Unlike metadata-only preparation, this call already owns every
@@ -230,7 +219,8 @@ public actor ContentPreview {
             defer { debugRetainedSourceBytes -= siblingBytes }
             #endif
             outcome = await renderSelectedHistoryPane(
-                source, representation: representations[source.representationIndex], pdfPage: pdfPage
+                source, representation: representations[source.representationIndex], pdfPage: pdfPage,
+                textConfiguration: textConfiguration
             )
             if !source.permitsFallback(after: outcome) { return outcome }
         }
@@ -238,15 +228,21 @@ public actor ContentPreview {
     }
 
     public func renderSelectedHistoryPane(
-        _ source: PreviewSource, representation: PreviewRepresentation, pdfPage: Int = 1
+        _ source: PreviewSource, representation: PreviewRepresentation, pdfPage: Int = 1,
+        textConfiguration: PreviewTextConfiguration = .init()
     ) async -> PreviewOutcome {
         if let failure = source.preflightFailure { return failure }
         guard representation.typeIdentifier.utf8.elementsEqual(source.typeIdentifier.utf8),
               representation.bytes.count == source.byteCount else { return .failed(.malformedRepresentation) }
-        return await renderRepresentation(
+        let outcome = await renderRepresentation(
             representation, kind: source.kind, maximumInputBytes: source.maximumInputBytes,
-            profile: .historyPane, pdfPage: pdfPage
+            profile: .historyPane, pdfPage: pdfPage, textConfiguration: textConfiguration
         )
+        guard !Task.isCancelled else { return .failed(.cancelled) }
+        if case .content(.text(let text)) = outcome {
+            PreviewTextTypography.prepare(text)
+        }
+        return Task.isCancelled ? .failed(.cancelled) : outcome
     }
 
     /// Display-only PNG materialization. Thumbnail request/source/version
@@ -260,7 +256,8 @@ public actor ContentPreview {
 
     private func renderRepresentation(
         _ representation: PreviewRepresentation, kind: PreviewSource.Kind,
-        maximumInputBytes: Int, profile: ResourceProfile, pdfPage: Int = 1
+        maximumInputBytes: Int, profile: ResourceProfile, pdfPage: Int = 1,
+        textConfiguration: PreviewTextConfiguration = .init()
     ) async -> PreviewOutcome {
         guard representation.bytes.count <= maximumInputBytes else { return .failed(.resourceLimit) }
         #if DEBUG
@@ -279,18 +276,17 @@ public actor ContentPreview {
             guard let decoded = codec.decode(representation.bytes), !decoded.isEmpty else {
                 return .failed(.malformedRepresentation)
             }
-            let end = decoded.index(decoded.startIndex, offsetBy: PreviewText.maximumCharacters,
-                                    limitedBy: decoded.endIndex) ?? decoded.endIndex
             return .content(.text(PreviewText(
-                text: String(decoded[..<end]), wasTruncated: end != decoded.endIndex
+                text: decoded, wasTruncated: false, configuration: textConfiguration
             )))
         case .rtf:
-            return PreviewRTFRenderer.render(representation.bytes)
+            return PreviewRTFRenderer.render(representation.bytes, textConfiguration: textConfiguration)
         case .rtfd:
-            return PreviewRTFDRenderer.render(representation.bytes)
+            return PreviewRTFDRenderer.render(representation.bytes, textConfiguration: textConfiguration)
         case .html:
             return PreviewHTMLRenderer.render(
-                representation.bytes, maximumInputBytes: maximumInputBytes, maximumOutputBytes: 1_048_576
+                representation.bytes, maximumInputBytes: maximumInputBytes, maximumOutputBytes: 1_048_576,
+                textConfiguration: textConfiguration
             )
         case .reference:
             return PreviewReference.resolve(representation) ?? .unavailable(.unsupported)

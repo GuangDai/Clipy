@@ -6,6 +6,46 @@ import Testing
 
 @MainActor
 struct RealHistoryLazyPreviewTests {
+    @Test func dwellPreparesTheRealPreviewAndDisplayDoesNotReadItAgain() async throws {
+        let store = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let item = try await capture([
+            .init(typeIdentifier: "public.utf8-plain-text", bytes: Data("Already prepared".utf8))
+        ], in: store)
+        let history = PreviewReadRecorder(store)
+        let loader = PreviewContentLoader(history: history)
+        let pane = PreviewPaneState(autoOpenDelay: .seconds(3_600))
+        var preparation: Task<Void, Never>?
+        pane.onPreparationTargetChanged = { item in
+            if let item {
+                preparation = loader.prepare(item: item, textConfiguration: .init())
+            } else {
+                loader.clear()
+            }
+        }
+        defer { pane.panelClosed() }
+        pane.handleSelectionChange(item)
+        let prepared = try #require(preparation)
+        await prepared.value
+        #expect(!pane.isOpen)
+        #expect(loader.phase == .content(.text("Already prepared")))
+
+        // Opening manually before the timer fires consumes the same work.
+        pane.togglePreview(for: item)
+        #expect(pane.isOpen)
+        await loader.loadForDisplay(item: item, pdfPage: 1, textConfiguration: .init(), isRetry: false)
+        #expect(await history.reads().representations.count == 1)
+        #expect(loader.phase == .content(.text("Already prepared")))
+
+        // A changed user preference cannot reuse the old prepared prefix.
+        await loader.loadForDisplay(item: item, pdfPage: 1,
+            textConfiguration: .init(maximumCharacters: 7), isRetry: false)
+        #expect(await history.reads().representations.count == 2)
+        #expect(loader.phase == .content(.text("Already", wasTruncated: true)))
+        pane.panelClosed()
+        #expect(loader.requestedItem == nil)
+        #expect(loader.textSegments.isEmpty)
+    }
+
     @Test func validPlainTextDoesNotReadRichOrOpaqueSiblings() async throws {
         let store = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture([

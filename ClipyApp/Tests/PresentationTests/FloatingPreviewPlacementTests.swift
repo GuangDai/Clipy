@@ -9,6 +9,16 @@ import Testing
 
 @Suite("Floating preview placement geometry")
 struct FloatingPreviewPlacementTests {
+    @Test func preferredGapFitsAvailableSpaceWithoutMovingTheMainPanel() {
+        let screen = NSRect(x: 0, y: 0, width: 1_000, height: 800)
+        let panel = NSRect(x: 20, y: 200, width: 360, height: 420)
+        let touching = PopupPositionGeometry.floatingPreviewFrame(beside: panel, in: screen, gap: 0)
+        #expect(touching.frame.minX == panel.maxX)
+        let spacious = PopupPositionGeometry.floatingPreviewFrame(beside: panel, in: screen, gap: 10_000)
+        #expect(spacious.frame.maxX == screen.maxX)
+        #expect(spacious.frame.minX >= panel.maxX)
+        #expect(screen.contains(spacious.frame))
+    }
 
     private let mainFrame = NSRect(x: 0, y: 0, width: 1_440, height: 875)
     private let negativeOriginFrame = NSRect(x: -1_600, y: -200, width: 1_600, height: 1_000)

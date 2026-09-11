@@ -26,6 +26,7 @@ struct ValueFieldRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
                     TextField("", text: $text)
+                        .textFieldStyle(.roundedBorder)
                         .frame(minWidth: 96, idealWidth: 120, maxWidth: 180)
                         .multilineTextAlignment(.trailing)
                         .disabled(!isEnabled)

@@ -11,7 +11,7 @@ struct ContentPreviewTests {
 
     @Test("exact UTF-8 returns a capped inert text artifact")
     func exactUTF8TextArtifact() async {
-        let body = String(repeating: "a", count: PreviewText.maximumCharacters + 7)
+        let body = String(repeating: "a", count: PreviewTextConfiguration.defaultMaximumCharacters + 7)
         let outcome = await renderer.renderHistoryPane([
             PreviewRepresentation(
                 typeIdentifier: "public.utf8-plain-text",

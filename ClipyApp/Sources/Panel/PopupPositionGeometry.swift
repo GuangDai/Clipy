@@ -43,8 +43,13 @@ enum PopupPositionGeometry {
             width: previewWidth,
             height: screenVisibleFrame.map { min(desiredHeight, $0.height) } ?? desiredHeight
         )
-        let trailingX = mainPanelFrame.maxX + gap
-        let leadingX = mainPanelFrame.minX - gap - previewWidth
+        let preferredGap = gap.isFinite ? max(0, gap) : PanelGeometry.floatingPreviewGap
+        let availableGap = screenVisibleFrame.map {
+            max(0, max($0.maxX - mainPanelFrame.maxX, mainPanelFrame.minX - $0.minX) - previewWidth)
+        } ?? preferredGap
+        let fittedGap = min(preferredGap, availableGap)
+        let trailingX = mainPanelFrame.maxX + fittedGap
+        let leadingX = mainPanelFrame.minX - fittedGap - previewWidth
 
         let placement: PreviewPlacement
         if let screenVisibleFrame {

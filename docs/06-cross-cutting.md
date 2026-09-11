@@ -161,20 +161,26 @@ and declared codec facts. Each behavior owner retains its purpose admission.
 `ContentPreview` is likewise concrete rather than speculative: package-only
 immutable representation inputs plus closed product presets produce bounded
 text, eager tight BGRA8/sRGB rasters, or copied-address metadata. It may import only Foundation,
-ClipboardFormats, CoreGraphics, and ImageIO; it never reads History, owns item/
+ClipboardFormats, CoreGraphics, ImageIO, and CoreText; it never reads History, owns item/
 reference/lifecycle/cache state, performs external I/O, or exposes framework
 objects. Its direct tests and Presentation lifecycle tracers are functional
 correctness tests in the default lane.
 
 The history-pane preview keeps image-first and valid exact-text precedence.
-Text artifacts contain at most 50,000 complete Swift `Character`s as an exact
-source prefix. A separate truncation fact drives a visible UI notice outside
+Text artifacts default to 50,000 complete Swift `Character`s as an exact
+source prefix. `PreviewTextConfiguration` accepts a chosen positive length or
+`nil` for complete decoded text. A separate truncation fact drives a visible UI notice outside
 the selectable body; no synthetic ellipsis is appended to copied source text.
-The preview limit never truncates History's retained values or paste payloads.
+The preview preference never truncates History's retained values or paste payloads.
+The renderer prepares lossless text segments off the UI actor. The UI lays out
+only visible segments instead of measuring one selectable document-sized Text.
+The segment work budget is independent of the retained text length; ordinary
+graphemes remain whole, and oversized combining sequences split at scalar
+boundaries without dropping bytes. Segment views share one immutable text buffer.
 After image and valid exact plain text, exact `public.rtf` and then
 `public.html` can supply derived plain-text previews. Both consume only
-the copied bytes, with a 1 MiB selected-input limit and at most 50,000
-complete displayed Characters; they do not use document importers, WebKit,
+the copied bytes, with a 1 MiB selected-input limit and the same configurable
+display length; they do not use document importers, WebKit,
 network requests, or file access. RTF honors scoped encodings and Unicode
 fallback, presents field results without executing instructions, and replaces
 pictures/objects with `[Attachment]` (at most 128), with nesting capped at
@@ -261,7 +267,7 @@ Before “executable specification”:
 - `HistoryCore` imports only Foundation.
 - `ClipboardFormats` imports only Foundation and owns no purpose policy.
 - `ContentPreview` imports only Foundation, ClipboardFormats, CoreGraphics,
-  and ImageIO; it owns no History/reference/lifecycle/cache state, and
+  ImageIO, and CoreText; it owns no History/reference/lifecycle/cache state, and
   PresentationUI cannot import ImageIO.
 - `ClipyCLIContract` imports only Foundation and owns no I/O or operation
   dispatch.

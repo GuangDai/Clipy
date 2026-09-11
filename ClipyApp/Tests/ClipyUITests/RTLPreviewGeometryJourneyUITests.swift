@@ -30,6 +30,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         app.launchArguments += [
             "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
             "-NSForceRightToLeftWritingDirection", "YES", "-AppleTextDirection", "YES",
+            "-clipy.preview.panelGap", "2",
         ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
@@ -97,7 +98,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         XCTAssertTrue(content.descendants(matching: .any)["clipy.preview.text"].waitForExistence(timeout: 5))
         let compactWidth: CGFloat = 360
         let paneWidth: CGFloat = 340
-        let gap: CGFloat = 8
+        let gap: CGFloat = 2
         // Under RTL the pane still goes to the PHYSICAL trailing (right)
         // side: top edges align, the panel keeps its compact width, and the
         // pane is a separate window rather than panel content.

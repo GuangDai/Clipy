@@ -2,6 +2,12 @@
 "Clearing history permanently removes saved clipboard content." = "Clearing history permanently removes saved clipboard content.";
 "Text Appearance" = "Text Appearance";
 "Preview" = "Preview";
+"Preferred panel gap (pt)" = "Preferred panel gap (pt)";
+"The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap." = "The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap.";
+"Advanced Preview" = "Advanced Preview";
+"Show complete text" = "Show complete text";
+"Preview characters" = "Preview characters";
+"Complete text uses more memory and may take longer to prepare. Text is laid out as you scroll. Copying and search always use their own content settings." = "Complete text uses more memory and may take longer to prepare. Text is laid out as you scroll. Copying and search always use their own content settings.";
 "The preview opens in a floating pane beside the panel." = "The preview opens in a floating pane beside the panel.";
 "A note for later" = "A note for later";
 "Text, links and files stay close at hand. Copy something and find it here when you need it." = "Text, links and files stay close at hand. Copy something and find it here when you need it.";

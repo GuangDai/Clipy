@@ -2,6 +2,12 @@
 "Clearing history permanently removes saved clipboard content." = "清除历史记录会永久移除已保存的剪贴板内容。";
 "Text Appearance" = "文字外观";
 "Preview" = "预览";
+"Preferred panel gap (pt)" = "面板间距（点）";
+"The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap." = "预览显示在主面板旁。间距为零时，两者边缘贴合。调整立即生效；屏幕空间不足时会缩小间距。";
+"Advanced Preview" = "高级预览";
+"Show complete text" = "显示完整文本";
+"Preview characters" = "预览字符数";
+"Complete text uses more memory and may take longer to prepare. Text is laid out as you scroll. Copying and search always use their own content settings." = "完整文本会占用更多内存，准备时间也可能更长。文本会随滚动按需排版。复制与搜索使用各自的内容设置，不受此选项影响。";
 "The preview opens in a floating pane beside the panel." = "预览在面板旁边的浮动窗格中打开。";
 "A note for later" = "留待稍后查看的笔记";
 "Text, links and files stay close at hand. Copy something and find it here when you need it." = "文字、链接和文件随手可得。复制内容，需要时即可在这里找到。";

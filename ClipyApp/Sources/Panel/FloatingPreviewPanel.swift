@@ -82,7 +82,8 @@ final class FloatingPreviewPanel: NSPanel {
         let placement = PopupPositionGeometry.floatingPreviewFrame(
             beside: mainPanel.frame,
             in: mainPanel.screen?.visibleFrame,
-            previewHeight: contentHeight
+            previewHeight: contentHeight,
+            gap: PanelGeometry.persistedFloatingPreviewGap(from: .standard)
         )
         setFrame(placement.frame, display: isPresented)
         if mainPanel.childWindows?.contains(self) != true {
@@ -132,7 +133,8 @@ struct FloatingPreviewRootView: View {
                     viewState: composition.viewState,
                     previewState: appDelegate.previewState,
                     sourceIcons: sourceIcons,
-                    maximumHeight: appDelegate.previewState.availablePreviewHeight
+                    maximumHeight: appDelegate.previewState.availablePreviewHeight,
+                    preparedLoader: appDelegate.floatingPreviewLoader
                 )
                 .id(item)
                 .fixedSize(horizontal: false, vertical: true)

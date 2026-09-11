@@ -33,6 +33,13 @@ struct AppearanceSettingsTab: View {
     private var isPreviewAutoOpenEnabled = true
 
     @State private var isShowingTextAppearance = false
+    @State private var isShowingPreviewOptions = false
+    @AppStorage(PreviewTextSettings.maximumCharactersKey)
+    private var previewMaximumCharacters = PreviewTextSettings.defaultMaximumCharacters
+    @AppStorage(PreviewTextSettings.isLengthLimitedKey)
+    private var isPreviewTextLengthLimited = true
+    @AppStorage(PanelGeometry.floatingPreviewGapDefaultsKey)
+    private var previewGap = Double(PanelGeometry.floatingPreviewGap)
 
     init(popupPosition: Binding<PopupPositionMode>?) {
         self.popupPosition = popupPosition
@@ -78,10 +85,54 @@ struct AppearanceSettingsTab: View {
                     isOn: $isPreviewAutoOpenEnabled
                 )
                 .accessibilityIdentifier("clipy.settings.appearance.preview-auto-open")
+                SettingsFieldLayout {
+                    Text(AdaptiveSettingsCopy.text("Preferred panel gap (pt)"))
+                    TextField("", value: Binding(
+                        get: { previewGap },
+                        set: { previewGap = $0.isFinite ? max(0, $0) : Double(PanelGeometry.floatingPreviewGap) }
+                    ), format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .frame(minWidth: 64, idealWidth: 80, maxWidth: 120)
+                        .accessibilityLabel(AdaptiveSettingsCopy.text("Preferred panel gap (pt)"))
+                        .accessibilityIdentifier("clipy.settings.preview.panel-gap")
+                }
+                DisclosureGroup(AdaptiveSettingsCopy.text("Advanced Preview"), isExpanded: $isShowingPreviewOptions) {
+                    Toggle(AdaptiveSettingsCopy.text("Show complete text"), isOn: Binding(
+                        get: { !isPreviewTextLengthLimited },
+                        set: { isPreviewTextLengthLimited = !$0 }
+                    ))
+                    .accessibilityIdentifier("clipy.settings.preview.complete-text")
+                    if isPreviewTextLengthLimited {
+                        SettingsFieldLayout {
+                            Text(AdaptiveSettingsCopy.text("Preview characters"))
+                            TextField("", value: Binding(
+                                get: { previewMaximumCharacters },
+                                set: { previewMaximumCharacters = max(1, $0) }
+                            ), format: .number.grouping(.never))
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .frame(minWidth: 96, idealWidth: 120, maxWidth: 180)
+                                .accessibilityLabel(AdaptiveSettingsCopy.text("Preview characters"))
+                                .accessibilityIdentifier("clipy.settings.preview.character-count")
+                        }
+                    }
+                    Text(AdaptiveSettingsCopy.text("Complete text uses more memory and may take longer to prepare. Text is laid out as you scroll. Copying and search always use their own content settings."))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button(SettingsCopy.text("Reset")) {
+                        previewMaximumCharacters = PreviewTextSettings.defaultMaximumCharacters
+                        isPreviewTextLengthLimited = true
+                        previewGap = Double(PanelGeometry.floatingPreviewGap)
+                    }
+                    .accessibilityIdentifier("clipy.settings.preview.reset")
+                }
+                .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.appearance.advanced-preview"))
             } header: {
                 Text(AdaptiveSettingsCopy.text("Preview"))
             } footer: {
-                Text(AdaptiveSettingsCopy.text("The preview opens in a floating pane beside the panel."))
+                Text(AdaptiveSettingsCopy.text("The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap."))
             }
             Section {
                 if let popupPosition {

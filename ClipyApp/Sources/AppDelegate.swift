@@ -191,6 +191,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         previewState.onFloatingPreviewTransition = { [weak self] transition in
             self?.handleFloatingPreviewTransition(transition)
         }
+        previewState.onPreparationTargetChanged = { [weak self] item in
+            self?.prepareFloatingPreview(for: item)
+        }
     }
 
     init(
@@ -217,6 +220,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installPanelAppearanceObservation()
         previewState.onFloatingPreviewTransition = { [weak self] transition in
             self?.handleFloatingPreviewTransition(transition)
+        }
+        previewState.onPreparationTargetChanged = { [weak self] item in
+            self?.prepareFloatingPreview(for: item)
         }
     }
 
@@ -778,6 +784,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it follows the main panel's ordering and never outlives it.
     @ObservationIgnored
     private var floatingPreviewPanel: FloatingPreviewPanel?
+    private(set) var floatingPreviewLoader: PreviewContentLoader?
+    @ObservationIgnored
+    private var pendingPreview: (item: HistoryItemReference, loader: PreviewContentLoader)?
+
+    private func prepareFloatingPreview(for item: HistoryItemReference?) {
+        guard let item, let composition else {
+            pendingPreview?.loader.clear()
+            pendingPreview = nil
+            return
+        }
+        guard pendingPreview?.item != item else { return }
+        pendingPreview?.loader.clear()
+        let loader = makePreviewLoader(for: item, viewState: composition.viewState)
+        pendingPreview = (item, loader)
+    }
+
+    private func makePreviewLoader(for item: HistoryItemReference, viewState: HistoryViewState) -> PreviewContentLoader {
+        let loader = PreviewContentLoader(history: viewState.history,
+            filePreviewSettings: viewState.filePreviewSettings, renderer: viewState.previewRenderer)
+        loader.prepare(item: item, textConfiguration: PreviewTextSettings.configuration(from: .standard))
+        return loader
+    }
 
     /// Content-fit coalescing: row/chrome changes arrive in bursts (page
     /// loads, banner transitions), so the latest analytic demand applies
@@ -788,6 +816,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @ObservationIgnored
     private var floatingPreviewFitTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var configuredPreviewGap = PanelGeometry.persistedFloatingPreviewGap(from: .standard)
 
     /// The panel content's analytic height demand (HistoryPanelView's
     /// `PanelContentFit.Input` reports). Coalesced ~40 ms, then applied to
@@ -847,9 +877,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ transition: PreviewPaneState.FloatingPreviewTransition
     ) {
         switch transition {
-        case .show, .update:
-            guard let panel, panel.isPresented, composition != nil else {
+        case .show(let item), .update(let item):
+            guard let panel, panel.isPresented, let composition else {
+                prepareFloatingPreview(for: nil)
                 return
+            }
+            floatingPreviewLoader?.clear()
+            if let pendingPreview, pendingPreview.item == item {
+                floatingPreviewLoader = pendingPreview.loader
+                self.pendingPreview = nil
+            } else {
+                prepareFloatingPreview(for: nil)
+                floatingPreviewLoader = makePreviewLoader(for: item, viewState: composition.viewState)
             }
             if floatingPreviewPanel == nil {
                 floatingPreviewPanel = FloatingPreviewPanel(
@@ -866,6 +905,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Orders the floating preview pane out (panel close, screen change, or
     /// the preview's own hide transition). Idempotent.
     private func hideFloatingPreviewPane() {
+        prepareFloatingPreview(for: nil)
+        floatingPreviewLoader?.clear()
+        floatingPreviewLoader = nil
         floatingPreviewFitTask?.cancel()
         floatingPreviewFitTask = nil
         floatingPreviewPanel?.dismiss()
@@ -1358,6 +1400,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// unrelated writes (panel size, position, retention) from
     /// invalidating the panel content.
     private func reloadPanelAppearance() {
+        let gap = PanelGeometry.persistedFloatingPreviewGap(from: .standard)
+        if configuredPreviewGap != gap {
+            configuredPreviewGap = gap
+            followMainPanelFrameWithPreview()
+        }
         let loaded = PanelAppearanceSettings.load(from: .standard)
         guard loaded != panelAppearance else { return }
         panelAppearance = loaded
