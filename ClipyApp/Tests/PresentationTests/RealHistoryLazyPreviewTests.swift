@@ -29,6 +29,9 @@ struct RealHistoryLazyPreviewTests {
         #expect(!pane.isOpen)
         #expect(loader.phase == .content(.text("Already prepared")))
 
+        // Opening manually before the timer fires consumes the same work.
+        pane.togglePreview(for: item)
+        #expect(pane.isOpen)
         await loader.loadForDisplay(item: item, pdfPage: 1, textConfiguration: .init(), isRetry: false)
         #expect(await history.reads().representations.count == 1)
         #expect(loader.phase == .content(.text("Already prepared")))

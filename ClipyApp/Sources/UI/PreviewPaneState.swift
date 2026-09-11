@@ -272,7 +272,7 @@ final class PreviewPaneState {
     /// selection immediately; an open preview closes and stays closed
     /// (auto-open suppressed) until the selection changes.
     func togglePreview(for item: HistoryItemReference?) {
-        cancelPendingAutoOpen()
+        cancelPendingAutoOpen(retainingPreparationFor: isOpen ? nil : item)
         if isOpen {
             closePreview()
             isAutoOpenSuppressed = true
@@ -541,11 +541,12 @@ final class PreviewPaneState {
         onFloatingPreviewTransition?(.hide)
     }
 
-    private func cancelPendingAutoOpen() {
+    private func cancelPendingAutoOpen(retainingPreparationFor item: HistoryItemReference? = nil) {
+        let retainPreparation = item != nil && pendingAutoOpenItem == item
         autoOpenTask?.cancel()
         autoOpenTask = nil
         pendingAutoOpenItem = nil
-        onPreparationTargetChanged?(nil)
+        if !retainPreparation { onPreparationTargetChanged?(nil) }
     }
 
     private func cancelPendingPointerExit() {
