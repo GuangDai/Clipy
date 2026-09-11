@@ -27,7 +27,7 @@ ClipyApp
 HistoryDomain ─────────────→ HistoryCore
 
 ClipboardFormats ────────→ Foundation only
-ContentPreview ──────────→ ClipboardFormats + CoreGraphics + ImageIO
+ContentPreview ──────────→ ClipboardFormats + CoreGraphics + ImageIO + CoreText
 ClipyCLIContract ────────→ Foundation only
                             (package-only pure wire contract)
 clipyctl ────────────────→ LocalAutomation + AppKit
@@ -411,7 +411,8 @@ The Authority does not retain model objects between operations. Each isolated re
 
 - `ClipboardFormats` may import Foundation only and must not own a purpose-specific behavior policy.
 - `ContentPreview` may import only Foundation, ClipboardFormats, CoreGraphics,
-  and ImageIO. It must not import HistoryCore/HistoryStorage, SwiftUI/AppKit,
+  ImageIO, and CoreText. CoreText prepares system-font fallback off the UI actor;
+  its layout objects stay local to one operation. It must not import HistoryCore/HistoryStorage, SwiftUI/AppKit,
   persistence, or adapters; app views leave ImageIO decoding to ContentPreview.
 - `ClipyCLIContract` may import Foundation only and must not own standard-stream
   I/O, transport, credential, Gateway, History, or product-CLI behavior.

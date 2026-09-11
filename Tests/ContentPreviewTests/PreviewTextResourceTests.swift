@@ -75,6 +75,6 @@ struct PreviewTextResourceTests {
         #expect(Data(text.text.utf8) == Data((prefix + "e" + marks).utf8))
         #expect(Data(text.displaySegments.joined().utf8) == Data(text.text.utf8))
         #expect(text.displaySegments.count > 1)
-        #expect(text.displaySegments.allSatisfy { $0.utf16.count <= 1_024 })
+        #expect(text.displaySegments.allSatisfy { $0.utf16.count <= 512 })
     }
 }

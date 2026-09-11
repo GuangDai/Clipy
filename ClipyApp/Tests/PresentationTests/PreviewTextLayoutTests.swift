@@ -26,9 +26,11 @@ struct PreviewTextLayoutTests {
                        String(repeating: "中文快速预览。\n", count: 5_000),
                        String(repeating: "\n", count: 20_000),
                        "Prefix\ne" + String(repeating: "\u{301}", count: 20_000)] {
+            let preparationStart = ContinuousClock.now
             let outcome = await ContentPreview().renderHistoryPane([
                 PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(source.utf8))
             ])
+            print("Preview preparation: \(preparationStart.duration(to: .now)), UTF-16 units: \(source.utf16.count)")
             guard case .content(.text(let text)) = outcome else {
                 Issue.record("Expected text fixture")
                 return

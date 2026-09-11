@@ -179,7 +179,7 @@ final class PreviewContentLoader {
     @discardableResult
     func prepare(item: HistoryItemReference, textConfiguration: PreviewTextConfiguration) -> Task<Void, Never> {
         clear()
-        let task = Task { [weak self] in
+        let task = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             await self.load(item: item, textConfiguration: textConfiguration)
         }

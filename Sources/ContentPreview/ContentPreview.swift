@@ -234,10 +234,15 @@ public actor ContentPreview {
         if let failure = source.preflightFailure { return failure }
         guard representation.typeIdentifier.utf8.elementsEqual(source.typeIdentifier.utf8),
               representation.bytes.count == source.byteCount else { return .failed(.malformedRepresentation) }
-        return await renderRepresentation(
+        let outcome = await renderRepresentation(
             representation, kind: source.kind, maximumInputBytes: source.maximumInputBytes,
             profile: .historyPane, pdfPage: pdfPage, textConfiguration: textConfiguration
         )
+        guard !Task.isCancelled else { return .failed(.cancelled) }
+        if case .content(.text(let text)) = outcome {
+            PreviewTextTypography.prepare(text)
+        }
+        return Task.isCancelled ? .failed(.cancelled) : outcome
     }
 
     /// Display-only PNG materialization. Thumbnail request/source/version

@@ -23,7 +23,7 @@ public struct PreviewTextConfiguration: Equatable, Sendable {
 
     public init(
         maximumCharacters: Int? = Self.defaultMaximumCharacters,
-        segmentUTF16Budget: Int = 1_024,
+        segmentUTF16Budget: Int = 512,
         segmentLineBreakBudget: Int = 24
     ) {
         self.maximumCharacters = maximumCharacters.map { max(1, $0) }

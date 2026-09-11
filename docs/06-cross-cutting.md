@@ -161,7 +161,7 @@ and declared codec facts. Each behavior owner retains its purpose admission.
 `ContentPreview` is likewise concrete rather than speculative: package-only
 immutable representation inputs plus closed product presets produce bounded
 text, eager tight BGRA8/sRGB rasters, or copied-address metadata. It may import only Foundation,
-ClipboardFormats, CoreGraphics, and ImageIO; it never reads History, owns item/
+ClipboardFormats, CoreGraphics, ImageIO, and CoreText; it never reads History, owns item/
 reference/lifecycle/cache state, performs external I/O, or exposes framework
 objects. Its direct tests and Presentation lifecycle tracers are functional
 correctness tests in the default lane.
@@ -267,7 +267,7 @@ Before “executable specification”:
 - `HistoryCore` imports only Foundation.
 - `ClipboardFormats` imports only Foundation and owns no purpose policy.
 - `ContentPreview` imports only Foundation, ClipboardFormats, CoreGraphics,
-  and ImageIO; it owns no History/reference/lifecycle/cache state, and
+  ImageIO, and CoreText; it owns no History/reference/lifecycle/cache state, and
   PresentationUI cannot import ImageIO.
 - `ClipyCLIContract` imports only Foundation and owns no I/O or operation
   dispatch.
