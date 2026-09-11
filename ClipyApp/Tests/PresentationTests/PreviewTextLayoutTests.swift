@@ -14,18 +14,19 @@ struct PreviewTextLayoutTests {
             styleMask: [.borderless], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let host = NSHostingView(rootView: PreviewTextBody(segments: ["Warm up"], maximumHeight: 480))
+        let host = NSHostingView(rootView: PreviewTextBody(segments: ["Warm up"], maximumHeight: 480).id(-1))
         host.sizingOptions = []
         window.contentView = host
         window.orderFront(nil)
         host.layoutSubtreeIfNeeded()
         host.displayIfNeeded()
 
-        for source in [String(repeating: "x", count: 50_000),
+        let sources = [String(repeating: "x", count: 50_000),
                        String(repeating: "长文本预览测试。\n", count: 5_000),
                        String(repeating: "中文快速预览。\n", count: 5_000),
                        String(repeating: "\n", count: 20_000),
-                       "Prefix\ne" + String(repeating: "\u{301}", count: 20_000)] {
+                       "Prefix\ne" + String(repeating: "\u{301}", count: 20_000)]
+        for (index, source) in sources.enumerated() {
             let preparationStart = ContinuousClock.now
             let outcome = await ContentPreview().renderHistoryPane([
                 PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(source.utf8))
@@ -36,7 +37,9 @@ struct PreviewTextLayoutTests {
                 return
             }
             let start = ContinuousClock.now
-            host.rootView = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480)
+            // The actual floating pane replaces its view identity on item
+            // changes. Include that construction and retirement work here.
+            host.rootView = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480).id(index)
             host.layoutSubtreeIfNeeded()
             host.displayIfNeeded()
             let elapsed = start.duration(to: .now)
