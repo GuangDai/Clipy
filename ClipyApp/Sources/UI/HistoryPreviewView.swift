@@ -111,6 +111,8 @@ final class PreviewContentLoader {
     /// Eager bounded pixels; no ImageIO/CoreGraphics object is retained in
     /// observable state or crosses the renderer actor seam.
     private(set) var raster: PreviewRaster?
+    /// Prepared by ContentPreview off the main actor, for lazy text layout.
+    private(set) var textSegments: [String] = []
 
     /// PDF uses the same bitmap surface, but its page count must not be
     /// mistaken for an image source's frame count. Other formats keep nil.
@@ -202,6 +204,7 @@ final class PreviewContentLoader {
         requestedItem = nil
         requestedPDFPage = 1
         raster = nil
+        textSegments = []
         pdfPageCount = nil
         pdfPageNumber = nil
         canRetryFailure = false
@@ -225,6 +228,7 @@ final class PreviewContentLoader {
         requestedItem = item
         requestedPDFPage = pdfPage
         raster = nil
+        textSegments = []
         pdfPageCount = nil
         pdfPageNumber = nil
         canRetryFailure = false
@@ -284,6 +288,7 @@ final class PreviewContentLoader {
 
     private func apply(_ outcome: PreviewOutcome) {
         raster = nil
+        textSegments = []
         pdfPageCount = nil
         pdfPageNumber = nil
         canRetryFailure = false
@@ -297,6 +302,7 @@ final class PreviewContentLoader {
             pdfPageNumber = artifact.pageNumber
             phase = .content(.image)
         case .content(.text(let artifact)):
+            textSegments = artifact.displaySegments
             phase = .content(.text(artifact.text, wasTruncated: artifact.wasTruncated))
         case .content(.reference(let artifact)):
             phase = .content(.reference(artifact))
@@ -869,9 +875,11 @@ struct HistoryPreviewView: View {
                 } else {
                     failedBody
                 }
-            case .content(.text(let text, let wasTruncated)):
+            case .content(.text(_, let wasTruncated)):
                 VStack(spacing: 0) {
-                    PreviewTextBody(text: text, maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) })
+                    PreviewTextBody(segments: loader.textSegments,
+                        maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) })
+                    .id(targetItem)
                     // The body scrolls independently; the disclosure stays
                     // visible and never becomes part of selectable content.
                     .frame(maxWidth: .infinity, maxHeight: flexibleHeight)

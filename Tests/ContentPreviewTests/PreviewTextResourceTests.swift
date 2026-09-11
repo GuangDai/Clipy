@@ -4,7 +4,7 @@ import Testing
 
 struct PreviewTextResourceTests {
     @Test(arguments: ["public.utf8-plain-text", "public.html", "public.rtf"])
-    func oversizedCombiningSequenceNeverReachesTextLayout(type: String) async {
+    func oversizedCombiningSequenceIsSegmentedWithoutDiscardingContent(type: String) async {
         let prefix = "Readable prefix\n"
         let marks = String(repeating: "\u{301}", count: 20_000)
         let bytes: Data
@@ -21,7 +21,10 @@ struct PreviewTextResourceTests {
             Issue.record("Expected the readable source prefix")
             return
         }
-        #expect(text.wasTruncated)
-        #expect(text.text == prefix)
+        #expect(!text.wasTruncated)
+        #expect(Data(text.text.utf8) == Data((prefix + "e" + marks).utf8))
+        #expect(Data(text.displaySegments.joined().utf8) == Data(text.text.utf8))
+        #expect(text.displaySegments.count > 1)
+        #expect(text.displaySegments.allSatisfy { $0.utf16.count <= 1_024 })
     }
 }

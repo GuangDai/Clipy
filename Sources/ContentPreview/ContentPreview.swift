@@ -57,18 +57,6 @@ public struct PreviewSource: Sendable {
     }
 }
 
-public struct PreviewText: Equatable, Sendable {
-    package static let maximumCharacters = 50_000
-
-    public let text: String
-    public let wasTruncated: Bool
-
-    internal init(text: String, wasTruncated: Bool) {
-        self.text = text
-        self.wasTruncated = wasTruncated
-    }
-}
-
 /// Fixed eager display artifact: premultiplied BGRA8 in the sRGB color space.
 /// The renderer constructs it after validation; the per-surface pixel cache
 /// may reconstruct the same layout from independently copied cached bytes.
