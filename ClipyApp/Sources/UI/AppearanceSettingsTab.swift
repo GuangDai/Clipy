@@ -91,6 +91,7 @@ struct AppearanceSettingsTab: View {
                         get: { previewGap },
                         set: { previewGap = $0.isFinite ? max(0, $0) : Double(PanelGeometry.floatingPreviewGap) }
                     ), format: .number)
+                        .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
                         .frame(minWidth: 64, idealWidth: 80, maxWidth: 120)
                         .accessibilityLabel(AdaptiveSettingsCopy.text("Preferred panel gap (pt)"))
@@ -109,6 +110,7 @@ struct AppearanceSettingsTab: View {
                                 get: { previewMaximumCharacters },
                                 set: { previewMaximumCharacters = max(1, $0) }
                             ), format: .number.grouping(.never))
+                                .textFieldStyle(.roundedBorder)
                                 .multilineTextAlignment(.trailing)
                                 .frame(minWidth: 96, idealWidth: 120, maxWidth: 180)
                                 .accessibilityLabel(AdaptiveSettingsCopy.text("Preview characters"))
@@ -116,7 +118,7 @@ struct AppearanceSettingsTab: View {
                         }
                     }
                     Text(AdaptiveSettingsCopy.text("Complete text uses more memory and may take longer to prepare. Text is laid out as you scroll. Copying and search always use their own content settings."))
-                        .font(.caption)
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Button(SettingsCopy.text("Reset")) {
