@@ -107,7 +107,8 @@ final class CompactPreviewJourneyUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(copy.frame.width, 24)
         XCTAssertGreaterThanOrEqual(copy.frame.height, 24)
         copy.click()
-        XCTAssertTrue(waitUntil { !panel.exists && pasteboard.string(forType: .string) == short })
+        XCTAssertTrue(waitUntil { !panel.exists && pasteboard.string(forType: .string) == short },
+            "Copy result: \(pasteboard.string(forType: .string) ?? "nil").\n\(app.debugDescription)")
     }
 
     @MainActor private func value(_ element: XCUIElement) -> String {

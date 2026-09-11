@@ -36,14 +36,24 @@ struct PreviewTextLayoutTests {
                 Issue.record("Expected text fixture")
                 return
             }
+            #if DEBUG
+            var preview = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480)
+            var materialized: Set<Int> = []
+            preview.onSegmentMaterialized = { materialized.insert($0) }
+            #else
+            let preview = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480)
+            #endif
             let start = ContinuousClock.now
             // The actual floating pane replaces its view identity on item
             // changes. Include that construction and retirement work here.
-            host.rootView = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480).id(index)
+            host.rootView = preview.id(index)
             host.layoutSubtreeIfNeeded()
             host.displayIfNeeded()
             let elapsed = start.duration(to: .now)
             print("Preview initial layout: \(elapsed), UTF-16 units: \(source.utf16.count)")
+            #if DEBUG
+            print("[DEBUG-preview-layout] materialized=\(materialized.count) total=\(text.displaySegments.count)")
+            #endif
             #expect(elapsed < .milliseconds(34))
             // Whole-process figures are observations, not per-view memory
             // accounting: the hosted runner also owns other test fixtures.

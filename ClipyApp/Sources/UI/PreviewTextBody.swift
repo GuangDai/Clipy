@@ -5,18 +5,15 @@ struct PreviewTextBody: View {
     let segments: [Substring]
     var maximumHeight: CGFloat?
     @State private var contentHeight: CGFloat?
+    #if DEBUG
+    var onSegmentMaterialized: ((Int) -> Void)?
+    #endif
 
     var body: some View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(segments.indices, id: \.self) { index in
-                    Text(verbatim: String(segments[index]))
-                        .font(.body)
-                        .lineSpacing(2)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .accessibilityIdentifier(index == 0
-                            ? "clipy.preview.text" : "clipy.preview.text.segment.\(index)")
+                    textSegment(index)
                 }
             }
             .frame(maxWidth: 720, alignment: .leading)
@@ -30,5 +27,18 @@ struct PreviewTextBody: View {
         // screen. Short content then fits its measured height; long content
         // never requests a full-document intrinsic-size measurement.
         .frame(height: maximumHeight.map { min(contentHeight ?? $0, max(0, $0)) })
+    }
+
+    private func textSegment(_ index: Int) -> some View {
+        #if DEBUG
+        onSegmentMaterialized?(index)
+        #endif
+        return Text(verbatim: String(segments[index]))
+            .font(.body)
+            .lineSpacing(2)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier(index == 0
+                ? "clipy.preview.text" : "clipy.preview.text.segment.\(index)")
     }
 }
