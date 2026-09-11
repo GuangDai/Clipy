@@ -84,8 +84,16 @@ xcodebuild \
 # Keep the native UI journey screenshots directly viewable alongside the
 # result bundle, including on a failing run. Preserve the original test result.
 if [[ -d "$result_dir/app.xcresult" ]]; then
-  xcrun xcresulttool export attachments \
+  # xcresulttool reports every test without attachments as "Skipped export".
+  # Keep those informational messages with the artifacts, separate from test
+  # execution output. A failed export still prints its complete diagnostics.
+  if xcrun xcresulttool export attachments \
     --path "$result_dir/app.xcresult" --output-path "$log_dir/app-attachments" \
-    || echo "Could not export UI attachments; the result bundle is retained." >&2
+    > "$log_dir/app-attachment-export.log" 2>&1; then
+    echo "Test attachment export finished; details are in app-attachment-export.log."
+  else
+    cat "$log_dir/app-attachment-export.log" >&2
+    echo "Could not export UI attachments; the result bundle is retained." >&2
+  fi
 fi
 exit "$test_exit_code"
