@@ -6,7 +6,7 @@ import Testing
 
 @MainActor
 struct PreviewTextLayoutTests {
-    @Test func longTextLayoutFitsTwoFramesAfterWarmup() async {
+    @Test func longTextLayoutFitsTwoFramesAfterWarmup() async throws {
         // Exercise the same view as both preview surfaces, including native
         // hosting, constrained-width layout and drawing. Renderer-only timing
         // misses the synchronous work that prevents selection from changing.
@@ -38,6 +38,10 @@ struct PreviewTextLayoutTests {
             let elapsed = start.duration(to: .now)
             print("Preview initial layout: \(elapsed), UTF-16 units: \(source.utf16.count)")
             #expect(elapsed < .milliseconds(34))
+            // Whole-process figures are observations, not per-view memory
+            // accounting: the hosted runner also owns other test fixtures.
+            let memory = try await ProcessMemoryReader().read()
+            print("Preview process memory: resident \(memory.residentBytes), peak \(memory.peakResidentBytes), footprint \(memory.footprintBytes)")
         }
     }
 }
