@@ -148,8 +148,11 @@ final class PreviewContentLoader {
 
     private let history: any ClipboardHistory
 
-    private let renderer = ContentPreview()
+    private let renderer: ContentPreview
     private var textConfiguration = PreviewTextConfiguration()
+    @ObservationIgnored private var preparation: (
+        item: HistoryItemReference, configuration: PreviewTextConfiguration, task: Task<Void, Never>
+    )?
 
 #if DEBUG
     /// Running-app acceptance can make only this loader's first metadata read
@@ -164,9 +167,39 @@ final class PreviewContentLoader {
             ] == "transient-details-once"
 #endif
 
-    init(history: any ClipboardHistory, filePreviewSettings: FilePreviewSettings? = nil) {
+    init(history: any ClipboardHistory, filePreviewSettings: FilePreviewSettings? = nil,
+         renderer: ContentPreview = ContentPreview()) {
         self.history = history
         self.filePreviewSettings = filePreviewSettings
+        self.renderer = renderer
+    }
+
+    /// Begin the exact selected read during dwell. Only one prospective
+    /// preview owns this task; close, supersession and purge cancel it.
+    @discardableResult
+    func prepare(item: HistoryItemReference, textConfiguration: PreviewTextConfiguration) -> Task<Void, Never> {
+        clear()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.load(item: item, textConfiguration: textConfiguration)
+        }
+        preparation = (item, textConfiguration, task)
+        return task
+    }
+
+    /// A view joins its prepared read instead of resetting to a spinner or
+    /// reading the payload twice. Explicit Retry, PDF navigation and changed
+    /// preferences still start a new fenced operation.
+    func loadForDisplay(item: HistoryItemReference?, pdfPage: Int,
+                        textConfiguration: PreviewTextConfiguration, isRetry: Bool) async {
+        if !isRetry, pdfPage == 1, let preparation,
+           preparation.item == item, preparation.configuration == textConfiguration {
+            await preparation.task.value
+            return
+        }
+        self.preparation?.task.cancel()
+        self.preparation = nil
+        await load(item: item, pdfPage: pdfPage, textConfiguration: textConfiguration)
     }
 
     #if DEBUG
@@ -197,6 +230,8 @@ final class PreviewContentLoader {
     /// reads/renders cannot publish after the pane or Quick Look closes
     /// (PREVIEW-FENCE-1).
     func clear() {
+        preparation?.task.cancel()
+        preparation = nil
         retireFileLoad()
         requestGeneration += 1
         requestedItem = nil
@@ -419,7 +454,7 @@ final class PreviewContentLoader {
     /// previews survive Clear Unpinned; file reads retain their existing
     /// conservative retirement behavior.
     func purgePreview(_ scope: HistorySurfacePurge.Scope, isPinned: Bool = false) {
-        guard let requestedItem else { return }
+        guard let requestedItem = requestedItem ?? preparation?.item else { return }
         switch scope {
         case .all: clear()
         case .unpinned:
@@ -498,4 +533,3 @@ final class PreviewContentLoader {
         return outcome
     }
 }
-

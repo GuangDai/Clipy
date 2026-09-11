@@ -10,6 +10,7 @@
 /// three-page window. Cursor expiration restarts the current observation
 /// from page one (docs/04-coherence.md §6).
 import ClipboardFormats
+import ContentPreview
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -61,6 +62,9 @@ final class HistoryViewState {
     /// passes `SQLiteHistory`; SwiftUI previews pass the scripted
     /// `PreviewClipboardHistory`.
     let history: any ClipboardHistory
+    /// One native raster slot for this browsing session, shared by floating
+    /// and Quick Look loaders. Retargeting cannot create a new decoder pool.
+    let previewRenderer = ContentPreview()
 
     /// App-owned preferences for explicit file preview reads.
     var filePreviewSettings: FilePreviewSettings?

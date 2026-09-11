@@ -90,6 +90,9 @@ final class PreviewPaneState {
     /// once by the composition shell; every state transition that changes
     /// what a window must show publishes exactly one event here.
     var onFloatingPreviewTransition: ((FloatingPreviewTransition) -> Void)?
+    /// Dwell starts preparation before window visibility changes. A nil
+    /// target retires speculative work without touching the visible item.
+    var onPreparationTargetChanged: ((HistoryItemReference?) -> Void)?
 
     /// The dwell delay before a selection change auto-opens the preview
     /// (Maccy's `previewDelay` default: 200 ms). The property is
@@ -200,6 +203,7 @@ final class PreviewPaneState {
             isAutoOpenSuspendedForMemoryPressure = true
             autoOpenTask?.cancel()
             autoOpenTask = nil
+            onPreparationTargetChanged?(nil)
         }
     }
 
@@ -504,6 +508,7 @@ final class PreviewPaneState {
     private func scheduleAutoOpen(for item: HistoryItemReference) {
         pendingAutoOpenItem = item
         guard !isAutoOpenSuspendedForMemoryPressure else { return }
+        onPreparationTargetChanged?(item)
         let delay = autoOpenDelay
         // Inherits the MainActor from this isolated context; `weak self`
         // keeps a released pane from being pinned by its own dwell task.
@@ -540,6 +545,7 @@ final class PreviewPaneState {
         autoOpenTask?.cancel()
         autoOpenTask = nil
         pendingAutoOpenItem = nil
+        onPreparationTargetChanged?(nil)
     }
 
     private func cancelPendingPointerExit() {

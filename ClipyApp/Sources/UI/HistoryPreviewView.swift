@@ -75,7 +75,8 @@ struct HistoryPreviewView: View {
         viewState: HistoryViewState,
         previewState: PreviewPaneState,
         sourceIcons: SourceIconStore? = nil,
-        maximumHeight: CGFloat? = nil
+        maximumHeight: CGFloat? = nil,
+        preparedLoader: PreviewContentLoader? = nil
     ) {
         self.viewState = viewState
         self.previewState = previewState
@@ -83,8 +84,9 @@ struct HistoryPreviewView: View {
         self.maximumHeight = maximumHeight
         selectionSource = .paneState
         _loader = State(
-            initialValue: PreviewContentLoader(
-                history: viewState.history, filePreviewSettings: viewState.filePreviewSettings
+            initialValue: preparedLoader ?? PreviewContentLoader(
+                history: viewState.history, filePreviewSettings: viewState.filePreviewSettings,
+                renderer: viewState.previewRenderer
             )
         )
     }
@@ -104,7 +106,8 @@ struct HistoryPreviewView: View {
         selectionSource = .observedRows(selection)
         _loader = State(
             initialValue: PreviewContentLoader(
-                history: viewState.history, filePreviewSettings: viewState.filePreviewSettings
+                history: viewState.history, filePreviewSettings: viewState.filePreviewSettings,
+                renderer: viewState.previewRenderer
             )
         )
     }
@@ -126,7 +129,8 @@ struct HistoryPreviewView: View {
         selectionSource = .exactItem(item)
         _loader = State(
             initialValue: PreviewContentLoader(
-                history: viewState.history, filePreviewSettings: viewState.filePreviewSettings
+                history: viewState.history, filePreviewSettings: viewState.filePreviewSettings,
+                renderer: viewState.previewRenderer
             )
         )
     }
@@ -215,9 +219,10 @@ struct HistoryPreviewView: View {
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
         .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration, pdfPage: requestedPDFPage,
                               maximumTextCharacters: maximumTextCharacters, isTextLengthLimited: isTextLengthLimited)) {
-            await loader.load(item: targetItem, pdfPage: requestedPDFPage,
+            await loader.loadForDisplay(item: targetItem, pdfPage: requestedPDFPage,
                 textConfiguration: PreviewTextSettings.configuration(
-                    maximumCharacters: maximumTextCharacters, isLengthLimited: isTextLengthLimited))
+                    maximumCharacters: maximumTextCharacters, isLengthLimited: isTextLengthLimited),
+                isRetry: retryGeneration > 0)
         }
         .onChange(of: targetItem) { _, target in
             previewState.isInformationPresented = false

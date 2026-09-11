@@ -21,6 +21,23 @@ struct PreviewPaneStateTests {
 
     /// Zero delay preserves the production task-suspension boundary without
     /// coupling state-machine tests to wall-clock scheduling under CI load.
+    @Test func memoryPressureAndPanelCloseRetireDwellPreparation() {
+        let state = PreviewPaneState(autoOpenDelay: .seconds(3_600))
+        var targets: [HistoryItemReference?] = []
+        state.onPreparationTargetChanged = { targets.append($0) }
+        let item = reference()
+        state.handleSelectionChange(item)
+        #expect(targets.last == .some(item))
+        #expect(!state.isOpen)
+        state.respondToMemoryPressure(.critical)
+        #expect(targets.last == .some(nil))
+        state.respondToMemoryPressure(.normal)
+        #expect(targets.last == .some(item))
+        state.panelClosed()
+        #expect(targets.last == .some(nil))
+        #expect(!state.isOpen)
+    }
+
     private func makeState() -> PreviewPaneState {
         PreviewPaneState(autoOpenDelay: .zero)
     }

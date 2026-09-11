@@ -49,6 +49,14 @@ segments, sharing the immutable source buffer. No global full-document height
 measurement is required to open the pane. The timing tests use the actual
 AppKit-hosted preview body; passing decoder tests alone is not rendering proof.
 
+Dwell starts the prospective preview read before opening the floating window.
+Opening joins that exact preparation instead of rereading the representation.
+Only the visible loader and one prospective loader are retained; supersession,
+panel close, purge and critical memory pressure retire prospective work. Text
+preferences and explicit Retry still start a fresh exact-reference load.
+Floating and Quick Look loaders share the browsing session's ContentPreview
+actor so rapid retargets do not create independent native decoder pools.
+
 ## Copy behavior
 
 Existing byte-exact Canonical containment and lineage confirmation continue

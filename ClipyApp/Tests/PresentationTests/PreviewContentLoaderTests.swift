@@ -15,6 +15,20 @@ import Testing
 
 @MainActor
 struct PreviewContentLoaderTests {
+    @Test func clearingAPreparedReadFencesItsLateCompletion() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000001E1", version: 1)
+        let history = PausablePreviewHistory()
+        await history.scriptPayload(payload(for: item, text: "retired preparation"))
+        let loader = PreviewContentLoader(history: history)
+        let preparation = loader.prepare(item: item, textConfiguration: .init())
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
+        loader.clear()
+        await history.resumePayload(for: item.id)
+        await preparation.value
+        #expect(loader.requestedItem == nil)
+        #expect(loader.phase == .unsupported)
+        #expect(loader.textSegments.isEmpty)
+    }
 
     // MARK: - Fixtures
 

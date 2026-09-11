@@ -9,6 +9,12 @@ enum PreviewTextSettings {
     static let maximumCharactersKey = "clipy.preview.maximumTextCharacters"
     static let defaultMaximumCharacters = PreviewTextConfiguration.defaultMaximumCharacters
 
+    static func configuration(from defaults: UserDefaults) -> PreviewTextConfiguration {
+        configuration(maximumCharacters: (defaults.object(forKey: maximumCharactersKey) as? Int)
+            ?? defaultMaximumCharacters,
+            isLengthLimited: (defaults.object(forKey: isLengthLimitedKey) as? Bool) ?? true)
+    }
+
     static func configuration(maximumCharacters: Int, isLengthLimited: Bool) -> PreviewTextConfiguration {
         PreviewTextConfiguration(maximumCharacters: isLengthLimited
             ? (maximumCharacters > 0 ? maximumCharacters : defaultMaximumCharacters) : nil)

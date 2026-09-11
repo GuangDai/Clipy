@@ -133,7 +133,8 @@ struct FloatingPreviewRootView: View {
                     viewState: composition.viewState,
                     previewState: appDelegate.previewState,
                     sourceIcons: sourceIcons,
-                    maximumHeight: appDelegate.previewState.availablePreviewHeight
+                    maximumHeight: appDelegate.previewState.availablePreviewHeight,
+                    preparedLoader: appDelegate.floatingPreviewLoader
                 )
                 .id(item)
                 .fixedSize(horizontal: false, vertical: true)
