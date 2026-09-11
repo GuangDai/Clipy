@@ -112,7 +112,7 @@ final class PreviewContentLoader {
     /// observable state or crosses the renderer actor seam.
     private(set) var raster: PreviewRaster?
     /// Prepared by ContentPreview off the main actor, for lazy text layout.
-    private(set) var textSegments: [String] = []
+    private(set) var textSegments: [Substring] = []
 
     /// PDF uses the same bitmap surface, but its page count must not be
     /// mistaken for an image source's frame count. Other formats keep nil.

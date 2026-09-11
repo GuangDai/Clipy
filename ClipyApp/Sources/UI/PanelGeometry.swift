@@ -27,8 +27,17 @@ enum PanelGeometry {
     /// side pane; it never resizes the main panel).
     static let floatingPreviewWidth: CGFloat = 340
 
-    /// The gap between the main panel and the floating preview pane.
-    static let floatingPreviewGap: CGFloat = 8
+    /// Preferred gap, in points, between the main panel and preview. The
+    /// default keeps the surfaces close; zero joins their visible edges.
+    /// There is no saved upper bound: placement fits the preference into the
+    /// actual free screen space without moving the main panel.
+    static let floatingPreviewGap: CGFloat = 2
+    static let floatingPreviewGapDefaultsKey = "clipy.preview.panelGap"
+
+    static func persistedFloatingPreviewGap(from defaults: UserDefaults) -> CGFloat {
+        persistedDimension(forKey: floatingPreviewGapDefaultsKey, in: defaults,
+            fallback: floatingPreviewGap, minimum: 0)
+    }
 
     // MARK: User resizing
 

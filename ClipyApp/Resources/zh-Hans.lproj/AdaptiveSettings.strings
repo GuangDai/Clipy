@@ -2,6 +2,8 @@
 "Clearing history permanently removes saved clipboard content." = "清除历史记录会永久移除已保存的剪贴板内容。";
 "Text Appearance" = "文字外观";
 "Preview" = "预览";
+"Preferred panel gap (pt)" = "面板间距（点）";
+"The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap." = "预览显示在主面板旁。间距为零时，两者边缘贴合。调整立即生效；屏幕空间不足时会缩小间距。";
 "Advanced Preview" = "高级预览";
 "Show complete text" = "显示完整文本";
 "Preview characters" = "预览字符数";

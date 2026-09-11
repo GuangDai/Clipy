@@ -38,6 +38,8 @@ struct AppearanceSettingsTab: View {
     private var previewMaximumCharacters = PreviewTextSettings.defaultMaximumCharacters
     @AppStorage(PreviewTextSettings.isLengthLimitedKey)
     private var isPreviewTextLengthLimited = true
+    @AppStorage(PanelGeometry.floatingPreviewGapDefaultsKey)
+    private var previewGap = Double(PanelGeometry.floatingPreviewGap)
 
     init(popupPosition: Binding<PopupPositionMode>?) {
         self.popupPosition = popupPosition
@@ -83,6 +85,17 @@ struct AppearanceSettingsTab: View {
                     isOn: $isPreviewAutoOpenEnabled
                 )
                 .accessibilityIdentifier("clipy.settings.appearance.preview-auto-open")
+                SettingsFieldLayout {
+                    Text(AdaptiveSettingsCopy.text("Preferred panel gap (pt)"))
+                    TextField("", value: Binding(
+                        get: { previewGap },
+                        set: { previewGap = $0.isFinite ? max(0, $0) : Double(PanelGeometry.floatingPreviewGap) }
+                    ), format: .number)
+                        .multilineTextAlignment(.trailing)
+                        .frame(minWidth: 64, idealWidth: 80, maxWidth: 120)
+                        .accessibilityLabel(AdaptiveSettingsCopy.text("Preferred panel gap (pt)"))
+                        .accessibilityIdentifier("clipy.settings.preview.panel-gap")
+                }
                 DisclosureGroup(AdaptiveSettingsCopy.text("Advanced Preview"), isExpanded: $isShowingPreviewOptions) {
                     Toggle(AdaptiveSettingsCopy.text("Show complete text"), isOn: Binding(
                         get: { !isPreviewTextLengthLimited },
@@ -109,6 +122,7 @@ struct AppearanceSettingsTab: View {
                     Button(SettingsCopy.text("Reset")) {
                         previewMaximumCharacters = PreviewTextSettings.defaultMaximumCharacters
                         isPreviewTextLengthLimited = true
+                        previewGap = Double(PanelGeometry.floatingPreviewGap)
                     }
                     .accessibilityIdentifier("clipy.settings.preview.reset")
                 }
@@ -116,7 +130,7 @@ struct AppearanceSettingsTab: View {
             } header: {
                 Text(AdaptiveSettingsCopy.text("Preview"))
             } footer: {
-                Text(AdaptiveSettingsCopy.text("The preview opens in a floating pane beside the panel."))
+                Text(AdaptiveSettingsCopy.text("The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap."))
             }
             Section {
                 if let popupPosition {

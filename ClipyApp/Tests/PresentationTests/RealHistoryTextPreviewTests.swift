@@ -48,6 +48,15 @@ struct RealHistoryTextPreviewTests {
         await loader.load(item: longItem)
         #expect(loader.phase == .content(.text(displayedPrefix, wasTruncated: true)))
         #expect(try await history.pastePayload(for: longItem.id) == longPaste)
+
+        // A user's complete-text setting reaches the real History loader;
+        // neither its length preference nor layout segmentation changes Copy.
+        await loader.load(item: longItem, textConfiguration: .init(maximumCharacters: nil))
+        #expect(loader.phase == .content(.text(String(decoding: completeLongBytes, as: UTF8.self))))
+        #expect(Data(loader.textSegments.joined().utf8) == completeLongBytes)
+        #expect(try await history.pastePayload(for: longItem.id) == longPaste)
+        loader.clear()
+        #expect(loader.textSegments.isEmpty)
     }
 
     private func capture(

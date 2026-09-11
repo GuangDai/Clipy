@@ -31,6 +31,24 @@ the list.
   metal texture. Menu-bar/control icons must remain legible as templates and
   at small sizes; they must not be raster reductions of a shaded app icon.
 
+## Preview responsiveness and preferences
+
+The preview gap defaults to 2 pt and can be changed in Appearance, including
+zero for touching edges. The saved preference has no arbitrary upper bound;
+placement reduces it to fit the available screen space and applies changes
+while the preview is open. Advanced Preview controls the optional text length
+independently from copying and search. Switching to complete text preserves
+the previous custom count for later reuse. Complete text may require more
+memory and preparation time; source-format resource limits still apply.
+
+`PreviewTextConfiguration` owns the renderer's text defaults and work-unit
+parameters. `PreviewTextSettings` owns their app preferences, and
+`PanelGeometry` owns window dimensions and gap preferences. Text segmentation
+is prepared off the main actor; the view renders a lazy sequence of bounded
+segments, sharing the immutable source buffer. No global full-document height
+measurement is required to open the pane. The timing tests use the actual
+AppKit-hosted preview body; passing decoder tests alone is not rendering proof.
+
 ## Copy behavior
 
 Existing byte-exact Canonical containment and lineage confirmation continue

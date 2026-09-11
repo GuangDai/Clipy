@@ -2,6 +2,8 @@
 "Clearing history permanently removes saved clipboard content." = "Clearing history permanently removes saved clipboard content.";
 "Text Appearance" = "Text Appearance";
 "Preview" = "Preview";
+"Preferred panel gap (pt)" = "Preferred panel gap (pt)";
+"The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap." = "The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap.";
 "Advanced Preview" = "Advanced Preview";
 "Show complete text" = "Show complete text";
 "Preview characters" = "Preview characters";

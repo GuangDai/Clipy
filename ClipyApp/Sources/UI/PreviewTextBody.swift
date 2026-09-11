@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Selectable preview text shared by the floating pane and Quick Look.
 struct PreviewTextBody: View {
-    let segments: [String]
+    let segments: [Substring]
     var maximumHeight: CGFloat?
     @State private var contentHeight: CGFloat?
 
@@ -10,7 +10,7 @@ struct PreviewTextBody: View {
         ScrollView(.vertical) {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(segments.indices, id: \.self) { index in
-                    Text(verbatim: segments[index])
+                    Text(verbatim: String(segments[index]))
                         .font(.body)
                         .lineSpacing(2)
                         .textSelection(.enabled)

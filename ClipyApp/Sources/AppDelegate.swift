@@ -788,6 +788,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @ObservationIgnored
     private var floatingPreviewFitTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var configuredPreviewGap = PanelGeometry.persistedFloatingPreviewGap(from: .standard)
 
     /// The panel content's analytic height demand (HistoryPanelView's
     /// `PanelContentFit.Input` reports). Coalesced ~40 ms, then applied to
@@ -1358,6 +1360,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// unrelated writes (panel size, position, retention) from
     /// invalidating the panel content.
     private func reloadPanelAppearance() {
+        let gap = PanelGeometry.persistedFloatingPreviewGap(from: .standard)
+        if configuredPreviewGap != gap {
+            configuredPreviewGap = gap
+            followMainPanelFrameWithPreview()
+        }
         let loaded = PanelAppearanceSettings.load(from: .standard)
         guard loaded != panelAppearance else { return }
         panelAppearance = loaded

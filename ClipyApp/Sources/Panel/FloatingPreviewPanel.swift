@@ -82,7 +82,8 @@ final class FloatingPreviewPanel: NSPanel {
         let placement = PopupPositionGeometry.floatingPreviewFrame(
             beside: mainPanel.frame,
             in: mainPanel.screen?.visibleFrame,
-            previewHeight: contentHeight
+            previewHeight: contentHeight,
+            gap: PanelGeometry.persistedFloatingPreviewGap(from: .standard)
         )
         setFrame(placement.frame, display: isPresented)
         if mainPanel.childWindows?.contains(self) != true {
