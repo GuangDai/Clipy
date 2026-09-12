@@ -45,6 +45,7 @@ struct HistoryPreviewView: View {
     @State private var pdfPageSelection: PDFPageSelection?
     @State private var pinRequest: PinRequest?
     @State private var pinFailure: (item: HistoryItemReference, message: String)?
+    @State private var informationItem: HistoryItemReference?
     @AppStorage(PreviewTextSettings.maximumCharactersKey)
     private var maximumTextCharacters = PreviewTextSettings.defaultMaximumCharacters
     @AppStorage(PreviewTextSettings.isLengthLimitedKey)
@@ -257,16 +258,40 @@ struct HistoryPreviewView: View {
             await performPin(request)
         }
         .onChange(of: targetItem) { _, target in
-            previewState.isInformationPresented = false
+            if let informationItem, informationItem != target {
+                previewState.isInformationPresented = false
+                self.informationItem = nil
+            }
             fileConfirmationPresented = false
             pdfPageSelection = nil
             pinRequest = nil
             pinFailure = nil
             if loader.requestedItem != target { loader.clear() }
         }
+        .onChange(of: previewState.isInformationPresented) { _, presented in
+            // Escape is shared with the panel; retire this local anchor too
+            // so another preview opening information cannot resurrect it.
+            if !presented { informationItem = nil }
+        }
         .onChange(of: viewState.surfacePurge) { _, purge in
             guard let purge else { return }
-            previewState.isInformationPresented = false
+            // An unrelated removal/revision must not interrupt reading this
+            // item's information; Clear Unpinned also preserves pinned rows.
+            let retiresTarget: Bool
+            switch purge.scope {
+            case .all:
+                retiresTarget = true
+            case .unpinned:
+                retiresTarget = observedRow?.pinnedPosition == nil
+            case .item(let id):
+                retiresTarget = targetItem?.id == id
+            case .revision(let old, _):
+                retiresTarget = targetItem == old
+            }
+            if retiresTarget, informationItem != nil {
+                previewState.isInformationPresented = false
+                informationItem = nil
+            }
             loader.purgePreview(purge.scope, isPinned: observedRow?.pinnedPosition != nil)
             if loader.fileLoadConfirmation == nil { fileConfirmationPresented = false }
         }
@@ -294,7 +319,10 @@ struct HistoryPreviewView: View {
             }
         }
         .onDisappear {
-            previewState.isInformationPresented = false
+            if informationItem != nil {
+                previewState.isInformationPresented = false
+                informationItem = nil
+            }
             pdfPageSelection = nil
             fileConfirmationPresented = false
             pinRequest = nil
@@ -569,7 +597,8 @@ struct HistoryPreviewView: View {
 
     @ViewBuilder
     private var metadataBar: some View {
-        if let occurrence = PreviewFooterMetadata(item: targetItem, row: observedRow) {
+        if let row = observedRow,
+           let occurrence = PreviewFooterMetadata(item: targetItem, row: row) {
             HStack(spacing: 8) {
                 SourceApplicationLabel(application: occurrence.lastSource, store: sourceIcons)
                     .foregroundStyle(.secondary)
@@ -620,7 +649,16 @@ struct HistoryPreviewView: View {
                     .fixedSize()
                     .layoutPriority(1)
                 }
-                Button { previewState.isInformationPresented.toggle() } label: {
+                Button {
+                    guard observedRow?.item == row.item else { return }
+                    if informationItem == row.item, previewState.isInformationPresented {
+                        previewState.isInformationPresented = false
+                        informationItem = nil
+                    } else {
+                        informationItem = row.item
+                        previewState.isInformationPresented = true
+                    }
+                } label: {
                     Image(systemName: "info.circle")
                         .font(.system(size: 12))
                         .frame(width: 24, height: 24)
@@ -635,13 +673,24 @@ struct HistoryPreviewView: View {
                 .fixedSize()
                 .layoutPriority(1)
                 .popover(isPresented: Binding(
-                    get: { previewState.isInformationPresented },
-                    set: { previewState.isInformationPresented = $0 }
+                    get: {
+                        previewState.isInformationPresented
+                            && informationItem == row.item
+                            && observedRow?.item == row.item
+                    },
+                    set: { presented in
+                        // A dismissed old anchor cannot close information
+                        // the user has already opened for a newer target.
+                        guard informationItem == row.item else { return }
+                        previewState.isInformationPresented = presented
+                        if !presented { informationItem = nil }
+                    }
                 ), arrowEdge: .bottom) {
                     VStack(alignment: .leading, spacing: 10) {
-                        if let row = observedRow {
-                            PreviewMetadataView(history: viewState.history, row: row, sourceIcons: sourceIcons)
-                                .id(row.item)
+                        if informationItem == row.item,
+                           let currentRow = observedRow, currentRow.item == row.item {
+                            PreviewMetadataView(history: viewState.history, row: currentRow, sourceIcons: sourceIcons)
+                                .id(currentRow.item)
                         }
                     }
                     .font(.callout)
@@ -669,6 +718,11 @@ struct HistoryPreviewView: View {
                 }
             }
             .font(.caption2)
+            .onDisappear {
+                guard informationItem == row.item else { return }
+                previewState.isInformationPresented = false
+                informationItem = nil
+            }
         }
     }
 }

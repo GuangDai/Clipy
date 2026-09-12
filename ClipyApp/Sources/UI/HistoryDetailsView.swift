@@ -37,6 +37,12 @@ struct HistoryDetailsLoadFence {
         return generation
     }
 
+    /// Handing the surface to its editor retires prior overview reads without
+    /// purging the item or cancelling an already-submitted History mutation.
+    mutating func invalidateReads() {
+        generation += 1
+    }
+
     mutating func purge(
         _ scope: HistorySurfacePurge.Scope,
         item: HistoryItemReference
@@ -249,12 +255,6 @@ struct HistoryDetailsView: View {
             cancelExport()
             cancelRepresentationPreview()
         }
-        .onChange(of: showsEditor) { _, opened in
-            if opened {
-                cancelExport()
-                cancelRepresentationPreview()
-            }
-        }
         .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
             _ = reconcileSurfacePurge(viewState.surfacePurge)
         }
@@ -310,7 +310,25 @@ struct HistoryDetailsView: View {
     @MainActor
     private func closeEditor() {
         showsEditor = false
-        Task { await load(presentingTransition: false) }
+        // Save/Reload Latest may have advanced currentItem while this phase
+        // still contains the opening metadata. Do not expose its old Edit or
+        // Revert controls before the authoritative readback returns.
+        phase = .loading
+        Task { await load() }
+    }
+
+    /// A Pin readback or a previous editor dismissal may still be suspended.
+    /// Retire those overview reads before exposing a new editable draft so a
+    /// late success/failure cannot replace its loaded phase and discard edits.
+    @MainActor
+    private func openEditor() {
+        guard !showsEditor, reconcileSurfacePurge(viewState.surfacePurge),
+              case .loaded(let details, _) = phase,
+              details.item == currentItem else { return }
+        loadFence.invalidateReads()
+        cancelExport()
+        cancelRepresentationPreview()
+        showsEditor = true
     }
 
     /// Explicit revision recovery and committed Save/Revert are the sources
@@ -428,7 +446,7 @@ struct HistoryDetailsView: View {
             .accessibilityIdentifier("clipy.details.pin-toggle")
             .disabled(isTogglingPin)
             Button {
-                showsEditor = true
+                openEditor()
             } label: {
                 Label(PanelActionsCopy.text("Edit Content", bundle: copyBundle), systemImage: "square.and.pencil")
                     .frame(width: 28, height: 24)
@@ -619,6 +637,10 @@ struct HistoryDetailsView: View {
     /// user-facing `FailurePresentation` message (03b §10).
     @MainActor
     private func load(presentingTransition: Bool = true) async {
+        // A previously submitted Pin still commits normally. Its subsequent
+        // metadata readback waits for the editor's own dismissal instead of
+        // replacing a live authored draft (V2-09 §5).
+        guard !showsEditor else { return }
         cancelRepresentationPreview()
         cancelExport()
         guard reconcileSurfacePurge(viewState.surfacePurge) else { return }

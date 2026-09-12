@@ -84,8 +84,10 @@ final class ThumbnailStore {
     private var inFlight: [HistoryItemReference: Flight] = [:]
 
     /// Actual row appearances distinguish display demand from cold
-    /// retained results. These references own no pixels or History values.
-    private var displayedItems: Set<HistoryItemReference> = []
+    /// retained results. A move between Pinned and Recent can briefly show
+    /// two row instances for one reference; the retiring row must not release
+    /// the replacement's pixels. Counts own no pixels or History values.
+    private var displayedItemCounts: [HistoryItemReference: Int] = [:]
     var isSurfaceActive = true {
         didSet {
             if !isSurfaceActive {
@@ -99,8 +101,9 @@ final class ThumbnailStore {
     private(set) var isPrefetchSuspended = false
 
     func setDisplayed(_ item: HistoryItemReference, _ displayed: Bool) {
+        let count = (displayedItemCounts[item] ?? 0) + (displayed ? 1 : -1)
+        displayedItemCounts[item] = count > 0 ? count : nil
         if displayed {
-            displayedItems.insert(item)
             if isSurfaceActive, entries[item]?.width != nil, activeRasters[item] == nil {
                 if let raster = readColdRaster(for: item) {
                     activeRasters[item] = raster
@@ -110,8 +113,7 @@ final class ThumbnailStore {
                     prefetch(item)
                 }
             }
-        } else {
-            displayedItems.remove(item)
+        } else if count <= 0 {
             if let raster = activeRasters.removeValue(forKey: item) {
                 retainColdPixels(raster.pixels, for: item)
             }
@@ -123,8 +125,8 @@ final class ThumbnailStore {
         case .normal:
             isPrefetchSuspended = false
         case .warning:
-            removeEntries { !isSurfaceActive || !displayedItems.contains($0) }
-            for item in inFlight.keys.filter({ !isSurfaceActive || !displayedItems.contains($0) }) {
+            removeEntries { !isSurfaceActive || displayedItemCounts[$0] == nil }
+            for item in inFlight.keys.filter({ !isSurfaceActive || displayedItemCounts[$0] == nil }) {
                 inFlight.removeValue(forKey: item)?.task.cancel()
             }
         case .critical:
@@ -300,7 +302,7 @@ final class ThumbnailStore {
         // promote a retained entry on behalf of that retired caller.
         guard !Task.isCancelled, !isPrefetchSuspended, isSurfaceActive else { return }
         removeEntries { !hasRetainedEntry($0) }
-        if displayedItems.contains(item), entries[item]?.width != nil, activeRasters[item] == nil {
+        if displayedItemCounts[item] != nil, entries[item]?.width != nil, activeRasters[item] == nil {
             if let raster = readColdRaster(for: item) {
                 activeRasters[item] = raster
                 coldPixels.removeObject(forKey: cacheKey(item))
@@ -619,7 +621,7 @@ final class ThumbnailStore {
         retainedDecodedBytes += cost
         evictColdEntriesIfNeeded()
         if entries[item] != nil, let raster {
-            if isSurfaceActive, displayedItems.contains(item) {
+            if isSurfaceActive, displayedItemCounts[item] != nil {
                 activeRasters[item] = raster
             } else {
                 retainColdPixels(raster.pixels, for: item)
@@ -634,7 +636,7 @@ final class ThumbnailStore {
     /// request and would otherwise remain permanent fallbacks.
     private func evictColdEntriesIfNeeded() {
         while entries.count > maximumEntries || retainedDecodedBytes > maximumDecodedBytes {
-            let cold = entries.filter { !displayedItems.contains($0.key) }
+            let cold = entries.filter { displayedItemCounts[$0.key] == nil }
             let candidates = cold.isEmpty ? entries : cold
             guard let coldest = candidates.min(by: { $0.value.recency < $1.value.recency }) else {
                 return

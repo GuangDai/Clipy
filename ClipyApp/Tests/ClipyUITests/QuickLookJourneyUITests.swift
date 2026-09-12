@@ -147,7 +147,8 @@ final class QuickLookJourneyUITests: XCTestCase {
         XCTAssertTrue(overlay.waitForExistence(timeout: 5), app.debugDescription)
         let title = overlay.staticTexts["clipy.panel.quicklook.title"]
         XCTAssertTrue(title.exists, app.debugDescription)
-        XCTAssertEqual(title.label, expected)
+        let titleText = (title.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? title.label
+        XCTAssertEqual(titleText, expected)
         // Scope beneath Quick Look: the side pane uses the same preview IDs
         // and may be open because of the normal selection dwell.
         let text = overlay.descendants(matching: .any)["clipy.preview.text"]

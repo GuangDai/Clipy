@@ -120,7 +120,9 @@ final class VisualLayoutJourneyUITests: XCTestCase {
                        "An unedited item has no revision list or restore action to disclose.")
         let pin = details.buttons["clipy.details.pin-toggle"]
         XCTAssertTrue(waitUntil { pin.exists && pin.isEnabled }, app.debugDescription)
-        attach(panel, named: "Details — Image and actions")
+        // NavigationStack exposes its destination as the visible AX surface;
+        // the covered browsing group need not remain in that hierarchy.
+        attach(details, named: "Details — Image and actions")
         let back = details.buttons["clipy.details.back"]
         XCTAssertTrue(back.exists && back.isHittable, app.debugDescription)
         XCTAssertGreaterThanOrEqual(back.frame.width, 24)

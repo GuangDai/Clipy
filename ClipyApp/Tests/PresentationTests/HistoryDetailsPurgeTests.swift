@@ -16,6 +16,35 @@ struct HistoryDetailsPurgeTests {
         )
     }
 
+    /// Pin may already have committed when its readback is suspended. Opening
+    /// Edit retires only that overview read: neither its success nor its error
+    /// may replace the loaded phase which keeps the authored editor mounted.
+    @Test func editorHandoffRejectsBothParkedReadbackOutcomesWithoutPurging() throws {
+        let item = reference(
+            "00000000-0000-0000-0000-000000009B10",
+            version: 1
+        )
+        var fence = HistoryDetailsLoadFence()
+        let readbackToken = fence.begin()
+        let readback = try #require(readbackToken)
+
+        fence.invalidateReads()
+
+        #expect(!fence.accepts(
+            readback, returned: item, expected: item, isCancelled: false
+        ))
+        // The typed failure branch has no returned reference; it must lose
+        // ownership too, or phase.failed would silently remove the editor.
+        #expect(!fence.owns(readback))
+        #expect(!fence.isPurged)
+        let dismissalToken = fence.begin()
+        let afterDismissal = try #require(dismissalToken)
+        #expect(fence.accepts(
+            afterDismissal, returned: item, expected: item, isCancelled: false
+        ))
+        #expect(!fence.owns(readback))
+    }
+
     /// A parked read carries the token returned by `begin`. Purge advances
     /// ownership before that read returns, so its late full-details payload
     /// cannot be accepted; this retired exact-reference screen starts no new
@@ -304,6 +333,10 @@ struct HistoryDetailsPurgeTests {
         let oldToken = fence.begin()
         #expect(oldToken != nil)
 
+        // A committed Save advances the reference while its editor is still
+        // open. The metadata retained from before that handoff remains stale
+        // even when the editor then dismisses and starts its fresh readback.
+        fence.invalidateReads()
         let didAdvance = fence.advanceReference(from: original, to: latest)
         #expect(didAdvance)
         if let oldToken {
