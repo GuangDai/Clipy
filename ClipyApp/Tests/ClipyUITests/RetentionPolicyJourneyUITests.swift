@@ -741,7 +741,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         context: String
     ) {
         XCTAssertTrue(
-            element.waitForExistence(timeout: timeout),
+            element.exists || element.waitForExistence(timeout: timeout),
             diagnostic(app, context: context)
         )
     }
@@ -751,6 +751,9 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         timeout: TimeInterval,
         condition: @escaping () -> Bool
     ) -> Bool {
+        // XCTest polls after an initial interval even when the preceding UI
+        // action already settled. Keep the full wait for unfinished work.
+        if condition() { return true }
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in condition() },
             object: nil

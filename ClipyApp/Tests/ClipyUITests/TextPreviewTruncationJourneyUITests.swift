@@ -25,7 +25,13 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        // Arm production dwell without inheriting another journey's preference.
+        app.launchArguments += [
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-clipy.appearance.previewAutoOpen", "YES",
+            "-clipy.preview.isTextLengthLimited", "YES",
+            "-clipy.preview.maximumTextCharacters", "50000",
+        ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
@@ -40,24 +46,6 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         ))
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 }, "Long text was not captured")
         let longRowIdentifier = rows.firstMatch.identifier
-
-        // Use the real preference control: a prior journey may have disabled
-        // automatic preview. Reopening the panel starts ordinary dwell.
-        app.typeKey(",", modifierFlags: .command)
-        let appearance = app.buttons["clipy.settings.category.appearance"]
-        XCTAssertTrue(appearance.waitForExistence(timeout: 10))
-        appearance.click()
-        let autoOpen = app.switches["clipy.settings.appearance.preview-auto-open"]
-        XCTAssertTrue(autoOpen.waitForExistence(timeout: 5))
-        if (autoOpen.value as? Int) == 0 { autoOpen.click() }
-        XCTAssertTrue(waitUntil(timeout: 5) { (autoOpen.value as? Int) == 1 })
-        let general = app.buttons["clipy.settings.category.general"]
-        XCTAssertTrue(general.exists)
-        general.click()
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(waitUntil(timeout: 5) { !general.exists })
-        app.typeKey("c", modifierFlags: [.command, .shift])
-        XCTAssertTrue(panel.waitForExistence(timeout: 10))
 
         // The preview is the floating child pane now — a separate window, so
         // its queries scope to the app, never to the main panel.

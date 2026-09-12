@@ -36,6 +36,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-AppleLanguages", "(\(language))", "-AppleLocale", locale,
+            "-clipy.appearance.previewAutoOpen", "YES",
         ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
@@ -47,26 +48,8 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
 
-        // Arm the real auto-open preference: a prior journey may have left
-        // it disabled, and the width invariant below is proven WHILE the
-        // floating preview pane is on screen. No manual preview chord
-        // substitutes for the dwell transition.
-        app.typeKey(",", modifierFlags: .command)
-        let appearance = app.buttons["clipy.settings.category.appearance"]
-        XCTAssertTrue(appearance.waitForExistence(timeout: 10), app.debugDescription)
-        appearance.click()
-        let autoOpen = app.switches["clipy.settings.appearance.preview-auto-open"]
-        XCTAssertTrue(autoOpen.waitForExistence(timeout: 5), app.debugDescription)
-        if (autoOpen.value as? Int) == 0 { autoOpen.click() }
-        XCTAssertTrue(waitUntil { (autoOpen.value as? Int) == 1 }, app.debugDescription)
-        let general = app.buttons["clipy.settings.category.general"]
-        XCTAssertTrue(general.exists, app.debugDescription)
-        general.click()
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(waitUntil { !general.exists }, app.debugDescription)
-        app.typeKey("c", modifierFlags: [.command, .shift])
-        XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
-
+        // Launch arguments arm production dwell for this process; the
+        // width proof still requires the real floating pane to appear.
         let narrowWidth: CGFloat = 320
         if abs(panel.frame.width - narrowWidth) > 3 {
             // V2-11 permits freely chosen widths. Drag to the intended

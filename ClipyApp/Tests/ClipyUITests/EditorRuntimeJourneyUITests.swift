@@ -51,7 +51,10 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             typeIdentifier: typeIdentifier,
             bytes: originalBytes
         )
-        defer { app.terminate() }
+        defer {
+            app.terminate()
+            NSPasteboard.general.clearContents()
+        }
         let expectedItemID = try XCTUnwrap(capturedItemID)
         let pasteboard = NSPasteboard.general
         let source = try XCTUnwrap(pasteboard.pasteboardItems?.first)
@@ -147,7 +150,10 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             capturing: "clipy-editor-stale-original",
             editorJourney: "stale-reload-failure-once"
         )
-        defer { app.terminate() }
+        defer {
+            app.terminate()
+            NSPasteboard.general.clearContents()
+        }
 
         let replacement = try authorReplacement(draft, in: app)
         let revisionDisclosure = app.descendants(matching: .any)[
@@ -347,7 +353,10 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         let original = "clipy-editor-dirty-original"
         let draft = "clipy-editor-dirty-draft"
         let app = try launchEditor(capturing: original)
-        defer { app.terminate() }
+        defer {
+            app.terminate()
+            NSPasteboard.general.clearContents()
+        }
 
         let replacement = try authorReplacement(draft, in: app)
         replacement.typeKey(.escape, modifierFlags: [])

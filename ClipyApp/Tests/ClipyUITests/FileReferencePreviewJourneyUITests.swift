@@ -43,7 +43,13 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertTrue(pasteboard.writeObjects([item]))
 
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        // Arm production dwell without inheriting another journey's preference.
+        app.launchArguments += [
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-clipy.appearance.previewAutoOpen", "YES",
+            "-clipy.preview.isTextLengthLimited", "YES",
+            "-clipy.preview.maximumTextCharacters", "50000",
+        ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
@@ -60,27 +66,14 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         let capturedRowIdentifier = rows.firstMatch.identifier
         XCTAssertTrue(rows.firstMatch.label.contains(expectedFilename), app.debugDescription)
         // Capture is now authoritative. Remove only the synthetic target;
-        // the subsequent Settings reopen and dwell use its retained URL.
+        // the subsequent panel reopen and dwell use its retained URL.
         try FileManager.default.removeItem(at: destination)
         XCTAssertFalse(FileManager.default.fileExists(atPath: expectedPath))
 
-        // Configure the real auto-open control so this journey exercises
-        // dwell even if a previous run left the preference disabled. No
-        // manual preview toggle substitutes for the dwell transition.
-        app.typeKey(",", modifierFlags: .command)
-        let appearance = app.buttons["clipy.settings.category.appearance"]
-        XCTAssertTrue(appearance.waitForExistence(timeout: 10), app.debugDescription)
-        appearance.click()
-        let autoOpen = app.switches["clipy.settings.appearance.preview-auto-open"]
-        XCTAssertTrue(autoOpen.waitForExistence(timeout: 5), app.debugDescription)
-        if (autoOpen.value as? Int) == 0 { autoOpen.click() }
-        XCTAssertTrue(waitUntil(timeout: 5) { (autoOpen.value as? Int) == 1 },
-                      app.debugDescription)
-        let general = app.buttons["clipy.settings.category.general"]
-        XCTAssertTrue(general.exists, app.debugDescription)
-        general.click()
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(waitUntil(timeout: 5) { !general.exists }, app.debugDescription)
+        // Begin a new dwell after deleting the target, so the initial
+        // preview cannot satisfy the retained-reference assertions below.
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitUntil(timeout: 5) { !panel.exists }, app.debugDescription)
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
 
@@ -219,7 +212,13 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertTrue(pasteboard.writeObjects([item]))
 
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        // Arm production dwell without inheriting another journey's preference.
+        app.launchArguments += [
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-clipy.appearance.previewAutoOpen", "YES",
+            "-clipy.preview.isTextLengthLimited", "YES",
+            "-clipy.preview.maximumTextCharacters", "50000",
+        ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.store").path
@@ -316,7 +315,13 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertTrue(pasteboard.writeObjects([item]))
 
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        // Arm production dwell without inheriting another journey's preference.
+        app.launchArguments += [
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-clipy.appearance.previewAutoOpen", "YES",
+            "-clipy.preview.isTextLengthLimited", "YES",
+            "-clipy.preview.maximumTextCharacters", "50000",
+        ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.store").path
