@@ -160,6 +160,7 @@ final class QuickLookJourneyUITests: XCTestCase {
 
     @MainActor
     private func waitUntil(_ condition: @escaping () -> Bool) -> Bool {
+        if condition() { return true }
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in condition() }, object: nil
         )

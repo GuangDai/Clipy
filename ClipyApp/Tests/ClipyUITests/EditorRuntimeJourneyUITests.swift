@@ -359,6 +359,10 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         }
 
         let replacement = try authorReplacement(draft, in: app)
+        let attachment = XCTAttachment(screenshot: editorDetailsDialog(in: app).screenshot())
+        attachment.name = "Editor — Direct text editing and focused navigation"
+        attachment.lifetime = .keepAlways
+        add(attachment)
         replacement.typeKey(.escape, modifierFlags: [])
 
         let detailsDialog = editorDetailsDialog(in: app)
@@ -667,6 +671,7 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) -> Bool {
+        if condition() { return true }
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in condition() },
             object: nil

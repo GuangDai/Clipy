@@ -33,10 +33,13 @@ struct PreviewMetadataView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 SourceApplicationLabel(application: row.lastSource, store: sourceIcons, isInformation: true)
+                    .font(.subheadline.weight(.semibold))
                 Spacer(minLength: 4)
-                Text(PreviewCopy.copyCount(row.copyCount, locale: locale))
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
+                if row.copyCount > 1 {
+                    Text(PreviewCopy.copyCount(row.copyCount, locale: locale))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
             }
             CopyTimeRow(label: "Last Copied", date: row.lastCopiedAt)
             if let details = currentDetails, row.copyCount > 1 {
@@ -179,7 +182,9 @@ private struct CopyTimeRow: View {
             Text(PreviewCopy.text(label)).foregroundStyle(.secondary)
             Spacer(minLength: 0)
             HStack(spacing: 4) {
-                Text(date, style: .date)
+                Text(date, format: Date.FormatStyle(
+                    date: .abbreviated, time: .omitted, locale: locale, timeZone: timeZone
+                ))
                     .accessibilityIdentifier(label == "Last Copied" ? "clipy.preview.information.date" : "clipy.preview.first-date")
                 Text(date, style: .time)
                     .accessibilityIdentifier(label == "Last Copied" ? "clipy.preview.information.time" : "clipy.preview.first-time")

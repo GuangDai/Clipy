@@ -639,8 +639,6 @@ struct HistoryPreviewView: View {
                     set: { previewState.isInformationPresented = $0 }
                 ), arrowEdge: .bottom) {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(PreviewPresentationCopy.text("Preview Information"))
-                            .font(.headline)
                         if let row = observedRow {
                             PreviewMetadataView(history: viewState.history, row: row, sourceIcons: sourceIcons)
                                 .id(row.item)

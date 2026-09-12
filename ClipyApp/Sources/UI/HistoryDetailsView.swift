@@ -821,7 +821,9 @@ private struct DetailsBody: View {
                 contentSection
                 Divider()
                 infoSection
-                revisionsSection
+                if !details.revisions.isEmpty {
+                    revisionsSection
+                }
             }
             .padding(PanelTheme.spacingLarge)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -973,11 +975,6 @@ private struct DetailsBody: View {
             .accessibilityHint(
                 PanelActionsCopy.text("Restores the canonical content as this item's current content.", bundle: copyBundle)
             )
-            if details.revisions.isEmpty {
-                Text(PanelActionsCopy.text("No revisions", bundle: copyBundle))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
             ForEach(details.revisions, id: \.id) { revision in
                 RevisionRow(revision: revision) {
                     onRevise(.revert(to: .revision(revision.id)))

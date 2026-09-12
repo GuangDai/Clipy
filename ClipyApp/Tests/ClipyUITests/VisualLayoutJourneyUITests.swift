@@ -116,6 +116,8 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         XCTAssertTrue(details.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertFalse(app.textFields["clipy.search.field"].exists,
                        "Details owns its navigation instead of retaining a second search toolbar.")
+        XCTAssertFalse(details.buttons["clipy.details.revisions.toggle"].exists,
+                       "An unedited item has no revision list or restore action to disclose.")
         let pin = details.buttons["clipy.details.pin-toggle"]
         XCTAssertTrue(waitUntil { pin.exists && pin.isEnabled }, app.debugDescription)
         attach(panel, named: "Details — Image and actions")
@@ -167,6 +169,7 @@ final class VisualLayoutJourneyUITests: XCTestCase {
 
     @MainActor
     private func waitUntil(_ condition: @escaping () -> Bool) -> Bool {
+        if condition() { return true }
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
         return XCTWaiter.wait(for: [expectation], timeout: 10) == .completed
     }

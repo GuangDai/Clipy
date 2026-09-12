@@ -26,6 +26,11 @@ the list.
   repeats) first-copy time. Multiple sources have a closed disclosure with
   per-application counts and first/last times; it scrolls within 140 pt. Full bundle identity and
   precise timestamps remain available in help.
+- Details and editing replace the list search toolbar with their own compact
+  navigation; its empty background remains a window drag surface. Returning to
+  the list restores search focus. Quick Look retains the exact item's type and
+  title above the content. An unedited item's Details omits the empty revision
+  disclosure; saved revisions expose the existing history and restore actions.
 - Native semantic colors and monochrome SF Symbols for controls. Application
   branding uses blue/pearl layered paper and a simple clip, without heavy
   metal texture. Menu-bar/control icons must remain legible as templates and
