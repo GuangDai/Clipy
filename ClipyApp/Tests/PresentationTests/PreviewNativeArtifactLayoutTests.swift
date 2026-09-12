@@ -60,7 +60,7 @@ struct PreviewNativeArtifactLayoutTests {
         #expect(elapsed < .milliseconds(34))
     }
 
-    @Test func collapsedReferencesFitTwoFramesAfterBaselineWarmup() async throws {
+    @Test func initialAndExpandedReferencesFitTwoFramesAfterBaselineWarmup() async throws {
         let baselineOutcome = await ContentPreview().renderHistoryPane([
             PreviewRepresentation(typeIdentifier: "public.url", bytes: Data("https://example.invalid/".utf8))
         ])
@@ -101,14 +101,73 @@ struct PreviewNativeArtifactLayoutTests {
             let start = ContinuousClock.now
             // Replacing identity matches selecting another item. Exercise the
             // actual product view, including filename, fields and disclosure.
-            // Full Reference expansion is deliberately outside this proof.
             host.rootView = ReferencePreviewView(reference: reference, maximumHeight: 480).id(index)
             host.layoutSubtreeIfNeeded()
             host.displayIfNeeded()
             let elapsed = start.duration(to: .now)
             print("Collapsed reference initial layout/draw: \(elapsed), fixture: \(fixture.name)")
             #expect(elapsed < .milliseconds(34))
+
+            // Drive the product's own DisclosureGroup through its public
+            // in-process accessibility action. No test state binding or
+            // replacement implementation can bypass the actual expansion.
+            let collapsedElements = accessibilityElements(in: host)
+            let group = try #require(collapsedElements.first {
+                $0.accessibilityIdentifier() == "clipy.preview.reference.full"
+            })
+            let disclosure = try #require(accessibilityElements(in: group).first {
+                $0.accessibilityRole() == .disclosureTriangle
+            })
+            #expect(!isExpanded(disclosure))
+            let initialAddressCount = exactTextCount(reference.address, in: collapsedElements)
+            let initialPathCount = reference.filePath.map { exactTextCount($0, in: collapsedElements) }
+
+            let expansionStart = ContinuousClock.now
+            let pressed = disclosure.accessibilityPerformPress()
+            host.layoutSubtreeIfNeeded()
+            host.displayIfNeeded()
+            let expansionElapsed = expansionStart.duration(to: .now)
+            print("Full reference expansion/layout/draw: \(expansionElapsed), fixture: \(fixture.name)")
+            #expect(pressed)
+            #expect(expansionElapsed < .milliseconds(34))
+
+            // A successful AX press means only that the action was accepted.
+            // Also require expansion and a newly exposed exact full spelling;
+            // the collapsed, two-line field already exposes one text value.
+            let expandedElements = accessibilityElements(in: host)
+            let expandedDisclosure = try #require(expandedElements.first {
+                $0.accessibilityRole() == .disclosureTriangle
+            })
+            #expect(isExpanded(expandedDisclosure))
+            #expect(exactTextCount(reference.address, in: expandedElements) > initialAddressCount)
+            if let path = reference.filePath, let initialPathCount {
+                #expect(exactTextCount(path, in: expandedElements) > initialPathCount)
+            }
         }
+    }
+
+    private func accessibilityElements(in root: any NSAccessibilityProtocol) -> [any NSAccessibilityProtocol] {
+        var elements: [any NSAccessibilityProtocol] = [root]
+        var index = 0
+        while index < elements.count && index < 4_096 {
+            let children = elements[index].accessibilityChildren() ?? []
+            elements.append(contentsOf: children.compactMap { $0 as? any NSAccessibilityProtocol })
+            index += 1
+        }
+        return elements
+    }
+
+    private func isExpanded(_ element: any NSAccessibilityProtocol) -> Bool {
+        element.isAccessibilityExpanded() || (element.accessibilityValue() as? NSNumber)?.boolValue == true
+    }
+
+    private func exactTextCount(_ text: String, in elements: [any NSAccessibilityProtocol]) -> Int {
+        let bytes = Data(text.utf8)
+        return elements.filter { element in
+            let value = element.accessibilityValue() as? String
+            return value.map { Data($0.utf8) == bytes } == true
+                || element.accessibilityLabel().map { Data($0.utf8) == bytes } == true
+        }.count
     }
 
     private var referenceFixtures: [(name: String, type: String, address: String)] {
