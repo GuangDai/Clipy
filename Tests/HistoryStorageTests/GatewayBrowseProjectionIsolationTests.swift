@@ -100,7 +100,7 @@ struct GatewayBrowseProjectionIsolationTests {
         try await Self.setNonintegerRevisionCount(for: matched.id, in: authority)
 
         await #expect(throws:
-            ExternalFailure.persistence(.invariantViolation)
+            ExternalFailure.persistence(.corruptStoredValue)
         ) {
             _ = try await history.makeAppIntentsHistoryFacade().read(
                 .search(text: privateQuery, mode: .exact, limit: 1)
@@ -137,7 +137,7 @@ struct GatewayBrowseProjectionIsolationTests {
         )
 
         await #expect(throws:
-            ExternalFailure.persistence(.invariantViolation)
+            ExternalFailure.persistence(.corruptStoredValue)
         ) {
             _ = try await history.makeAppIntentsHistoryFacade().read(
                 .search(
