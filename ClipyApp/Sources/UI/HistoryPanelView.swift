@@ -507,7 +507,7 @@ struct HistoryPanelView: View {
     @State private var surfaceState: HistoryPanelSurfaceState
     @State private var dismissedFailureEpisode: Int?
     @State private var pendingClear: ClearScope?
-    @FocusState private var isSearchFieldFocused: Bool
+    @State private var isSearchFieldFocused = false
 
     /// The app-facing entry point. Calls that do not name `sourceIcons:`
     /// resolve here because the designated initializer below requires that
@@ -642,7 +642,7 @@ struct HistoryPanelView: View {
                 if !isActive { isSearchFieldFocused = false }
             }
             .onChange(of: surfaceState.isAtListRoot) { _, isAtRoot in
-                if !isAtRoot { isSearchFieldFocused = false }
+                isSearchFieldFocused = isAtRoot && surfaceState.isSessionActive
             }
             .onChange(of: surfaceState.selection) { _, newSelection in
                 previewState.handleSelectionChange(
@@ -816,8 +816,7 @@ struct HistoryPanelView: View {
     }
 
     /// Search and list share the retained navigation destination (V2-11).
-    /// Its keyed task requests focus when Back reactivates that destination;
-    /// an outer onChange runs inside the pop's focus teardown instead.
+    /// The native field applies the explicit search-focus binding on Back.
     private var browsingRoot: some View {
         VStack(spacing: 0) {
             browsingHeader
@@ -844,11 +843,6 @@ struct HistoryPanelView: View {
                 onPointerMovement: { surfaceState.notePointerMovement() },
                 onShowDetails: { item in surfaceState.detailsPath.append(item) }
             )
-        }
-        .defaultFocus($isSearchFieldFocused, true, priority: .userInitiated)
-        .task(id: surfaceState.isAtListRoot) {
-            guard surfaceState.isAtListRoot, surfaceState.isSessionActive else { return }
-            isSearchFieldFocused = true
         }
         // Attach the browsing group to the actual navigation destination;
         // NavigationStack does not preserve an outer wrapper's AX group.

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Selectable preview text shared by the floating pane and Quick Look.
@@ -48,7 +49,7 @@ struct PreviewTextBody: View {
 }
 
 /// Lazy layout may request a row more than once while refining the viewport.
-/// Keep substring materialization and selectable Text construction inside a
+/// Keep substring materialization and selectable label construction inside a
 /// stable leaf, so unchanged rows can reuse that work (V2-11 text previews).
 private struct PreviewTextSegment: View, Equatable {
     let text: Substring
@@ -65,12 +66,78 @@ private struct PreviewTextSegment: View, Equatable {
         #if DEBUG
         onMaterialized?(index)
         #endif
-        return Text(verbatim: String(text))
-            .font(.body)
-            .lineSpacing(2)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier(index == 0
+        return PreviewTextLabel(value: String(text), identifier: index == 0
                 ? "clipy.preview.text" : "clipy.preview.text.segment.\(index)")
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A viewport containing many short combining-only segments should not pay
+/// SwiftUI's selectable Text construction cost for every row. Each native
+/// label retains the complete segment and supports selection across its wraps.
+private struct PreviewTextLabel: NSViewRepresentable {
+    let value: String
+    let identifier: String
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private var alignment: NSTextAlignment {
+        layoutDirection == .rightToLeft ? .right : .left
+    }
+
+    @MainActor
+    final class Coordinator {
+        var measuredSize: CGSize?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField(wrappingLabelWithString: "")
+        field.font = .preferredFont(forTextStyle: .body)
+        field.textColor = .labelColor
+        field.isSelectable = true
+        field.lineBreakMode = .byWordWrapping
+        field.lineBreakStrategy = []
+        field.maximumNumberOfLines = 0
+        field.setAccessibilityIdentifier(identifier)
+        setText(on: field)
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        guard !field.stringValue.utf8.elementsEqual(value.utf8)
+                || field.alignment != alignment else { return }
+        setText(on: field)
+        context.coordinator.measuredSize = nil
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextField, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite, width > 0,
+              let cell = nsView.cell else { return nil }
+        if let measuredSize = context.coordinator.measuredSize, measuredSize.width == width {
+            return measuredSize
+        }
+        // Cache only this row's last measured size. A width or text change
+        // remeasures its full content; no estimated or clipped document height.
+        let size = cell.cellSize(forBounds: NSRect(
+            x: 0, y: 0, width: width, height: .greatestFiniteMagnitude
+        ))
+        let measuredSize = CGSize(width: width, height: ceil(size.height))
+        context.coordinator.measuredSize = measuredSize
+        return measuredSize
+    }
+
+    private func setText(on field: NSTextField) {
+        field.alignment = alignment
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = alignment
+        paragraph.lineSpacing = 2
+        paragraph.lineBreakMode = .byWordWrapping
+        paragraph.lineBreakStrategy = []
+        field.attributedStringValue = NSAttributedString(string: value, attributes: [
+            .font: NSFont.preferredFont(forTextStyle: .body),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: paragraph
+        ])
     }
 }

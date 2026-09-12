@@ -22,13 +22,13 @@ struct SearchHeaderView: View {
     @Environment(\.locale) private var locale
 
     private let viewState: HistoryViewState
-    private let searchFieldFocused: FocusState<Bool>.Binding
+    private let searchFieldFocused: Binding<Bool>
     private let onMoveSelection: (Int) -> Void
     private let onSubmitSelection: () -> Void
 
     init(
         viewState: HistoryViewState,
-        searchFieldFocused: FocusState<Bool>.Binding,
+        searchFieldFocused: Binding<Bool>,
         onMoveSelection: @escaping (Int) -> Void = { _ in },
         onSubmitSelection: @escaping () -> Void = {}
     ) {
@@ -109,21 +109,14 @@ struct SearchHeaderView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            TextField(PanelActionsCopy.text("Search clipboard…", bundle: copyBundle), text: searchTextBinding)
-                .textFieldStyle(.plain)
-                .focused(searchFieldFocused)
-                .autocorrectionDisabled(true)
-                .accessibilityIdentifier("clipy.search.field")
-                .accessibilityLabel(PanelActionsCopy.text("Search clipboard history", bundle: copyBundle))
-                .onSubmit(onSubmitSelection)
-                .onKeyPress(.downArrow) {
-                    onMoveSelection(1)
-                    return .handled
-                }
-                .onKeyPress(.upArrow) {
-                    onMoveSelection(-1)
-                    return .handled
-                }
+            HistorySearchField(
+                text: searchTextBinding,
+                isFocused: searchFieldFocused,
+                placeholder: PanelActionsCopy.text("Search clipboard…", bundle: copyBundle),
+                accessibilityLabel: PanelActionsCopy.text("Search clipboard history", bundle: copyBundle),
+                onMoveSelection: onMoveSelection,
+                onSubmit: onSubmitSelection
+            )
             // Keep the editor's width and text position stable as the user
             // enters the first character or clears the query (V2-07 §3).
             // The empty slot has no control or accessibility element.
@@ -307,7 +300,7 @@ private struct SearchHeaderViewPreview: View {
     @State private var viewState = HistoryViewState(
         history: PreviewClipboardHistory.populated
     )
-    @FocusState private var searchFieldFocused: Bool
+    @State private var searchFieldFocused = false
 
     var body: some View {
         SearchHeaderView(
