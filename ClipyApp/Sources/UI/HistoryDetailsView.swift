@@ -192,6 +192,7 @@ struct HistoryDetailsView: View {
                     onReferenceAdvance: advanceDetailsReference
                 )
             } else {
+                backToHistory
                 switch phase {
                 case .loading:
                     ProgressView(PanelActionsCopy.text("Loading…", bundle: copyBundle))
@@ -227,8 +228,7 @@ struct HistoryDetailsView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.details.root")
         .navigationTitle(PanelActionsCopy.text("Details", bundle: copyBundle))
-        .navigationBarBackButtonHidden(showsEditor)
-        .overlay { detailsEscapeShortcut }
+        .navigationBarBackButtonHidden(true)
         .task { await load() }
         .confirmationDialog(
             PanelActionsCopy.text("Remove this item from your clipboard history?", bundle: copyBundle),
@@ -264,21 +264,25 @@ struct HistoryDetailsView: View {
 
     }
 
-    /// Details owns settled Esc as a navigation dismissal. While its inline
-    /// editor or remove confirmation is visible, that child/modal's own
-    /// `.cancelAction` remains the only Esc owner so a dirty draft or pending
-    /// destructive choice cannot be bypassed (review UI-7 / Card 3C / 14A).
-    @ViewBuilder
-    private var detailsEscapeShortcut: some View {
-        if !showsEditor, !showsRemoveConfirmation {
-            Button(PanelActionsCopy.text("Back to History", bundle: copyBundle)) {
+    /// NSPanel does not expose NavigationStack's toolbar Back button. Keep
+    /// this navigation visible and outside the scrolling content (V2-07 §3).
+    /// The editor replaces it; a remove confirmation owns its own Escape.
+    private var backToHistory: some View {
+        HStack {
+            Button {
                 dismiss()
+            } label: {
+                Label(PanelActionsCopy.text("Back to History", bundle: copyBundle), systemImage: "chevron.backward")
             }
+            .buttonStyle(.borderless)
             .keyboardShortcut(.cancelAction)
-            .opacity(0)
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
+            .disabled(showsRemoveConfirmation)
+            .accessibilityIdentifier("clipy.details.back")
+            Spacer(minLength: 0)
         }
+        .controlSize(.small)
+        .padding(.horizontal, PanelTheme.spacingXLarge)
+        .padding(.vertical, PanelTheme.spacingSmall)
     }
 
     /// The floating nonactivating panel's attached SwiftUI sheet is exposed

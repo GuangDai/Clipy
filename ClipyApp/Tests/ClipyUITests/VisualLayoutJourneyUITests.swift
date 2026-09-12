@@ -117,6 +117,10 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         let pin = details.buttons["clipy.details.pin-toggle"]
         XCTAssertTrue(waitUntil { pin.exists && pin.isEnabled }, app.debugDescription)
         attach(panel, named: "Details — Image and actions")
+        let back = details.buttons["clipy.details.back"]
+        XCTAssertTrue(back.exists && back.isHittable, app.debugDescription)
+        back.click()
+        XCTAssertTrue(waitUntil { !details.exists && panel.exists && rows.count == 3 }, app.debugDescription)
     }
 
     @MainActor

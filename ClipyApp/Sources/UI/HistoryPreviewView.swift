@@ -43,6 +43,8 @@ struct HistoryPreviewView: View {
     @State private var retryGeneration = 0
     @State private var fileConfirmationPresented = false
     @State private var pdfPageSelection: PDFPageSelection?
+    @State private var pinRequest: PinRequest?
+    @State private var pinFailure: (item: HistoryItemReference, message: String)?
     @AppStorage(PreviewTextSettings.maximumCharactersKey)
     private var maximumTextCharacters = PreviewTextSettings.defaultMaximumCharacters
     @AppStorage(PreviewTextSettings.isLengthLimitedKey)
@@ -53,6 +55,11 @@ struct HistoryPreviewView: View {
     private struct PDFPageSelection {
         let item: HistoryItemReference
         let number: Int
+    }
+
+    private struct PinRequest: Equatable {
+        let item: HistoryItemReference
+        let isPinned: Bool
     }
 
     private var requestedPDFPage: Int {
@@ -208,6 +215,26 @@ struct HistoryPreviewView: View {
                     metadataBar
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
+                    if let pinFailure, pinFailure.item == targetItem {
+                        HStack(alignment: .top, spacing: 8) {
+                            Label(pinFailure.message, systemImage: "exclamationmark.triangle")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityIdentifier("clipy.preview.pin.failure")
+                            Button { self.pinFailure = nil } label: {
+                                Image(systemName: "xmark")
+                                    .frame(width: 24, height: 24)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel(PanelActionsCopy.text(
+                                "Dismiss", bundle: PanelActionsCopy.bundle(for: locale)
+                            ))
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 8)
+                    }
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { metadataHeight = $0 }
@@ -225,10 +252,16 @@ struct HistoryPreviewView: View {
                     maximumCharacters: maximumTextCharacters, isLengthLimited: isTextLengthLimited),
                 isRetry: retryGeneration > 0)
         }
+        .task(id: pinRequest) {
+            guard let request = pinRequest, !Task.isCancelled else { return }
+            await performPin(request)
+        }
         .onChange(of: targetItem) { _, target in
             previewState.isInformationPresented = false
             fileConfirmationPresented = false
             pdfPageSelection = nil
+            pinRequest = nil
+            pinFailure = nil
             if loader.requestedItem != target { loader.clear() }
         }
         .onChange(of: viewState.surfacePurge) { _, purge in
@@ -264,6 +297,8 @@ struct HistoryPreviewView: View {
             previewState.isInformationPresented = false
             pdfPageSelection = nil
             fileConfirmationPresented = false
+            pinRequest = nil
+            pinFailure = nil
             loader.clear()
         }
         .alert(PreviewCopy.text("Load File Contents?"), isPresented: $fileConfirmationPresented) {
@@ -506,6 +541,32 @@ struct HistoryPreviewView: View {
 
     // MARK: - Metadata bar
 
+    /// One footer intent waits for its receipt (03b §10). Cancelling this
+    /// view's task only retires its feedback; an admitted write may still
+    /// commit. A retargeted preview never accepts that task's late result.
+    private func performPin(_ request: PinRequest) async {
+        do {
+            if request.isPinned {
+                _ = try await viewState.unpinAwaitingReceipt(request.item.id)
+            } else {
+                _ = try await viewState.pinAwaitingReceipt(request.item.id)
+            }
+        } catch {
+            guard !Task.isCancelled, pinRequest == request else { return }
+            if let failure = error as? HistoryFailure {
+                pinFailure = (request.item, FailurePresentation.message(
+                    for: failure, bundle: PanelActionsCopy.bundle(for: locale)
+                ))
+            } else if !(error is CancellationError) {
+                pinFailure = (request.item, PanelActionsCopy.text(
+                    "Clipy couldn't update this item.", bundle: PanelActionsCopy.bundle(for: locale)
+                ))
+            }
+        }
+        guard !Task.isCancelled, pinRequest == request else { return }
+        pinRequest = nil
+    }
+
     @ViewBuilder
     private var metadataBar: some View {
         if let occurrence = PreviewFooterMetadata(item: targetItem, row: observedRow) {
@@ -526,17 +587,22 @@ struct HistoryPreviewView: View {
                     .layoutPriority(-2)
                 if let row = observedRow {
                     Button {
-                        if row.pinnedPosition == nil {
-                            viewState.pin(row.item.id, at: .first)
-                        } else {
-                            viewState.unpin(row.item.id)
-                        }
+                        guard pinRequest == nil else { return }
+                        pinFailure = nil
+                        pinRequest = PinRequest(item: row.item, isPinned: row.pinnedPosition != nil)
                     } label: {
-                        Image(systemName: row.pinnedPosition == nil ? "pin" : "pin.fill")
-                            .font(.system(size: 12))
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
+                        Group {
+                            if pinRequest?.item == row.item {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: row.pinnedPosition == nil ? "pin" : "pin.fill")
+                                    .font(.system(size: 12))
+                            }
+                        }
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                     }
+                    .disabled(pinRequest != nil)
                     .buttonStyle(.plain)
                     // The floating pane is never key; Quick Look shares this
                     // button in the key window while the list is disabled.
