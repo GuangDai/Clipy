@@ -169,6 +169,29 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                     == "Only the reference is shown. Loading its contents requires confirmation."
         }, app.debugDescription)
         XCTAssertEqual(search.value as? String, "draft", app.debugDescription)
+
+        // The hosted layout test measures this same full-reference content.
+        // Use the real disclosure here to prove expansion actually mounts it
+        // for the selected item, preserving both complete source spellings.
+        let fullPath = quickReference.descendants(matching: .any)["clipy.preview.reference.full.path"]
+        let fullAddress = quickReference.descendants(matching: .any)["clipy.preview.reference.full.address"]
+        XCTAssertFalse(fullPath.exists, app.debugDescription)
+        XCTAssertFalse(fullAddress.exists, app.debugDescription)
+        let fullReferenceToggle = quickReference.disclosureTriangles.firstMatch
+        XCTAssertTrue(fullReferenceToggle.exists && fullReferenceToggle.isHittable, app.debugDescription)
+        fullReferenceToggle.click()
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            fullPath.exists && fullAddress.exists
+                && Data(self.text(of: fullPath).utf8) == Data(expectedPath.utf8)
+                && Data(self.text(of: fullAddress).utf8) == Data(originalAddress.utf8)
+        }, app.debugDescription)
+        XCTAssertEqual(rows.count, 1, app.debugDescription)
+        XCTAssertEqual(rows.firstMatch.identifier, capturedRowIdentifier, app.debugDescription)
+        XCTAssertEqual(Data(text(of: quickAddress).utf8), Data(originalAddress.utf8), app.debugDescription)
+        fullReferenceToggle.click()
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            !fullPath.exists && !fullAddress.exists
+        }, app.debugDescription)
         XCTAssertFalse(quickLook.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@ OR value == %@", fileContentMarker, fileContentMarker)
         ).firstMatch.exists, app.debugDescription)

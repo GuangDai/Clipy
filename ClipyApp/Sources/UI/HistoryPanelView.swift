@@ -167,6 +167,10 @@ final class HistoryPanelSurfaceState {
     private(set) var memoryPressure: DisplayMemoryPressure = .normal
     private(set) var memoryPressureGeneration = 0
     var isAtListRoot: Bool { detailsPath.isEmpty }
+#if DEBUG
+    // Temporary native-focus experiment; never participates in rendering.
+    @ObservationIgnored var searchFieldFocusForTesting = false
+#endif
 
     func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
         memoryPressure = pressure
@@ -644,6 +648,11 @@ struct HistoryPanelView: View {
             .onChange(of: surfaceState.isAtListRoot) { _, isAtRoot in
                 if !isAtRoot { isSearchFieldFocused = false }
             }
+#if DEBUG
+            .onChange(of: isSearchFieldFocused, initial: true) { _, focused in
+                surfaceState.searchFieldFocusForTesting = focused
+            }
+#endif
             .onChange(of: surfaceState.selection) { _, newSelection in
                 previewState.handleSelectionChange(
                     PreviewSelectionResolution.resolve(

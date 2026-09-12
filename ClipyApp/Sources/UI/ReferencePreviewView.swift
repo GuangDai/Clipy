@@ -70,16 +70,7 @@ struct ReferencePreviewView: View {
                 }
 
                 DisclosureGroup(PreviewPresentationCopy.text("Full Reference")) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        if let path = reference.filePath {
-                            Text(verbatim: path)
-                        }
-                        Text(verbatim: reference.address)
-                    }
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 6)
+                    FullReferencePreviewContent(reference: reference)
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -108,5 +99,26 @@ struct ReferencePreviewView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier(identifier)
         }
+    }
+}
+
+/// The disclosure's complete selectable spelling, also exercised directly by
+/// the hosted native layout test. It owns no expansion state or destination I/O.
+struct FullReferencePreviewContent: View {
+    let reference: PreviewReference
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let path = reference.filePath {
+                Text(verbatim: path)
+                    .accessibilityIdentifier("clipy.preview.reference.full.path")
+            }
+            Text(verbatim: reference.address)
+                .accessibilityIdentifier("clipy.preview.reference.full.address")
+        }
+        .font(.system(.caption, design: .monospaced))
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 6)
     }
 }
