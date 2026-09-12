@@ -72,6 +72,29 @@ struct ReviseEditorDraftTests {
         #expect(decisions(from: draft.revisionRequest())[textType] == .inheritCurrent)
     }
 
+    @Test func requestPreparedOffActorKeepsItsSubmittedTextEncodingAndVersion() async {
+        let type = "public.utf16-external-plain-text"
+        let source = HistoryRepresentation(typeIdentifier: type, bytes: Data([0xFE, 0xFF, 0x00, 0x41]))
+        var draft = ReviseEditorDraft(details: details(canonical: [source], effective: [source]))
+        let sourceAccepted = draft.installReplacementSource(source, forDirectEditing: true)
+        #expect(sourceAccepted)
+        draft.setReplacementText("B🌿", for: type)
+        let submitted = draft
+        let preparation = Task.detached { submitted.revisionRequest() }
+
+        // A separately retained UI value can change or rebase without changing
+        // the frozen request currently being encoded for the History writer.
+        draft.setReplacementText("C", for: type)
+        draft.markStale()
+        let reloaded = draft.reloadLatest(details: details(canonical: [source], effective: [source], version: 3))
+        #expect(reloaded)
+        let request = await preparation.value
+        #expect(request.expected == ContentVersion(rawValue: 2))
+        #expect(decisions(from: request)[type] == .replace(bytes: Data([0xFE, 0xFF, 0x00, 0x42, 0xD8, 0x3C, 0xDF, 0x3F])))
+        #expect(draft.itemReference.contentVersion == ContentVersion(rawValue: 3))
+        #expect(draft.replacementText(for: type) == "C")
+    }
+
     @Test func directEditingLeavesExplicitFormatDecisionsUnderUserControl() {
         let original = HistoryRepresentation(typeIdentifier: textType, bytes: Data("original".utf8))
         var draft = ReviseEditorDraft(details: details(canonical: [original], effective: [original]))

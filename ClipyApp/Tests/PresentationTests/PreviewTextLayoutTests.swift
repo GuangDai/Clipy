@@ -39,7 +39,11 @@ struct PreviewTextLayoutTests {
             #if DEBUG
             var preview = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480)
             var materialized: Set<Int> = []
-            preview.onSegmentMaterialized = { materialized.insert($0) }
+            var materializationCalls = 0
+            preview.onSegmentMaterialized = {
+                materialized.insert($0)
+                materializationCalls += 1
+            }
             #else
             let preview = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480)
             #endif
@@ -52,7 +56,7 @@ struct PreviewTextLayoutTests {
             let elapsed = start.duration(to: .now)
             print("Preview initial layout: \(elapsed), UTF-16 units: \(source.utf16.count)")
             #if DEBUG
-            print("[DEBUG-preview-layout] materialized=\(materialized.count) total=\(text.displaySegments.count)")
+            print("[DEBUG-preview-layout] materialized=\(materialized.count) total=\(text.displaySegments.count) calls=\(materializationCalls)")
             #endif
             #expect(elapsed < .milliseconds(34))
             // Whole-process figures are observations, not per-view memory

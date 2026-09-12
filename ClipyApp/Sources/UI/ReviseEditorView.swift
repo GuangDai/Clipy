@@ -179,8 +179,10 @@ struct ReviseEditorView: View {
                     .padding(.horizontal)
             }
             if let replacementFailure {
-                HStack {
-                    Text(replacementFailure).font(.caption)
+                SettingsFieldLayout {
+                    Text(replacementFailure)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button(PanelActionsCopy.text("Retry", bundle: copyBundle)) {
                         if let replacementType { loadReplacement(for: replacementType.typeIdentifier, pasteboardItemIndex: replacementType.pasteboardItemIndex, forDirectEditing: replacementIsDirectEditing) }
                     }
@@ -334,15 +336,15 @@ struct ReviseEditorView: View {
     @ViewBuilder
     private var reloadStatus: some View {
         if draft.isAwaitingLatestContent {
-            HStack(spacing: PanelTheme.spacingLarge) {
+            SettingsFieldLayout {
                 Label(
                     PanelActionsCopy.text("Reload latest content before saving again.", bundle: copyBundle),
                     systemImage: "arrow.clockwise"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("clipy.editor.awaiting-reload")
-                Spacer(minLength: PanelTheme.spacingSmall)
                 Button(isReloading ? PanelActionsCopy.text("Reloading…", bundle: copyBundle) : PanelActionsCopy.text("Reload Latest", bundle: copyBundle)) {
                     startReload()
                 }
@@ -527,6 +529,7 @@ struct ReviseEditorView: View {
                 TextEditor(text: textBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex))
                     .disabled(isSaving || isReloading || replacementTask != nil)
                     .font(.system(.body, design: .monospaced))
+                    .autocorrectionDisabled(true)
                     .scrollContentBackground(.hidden)
                     .focused($focusedReplacement, equals: identity)
                     .containerRelativeFrame(.vertical) { height, _ in height * 0.65 }
@@ -667,10 +670,24 @@ struct ReviseEditorView: View {
         // input that was never included in the committed revision.
         isSaving = true
         defer { isSaving = false }
+        let snapshot = draft
         do {
-            _ = try await viewState.reviseKeepingDetails(
-                draft.revisionRequest()
-            ) { reference in
+            // UTF-16 replacement encoding visits every code unit. Prepare the
+            // immutable request away from MainActor so large pastes leave the
+            // Saving state and the rest of the application responsive.
+            let encoding = Task.detached {
+                try Task.checkCancellation()
+                let request = snapshot.revisionRequest()
+                try Task.checkCancellation()
+                return request
+            }
+            let request = try await withTaskCancellationHandler {
+                try await encoding.value
+            } onCancel: {
+                encoding.cancel()
+            }
+            try Task.checkCancellation()
+            _ = try await viewState.reviseKeepingDetails(request) { reference in
                 onReferenceAdvance?(reference)
             }
             completeDismissal()

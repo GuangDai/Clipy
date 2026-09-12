@@ -18,6 +18,7 @@ extension HistoryAuthority {
         guard limits.pageRowLimitRange.contains(limit) else {
             throw HistoryFailure.invalidInput(.invalidPageLimit)
         }
+        try Task.checkCancellation()
         let page: HistoryPage
         do {
             page = try autoreleasepool {
@@ -31,6 +32,7 @@ extension HistoryAuthority {
 #if DEBUG
         storageLifecycleDebugProbe.record(phase: .recentAutoreleasePoolDrained)
 #endif
+        try Task.checkCancellation()
         return page
     }
 
@@ -40,6 +42,7 @@ extension HistoryAuthority {
         guard limits.pageRowLimitRange.contains(limit) else {
             throw HistoryFailure.invalidInput(.invalidPageLimit)
         }
+        try Task.checkCancellation()
         let row = try Self.fetchExactlyOnePositionRow(in: database)
         let currentPosition = try Self.decodePositionRow(row, limits: limits).position
         let cursor: ResolvedPageCursor?
@@ -255,7 +258,10 @@ extension HistoryAuthority {
         _ slice: [ScalarReadRow], limit: Int, position: ChangePosition,
         hasPrevious: Bool, hasNext: Bool, filter: HistoryFilter
     ) throws -> HistoryPage {
-        let rows = try slice.map { try $0.toHistoryRow(limits: limits) }
+        let rows = try slice.map {
+            try Task.checkCancellation()
+            return try $0.toHistoryRow(limits: limits)
+        }
         let previous: HistoryPageCursor?
         let next: HistoryPageCursor?
         do {
@@ -274,6 +280,7 @@ extension HistoryAuthority {
         } catch {
             throw HistoryFailure.persistence(.invariantViolation)
         }
+        try Task.checkCancellation()
         return HistoryPage(position: position, rows: rows, previous: previous, next: next)
     }
 
@@ -284,6 +291,9 @@ extension HistoryAuthority {
         whereSQL: String, orderSQL: String, bindings: [SQLiteValue] = [], limit: Int
     ) throws -> [ScalarReadRow] {
         do {
+            // V2-09 §4: a superseded panel query must release this writer
+            // actor on cancellation between rows, even for a bounded page.
+            try Task.checkCancellation()
             let predicate = HistoryFilterSQL.predicate(filter)
             let statement = try database.prepare(
                 "SELECT \(ScalarReadRow.columns) FROM history_items WHERE (\(whereSQL)) AND (\(predicate.sql)) ORDER BY \(orderSQL) LIMIT ?",
@@ -292,7 +302,11 @@ extension HistoryAuthority {
             defer { statement.finalize() }
             var rows: [ScalarReadRow] = []
             rows.reserveCapacity(limit)
-            while try statement.step() { rows.append(try ScalarReadRow(statement, limits: limits)) }
+            while true {
+                try Task.checkCancellation()
+                guard try statement.step() else { break }
+                rows.append(try ScalarReadRow(statement, limits: limits))
+            }
             return rows
         } catch let failure as SQLiteFailure {
             throw failure.historyFailure

@@ -50,6 +50,7 @@ struct AppearanceSettingsTab: View {
         Form {
             Section {
                 sampleRow
+                    .frame(maxWidth: .infinity)
                 SettingsFieldLayout {
                     Text(SettingsCopy.text("Row density"))
                         .fixedSize(horizontal: false, vertical: true)
@@ -70,6 +71,7 @@ struct AppearanceSettingsTab: View {
                         .labelsHidden()
                         .accessibilityIdentifier("clipy.settings.appearance.row-density")
                     }
+                    .frame(idealWidth: 220, maxWidth: 220)
                 }
                 DisclosureGroup(
                     AdaptiveSettingsCopy.text("Text Appearance"),
@@ -86,6 +88,7 @@ struct AppearanceSettingsTab: View {
                         .pickerStyle(.segmented)
                         .labelsHidden()
                         .accessibilityIdentifier("clipy.settings.appearance.snippet-lines")
+                        .frame(idealWidth: 220, maxWidth: 220)
                     }
                     SettingsFieldLayout {
                         Text(SettingsCopy.text("Font size"))
@@ -98,6 +101,7 @@ struct AppearanceSettingsTab: View {
                         .pickerStyle(.segmented)
                         .labelsHidden()
                         .accessibilityIdentifier("clipy.settings.appearance.font-size")
+                        .frame(idealWidth: 220, maxWidth: 220)
                     }
                 }
                 .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.appearance.text-appearance"))
@@ -201,7 +205,10 @@ struct AppearanceSettingsTab: View {
             sampleHistoryRow("https://example.org/reading-list", symbol: "link")
             sampleHistoryRow(SettingsCopy.text("Weekend itinerary.pdf"), symbol: "doc")
         }
-        .padding(6)
+        .padding(PanelContentFit.listRowHorizontalInset)
+        // Show the normal browsing width even in a wide Settings window;
+        // a narrower detail proposal still shrinks the sample naturally.
+        .frame(maxWidth: PanelGeometry.contentWidth)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
         .overlay {
             RoundedRectangle(cornerRadius: 8)
@@ -232,11 +239,16 @@ struct AppearanceSettingsTab: View {
         .padding(.horizontal, PanelTheme.spacingXSmall)
         .frame(height: PanelContentFit.rowHeight(
             descriptor, density: rowDensity, fontSize: rowFontSize
-        ))
+        ) - 2 * PanelContentFit.listRowVerticalInset)
         .background {
             RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
-                .fill(selected ? Color.accentColor.opacity(0.14) : Color.clear)
+                .fill(selected ? Color.accentColor.opacity(0.12) : Color.clear)
         }
+        .overlay {
+            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
+                .strokeBorder(selected ? Color.accentColor.opacity(0.35) : .clear, lineWidth: 1)
+        }
+        .padding(.vertical, PanelContentFit.listRowVerticalInset)
     }
 
     /// Keep the picker itself native. Its paired diagrams compare actual
@@ -257,28 +269,44 @@ struct AppearanceSettingsTab: View {
     /// A small scale drawing expresses the relationship between the windows.
     /// Only the drawing scales to fit; the persisted gap stays unbounded.
     private var previewPlacementSample: some View {
-        VStack(spacing: 6) {
-            GeometryReader { geometry in
-                let gap = CGFloat(previewGap.isFinite ? max(0, previewGap) : 2)
-                let scale = min(1, max(0, geometry.size.width) / (220 + gap))
+        GeometryReader { geometry in
+            let gap = CGFloat(previewGap.isFinite ? max(0, previewGap) : 2)
+            let width = max(0, geometry.size.width)
+            let panelWidths = PanelGeometry.contentWidth + PanelGeometry.floatingPreviewWidth
+            let scale = min(220 / panelWidths, width / (panelWidths + gap))
+            let drawingWidth = (panelWidths + gap) * scale
+            let leadingEdge = (width - drawingWidth) / 2 + PanelGeometry.contentWidth * scale
+            let trailingEdge = leadingEdge + gap * scale
+            let gapCenter = (leadingEdge + trailingEdge) / 2
+            ZStack(alignment: .topLeading) {
                 HStack(alignment: .top, spacing: gap * scale) {
                     miniatureWindow(isPreview: false)
-                        .frame(width: 120 * scale, height: 60)
+                        .frame(width: PanelGeometry.contentWidth * scale, height: 60)
                     miniatureWindow(isPreview: true)
-                        .frame(width: 100 * scale, height: 48)
+                        .frame(width: PanelGeometry.floatingPreviewWidth * scale, height: 48)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            }
-            .frame(height: 60)
-            Label {
+                .frame(width: width, alignment: .top)
+                // Dimension witnesses start at the actual two window edges,
+                // including touching edges at zero; no visual minimum gap.
+                Path { path in
+                    path.move(to: CGPoint(x: leadingEdge, y: 60))
+                    path.addLine(to: CGPoint(x: leadingEdge, y: 70))
+                    path.move(to: CGPoint(x: trailingEdge, y: 48))
+                    path.addLine(to: CGPoint(x: trailingEdge, y: 70))
+                    path.move(to: CGPoint(x: leadingEdge, y: 67))
+                    path.addLine(to: CGPoint(x: trailingEdge, y: 67))
+                }
+                .stroke(Color.accentColor, lineWidth: 1)
                 Text("\(previewGap, format: .number) pt")
+                    .font(.caption)
                     .monospacedDigit()
-            } icon: {
-                Image(systemName: "arrow.left.and.right")
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: max(0, 2 * min(gapCenter, width - gapCenter)))
+                    .position(x: gapCenter, y: 82)
             }
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
+        .frame(height: 92)
         .padding(.vertical, 4)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(SettingsCopy.text("Panel gap"))

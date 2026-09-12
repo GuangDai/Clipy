@@ -68,6 +68,12 @@ struct PreviewMetadataView: View {
         .task(id: Request(item: row.item, copyCount: row.copyCount,
                           lastCopiedAt: row.lastCopiedAt, retry: retry)) {
             failed = false
+            // A single copy needs only the row's last-copy facts. Details
+            // supplies the first-copy time only when repeats are visible.
+            guard row.copyCount > 1 else {
+                details = nil
+                return
+            }
             do {
                 let value = try await history.details(for: row.item.id)
                 try Task.checkCancellation()

@@ -19,8 +19,16 @@ struct PreviewTextBody: View {
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height.rounded(.up) } action: {
-                contentHeight = $0
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                let height = geometry.size.height.rounded(.up)
+                return maximumHeight.map { min(height, max(0, $0)) } ?? height
+            } action: { height in
+                guard let maximumHeight else { return }
+                let currentHeight = min(contentHeight ?? maximumHeight, max(0, maximumHeight))
+                // Long content already uses the full viewport. Refinements
+                // of its lazy height must not rebuild the same visible Texts.
+                guard height != currentHeight else { return }
+                contentHeight = height
             }
         }
         // Start with a real viewport so lazy layout can materialize its first
