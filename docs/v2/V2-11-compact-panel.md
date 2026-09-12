@@ -56,8 +56,9 @@ panel close, purge and critical memory pressure retire prospective work. Text
 preferences and explicit Retry still start a fresh exact-reference load.
 Floating and Quick Look loaders share the browsing session's ContentPreview
 actor so rapid retargets do not create independent native decoder pools.
-The renderer also prepares the first segment's system-font fallback before
-publication. Core Text layout objects remain inside that background operation;
+The renderer also prepares system-font fallback for at most the first two
+segments before publication, including content after a short prefix segment.
+Core Text layout objects remain inside that background operation;
 the UI receives only the same immutable text. This targets the measured cold
 CJK cost separately from per-segment layout. Preparation duration and actual
 native presentation duration are recorded separately by the layout test.
