@@ -75,6 +75,24 @@ struct PreviewTextResourceTests {
         #expect(Data(text.text.utf8) == Data((prefix + "e" + marks).utf8))
         #expect(Data(text.displaySegments.joined().utf8) == Data(text.text.utf8))
         #expect(text.displaySegments.count > 1)
-        #expect(text.displaySegments.allSatisfy { $0.utf16.count <= 512 })
+        #expect(text.displaySegments.allSatisfy { $0.utf16.count <= 128 })
+    }
+
+    @Test func oversizedGraphemeHonorsSmallerBudgetAtCompleteScalarBoundaries() async {
+        // The supplementary combining mark consumes two UTF-16 units. An
+        // odd work budget exercises boundaries without breaking its scalar.
+        let source = "e" + String(repeating: "\u{1D165}\u{301}", count: 2_000)
+        #expect(source.count == 1)
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(source.utf8))
+        ], textConfiguration: PreviewTextConfiguration(segmentUTF16Budget: 63))
+        guard case .content(.text(let text)) = outcome else {
+            Issue.record("Expected the complete combining sequence")
+            return
+        }
+        #expect(!text.wasTruncated)
+        #expect(Data(text.text.utf8) == Data(source.utf8))
+        #expect(Data(text.displaySegments.joined().utf8) == Data(source.utf8))
+        #expect(text.displaySegments.allSatisfy { !$0.isEmpty && $0.utf16.count <= 63 })
     }
 }
