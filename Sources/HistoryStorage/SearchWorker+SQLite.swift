@@ -608,8 +608,15 @@ private final class SQLiteSearchRows {
                 )
 #endif
             }
-            if includesRevisionCounts, let count = try? statement.integer(at: 9), let exact = Int(exactly: count) {
-                counts[row.id] = exact
+            if includesRevisionCounts {
+                // V2-09 §4: validate the purpose-specific facts actually
+                // consumed by this batch. A malformed stored count is data
+                // corruption, not a missing internal result at publication.
+                let count = try HistoryItemRowHydration.integer(statement, 9)
+                guard count >= 0, count <= limits.maximumRevisionsPerItem else {
+                    throw HistoryFailure.persistence(.corruptStoredValue)
+                }
+                counts[row.id] = count
             }
             if rows.isEmpty { work.batchCount += 1 }
             work.rowsDecoded += 1

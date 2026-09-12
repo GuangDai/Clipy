@@ -34,6 +34,7 @@ struct AppearanceSettingsTab: View {
 
     @State private var isShowingTextAppearance = false
     @State private var isShowingPreviewOptions = false
+    @State private var hasResetPanelSize = false
     @AppStorage(PreviewTextSettings.maximumCharactersKey)
     private var previewMaximumCharacters = PreviewTextSettings.defaultMaximumCharacters
     @AppStorage(PreviewTextSettings.isLengthLimitedKey)
@@ -49,31 +50,46 @@ struct AppearanceSettingsTab: View {
         Form {
             Section {
                 sampleRow
-                Picker(SettingsCopy.text("Row density"), selection: $rowDensity) {
-                    ForEach(HistoryRowDensity.allCases, id: \.self) { density in
-                        Text(rowDensityLabel(density)).tag(density)
+                SettingsFieldLayout {
+                    Text(SettingsCopy.text("Row density"))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Picker(SettingsCopy.text("Row density"), selection: $rowDensity) {
+                        ForEach(HistoryRowDensity.allCases, id: \.self) { density in
+                            Text(rowDensityLabel(density)).tag(density)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityIdentifier("clipy.settings.appearance.row-density")
                 }
-                .pickerStyle(.segmented)
-                .accessibilityIdentifier("clipy.settings.appearance.row-density")
                 DisclosureGroup(
                     AdaptiveSettingsCopy.text("Text Appearance"),
                     isExpanded: $isShowingTextAppearance
                 ) {
-                    Picker(SettingsCopy.text("Snippet lines"), selection: $snippetLineCount) {
-                        ForEach(HistorySnippetLineCount.allCases, id: \.self) { count in
-                            Text(snippetLineCountLabel(count)).tag(count)
+                    SettingsFieldLayout {
+                        Text(SettingsCopy.text("Snippet lines"))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Picker(SettingsCopy.text("Snippet lines"), selection: $snippetLineCount) {
+                            ForEach(HistorySnippetLineCount.allCases, id: \.self) { count in
+                                Text(snippetLineCountLabel(count)).tag(count)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityIdentifier("clipy.settings.appearance.snippet-lines")
                     }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("clipy.settings.appearance.snippet-lines")
-                    Picker(SettingsCopy.text("Font size"), selection: $rowFontSize) {
-                        ForEach(HistoryRowFontSize.allCases, id: \.self) { size in
-                            Text(rowFontSizeLabel(size)).tag(size)
+                    SettingsFieldLayout {
+                        Text(SettingsCopy.text("Font size"))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Picker(SettingsCopy.text("Font size"), selection: $rowFontSize) {
+                            ForEach(HistoryRowFontSize.allCases, id: \.self) { size in
+                                Text(rowFontSizeLabel(size)).tag(size)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityIdentifier("clipy.settings.appearance.font-size")
                     }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("clipy.settings.appearance.font-size")
                 }
                 .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.appearance.text-appearance"))
             } header: {
@@ -121,14 +137,15 @@ struct AppearanceSettingsTab: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button(SettingsCopy.text("Reset")) {
-                        previewMaximumCharacters = PreviewTextSettings.defaultMaximumCharacters
-                        isPreviewTextLengthLimited = true
-                        previewGap = Double(PanelGeometry.floatingPreviewGap)
-                    }
-                    .accessibilityIdentifier("clipy.settings.preview.reset")
                 }
                 .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.appearance.advanced-preview"))
+                Button(SettingsCopy.text("Reset Preview Settings")) {
+                    isPreviewAutoOpenEnabled = true
+                    previewMaximumCharacters = PreviewTextSettings.defaultMaximumCharacters
+                    isPreviewTextLengthLimited = true
+                    previewGap = Double(PanelGeometry.floatingPreviewGap)
+                }
+                .accessibilityIdentifier("clipy.settings.preview.reset")
             } header: {
                 Text(AdaptiveSettingsCopy.text("Preview"))
             } footer: {
@@ -145,8 +162,15 @@ struct AppearanceSettingsTab: View {
                 }
                 Button(SettingsCopy.text("Reset Panel Size to Default")) {
                     Self.resetPersistedPanelSize()
+                    hasResetPanelSize = true
                 }
                 .accessibilityIdentifier("clipy.settings.appearance.reset-panel-size")
+                if hasResetPanelSize {
+                    SettingStatusView(status: .success(SettingsCopy.text(
+                        "Panel size reset. Reopen the panel to use the default size."
+                    )))
+                    .accessibilityIdentifier("clipy.settings.appearance.panel-size-status")
+                }
             } header: {
                 Text(SettingsCopy.text("Panel"))
             } footer: {

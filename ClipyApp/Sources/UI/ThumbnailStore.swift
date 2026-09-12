@@ -20,8 +20,7 @@ import SwiftUI
 
 /// Thumbnail fetch + bounded reference-exact retention (docs/
 /// 01-architecture.md §5.7; docs/04-coherence.md §9). One instance per
-/// browsing surface; the panel owns it and the detail view owns its own
-/// (larger-pixel) instance.
+/// browsing surface, owned by the panel's history list.
 @MainActor @Observable
 final class ThumbnailStore {
 
@@ -84,7 +83,7 @@ final class ThumbnailStore {
     }
     private var inFlight: [HistoryItemReference: Flight] = [:]
 
-    /// Actual row/header appearances distinguish display demand from cold
+    /// Actual row appearances distinguish display demand from cold
     /// retained results. These references own no pixels or History values.
     private var displayedItems: Set<HistoryItemReference> = []
     var isSurfaceActive = true {
@@ -166,8 +165,8 @@ final class ThumbnailStore {
     /// Decoded-byte half of the admission bound (default 64 MiB). At the
     /// default 112 px payload the ENTRY ceiling binds first (500 × ≈50 KB ≈
     /// 25 MiB of decoded bitmap); the byte ceiling is the backstop that
-    /// keeps larger pixel sizes (the details view's 128 px store) or
-    /// row-padded bitmaps from growing a surface without bound. Injectable
+    /// keeps larger pixel sizes or row-padded bitmaps from growing a surface
+    /// without bound. Injectable
     /// for the same small-scale proof as `maximumEntries`.
     private let maximumDecodedBytes: Int
 
@@ -203,9 +202,7 @@ final class ThumbnailStore {
         // A DEBUG running-app journey activates the per-surface evidence
         // sink through its own envelope key (the HistoryPreviewView
         // CLIPY_UI_TEST_PREVIEW_FAILURE precedent); every other DEBUG
-        // context — including the details view's 128 px store, whose records
-        // would still be distinguishable by `pixelsWidth/Height` — and all
-        // Release builds construct a sink-free store.
+        // context and all Release builds construct a sink-free store.
         self.init(
             history: history,
             pixels: pixels,
@@ -271,8 +268,8 @@ final class ThumbnailStore {
         return PixelSize(width: width, height: entry.height)
     }
 
-    /// Internal render edge (GOV-3 tail: only this module's row and details
-    /// views read retained pixels; hosted journeys and owner tests observe
+    /// Internal render edge (GOV-3 tail: only this module's row views read
+    /// retained pixels; hosted journeys and owner tests observe
     /// the content-free `imagePixelSize(for:)` above). The returned value is
     /// immutable Sendable pixels, never a framework object, and this pure
     /// read never fetches.

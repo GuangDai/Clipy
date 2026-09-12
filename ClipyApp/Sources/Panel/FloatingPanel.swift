@@ -1,4 +1,4 @@
-/// The app-owned floating panel. User dimensions have usability floors;
+/// The app-owned floating panel. Content determines its compact size;
 /// the active display supplies resize limits, and display fitting never
 /// rewrites saved dimensions. The transient preview lives in the separate
 /// `FloatingPreviewPanel` child window; this panel's geometry never changes
@@ -93,7 +93,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// re-applies the retained demand (Maccy's popup semantics: content
     /// smaller than the new ceiling shrinks the panel).
     private var isLiveResizeActive = false
-    private var liveResizeStartingHeight: CGFloat?
+    private var liveResizeStartingSize: NSSize?
 
     /// AppKit can notify the parent that it resigned key before
     /// `beginSheetModal` has made `attachedSheet` observable. Defer the close
@@ -225,9 +225,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// fit the target screen's visible frame when a size persisted on a
     /// larger display would overflow — the geometry layer clamps ORIGINS
     /// only, so the shrink must happen here. The persisted height is the
-    /// content-fit CEILING: a retained content-fit demand (or the next one
-    /// the SwiftUI content publishes) then shrinks the panel to its
-    /// displayed content.
+    /// content-fit CEILING: a retained content-fit demand determines the
+    /// actual size before placement. Without one, the next demand from
+    /// SwiftUI fits the displayed content after opening.
     func open(
         at mode: PopupPositionMode,
         statusItemButtonScreenFrame: NSRect?
@@ -239,6 +239,12 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             width: persisted.contentWidth,
             height: persisted.height
         )
+        // Position the actual compact surface, not its taller saved ceiling.
+        // Otherwise center placement ends above center, and cursor/last-position
+        // placement near the bottom unnecessarily jumps up to fit empty space.
+        if let idealHeight = pendingContentFitHeight {
+            size.height = PanelContentFit.clampedHeight(idealHeight, ceiling: size.height)
+        }
         let mouseLocation = NSEvent.mouseLocation
         let screens = NSScreen.screens.map { (frame: $0.frame, visibleFrame: $0.visibleFrame) }
         // Size and origin use the same target display, including a status
@@ -338,7 +344,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// active the retained demand is kept but not applied.
     func windowWillStartLiveResize(_ notification: Notification) {
         isLiveResizeActive = true
-        liveResizeStartingHeight = frame.height
+        liveResizeStartingSize = frame.size
     }
 
     /// Persists the user-settled panel size through PanelGeometry's single
@@ -354,13 +360,17 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         isLiveResizeActive = false
         let contentWidth = PanelGeometry.clampedContentWidth(frame.width)
         let height = PanelGeometry.clampedHeight(frame.height)
-        // A width-only drag must not turn a content-fitted short list into
-        // a permanent height ceiling for future history and previews.
-        let heightCeiling = liveResizeStartingHeight == frame.height
-            ? PanelGeometry.persistedSize(from: .standard).height : height
-        liveResizeStartingHeight = nil
+        // Preserve each untouched dimension (V2-11). A width-only drag must
+        // not save a short fitted height; a height-only drag on a smaller
+        // screen must not erase the preferred width for a larger display.
+        let saved = PanelGeometry.persistedSize(from: .standard)
+        let preferredWidth = liveResizeStartingSize?.width == frame.width
+            ? saved.contentWidth : contentWidth
+        let heightCeiling = liveResizeStartingSize?.height == frame.height
+            ? saved.height : height
+        liveResizeStartingSize = nil
         PanelGeometry.persistSize(
-            contentWidth: contentWidth,
+            contentWidth: preferredWidth,
             height: heightCeiling,
             to: .standard
         )
@@ -463,7 +473,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
 
     // MARK: - Private
 
-    /// Usability minima and the current screen's available drawing area.
+    /// Content-size bounds and the current screen's available drawing area.
     private func applyResizeLimits(in visibleFrame: NSRect? = nil) {
         let available = visibleFrame ?? screen?.visibleFrame ?? NSScreen.main?.visibleFrame
         let maximum = available?.size ?? NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)

@@ -14,6 +14,9 @@ struct ReviseEditorDraft: Sendable {
     private var replacementTexts: [RepresentationIdentity: String] = [:]
     private var replacementCodecs: [RepresentationIdentity: EditorTextCodec] = [:]
     private var openingTexts: [RepresentationIdentity: String] = [:]
+    /// Exact comparison is performed when text changes, not every time the
+    /// footer, dismissal protection, or accessibility hints render a large draft.
+    private var editedTextIdentities: Set<RepresentationIdentity> = []
     private(set) var isAwaitingLatestContent = false
 
     init(details: HistoryDetails) {
@@ -27,10 +30,7 @@ struct ReviseEditorDraft: Sendable {
     var canSubmit: Bool { !isAwaitingLatestContent && !hasEmptyPasteboardItem && !hasEmptyReplacement }
     var isDirty: Bool {
         choices.values.contains { $0 != .keepCurrent }
-            || replacementTexts.contains { entry in
-                guard let original = openingTexts[entry.key] else { return true }
-                return !entry.value.utf8.elementsEqual(original.utf8)
-            }
+            || !editedTextIdentities.isEmpty
     }
     var dismissalDecision: DismissalDecision { isDirty ? .confirmDiscard : .dismiss }
     var allRepresentationsHidden: Bool {
@@ -66,8 +66,14 @@ struct ReviseEditorDraft: Sendable {
     }
     func replacementText(for typeIdentifier: String, pasteboardItemIndex: Int = 0) -> String { replacementTexts[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] ?? "" }
     mutating func setReplacementText(_ text: String, for typeIdentifier: String, pasteboardItemIndex: Int = 0) {
-        guard replacementCodecs[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] != nil else { return }
-        replacementTexts[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] = text
+        let identity = RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+        guard replacementCodecs[identity] != nil else { return }
+        replacementTexts[identity] = text
+        if let opening = openingTexts[identity], text.utf8.elementsEqual(opening.utf8) {
+            editedTextIdentities.remove(identity)
+        } else {
+            editedTextIdentities.insert(identity)
+        }
     }
 
     /// Metadata offers declared encodings; choosing Replace validates its source.
@@ -90,6 +96,7 @@ struct ReviseEditorDraft: Sendable {
         replacementTexts[key] = decoded.text
         replacementCodecs[key] = decoded.codec
         openingTexts[key] = decoded.text
+        editedTextIdentities.remove(key)
         return true
     }
     mutating func markStale() { isAwaitingLatestContent = true }
@@ -102,8 +109,7 @@ struct ReviseEditorDraft: Sendable {
               details.canonical == canonical else { return false }
         for type in Array(replacementTexts.keys) {
             if choice(for: type.typeIdentifier, pasteboardItemIndex: type.pasteboardItemIndex) != .replace,
-               let current = replacementTexts[type], let opening = openingTexts[type],
-               current.utf8.elementsEqual(opening.utf8) {
+               !editedTextIdentities.contains(type) {
                 replacementTexts.removeValue(forKey: type)
                 replacementCodecs.removeValue(forKey: type)
                 openingTexts.removeValue(forKey: type)

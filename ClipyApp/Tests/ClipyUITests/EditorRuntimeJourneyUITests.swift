@@ -563,9 +563,11 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             in: app,
             message: "Replace did not materialize the actual TextEditor."
         ) else { throw JourneyFailure.precondition }
-        replacement.click()
-        replacement.typeKey("a", modifierFlags: .command)
-        replacement.typeText(draft)
+        // Replace should hand keyboard focus to its loaded text immediately.
+        // Send keys through the application: targeting/clicking the TextEditor
+        // here would hide a product focus failure by focusing it for the user.
+        app.typeKey("a", modifierFlags: .command)
+        app.typeText(draft)
         XCTAssertEqual(replacement.value as? String, draft)
         return replacement
     }

@@ -6,8 +6,8 @@
 /// nothing here sees SwiftData, Domain state, or fingerprints.
 /// Owning spec: docs/01-architecture.md §6 (Main-actor UI) and §5.4 (detail
 /// flow); detail DTOs docs/03b-instruction-set.md §9; revise semantics
-/// docs/03a-instruction-set.md §5; thumbnail discipline
-/// docs/01-architecture.md §5.7 / docs/04-coherence.md §9; roadmap:
+/// docs/03a-instruction-set.md §5; explicit representation reads
+/// docs/v2/V2-09-multilevel-storage.md §5; roadmap:
 /// docs/roadmap/05-presentationui.md (step 9).
 import ClipboardFormats
 import ContentPreview
@@ -133,12 +133,6 @@ struct HistoryDetailsView: View {
         (@MainActor (HistoryItemReference, HistoryItemReference) -> Bool)?
     @State private var currentItem: HistoryItemReference
 
-    /// Reference-exact thumbnail cache (01 §5.7; 04 §9): keyed by
-    /// `HistoryItemReference`, so a revised item never shows stale pixels.
-    /// 128 px ≈ 2× the 64 pt header cell, keeping the header sharp on
-    /// retina displays (the row list keeps the 112 px default).
-    @State private var thumbnails: ThumbnailStore
-
     @State private var phase: DetailsPhase = .loading
     @State private var basis: ContentBasis = .effective
     @State private var showsStaleNotice = false
@@ -167,12 +161,6 @@ struct HistoryDetailsView: View {
                 baselinePurgeGeneration: viewState.surfacePurge?.generation ?? 0
             )
         )
-        self._thumbnails = State(
-            initialValue: ThumbnailStore(
-                history: viewState.history,
-                pixels: PixelSize(width: 128, height: 128)
-            )
-        )
     }
 
     init(
@@ -190,12 +178,6 @@ struct HistoryDetailsView: View {
             initialValue: HistoryDetailsLoadFence(
                 baselinePurgeGeneration:
                     viewState.surfacePurge?.generation ?? 0
-            )
-        )
-        self._thumbnails = State(
-            initialValue: ThumbnailStore(
-                history: viewState.history,
-                pixels: PixelSize(width: 128, height: 128)
             )
         )
     }
@@ -277,7 +259,6 @@ struct HistoryDetailsView: View {
             _ = reconcileSurfacePurge(viewState.surfacePurge)
         }
         .onChange(of: memoryPressureGeneration, initial: true) { _, _ in
-            thumbnails.respondToMemoryPressure(memoryPressure)
             if memoryPressure == .critical { cancelRepresentationPreview() }
         }
 
@@ -334,9 +315,6 @@ struct HistoryDetailsView: View {
             cancelRepresentationPreview()
         }
         currentItem = latest
-        if latest != previous {
-            thumbnails.purge(.revision(old: previous, new: latest))
-        }
     }
 
     // MARK: Loaded layout
@@ -369,7 +347,6 @@ struct HistoryDetailsView: View {
             DetailsBody(
                 details: details,
                 content: content,
-                thumbnails: thumbnails,
                 basis: $basis,
                 onRevise: { intent in
                     Task {
@@ -683,10 +660,9 @@ struct HistoryDetailsView: View {
     private func reconcileSurfacePurge(
         _ purge: HistorySurfacePurge?
     ) -> Bool {
-        if let scope = loadFence.reconcile(purge, item: currentItem) {
+        if loadFence.reconcile(purge, item: currentItem) != nil {
             cancelExport()
             cancelRepresentationPreview()
-            thumbnails.purge(scope)
             showsEditor = false
             phase = .removed
         }
@@ -791,7 +767,6 @@ private struct DetailsBody: View {
 
     let details: HistoryDetails
     let content: DetailsContentPresentation
-    let thumbnails: ThumbnailStore
     @Binding var basis: ContentBasis
     let onRevise: (RevisionIntent) -> Void
     var onExport: (HistoryRepresentationRequest) -> Void = { _ in }
@@ -819,7 +794,7 @@ private struct DetailsBody: View {
     private var headerSection: some View {
         VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
             HStack(alignment: .top, spacing: PanelTheme.spacingLarge) {
-                thumbnail
+                contentTypeIcon
                     .frame(width: 64, height: 64)
                 VStack(
                     alignment: .leading,
@@ -838,26 +813,10 @@ private struct DetailsBody: View {
         }
     }
 
-    @ViewBuilder
-    private var thumbnail: some View {
-        if let raster = thumbnails.raster(for: details.item),
-           let image = PreviewRasterDisplay.image(
-               raster,
-               scale: 2,
-               label: Text(PanelActionsCopy.text("Item thumbnail", bundle: copyBundle))
-           ) {
-            image
-                .resizable()
-                .scaledToFill()
-                .frame(width: 64, height: 64)
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: PanelTheme.cornerRadiusMedium
-                    )
-                )
-                .accessibilityLabel(PanelActionsCopy.text("Item thumbnail", bundle: copyBundle))
-        } else {
-            Image(systemName: content.symbolName)
+    /// The overview uses metadata only (V2-09 §5). Image bytes belong to
+    /// the explicitly requested representation preview below.
+    private var contentTypeIcon: some View {
+        Image(systemName: content.symbolName)
             .font(.system(size: 28))
             .foregroundStyle(.secondary)
             .frame(width: 64, height: 64)
@@ -868,7 +827,6 @@ private struct DetailsBody: View {
                 )
             )
             .accessibilityLabel(PanelActionsCopy.text("Content type icon", bundle: copyBundle))
-        }
     }
 
     @ViewBuilder
@@ -1493,7 +1451,6 @@ private func typeSymbol(for typeIdentifiers: [String]) -> String {
         DetailsBody(
             details: details,
             content: content,
-            thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
             basis: .constant(.effective),
             onRevise: { _ in }
         )
@@ -1507,7 +1464,6 @@ private func typeSymbol(for typeIdentifiers: [String]) -> String {
         DetailsBody(
             details: details,
             content: content,
-            thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
             basis: .constant(.effective),
             onRevise: { _ in }
         )

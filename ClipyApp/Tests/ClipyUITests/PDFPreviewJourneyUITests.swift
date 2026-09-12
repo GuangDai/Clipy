@@ -138,6 +138,15 @@ final class PDFPreviewJourneyUITests: XCTestCase {
                 && image.label == "PDF preview, page \(page) of 2"
                 && caption.exists && self.text(of: caption) == "Page \(page) of 2"
         }, surface.debugDescription)
+        // Navigation remains a full pointer target; the caption must not
+        // compress either control when the preview is narrow.
+        for identifier in ["clipy.preview.pdf.previous", "clipy.preview.pdf.next"] {
+            let button = surface.buttons[identifier]
+            XCTAssertGreaterThanOrEqual(button.frame.width, 24, identifier)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 24, identifier)
+            XCTAssertGreaterThanOrEqual(button.frame.minX, surface.frame.minX - 1, identifier)
+            XCTAssertLessThanOrEqual(button.frame.maxX, surface.frame.maxX + 1, identifier)
+        }
     }
 
     @MainActor

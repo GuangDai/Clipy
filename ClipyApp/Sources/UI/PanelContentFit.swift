@@ -20,27 +20,32 @@ import HistoryCore
 enum PanelContentFit {
 
     /// One displayed row's height-relevant facts: its slot kind (image rows
-    /// carry the generous 44/56pt slot) and the effective snippet line
-    /// count (0 when the row renders no snippet).
+    /// carry the generous 44/56pt slot) and the effective title/snippet
+    /// line counts (0 snippet lines when the row renders no excerpt).
     struct RowDescriptor: Equatable, Sendable {
         let isImageRow: Bool
+        let titleLineCount: Int
         let snippetLineCount: Int
 
-        init(isImageRow: Bool, snippetLineCount: Int) {
+        init(isImageRow: Bool, titleLineCount: Int = 1, snippetLineCount: Int) {
             self.isImageRow = isImageRow
+            self.titleLineCount = titleLineCount
             self.snippetLineCount = snippetLineCount
         }
 
         /// Maps an authoritative row through the same classification the
         /// row view uses (`HistoryRowKind`, shared with the type filter).
-        /// The oracle cannot measure snippet WRAPPING analytically; a row
-        /// with a snippet is charged the configured line limit
+        /// The oracle cannot measure text wrapping analytically; it reserves
+        /// the configured line limit for the title or body excerpt
         /// (`HistorySnippetLineCount.baseLineLimit(density:)`), the same
         /// bound the row view renders with.
         init(row: HistoryRow, snippetLineLimit: Int) {
             isImageRow = HistoryRowKind.classify(
                 effectiveTypeIdentifiers: row.typeIdentifiers
             ) == .image
+            // The line preference applies to the title in browse/title-match
+            // rows. Body matches keep a single title above their excerpt.
+            titleLineCount = row.search?.snippet == nil ? snippetLineLimit : 1
             snippetLineCount = row.search?.snippet == nil
                 ? 0 : snippetLineLimit
         }
@@ -152,9 +157,9 @@ enum PanelContentFit {
 
     /// One row: `max(slot, title block)` plus the row's vertical padding
     /// (`PanelTheme.rowVerticalPadding`) and the hoisted list-row insets.
-    /// The title block is one title line plus, when a snippet renders, the
-    /// title/snippet gap (`PanelTheme.spacingXXSmall`) and the effective
-    /// snippet lines.
+    /// The title block uses the configured title lines plus, when a snippet
+    /// renders, the title/snippet gap (`PanelTheme.spacingXXSmall`) and the
+    /// effective snippet lines.
     static func rowHeight(
         _ row: RowDescriptor,
         density: HistoryRowDensity,
@@ -163,7 +168,7 @@ enum PanelContentFit {
         let slot = row.isImageRow
             ? PanelTheme.imageThumbnailHeight(for: density)
             : PanelTheme.thumbnailSize(for: density)
-        var titleBlock = titleLineHeight(for: fontSize)
+        var titleBlock = CGFloat(row.titleLineCount) * titleLineHeight(for: fontSize)
         if row.snippetLineCount > 0 {
             titleBlock += PanelTheme.spacingXXSmall
                 + CGFloat(row.snippetLineCount) * snippetLineHeight(for: fontSize)

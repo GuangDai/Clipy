@@ -162,6 +162,38 @@ struct ReviseEditorDraftTests {
         )
     }
 
+    @Test func restoringOneTextDoesNotLoseAnotherFormatsUnsavedChangesAcrossReload() {
+        let secondType = "public.utf16-external-plain-text"
+        let firstBytes = Data("original".utf8)
+        let secondBytes = Data([0xFE, 0xFF, 0x00, 0x41])
+        let originals = [
+            HistoryRepresentation(typeIdentifier: textType, bytes: firstBytes),
+            HistoryRepresentation(typeIdentifier: secondType, bytes: secondBytes),
+        ]
+        var draft = ReviseEditorDraft(details: details(canonical: originals, effective: originals))
+        installSource(firstBytes, for: textType, in: &draft)
+        installSource(secondBytes, for: secondType, in: &draft)
+        draft.setReplacementText("first edit", for: textType)
+        draft.setReplacementText("B", for: secondType)
+        draft.setReplacementText("original", for: textType)
+        #expect(draft.dismissalDecision == .confirmDiscard)
+
+        draft.markStale()
+        let reloaded = draft.reloadLatest(details: details(canonical: originals, effective: originals, version: 3))
+        #expect(reloaded)
+        #expect(!draft.hasReplacementSource(for: textType))
+        #expect(draft.replacementText(for: secondType) == "B")
+        #expect(draft.dismissalDecision == .confirmDiscard)
+
+        draft.setReplacementText("A", for: secondType)
+        #expect(!draft.isDirty)
+        #expect(draft.dismissalDecision == .dismiss)
+        draft.setChoice(.hide, for: secondType)
+        #expect(draft.isDirty)
+        draft.setChoice(.keepCurrent, for: secondType)
+        #expect(!draft.isDirty)
+    }
+
     @Test func dirtyDraftKeepsOpeningReferenceAndLiteralReplacementBytes() {
         var draft = ReviseEditorDraft(
             details: details(

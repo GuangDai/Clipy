@@ -170,7 +170,8 @@ struct HistoryPreviewView: View {
                     HStack(spacing: 8) {
                         Button { loader.showFileReference() } label: {
                             Image(systemName: "chevron.backward")
-                                .padding(3)
+                                .frame(width: 24, height: 24)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.borderless)
                         .accessibilityLabel(PreviewCopy.text("Back to File Reference"))
@@ -303,7 +304,8 @@ struct HistoryPreviewView: View {
                 selectPDFPage(page - 1)
             } label: {
                 Image(systemName: "chevron.backward")
-                    .padding(3)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
             .disabled(page <= 1)
             .keyboardShortcut(.leftArrow, modifiers: [.option, .command])
@@ -311,16 +313,27 @@ struct HistoryPreviewView: View {
             .accessibilityLabel(PreviewCopy.text("Previous PDF Page"))
             .accessibilityIdentifier("clipy.preview.pdf.previous")
 
-            Text(PreviewCopy.pdfPageCaption(pageNumber: page, pageCount: count, locale: locale))
-                .font(.caption)
-                .monospacedDigit()
-                .accessibilityIdentifier("clipy.preview.pdf.page")
+            // Keep the full phrase when it fits; a narrow Quick Look uses
+            // the same localized numbers without squeezing the hit targets.
+            ViewThatFits(in: .horizontal) {
+                Text(PreviewCopy.pdfPageCaption(pageNumber: page, pageCount: count, locale: locale))
+                    .fixedSize()
+                Text(verbatim: LocalizedCountPresentation.number(page, locale: locale)
+                    + " / " + LocalizedCountPresentation.number(count, locale: locale))
+                    .fixedSize()
+            }
+            .font(.caption)
+            .monospacedDigit()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(PreviewCopy.pdfPageCaption(pageNumber: page, pageCount: count, locale: locale))
+            .accessibilityIdentifier("clipy.preview.pdf.page")
 
             Button {
                 selectPDFPage(page + 1)
             } label: {
                 Image(systemName: "chevron.forward")
-                    .padding(3)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
             .disabled(page >= count)
             .keyboardShortcut(.rightArrow, modifiers: [.option, .command])
@@ -498,12 +511,19 @@ struct HistoryPreviewView: View {
         if let occurrence = PreviewFooterMetadata(item: targetItem, row: observedRow) {
             HStack(spacing: 8) {
                 SourceApplicationLabel(application: occurrence.lastSource, store: sourceIcons)
-
                 if occurrence.count > 1 {
-                    Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
-                        .lineLimit(1)
+                    // Copy count remains available in Information. Give the
+                    // source and actions room before this secondary detail;
+                    // resizing never replaces the source's icon-load owner.
+                    ViewThatFits(in: .horizontal) {
+                        Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
+                            .fixedSize()
+                        Color.clear.frame(width: 0, height: 0)
+                    }
+                    .layoutPriority(-1)
                 }
                 Spacer(minLength: 4)
+                    .layoutPriority(-2)
                 if let row = observedRow {
                     Button {
                         if row.pinnedPosition == nil {
@@ -518,9 +538,14 @@ struct HistoryPreviewView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    // The floating pane is never key; Quick Look shares this
+                    // button in the key window while the list is disabled.
+                    .keyboardShortcut("p", modifiers: .command)
                     .help(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin") + "  ⌘P")
                     .accessibilityLabel(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin"))
                     .accessibilityIdentifier("clipy.preview.pin")
+                    .fixedSize()
+                    .layoutPriority(1)
                     Button { viewState.requestPasteFromDisplayedRow(row.item) } label: {
                         Image(systemName: "doc.on.doc")
                             .font(.system(size: 12))
@@ -531,6 +556,8 @@ struct HistoryPreviewView: View {
                     .help(PanelActionsCopy.text("Copy to Clipboard") + "  ↵")
                     .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard"))
                     .accessibilityIdentifier("clipy.preview.copy")
+                    .fixedSize()
+                    .layoutPriority(1)
                 }
                 Button { previewState.isInformationPresented.toggle() } label: {
                     Image(systemName: "info.circle")
@@ -543,6 +570,8 @@ struct HistoryPreviewView: View {
                 .help(PreviewPresentationCopy.text("Preview Information"))
                 .accessibilityLabel(PreviewPresentationCopy.text("Preview Information"))
                 .accessibilityIdentifier("clipy.preview.information")
+                .fixedSize()
+                .layoutPriority(1)
                 .popover(isPresented: Binding(
                     get: { previewState.isInformationPresented },
                     set: { previewState.isInformationPresented = $0 }

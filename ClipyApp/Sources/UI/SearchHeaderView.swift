@@ -109,22 +109,30 @@ struct SearchHeaderView: View {
                     onMoveSelection(-1)
                     return .handled
                 }
-            if !viewState.searchText.isEmpty {
-                Button {
-                    viewState.clearSearch()
-                    searchFieldFocused.wrappedValue = true
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+            // Keep the editor's width and text position stable as the user
+            // enters the first character or clears the query (V2-07 §3).
+            // The empty slot has no control or accessibility element.
+            ZStack {
+                if !viewState.searchText.isEmpty {
+                    Button {
+                        viewState.clearSearch()
+                        searchFieldFocused.wrappedValue = true
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: PanelContentFit.searchFieldHeight)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(PanelActionsCopy.text("Clear search", bundle: copyBundle))
+                    .accessibilityIdentifier("clipy.search.clear")
+                    .accessibilityLabel(PanelActionsCopy.text("Clear search", bundle: copyBundle))
+                    .accessibilityHint(
+                        PanelActionsCopy.text("Clears the query and keeps focus in search.", bundle: copyBundle)
+                    )
                 }
-                .buttonStyle(.plain)
-                .contentShape(Rectangle())
-                .accessibilityIdentifier("clipy.search.clear")
-                .accessibilityLabel(PanelActionsCopy.text("Clear search", bundle: copyBundle))
-                .accessibilityHint(
-                    PanelActionsCopy.text("Clears the query and keeps focus in search.", bundle: copyBundle)
-                )
             }
+            .frame(width: 24, height: PanelContentFit.searchFieldHeight)
         }
         .padding(.horizontal, PanelTheme.spacingSmall)
         .frame(height: PanelContentFit.searchFieldHeight)
@@ -158,6 +166,7 @@ struct SearchHeaderView: View {
                 Text(PanelActionsCopy.text("Fuzzy", bundle: copyBundle)).tag(SearchMode.fuzzy)
                 Text(PanelActionsCopy.text("Regular Expression", bundle: copyBundle)).tag(SearchMode.regexp)
             }
+            .pickerStyle(.inline)
         } label: {
             Group {
                 switch viewState.searchMode {
@@ -172,7 +181,7 @@ struct SearchHeaderView: View {
         .menuIndicator(.hidden)
         .foregroundStyle(viewState.searchMode == .fuzzy ? Color.secondary : Color.accentColor)
         .fixedSize()
-        .help(modeName(viewState.searchMode))
+        .help(PanelActionsCopy.text("Search Mode", bundle: copyBundle) + ": " + modeName(viewState.searchMode))
         .accessibilityIdentifier("clipy.search.mode")
         .accessibilityLabel(PanelActionsCopy.text("Search Mode", bundle: copyBundle))
         .accessibilityValue(modeName(viewState.searchMode))

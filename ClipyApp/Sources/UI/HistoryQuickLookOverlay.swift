@@ -55,7 +55,8 @@ struct HistoryQuickLookOverlay: View {
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
                         .font(.body.weight(.medium))
-                        .padding(4)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
                 .controlSize(.small)
@@ -79,6 +80,16 @@ struct HistoryQuickLookOverlay: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+        .background {
+            // The covered browsing surface is disabled while Quick Look is
+            // open. Own its second Space here, beside the active Escape
+            // control, so closing never depends on a disabled list shortcut.
+            Button(PreviewCopy.text("Close"), action: onDismiss)
+                .keyboardShortcut(.space, modifiers: [])
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.panel.quicklook")
         .accessibilityLabel(PreviewCopy.text("Quick Look preview"))

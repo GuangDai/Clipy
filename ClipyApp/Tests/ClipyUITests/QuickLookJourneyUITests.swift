@@ -79,6 +79,23 @@ final class QuickLookJourneyUITests: XCTestCase {
         app.typeKey(.space, modifierFlags: [])
         assertQuickLook(alpha, in: quickLook, app: app)
         XCTAssertEqual(search.value as? String, "")
+        // The underlying list is disabled. The visible preview owns ⌘P,
+        // and its authoritative footer must reflect both committed changes.
+        let pin = quickLook.buttons["clipy.preview.pin"]
+        XCTAssertTrue(waitUntil { pin.exists && pin.label == "Pin" }, app.debugDescription)
+        app.typeKey("p", modifierFlags: .command)
+        XCTAssertTrue(waitUntil { pin.label == "Unpin" }, app.debugDescription)
+        assertQuickLook(alpha, in: quickLook, app: app)
+        app.typeKey("p", modifierFlags: .command)
+        XCTAssertTrue(waitUntil { pin.label == "Pin" }, app.debugDescription)
+
+        // The same Space that opens Quick Look also closes it; disabled
+        // background shortcuts cannot supply this second half of the toggle.
+        app.typeKey(.space, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !quickLook.exists }, app.debugDescription)
+        XCTAssertTrue(panel.exists, app.debugDescription)
+        app.typeKey(.space, modifierFlags: [])
+        assertQuickLook(alpha, in: quickLook, app: app)
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil { !quickLook.exists }, app.debugDescription)
         XCTAssertTrue(panel.exists, "Escape must dismiss Quick Look before closing the panel.\n\(app.debugDescription)")
@@ -90,6 +107,8 @@ final class QuickLookJourneyUITests: XCTestCase {
         assertQuickLook(beta, in: quickLook, app: app)
         let close = quickLook.buttons["clipy.panel.quicklook.dismiss"]
         XCTAssertTrue(close.isHittable, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(close.frame.width, 24)
+        XCTAssertGreaterThanOrEqual(close.frame.height, 24)
         close.click()
         XCTAssertTrue(waitUntil { !quickLook.exists }, app.debugDescription)
 
