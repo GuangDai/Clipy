@@ -39,9 +39,33 @@ struct PreviewTextBody: View {
 
     private func textSegment(_ index: Int) -> some View {
         #if DEBUG
-        onSegmentMaterialized?(index)
+        return PreviewTextSegment(text: segments[index], index: index,
+                                  onMaterialized: onSegmentMaterialized).equatable()
+        #else
+        return PreviewTextSegment(text: segments[index], index: index).equatable()
         #endif
-        return Text(verbatim: String(segments[index]))
+    }
+}
+
+/// Lazy layout may request a row more than once while refining the viewport.
+/// Keep substring materialization and selectable Text construction inside a
+/// stable leaf, so unchanged rows can reuse that work (V2-11 text previews).
+private struct PreviewTextSegment: View, Equatable {
+    let text: Substring
+    let index: Int
+    #if DEBUG
+    var onMaterialized: ((Int) -> Void)?
+    #endif
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.index == rhs.index && lhs.text.utf8.elementsEqual(rhs.text.utf8)
+    }
+
+    var body: some View {
+        #if DEBUG
+        onMaterialized?(index)
+        #endif
+        return Text(verbatim: String(text))
             .font(.body)
             .lineSpacing(2)
             .textSelection(.enabled)

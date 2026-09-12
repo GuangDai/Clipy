@@ -776,12 +776,6 @@ struct HistoryPanelView: View {
         .padding(.horizontal, PanelTheme.headerHorizontalPadding)
         .padding(.top, PanelTheme.headerTopPadding)
         .padding(.bottom, PanelTheme.headerBottomPadding)
-        .task {
-            // Returning from Details inserts a new field. Hand it focus only
-            // once its focused binding is mounted, not during path removal.
-            guard surfaceState.isAtListRoot, surfaceState.isSessionActive else { return }
-            isSearchFieldFocused = true
-        }
         .background {
             // Only the header's empty background drags the window;
             // foreground search controls keep their own interactions.
@@ -795,33 +789,8 @@ struct HistoryPanelView: View {
 
     private var mainColumn: some View {
         VStack(spacing: 0) {
-            if surfaceState.isAtListRoot {
-                browsingHeader
-            }
-
             NavigationStack(path: $surfaceState.detailsPath) {
-                HistoryListView(
-                    viewState: viewState,
-                    thumbnails: surfaceState.thumbnails,
-                    density: appearance.rowDensity,
-                    snippetLineCount: appearance.snippetLineCount,
-                    fontSize: appearance.rowFontSize,
-                    isSearchFieldFocused: isSearchFieldFocused,
-                    selection: $surfaceState.selection,
-                    onFocusHistory: {
-                        isSearchFieldFocused = false
-                        // An actual click is a choice, not pointer transit.
-                        // Publish it before a subsequent preview-button click.
-                        previewState.handleSelectionChange(
-                            surfaceState.selectedReference(in: viewState.displayedRows),
-                            isExplicit: true
-                        )
-                    },
-                    onHoverRow: { id in surfaceState.handleRowHover(id) },
-                    onKeyboardNavigation: { surfaceState.noteKeyboardNavigation() },
-                    onPointerMovement: { surfaceState.notePointerMovement() },
-                    onShowDetails: { item in surfaceState.detailsPath.append(item) }
-                )
+                browsingRoot
                 .navigationDestination(for: HistoryItemReference.self) { item in
                     HistoryDetailsView(
                         viewState: viewState,
@@ -846,6 +815,40 @@ struct HistoryPanelView: View {
             .easeInOut(duration: 0.18),
             value: isFailureBannerVisible
         )
+    }
+
+    /// Search belongs to the same navigation destination as the list
+    /// (V2-11). When Back restores this branch, SwiftUI evaluates its search
+    /// preference as part of that focus transition. A sibling header's task
+    /// races NavigationStack restoring first responder to its list instead.
+    private var browsingRoot: some View {
+        VStack(spacing: 0) {
+            browsingHeader
+
+            HistoryListView(
+                viewState: viewState,
+                thumbnails: surfaceState.thumbnails,
+                density: appearance.rowDensity,
+                snippetLineCount: appearance.snippetLineCount,
+                fontSize: appearance.rowFontSize,
+                isSearchFieldFocused: isSearchFieldFocused,
+                selection: $surfaceState.selection,
+                onFocusHistory: {
+                    isSearchFieldFocused = false
+                    // An actual click is a choice, not pointer transit.
+                    // Publish it before a subsequent preview-button click.
+                    previewState.handleSelectionChange(
+                        surfaceState.selectedReference(in: viewState.displayedRows),
+                        isExplicit: true
+                    )
+                },
+                onHoverRow: { id in surfaceState.handleRowHover(id) },
+                onKeyboardNavigation: { surfaceState.noteKeyboardNavigation() },
+                onPointerMovement: { surfaceState.notePointerMovement() },
+                onShowDetails: { item in surfaceState.detailsPath.append(item) }
+            )
+        }
+        .defaultFocus($isSearchFieldFocused, true, priority: .userInitiated)
     }
 
     /// One lookup supplies both list reconciliation and preview's exact
