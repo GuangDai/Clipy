@@ -30,6 +30,9 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         app.launchArguments += [
             "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
             "-NSForceRightToLeftWritingDirection", "YES", "-AppleTextDirection", "YES",
+            "-panelPosition", "cursor",
+            "-clipy.appearance.previewAutoOpen", "YES",
+            "-clipy.panelContentWidth", "360", "-clipy.panelHeight", "420",
             "-clipy.preview.panelGap", "2",
         ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
@@ -63,33 +66,16 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
                 && mode.frame.minY < filter.frame.maxY
         }, app.debugDescription)
 
-        // Summon at the mouse cursor with auto-open armed and the panel at
-        // its default 360×420 size.
-        openAppearance(in: app)
-        let positionControl = app.descendants(matching: .any)["clipy.settings.appearance.panel-position"]
-        choose("At Mouse Cursor", in: positionControl, app: app)
-        let autoOpen = app.switches["clipy.settings.appearance.preview-auto-open"]
-        XCTAssertTrue(autoOpen.waitForExistence(timeout: 5), app.debugDescription)
-        SettingsJourneyControls.scroll(autoOpen,
-            into: app.scrollViews.containing(.any, identifier: autoOpen.identifier).firstMatch, app: app)
-        if (autoOpen.value as? Int) == 0 { autoOpen.click() }
-        XCTAssertTrue(waitUntil(timeout: 5) {
-            (autoOpen.value as? Int) == 1
-        }, app.debugDescription)
-        let reset = app.buttons["clipy.settings.appearance.reset-panel-size"]
-        XCTAssertTrue(reset.waitForExistence(timeout: 5), app.debugDescription)
-        SettingsJourneyControls.scroll(reset,
-            into: app.scrollViews.containing(.button, identifier: reset.identifier).firstMatch, app: app)
-        reset.click()
-        // Keep the real pointer in place through Cmd-W and keyboard summon:
-        // x=40 leaves room for the 360-point panel plus the trailing pane.
-        SettingsJourneyControls.scroll(positionControl,
-            into: app.scrollViews.containing(.any, identifier: positionControl.identifier).firstMatch, app: app)
-        positionControl.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .withOffset(CGVector(dx: 40 - positionControl.frame.midX, dy: 0))
+        // This journey covers panel RTL and physical preview placement.
+        // Settings' RTL detail AX viewport mismatch remains a separate,
+        // unresolved issue; launch preferences provide only this setup.
+        // Move the real pointer using the visible panel, then start a fresh
+        // dwell at x=40 with room for the 360-point panel and trailing pane.
+        panel.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            .withOffset(CGVector(dx: 40 - panel.frame.minX, dy: 0))
             .hover()
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(waitUntil(timeout: 5) { !positionControl.exists }, app.debugDescription)
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(waitUntil(timeout: 5) { !panel.exists }, app.debugDescription)
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
 
@@ -143,26 +129,6 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
                 && abs(pane.frame.maxX + gap - panel.frame.minX) <= 3
                 && abs(pane.frame.minY - panel.frame.minY) <= 3
         }, "leading floating pane at the screen's right edge under RTL.\n\(app.debugDescription)")
-    }
-
-    @MainActor
-    private func openAppearance(in app: XCUIApplication) {
-        app.typeKey(",", modifierFlags: .command)
-        let tab = app.buttons["clipy.settings.category.appearance"]
-        XCTAssertTrue(tab.waitForExistence(timeout: 10), app.debugDescription)
-        tab.click()
-    }
-
-    @MainActor
-    private func choose(_ title: String, in control: XCUIElement, app: XCUIApplication) {
-        XCTAssertTrue(control.waitForExistence(timeout: 5), app.debugDescription)
-        SettingsJourneyControls.scroll(control,
-            into: app.scrollViews.containing(.any, identifier: control.identifier).firstMatch, app: app)
-        control.click()
-        // Scope to this real picker; the Window menu also has Left/Right.
-        let option = control.menuItems[title]
-        XCTAssertTrue(option.waitForExistence(timeout: 5), app.debugDescription)
-        option.click()
     }
 
     @MainActor

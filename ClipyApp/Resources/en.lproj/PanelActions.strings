@@ -58,8 +58,8 @@
 "Content type icon" = "Content type icon";
 "Unpinned" = "Unpinned";
 "Content" = "Content";
-"Effective" = "Effective";
-"Canonical" = "Canonical";
+"Effective" = "Current";
+"Canonical" = "Original";
 "Content view" = "Content view";
 "Effective lists what pasting produces now; Canonical lists every retained original type." = "Effective lists what pasting produces now; Canonical lists every retained original type.";
 "No revisions" = "No revisions";

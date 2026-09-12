@@ -275,6 +275,7 @@ struct HistoryDetailsView: View {
                 Label(PanelActionsCopy.text("Back to History", bundle: copyBundle), systemImage: "chevron.backward")
                     .labelStyle(.iconOnly)
                     .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .help(PanelActionsCopy.text("Back to History", bundle: copyBundle))
@@ -407,6 +408,7 @@ struct HistoryDetailsView: View {
                     }
                 }
                 .frame(width: 28, height: 24)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
@@ -424,6 +426,7 @@ struct HistoryDetailsView: View {
             } label: {
                 Label(PanelActionsCopy.text("Edit Content", bundle: copyBundle), systemImage: "square.and.pencil")
                     .frame(width: 28, height: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
@@ -437,6 +440,7 @@ struct HistoryDetailsView: View {
             } label: {
                 Label(PanelActionsCopy.text("Remove", bundle: copyBundle), systemImage: "trash")
                     .frame(width: 28, height: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .controlSize(.small)
@@ -1057,6 +1061,7 @@ private struct RepresentationRow: View {
                     Label(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle),
                           systemImage: isLoading ? "xmark" : (preview == nil ? "eye" : "eye.fill"))
                         .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
                 .foregroundStyle(preview == nil ? Color.secondary : Color.accentColor)
                 .help(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle))
@@ -1066,6 +1071,7 @@ private struct RepresentationRow: View {
                 Button(action: onExport) {
                     Label(PanelActionsCopy.text("Save As…", bundle: copyBundle), systemImage: "square.and.arrow.down")
                         .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
                 .controlSize(.small)
                 .disabled(isExporting)
@@ -1106,7 +1112,10 @@ private struct RepresentationRow: View {
             if let raster = preview?.raster,
                let image = PreviewRasterDisplay.image(raster, scale: 1,
                    label: Text(PanelActionsCopy.format("Preview of %@", representation.identity.accessibilityLabel, bundle: copyBundle))) {
-                image.resizable().scaledToFit().frame(maxWidth: .infinity)
+                // Like the floating preview, small images retain their
+                // natural footprint instead of filling the whole column.
+                image.resizable().scaledToFit()
+                    .frame(maxWidth: CGFloat(raster.width))
                     .accessibilityIdentifier("clipy.details.image-preview." + representation.identity.accessibilitySuffix)
             }
             if case .some(.pdf(let pdf)) = preview {
@@ -1203,6 +1212,7 @@ private struct RevisionRow: View {
                 Label(PanelActionsCopy.text("Revert", bundle: copyBundle), systemImage: "arrow.uturn.backward")
                     .labelStyle(.iconOnly)
                     .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
                 .buttonStyle(.borderless)
                 .controlSize(.small)

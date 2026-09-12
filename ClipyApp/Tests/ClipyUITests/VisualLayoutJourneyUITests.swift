@@ -119,6 +119,8 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         attach(panel, named: "Details — Image and actions")
         let back = details.buttons["clipy.details.back"]
         XCTAssertTrue(back.exists && back.isHittable, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(back.frame.width, 24)
+        XCTAssertGreaterThanOrEqual(back.frame.height, 24)
         back.click()
         XCTAssertTrue(waitUntil { !details.exists && panel.exists && rows.count == 3 }, app.debugDescription)
     }

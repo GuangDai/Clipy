@@ -109,6 +109,9 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         assertVisibleElement(matching: NSPredicate(
             format: "identifier == %@", "clipy.details.image-preview.public.png"
         ), in: details, app: app, context: "explicit PNG preview")
+        let preview = details.images["clipy.details.image-preview.public.png"]
+        XCTAssertLessThanOrEqual(preview.frame.width, 1)
+        XCTAssertLessThanOrEqual(preview.frame.height, 1)
         // A completed PNG decode cannot stand in for the still-unread TIFF.
         assertNoRepresentationImage("public.tiff", in: details, app: app)
         clickPreview("public.tiff", in: details, app: app)
@@ -234,7 +237,18 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         // Same bounded native wheel steps used by the Settings Form journeys.
         for _ in 0..<8 {
             if isFullyVisible() { return }
-            let deltaY: CGFloat = element.frame.midY < scrollView.frame.midY ? 50 : -50
+            // A preview can nearly fill the viewport. Fixed wheel steps
+            // overshoot the small remaining margin and oscillate forever.
+            let frame = element.frame
+            let viewport = scrollView.frame
+            let deltaY: CGFloat
+            if frame.minY < viewport.minY {
+                deltaY = min(50, viewport.minY - frame.minY)
+            } else if frame.maxY > viewport.maxY {
+                deltaY = -min(50, frame.maxY - viewport.maxY)
+            } else {
+                break
+            }
             scrollCoordinate.scroll(byDeltaX: 0, deltaY: deltaY)
         }
         XCTAssertTrue(
