@@ -8,6 +8,7 @@ import XCTest
 
 final class DetailsMutationJourneyUITests: XCTestCase {
     private var temporaryDirectory: URL?
+    private var stagedCapture: (text: String, before: Int, after: Int)?
 
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -19,6 +20,7 @@ final class DetailsMutationJourneyUITests: XCTestCase {
             try? FileManager.default.removeItem(at: temporaryDirectory)
         }
         temporaryDirectory = nil
+        stagedCapture = nil
         try super.tearDownWithError()
     }
 
@@ -33,8 +35,13 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         let survivor = "clipy-ui-details-survivor"
         let target = "clipy-ui-details-target"
         let pasteboard = NSPasteboard.general
+        let survivorItem = NSPasteboardItem()
+        XCTAssertTrue(survivorItem.setString(survivor, forType: .string))
+        let beforeSurvivorWrite = pasteboard.changeCount
         pasteboard.clearContents()
-        XCTAssertTrue(pasteboard.setString(survivor, forType: .string))
+        let wroteSurvivor = pasteboard.writeObjects([survivorItem])
+        stagedCapture = (survivor, beforeSurvivorWrite, pasteboard.changeCount)
+        XCTAssertTrue(wroteSurvivor, captureDiagnostic())
 
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -70,11 +77,19 @@ final class DetailsMutationJourneyUITests: XCTestCase {
             message: "The first real clipboard capture did not retain survivor."
         ) else { return }
 
-        pasteboard.clearContents()
+        // Match the production writer's complete-item staging (03b §9).
+        // A single writeObjects call narrows the incomplete publication
+        // window; it does not promise cross-process atomicity.
+        let targetItem = NSPasteboardItem()
         XCTAssertTrue(
-            pasteboard.setString(target, forType: .string),
+            targetItem.setString(target, forType: .string),
             diagnostic(app, context: "staging target capture")
         )
+        let beforeTargetWrite = pasteboard.changeCount
+        pasteboard.clearContents()
+        let wroteTarget = pasteboard.writeObjects([targetItem])
+        stagedCapture = (target, beforeTargetWrite, pasteboard.changeCount)
+        XCTAssertTrue(wroteTarget, diagnostic(app, context: "publishing target capture"))
         guard assertEventually(
             {
                 rows.count == 2
@@ -349,7 +364,20 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         _ app: XCUIApplication,
         context: String
     ) -> String {
-        "\(context)\n\(app.debugDescription)"
+        "\(context)\n\(captureDiagnostic())\n\(app.debugDescription)"
+    }
+
+    /// Evaluated only by a failing assertion, never by the wait predicate.
+    /// Record fixture presence rather than unrelated General pasteboard bytes.
+    @MainActor
+    private func captureDiagnostic() -> String {
+        guard let stagedCapture else { return "No clipboard fixture staged." }
+        let pasteboard = NSPasteboard.general
+        let currentCount = pasteboard.changeCount
+        let stillPresent = pasteboard.string(forType: .string) == stagedCapture.text
+        return "Clipboard fixture \(stagedCapture.text): changeCount before write "
+            + "\(stagedCapture.before), after write \(stagedCapture.after), "
+            + "at failure \(currentCount); fixture still present: \(stillPresent)."
     }
 
     @MainActor
