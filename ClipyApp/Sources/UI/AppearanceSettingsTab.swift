@@ -67,9 +67,9 @@ struct AppearanceSettingsTab: View {
                     isExpanded: $isShowingTextAppearance
                 ) {
                     SettingsFieldLayout {
-                        Text(SettingsCopy.text("Snippet lines"))
+                        Text(SettingsCopy.text("Text lines"))
                             .fixedSize(horizontal: false, vertical: true)
-                        Picker(SettingsCopy.text("Snippet lines"), selection: $snippetLineCount) {
+                        Picker(SettingsCopy.text("Text lines"), selection: $snippetLineCount) {
                             ForEach(HistorySnippetLineCount.allCases, id: \.self) { count in
                                 Text(snippetLineCountLabel(count)).tag(count)
                             }
