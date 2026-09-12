@@ -114,9 +114,28 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         showDetails.click()
         let details = app.descendants(matching: .any)["clipy.details.root"]
         XCTAssertTrue(details.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertFalse(app.textFields["clipy.search.field"].exists,
+                       "Details owns its navigation instead of retaining a second search toolbar.")
+        XCTAssertFalse(details.buttons["clipy.details.revisions.toggle"].exists,
+                       "An unedited item has no revision list or restore action to disclose.")
         let pin = details.buttons["clipy.details.pin-toggle"]
         XCTAssertTrue(waitUntil { pin.exists && pin.isEnabled }, app.debugDescription)
-        attach(panel, named: "Details — Image and actions")
+        // NavigationStack exposes its destination as the visible AX surface;
+        // the covered browsing group need not remain in that hierarchy.
+        attach(details, named: "Details — Image and actions")
+        let back = details.buttons["clipy.details.back"]
+        XCTAssertTrue(back.exists && back.isHittable, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(back.frame.width, 24)
+        XCTAssertGreaterThanOrEqual(back.frame.height, 24)
+        back.click()
+        XCTAssertTrue(waitUntil {
+            !details.exists && panel.exists && rows.count == 3
+                && app.textFields["clipy.search.field"].exists
+        }, app.debugDescription)
+        app.typeText("Reading notes")
+        XCTAssertTrue(waitUntil {
+            app.textFields["clipy.search.field"].value as? String == "Reading notes"
+        }, "Returning from Details must let typing search immediately.\n\(app.debugDescription)")
     }
 
     @MainActor
@@ -156,6 +175,7 @@ final class VisualLayoutJourneyUITests: XCTestCase {
 
     @MainActor
     private func waitUntil(_ condition: @escaping () -> Bool) -> Bool {
+        if condition() { return true }
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
         return XCTWaiter.wait(for: [expectation], timeout: 10) == .completed
     }

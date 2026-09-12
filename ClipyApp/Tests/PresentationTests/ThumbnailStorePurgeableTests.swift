@@ -120,4 +120,51 @@ struct ThumbnailStorePurgeableTests {
         #expect(store.cachedEntryCount == 1)
         #expect(store.purgeGeneration == 0)
     }
+
+    @Test func overlappingRowsKeepPixelsUntilTheLastAppearanceEnds() async throws {
+        let item = reference()
+        let history = ThumbnailScriptHistory(pngByReference: [item: fixturePNGData])
+        let store = ThumbnailStore(history: history)
+        store.setDisplayed(item, true)
+        store.prefetch(item)
+        try #require(await pollUntil { store.imagePixelSize(for: item) != nil })
+        let raster = try #require(store.raster(for: item))
+
+        // Section replacement may mount the pinned row before the old
+        // recent row disappears. One appearance still owns these pixels.
+        store.setDisplayed(item, true)
+        store.setDisplayed(item, false)
+        store.respondToMemoryPressure(.warning)
+        #expect(store.raster(for: item) == raster)
+        #expect(store.activeDecodedBytes == 4)
+        store.prefetch(item)
+        #expect(store.inFlightCount == 0)
+        #expect(await history.requestCount(for: item) == 1)
+
+        store.setDisplayed(item, false)
+        #expect(store.activeDecodedBytes == 0)
+        store.respondToMemoryPressure(.warning)
+        #expect(store.cachedEntryCount == 0)
+    }
+
+    @Test func overlappingRowsPreservePendingWorkAcrossMemoryWarning() async throws {
+        let item = reference()
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+        store.setDisplayed(item, true)
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 1 })
+        store.setDisplayed(item, true)
+        store.setDisplayed(item, false)
+        store.respondToMemoryPressure(.warning)
+        #expect(store.inFlightCount == 1)
+        #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        #expect(store.activeDecodedBytes == 4)
+        #expect(store.imagePixelSize(for: item) == PixelSize(width: 1, height: 1))
+
+        store.setDisplayed(item, false)
+        store.respondToMemoryPressure(.warning)
+        #expect(store.cachedEntryCount == 0)
+    }
 }

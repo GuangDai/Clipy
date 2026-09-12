@@ -77,45 +77,44 @@ final class PreviewRecoveryJourneyUITests: XCTestCase {
     /// request admits replay, so neither running surface may manufacture Retry.
     @MainActor
     func testUnsupportedAndMalformedPreviewNeverExposeRetry() throws {
-        do {
-            let unsupportedApp = try launchApp(
-                representation: Data("opaque".utf8),
-                typeIdentifier: "com.example.clipy.preview-opaque"
-            )
-            defer { unsupportedApp.terminate() }
-            let unsupported = unsupportedApp.descendants(matching: .any)[
-                "clipy.preview.unsupported"
-            ]
-            XCTAssertTrue(
-                unsupported.waitForExistence(timeout: 10),
-                diagnostic(unsupportedApp, context: "unsupported opaque preview")
-            )
-            XCTAssertFalse(unsupportedApp.buttons["clipy.preview.retry"].exists)
-            XCTAssertFalse(
-                unsupportedApp.descendants(matching: .any)[
-                    "clipy.preview.failed"
-                ].exists
-            )
-        }
-
-        let malformedApp = try launchApp(
-            representation: Data([0xFF, 0xFE, 0xFF]),
-            typeIdentifier: "public.utf8-plain-text"
+        let app = try launchApp(
+            representation: Data("opaque".utf8),
+            typeIdentifier: "com.example.clipy.preview-opaque"
         )
-        defer { malformedApp.terminate() }
-        let failed = malformedApp.descendants(matching: .any)[
-            "clipy.preview.failed"
-        ]
+        defer {
+            app.terminate()
+            NSPasteboard.general.clearContents()
+        }
+        let unsupported = app.descendants(matching: .any)["clipy.preview.unsupported"]
+        XCTAssertTrue(
+            unsupported.waitForExistence(timeout: 10),
+            diagnostic(app, context: "unsupported opaque preview")
+        )
+        XCTAssertFalse(app.buttons["clipy.preview.retry"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["clipy.preview.failed"].exists)
+
+        // The second terminal representation needs no new process. Capture
+        // and select a different real row so the old unsupported surface
+        // cannot satisfy the malformed-content assertions.
+        let rows = historyRows(in: app)
+        let unsupportedID = rows.firstMatch.identifier
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setData(Data([0xFF, 0xFE, 0xFF]), forType: .string))
+        XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 2 },
+                      diagnostic(app, context: "captured malformed preview row"))
+        let malformedRow = try XCTUnwrap(rows.allElementsBoundByIndex.first {
+            $0.identifier != unsupportedID
+        })
+        XCTAssertTrue(malformedRow.isHittable, diagnostic(app, context: "malformed row selection"))
+        malformedRow.click()
+        let failed = app.descendants(matching: .any)["clipy.preview.failed"]
         XCTAssertTrue(
             failed.waitForExistence(timeout: 10),
-            diagnostic(malformedApp, context: "malformed UTF-8 preview")
+            diagnostic(app, context: "malformed UTF-8 preview")
         )
-        XCTAssertFalse(malformedApp.buttons["clipy.preview.retry"].exists)
-        XCTAssertFalse(
-            malformedApp.descendants(matching: .any)[
-                "clipy.preview.unsupported"
-            ].exists
-        )
+        XCTAssertFalse(app.buttons["clipy.preview.retry"].exists)
+        XCTAssertFalse(unsupported.exists)
     }
 
     @MainActor

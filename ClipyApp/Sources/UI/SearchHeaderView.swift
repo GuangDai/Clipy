@@ -22,13 +22,13 @@ struct SearchHeaderView: View {
     @Environment(\.locale) private var locale
 
     private let viewState: HistoryViewState
-    private let searchFieldFocused: FocusState<Bool>.Binding
+    private let searchFieldFocused: Binding<Bool>
     private let onMoveSelection: (Int) -> Void
     private let onSubmitSelection: () -> Void
 
     init(
         viewState: HistoryViewState,
-        searchFieldFocused: FocusState<Bool>.Binding,
+        searchFieldFocused: Binding<Bool>,
         onMoveSelection: @escaping (Int) -> Void = { _ in },
         onSubmitSelection: @escaping () -> Void = {}
     ) {
@@ -44,7 +44,9 @@ struct SearchHeaderView: View {
                 searchField
                     .frame(maxWidth: .infinity)
                 modeMenu
+                    .frame(width: 24, height: 24)
                 filterMenu
+                    .frame(width: 24, height: 24)
             }
             if hasActiveFilters {
                 Button {
@@ -52,16 +54,29 @@ struct SearchHeaderView: View {
                     viewState.showsPinnedOnly = false
                     searchFieldFocused.wrappedValue = true
                 } label: {
-                    Label(filterSummary, systemImage: "xmark.circle.fill")
+                    HStack(spacing: 5) {
+                        switch viewState.typeFilter {
+                        case .all: EmptyView()
+                        case .text: Image(systemName: "text.alignleft")
+                        case .images: Image(systemName: "photo")
+                        case .links: Image(systemName: "link")
+                        }
+                        if viewState.showsPinnedOnly {
+                            Image(systemName: "pin.fill")
+                        }
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
                         .font(.caption)
-                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .background(Color.accentColor.opacity(0.1), in: Capsule())
                 }
                 .buttonStyle(.borderless)
                 .tint(.accentColor)
                 .accessibilityIdentifier("clipy.search.clear-filters")
                 .accessibilityLabel(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
                 .accessibilityValue(filterSummary)
-                .help(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
+                .help(filterSummary + " · " + PanelChromeCopy.text("Clear filters", bundle: copyBundle))
             }
         }
         .background { modeShortcuts }
@@ -94,37 +109,38 @@ struct SearchHeaderView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            TextField(PanelActionsCopy.text("Search clipboard…", bundle: copyBundle), text: searchTextBinding)
-                .textFieldStyle(.plain)
-                .focused(searchFieldFocused)
-                .autocorrectionDisabled(true)
-                .accessibilityIdentifier("clipy.search.field")
-                .accessibilityLabel(PanelActionsCopy.text("Search clipboard history", bundle: copyBundle))
-                .onSubmit(onSubmitSelection)
-                .onKeyPress(.downArrow) {
-                    onMoveSelection(1)
-                    return .handled
+            HistorySearchField(
+                text: searchTextBinding,
+                isFocused: searchFieldFocused,
+                placeholder: PanelActionsCopy.text("Search clipboard…", bundle: copyBundle),
+                accessibilityLabel: PanelActionsCopy.text("Search clipboard history", bundle: copyBundle),
+                onMoveSelection: onMoveSelection,
+                onSubmit: onSubmitSelection
+            )
+            // Keep the editor's width and text position stable as the user
+            // enters the first character or clears the query (V2-07 §3).
+            // The empty slot has no control or accessibility element.
+            ZStack {
+                if !viewState.searchText.isEmpty {
+                    Button {
+                        viewState.clearSearch()
+                        searchFieldFocused.wrappedValue = true
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 24, height: PanelContentFit.searchFieldHeight)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(PanelActionsCopy.text("Clear search", bundle: copyBundle))
+                    .accessibilityIdentifier("clipy.search.clear")
+                    .accessibilityLabel(PanelActionsCopy.text("Clear search", bundle: copyBundle))
+                    .accessibilityHint(
+                        PanelActionsCopy.text("Clears the query and keeps focus in search.", bundle: copyBundle)
+                    )
                 }
-                .onKeyPress(.upArrow) {
-                    onMoveSelection(-1)
-                    return .handled
-                }
-            if !viewState.searchText.isEmpty {
-                Button {
-                    viewState.clearSearch()
-                    searchFieldFocused.wrappedValue = true
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .contentShape(Rectangle())
-                .accessibilityIdentifier("clipy.search.clear")
-                .accessibilityLabel(PanelActionsCopy.text("Clear search", bundle: copyBundle))
-                .accessibilityHint(
-                    PanelActionsCopy.text("Clears the query and keeps focus in search.", bundle: copyBundle)
-                )
             }
+            .frame(width: 24, height: PanelContentFit.searchFieldHeight)
         }
         .padding(.horizontal, PanelTheme.spacingSmall)
         .frame(height: PanelContentFit.searchFieldHeight)
@@ -132,6 +148,12 @@ struct SearchHeaderView: View {
             .quaternary,
             in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
         )
+        .overlay {
+            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
+                .strokeBorder(searchFieldFocused.wrappedValue
+                    ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
     }
 
     /// Counts include traversed rows in the complete filtered query. A
@@ -158,6 +180,7 @@ struct SearchHeaderView: View {
                 Text(PanelActionsCopy.text("Fuzzy", bundle: copyBundle)).tag(SearchMode.fuzzy)
                 Text(PanelActionsCopy.text("Regular Expression", bundle: copyBundle)).tag(SearchMode.regexp)
             }
+            .pickerStyle(.inline)
         } label: {
             Group {
                 switch viewState.searchMode {
@@ -172,7 +195,7 @@ struct SearchHeaderView: View {
         .menuIndicator(.hidden)
         .foregroundStyle(viewState.searchMode == .fuzzy ? Color.secondary : Color.accentColor)
         .fixedSize()
-        .help(modeName(viewState.searchMode))
+        .help(PanelActionsCopy.text("Search Mode", bundle: copyBundle) + ": " + modeName(viewState.searchMode))
         .accessibilityIdentifier("clipy.search.mode")
         .accessibilityLabel(PanelActionsCopy.text("Search Mode", bundle: copyBundle))
         .accessibilityValue(modeName(viewState.searchMode))
@@ -204,10 +227,12 @@ struct SearchHeaderView: View {
             Divider()
             Toggle(PanelActionsCopy.text("Pinned Only", bundle: copyBundle), isOn: pinnedOnlyBinding)
         } label: {
-            Image(systemName: hasActiveFilters
-                ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(hasActiveFilters ? Color.accentColor : Color.secondary)
                 .frame(width: 24, height: 24)
+                .background(hasActiveFilters ? Color.accentColor.opacity(0.12) : .clear,
+                            in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall))
         }
         .fixedSize()
         .menuStyle(.borderlessButton)
@@ -275,7 +300,7 @@ private struct SearchHeaderViewPreview: View {
     @State private var viewState = HistoryViewState(
         history: PreviewClipboardHistory.populated
     )
-    @FocusState private var searchFieldFocused: Bool
+    @State private var searchFieldFocused = false
 
     var body: some View {
         SearchHeaderView(

@@ -54,6 +54,8 @@ struct ValueFieldRow: View {
 /// One label/control pair that stacks when its natural widths do not fit.
 /// Both layouts use the same subviews, so resizing never replaces the live
 /// TextField or its selection. No window-width breakpoint or duplicate field.
+/// Layout coordinates stay left-to-right: SwiftUI mirrors subview placement
+/// for RTL environments (LayoutSubviews.layoutDirection).
 struct SettingsFieldLayout: Layout {
     private let columnSpacing: CGFloat = 20
     private let rowSpacing: CGFloat = 8
@@ -101,8 +103,8 @@ internal enum SettingStatus: Equatable {
     case failure(String)
 }
 
-/// One-line status rendering; the icon pairs with the text so the outcome
-/// is never conveyed by color alone (V2-07 §9 point 3).
+/// Status text wraps to its full height in narrow settings panes; the icon
+/// pairs with text so the outcome is never conveyed by color alone (V2-07 §9).
 struct SettingStatusView: View {
 
     let status: SettingStatus
@@ -113,10 +115,12 @@ struct SettingStatusView: View {
             Label(message, systemImage: "checkmark.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         case .failure(let message):
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(.callout)
                 .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

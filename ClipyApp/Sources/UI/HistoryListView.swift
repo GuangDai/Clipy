@@ -154,14 +154,12 @@ struct HistoryListView: View {
         }
         // Real mouse movement (an NSTrackingArea, never SwiftUI hover —
         // which also fires when content scrolls beneath a STATIONARY
-        // pointer) restores pointer control of the selection; arrow keys
-        // restore keyboard intent. `.ignored` lets the List's own arrow
-        // navigation proceed.
-        .onKeyPress(.upArrow) {
-            onKeyboardNavigation()
-            return .ignored
-        }
-        .onKeyPress(.downArrow) {
+        // pointer) restores pointer control of the selection. Paging and
+        // beginning/end keys also scroll rows beneath that pointer, so they
+        // must establish keyboard intent before native scrolling (V2-07 §9).
+        // This list-scoped handler leaves search/editor text input alone;
+        // `.ignored` preserves native key bindings and scroll behavior.
+        .onKeyPress(keys: [.upArrow, .downArrow, .pageUp, .pageDown, .home, .end]) { _ in
             onKeyboardNavigation()
             return .ignored
         }

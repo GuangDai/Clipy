@@ -94,7 +94,7 @@ struct HistoryRowView: View {
         self.onShowDetails = onShowDetails
     }
 
-    var body: some View {
+    private var rowLayout: some View {
         HStack(alignment: .center, spacing: PanelTheme.spacingSmall) {
             thumbnail
             VStack(alignment: .leading, spacing: PanelTheme.spacingXXSmall) {
@@ -114,7 +114,7 @@ struct HistoryRowView: View {
                     Text(MatchHighlighting.highlighted(snippet, ranges: search.matchedRanges))
                         .font(PanelTheme.snippetFont(for: fontSize))
                         .foregroundStyle(.secondary)
-                        .lineLimit(snippetLineCount.baseLineLimit(density: density))
+                        .lineLimit(rowDescriptor.snippetLineCount)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -125,13 +125,23 @@ struct HistoryRowView: View {
         // Like Maccy's ListItemView, the row's dimensions depend only on
         // content kind/typography, never on the asynchronous thumbnail.
         .frame(height: PanelContentFit.rowHeight(
-            .init(row: row, snippetLineLimit: snippetLineCount.baseLineLimit(density: density)),
+            rowDescriptor,
             density: density, fontSize: fontSize
         ) - 2 * PanelContentFit.listRowVerticalInset)
         .background {
             RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
-                .fill(isHovered && !isSelected ? Color.primary.opacity(0.045) : .clear)
+                .fill(isSelected ? Color.accentColor.opacity(0.12)
+                    : (isHovered ? Color.primary.opacity(0.045) : .clear))
         }
+        .overlay {
+            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
+                .strokeBorder(isSelected ? Color.accentColor.opacity(0.35) : .clear, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+    }
+
+    var body: some View {
+        rowLayout
         .background {
             if dragSource != nil { HistoryRowDragRegion(view: dragRegion) }
         }
@@ -151,7 +161,7 @@ struct HistoryRowView: View {
         .contextMenu { contextMenu }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("clipy.history.row.\(row.item.id.description)")
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(rowAccessibilityTraits)
         .accessibilityValue(copyAccessibilityLabel)
         .accessibilityAction {
             performAccessibilityAction(.paste)
@@ -169,6 +179,16 @@ struct HistoryRowView: View {
     }
 
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
+
+    private var rowAccessibilityTraits: AccessibilityTraits {
+        isSelected ? [.isButton, .isSelected] : .isButton
+    }
+
+    /// Rendering and content fitting share the same line counts so explicit
+    /// multi-line preferences cannot outgrow the row's fixed frame (V2-11).
+    private var rowDescriptor: PanelContentFit.RowDescriptor {
+        .init(row: row, snippetLineLimit: snippetLineCount.baseLineLimit(density: density))
+    }
 
     // MARK: Accessibility action dispatch (V2-07 §9)
 
@@ -358,6 +378,7 @@ struct HistoryRowView: View {
             .font(PanelTheme.metadataFont(for: fontSize))
             .foregroundStyle(.secondary)
             .fixedSize()
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(PanelActionsCopy.pinnedPosition(ordinal, bundle: copyBundle, locale: locale))
         }
     }
@@ -371,8 +392,9 @@ struct HistoryRowView: View {
         Text(displayedTitle)
             .font(PanelTheme.titleFont(for: fontSize))
             .fontWeight(.regular)
-            .lineLimit(row.search?.snippet == nil ? snippetLineCount.baseLineLimit(density: density) : 1)
+            .lineLimit(rowDescriptor.titleLineCount)
             .multilineTextAlignment(.leading)
+            .help(row.title)
     }
 
     private var displayedTitle: AttributedString {

@@ -6,6 +6,85 @@ import Testing
 
 @MainActor
 struct PreviewTextLayoutTests {
+    @Test func nativeSegmentKeepsSelectableBytesAndRemeasuresWrapping() throws {
+        let source = String(repeating: "Café e\u{301} selectable words 中文。 ", count: 12)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: segmentViewport(source))
+        host.sizingOptions = []
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+
+        let field = try #require(textField(in: host))
+        #expect(field.stringValue.utf8.elementsEqual(source.utf8))
+        #expect(field.isSelectable)
+        #expect(!field.isEditable)
+        #expect(field.maximumNumberOfLines == 0)
+        let originalHeight = field.frame.height
+
+        window.setContentSize(NSSize(width: 180, height: 480))
+        host.layoutSubtreeIfNeeded()
+        #expect(field.frame.height > originalHeight)
+        let cell = try #require(field.cell)
+        let completeSize = cell.cellSize(forBounds: NSRect(
+            x: 0, y: 0, width: field.bounds.width, height: .greatestFiniteMagnitude
+        ))
+        #expect(field.bounds.height >= completeSize.height)
+        #expect(field.stringValue.utf8.elementsEqual(source.utf8))
+
+        field.selectText(nil)
+        let editor = try #require(field.currentEditor() as? NSTextView)
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        #expect(editor.selectedRange() == NSRange(location: 0, length: (source as NSString).length))
+        let copiedEntireValue = editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes)
+        #expect(copiedEntireValue)
+        #expect(pasteboard.string(forType: .string).map { Data($0.utf8) } == Data(source.utf8))
+        // Copy through visual wraps without changing the composed/decomposed
+        // spellings or introducing presentation-only line breaks.
+        let range = NSRange(location: 0, length: (source as NSString).length - 2)
+        editor.setSelectedRange(range)
+        pasteboard.clearContents()
+        let copiedRange = editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes)
+        #expect(copiedRange)
+        #expect(pasteboard.string(forType: .string).map { Data($0.utf8) }
+            == Data((source as NSString).substring(with: range).utf8))
+        window.endEditing(for: nil)
+
+        host.rootView = segmentViewport(source, direction: .rightToLeft)
+        host.layoutSubtreeIfNeeded()
+        let rightToLeftField = try #require(textField(in: host))
+        #expect(rightToLeftField.alignment == .right)
+        host.rootView = segmentViewport("Replacement")
+        host.layoutSubtreeIfNeeded()
+        let replacement = try #require(textField(in: host))
+        #expect(replacement.stringValue == "Replacement")
+        #expect(replacement.alignment == .left)
+        #expect(replacement.frame.height < originalHeight)
+
+        host.rootView = segmentViewport(String(repeating: "\u{301}", count: 64))
+        host.layoutSubtreeIfNeeded()
+        let combiningField = try #require(textField(in: host))
+        #expect(combiningField.frame.height > 0)
+    }
+
+    private func segmentViewport(_ source: String, direction: LayoutDirection = .leftToRight) -> some View {
+        PreviewTextBody(segments: [source[...]], maximumHeight: 480)
+            .environment(\.layoutDirection, direction)
+    }
+
+    private func textField(in view: NSView) -> NSTextField? {
+        if let field = view as? NSTextField,
+           field.accessibilityIdentifier() == "clipy.preview.text" { return field }
+        for child in view.subviews {
+            if let field = textField(in: child) { return field }
+        }
+        return nil
+    }
+
     @Test func longTextLayoutFitsTwoFramesAfterWarmup() async throws {
         // Exercise the same view as both preview surfaces, including native
         // hosting, constrained-width layout and drawing. Renderer-only timing
@@ -39,7 +118,11 @@ struct PreviewTextLayoutTests {
             #if DEBUG
             var preview = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480)
             var materialized: Set<Int> = []
-            preview.onSegmentMaterialized = { materialized.insert($0) }
+            var materializationCalls = 0
+            preview.onSegmentMaterialized = {
+                materialized.insert($0)
+                materializationCalls += 1
+            }
             #else
             let preview = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480)
             #endif
@@ -52,7 +135,7 @@ struct PreviewTextLayoutTests {
             let elapsed = start.duration(to: .now)
             print("Preview initial layout: \(elapsed), UTF-16 units: \(source.utf16.count)")
             #if DEBUG
-            print("[DEBUG-preview-layout] materialized=\(materialized.count) total=\(text.displaySegments.count)")
+            print("[DEBUG-preview-layout] materialized=\(materialized.count) total=\(text.displaySegments.count) calls=\(materializationCalls)")
             #endif
             #expect(elapsed < .milliseconds(34))
             // Whole-process figures are observations, not per-view memory

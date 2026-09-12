@@ -1,4 +1,4 @@
-/// Real EN/ZH regular-expression search at the product's 360-point minimum
+/// Real EN/ZH regular-expression search in a narrow 320-point panel
 /// width. Verifies compact controls, filter clearing and continuous input.
 /// The preview is a floating child window now, so the width invariant is
 /// proven while the dwell-presented pane is on screen: the pane never
@@ -13,12 +13,12 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    func testEnglishRegularExpressionSearchRemainsUsableAtMinimumWidth() throws {
+    func testEnglishRegularExpressionSearchRemainsUsableAtNarrowWidth() throws {
         try exerciseSearch(language: "en", locale: "en_US")
     }
 
     @MainActor
-    func testChineseRegularExpressionSearchRemainsUsableAtMinimumWidth() throws {
+    func testChineseRegularExpressionSearchRemainsUsableAtNarrowWidth() throws {
         try exerciseSearch(language: "zh-Hans", locale: "zh_CN")
     }
 
@@ -36,6 +36,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-AppleLanguages", "(\(language))", "-AppleLocale", locale,
+            "-clipy.appearance.previewAutoOpen", "YES",
         ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
@@ -47,42 +48,25 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
 
-        // Arm the real auto-open preference: a prior journey may have left
-        // it disabled, and the width invariant below is proven WHILE the
-        // floating preview pane is on screen. No manual preview chord
-        // substitutes for the dwell transition.
-        app.typeKey(",", modifierFlags: .command)
-        let appearance = app.buttons["clipy.settings.category.appearance"]
-        XCTAssertTrue(appearance.waitForExistence(timeout: 10), app.debugDescription)
-        appearance.click()
-        let autoOpen = app.switches["clipy.settings.appearance.preview-auto-open"]
-        XCTAssertTrue(autoOpen.waitForExistence(timeout: 5), app.debugDescription)
-        if (autoOpen.value as? Int) == 0 { autoOpen.click() }
-        XCTAssertTrue(waitUntil { (autoOpen.value as? Int) == 1 }, app.debugDescription)
-        let general = app.buttons["clipy.settings.category.general"]
-        XCTAssertTrue(general.exists, app.debugDescription)
-        general.click()
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(waitUntil { !general.exists }, app.debugDescription)
-        app.typeKey("c", modifierFlags: [.command, .shift])
-        XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
-
-        if panel.frame.width > 363 {
-            // Use the actual resizable NSPanel edge. Drag beyond the minimum
-            // so AppKit applies the product's 360-point resize constraint.
+        // Launch arguments arm production dwell for this process; the
+        // width proof still requires the real floating pane to appear.
+        let narrowWidth: CGFloat = 320
+        if abs(panel.frame.width - narrowWidth) > 3 {
+            // V2-11 permits freely chosen widths. Drag to the intended
+            // test width instead of relying on an obsolete minimum clamp.
             let edge = panel.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.75))
                 .withOffset(CGVector(dx: -1, dy: 0))
             edge.press(forDuration: 0.1, thenDragTo: edge.withOffset(CGVector(
-                dx: -(panel.frame.width - 360 + 80), dy: 0
+                dx: narrowWidth - panel.frame.width, dy: 0
             )))
         }
         // The preview is a separate floating child window now
         // (`clipy.panel.floatingPreview`): it never extends the main panel,
         // so while the dwell-presented pane is on screen the browsing column
-        // still holds its 360-point product minimum.
+        // still holds the user's chosen 320-point width.
         let preview = app.descendants(matching: .any)["clipy.panel.floatingPreview"]
         XCTAssertTrue(waitUntil {
-            preview.exists && abs(panel.frame.width - 360) <= 3
+            preview.exists && abs(panel.frame.width - narrowWidth) <= 3
         }, app.debugDescription)
         let search = app.textFields["clipy.search.field"]
         let mode = panel.descendants(matching: .any)["clipy.search.mode"]
@@ -91,9 +75,10 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
             format: "identifier BEGINSWITH %@", "clipy.history.row."
         ))
         XCTAssertTrue(waitUntil { rows.count == 1 }, app.debugDescription)
+        let emptySearchFrame = search.frame
 
         // No mouse focus repair: compact mode controls preserve the active
-        // editor and every subsequent query character at the minimum width.
+        // editor and every subsequent query character at the narrow width.
         app.typeKey("3", modifierFlags: .command)
         app.typeText("^clipy.*alpha$")
         let clear = app.buttons["clipy.search.clear"]
@@ -102,6 +87,10 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
                 && clear.exists && clear.isHittable
                 && search.frame.width >= 140
         }, app.debugDescription)
+        XCTAssertEqual(search.frame.width, emptySearchFrame.width, accuracy: 1, app.debugDescription)
+        XCTAssertEqual(search.frame.minX, emptySearchFrame.minX, accuracy: 1, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(clear.frame.width, 24, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(clear.frame.height, 24, app.debugDescription)
         for control in [search, clear, mode, filter] {
             XCTAssertTrue(control.isHittable, app.debugDescription)
             XCTAssertTrue(panel.frame.insetBy(dx: -2, dy: -2).contains(control.frame), app.debugDescription)
@@ -111,6 +100,8 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         XCTAssertFalse(search.frame.intersects(filter.frame), app.debugDescription)
 
         clear.click()
+        XCTAssertTrue(waitUntil { !clear.exists && search.value as? String == "" }, app.debugDescription)
+        XCTAssertEqual(search.frame.width, emptySearchFrame.width, accuracy: 1, app.debugDescription)
         app.typeText("alpha")
         XCTAssertTrue(waitUntil {
             search.value as? String == "alpha" && rows.count == 1

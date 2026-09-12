@@ -36,7 +36,7 @@
 "Panel position and size changes apply the next time the panel opens." = "面板位置和大小的更改将在下次打开面板时生效。";
 "List" = "列表";
 "Row density" = "行密度";
-"Snippet lines" = "摘要行数";
+"Text lines" = "文本行数";
 "Font size" = "字号";
 "Compact" = "紧凑";
 "Comfortable" = "舒适";
@@ -48,3 +48,10 @@
 "Under Menu Bar Icon" = "菜单栏图标下方";
 "At Screen Center" = "屏幕中央";
 "At Last Position" = "上次位置";
+"Reset Preview Settings" = "重置预览设置";
+"Panel size reset. Reopen the panel to use the default size." = "面板大小已重置。重新打开面板即可使用默认大小。";
+"Clearing history…" = "正在清空历史记录…";
+"Panel gap" = "面板间距";
+"Reading notes — collect useful ideas, save a link, and pick up where you left off." = "阅读笔记——收集有用的想法，保存链接，下次从上次读到的地方继续。";
+"Weekend itinerary.pdf" = "周末行程.pdf";
+"List sample" = "列表示例";

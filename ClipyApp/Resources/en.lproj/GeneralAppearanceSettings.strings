@@ -36,7 +36,7 @@
 "Panel position and size changes apply the next time the panel opens." = "Panel position and size changes apply the next time the panel opens.";
 "List" = "List";
 "Row density" = "Row density";
-"Snippet lines" = "Snippet lines";
+"Text lines" = "Text lines";
 "Font size" = "Font size";
 "Compact" = "Compact";
 "Comfortable" = "Comfortable";
@@ -48,3 +48,10 @@
 "Under Menu Bar Icon" = "Under Menu Bar Icon";
 "At Screen Center" = "At Screen Center";
 "At Last Position" = "At Last Position";
+"Reset Preview Settings" = "Reset Preview Settings";
+"Panel size reset. Reopen the panel to use the default size." = "Panel size reset. Reopen the panel to use the default size.";
+"Clearing history…" = "Clearing history…";
+"Panel gap" = "Panel gap";
+"Reading notes — collect useful ideas, save a link, and pick up where you left off." = "Reading notes — collect useful ideas, save a link, and pick up where you left off.";
+"Weekend itinerary.pdf" = "Weekend itinerary.pdf";
+"List sample" = "List sample";

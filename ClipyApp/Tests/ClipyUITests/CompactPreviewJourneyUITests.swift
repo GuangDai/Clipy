@@ -24,6 +24,9 @@ final class CompactPreviewJourneyUITests: XCTestCase {
         app.launchArguments += [
             "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
             "-clipy.appearance.previewAutoOpen", "YES",
+            // Keep the long fixture intact when measuring content fitting.
+            "-clipy.preview.isTextLengthLimited", "YES",
+            "-clipy.preview.maximumTextCharacters", "50000",
             "-clipy.appearance.rowDensity", "compact",
             "-clipy.appearance.rowFontSize", "medium",
             "-clipy.panelContentWidth", "360", "-clipy.panelHeight", "420",

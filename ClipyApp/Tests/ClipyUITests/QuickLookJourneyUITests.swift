@@ -25,6 +25,7 @@ final class QuickLookJourneyUITests: XCTestCase {
         let beta = "clipy-quicklook-beta"
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
+        defer { pasteboard.clearContents() }
         XCTAssertTrue(pasteboard.setString(alpha, forType: .string))
 
         let directory = FileManager.default.temporaryDirectory
@@ -32,7 +33,12 @@ final class QuickLookJourneyUITests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         temporaryDirectory = directory
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        // Exact preview text must not inherit a previous custom length.
+        app.launchArguments += [
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-clipy.preview.isTextLengthLimited", "YES",
+            "-clipy.preview.maximumTextCharacters", "50000",
+        ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store").path
@@ -78,7 +84,28 @@ final class QuickLookJourneyUITests: XCTestCase {
         alphaRow.click()
         app.typeKey(.space, modifierFlags: [])
         assertQuickLook(alpha, in: quickLook, app: app)
+        let attachment = XCTAttachment(screenshot: panel.screenshot())
+        attachment.name = "Quick Look — Item identity and content"
+        attachment.lifetime = .keepAlways
+        add(attachment)
         XCTAssertEqual(search.value as? String, "")
+        // The underlying list is disabled. The visible preview owns ⌘P,
+        // and its authoritative footer must reflect both committed changes.
+        let pin = quickLook.buttons["clipy.preview.pin"]
+        XCTAssertTrue(waitUntil { pin.exists && pin.isEnabled && pin.label == "Pin" }, app.debugDescription)
+        app.typeKey("p", modifierFlags: .command)
+        XCTAssertTrue(waitUntil { pin.isEnabled && pin.label == "Unpin" }, app.debugDescription)
+        assertQuickLook(alpha, in: quickLook, app: app)
+        app.typeKey("p", modifierFlags: .command)
+        XCTAssertTrue(waitUntil { pin.isEnabled && pin.label == "Pin" }, app.debugDescription)
+
+        // The same Space that opens Quick Look also closes it; disabled
+        // background shortcuts cannot supply this second half of the toggle.
+        app.typeKey(.space, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !quickLook.exists }, app.debugDescription)
+        XCTAssertTrue(panel.exists, app.debugDescription)
+        app.typeKey(.space, modifierFlags: [])
+        assertQuickLook(alpha, in: quickLook, app: app)
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil { !quickLook.exists }, app.debugDescription)
         XCTAssertTrue(panel.exists, "Escape must dismiss Quick Look before closing the panel.\n\(app.debugDescription)")
@@ -90,6 +117,8 @@ final class QuickLookJourneyUITests: XCTestCase {
         assertQuickLook(beta, in: quickLook, app: app)
         let close = quickLook.buttons["clipy.panel.quicklook.dismiss"]
         XCTAssertTrue(close.isHittable, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(close.frame.width, 24)
+        XCTAssertGreaterThanOrEqual(close.frame.height, 24)
         close.click()
         XCTAssertTrue(waitUntil { !quickLook.exists }, app.debugDescription)
 
@@ -116,6 +145,10 @@ final class QuickLookJourneyUITests: XCTestCase {
     @MainActor
     private func assertQuickLook(_ expected: String, in overlay: XCUIElement, app: XCUIApplication) {
         XCTAssertTrue(overlay.waitForExistence(timeout: 5), app.debugDescription)
+        let title = overlay.staticTexts["clipy.panel.quicklook.title"]
+        XCTAssertTrue(title.exists, app.debugDescription)
+        let titleText = (title.value as? String).flatMap { $0.isEmpty ? nil : $0 } ?? title.label
+        XCTAssertEqual(titleText, expected)
         // Scope beneath Quick Look: the side pane uses the same preview IDs
         // and may be open because of the normal selection dwell.
         let text = overlay.descendants(matching: .any)["clipy.preview.text"]
@@ -128,6 +161,7 @@ final class QuickLookJourneyUITests: XCTestCase {
 
     @MainActor
     private func waitUntil(_ condition: @escaping () -> Bool) -> Bool {
+        if condition() { return true }
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in condition() }, object: nil
         )

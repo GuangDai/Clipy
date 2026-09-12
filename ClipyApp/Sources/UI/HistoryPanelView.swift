@@ -507,7 +507,7 @@ struct HistoryPanelView: View {
     @State private var surfaceState: HistoryPanelSurfaceState
     @State private var dismissedFailureEpisode: Int?
     @State private var pendingClear: ClearScope?
-    @FocusState private var isSearchFieldFocused: Bool
+    @State private var isSearchFieldFocused = false
 
     /// The app-facing entry point. Calls that do not name `sourceIcons:`
     /// resolve here because the designated initializer below requires that
@@ -599,8 +599,6 @@ struct HistoryPanelView: View {
             .onChange(of: surfaceState.memoryPressureGeneration, initial: true) { _, _ in
                 sourceIcons?.respondToMemoryPressure(surfaceState.memoryPressure)
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("clipy.panel.root")
             .background { hiddenShortcuts }
             .task(id: surfaceState.sessionGeneration) {
                 guard surfaceState.isSessionActive else { return }
@@ -642,6 +640,9 @@ struct HistoryPanelView: View {
             .onChange(of: surfaceState.isSessionActive, initial: true) { _, isActive in
                 sourceIcons?.isSurfaceActive = isActive
                 if !isActive { isSearchFieldFocused = false }
+            }
+            .onChange(of: surfaceState.isAtListRoot) { _, isAtRoot in
+                isSearchFieldFocused = isAtRoot && surfaceState.isSessionActive
             }
             .onChange(of: surfaceState.selection) { _, newSelection in
                 previewState.handleSelectionChange(
@@ -747,67 +748,47 @@ struct HistoryPanelView: View {
 
     // MARK: Main column
 
-    /// The browsing column: search header, the list in its details
-    /// NavigationStack and failure banner. Search and secondary actions share
-    /// one compact toolbar; the list absorbs the remaining window height.
+    /// Search and secondary actions share the list's compact toolbar.
+    /// Details and its editor own their navigation and window drag surface.
+    private var browsingHeader: some View {
+        HStack(alignment: .top, spacing: PanelTheme.spacingXSmall) {
+            SearchHeaderView(
+                viewState: viewState,
+                searchFieldFocused: $isSearchFieldFocused,
+                onMoveSelection: { offset in
+                    surfaceState.moveSelection(
+                        in: displayedSelectionRows,
+                        direction: offset < 0 ? .previous : .next
+                    )
+                },
+                onSubmitSelection: {
+                    guard let selected = surfaceState.selectedReference(
+                        in: viewState.displayedRows
+                    )
+                    else { return }
+                    viewState.requestPasteFromDisplayedRow(selected)
+                }
+            )
+            panelActions
+        }
+        .padding(.horizontal, PanelTheme.headerHorizontalPadding)
+        .padding(.top, PanelTheme.headerTopPadding)
+        .padding(.bottom, PanelTheme.headerBottomPadding)
+        .background {
+            // Only the header's empty background drags the window;
+            // foreground search controls keep their own interactions.
+            // List drag-out remains independent.
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(WindowDragGesture())
+                .allowsWindowActivationEvents()
+        }
+    }
+
     private var mainColumn: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: PanelTheme.spacingXSmall) {
-                SearchHeaderView(
-                    viewState: viewState,
-                    searchFieldFocused: $isSearchFieldFocused,
-                    onMoveSelection: { offset in
-                        surfaceState.moveSelection(
-                            in: displayedSelectionRows,
-                            direction: offset < 0 ? .previous : .next
-                        )
-                    },
-                    onSubmitSelection: {
-                        guard let selected = surfaceState.selectedReference(
-                            in: viewState.displayedRows
-                        )
-                        else { return }
-                        viewState.requestPasteFromDisplayedRow(selected)
-                    }
-                )
-                panelActions
-            }
-            .padding(.horizontal, PanelTheme.headerHorizontalPadding)
-            .padding(.top, PanelTheme.headerTopPadding)
-            .padding(.bottom, PanelTheme.headerBottomPadding)
-            .background {
-                // Only the header's empty background drags the window;
-                // foreground search controls keep their own interactions.
-                // List drag-out remains independent.
-                Color.clear
-                    .contentShape(Rectangle())
-                    .gesture(WindowDragGesture())
-                    .allowsWindowActivationEvents()
-            }
-
             NavigationStack(path: $surfaceState.detailsPath) {
-                HistoryListView(
-                    viewState: viewState,
-                    thumbnails: surfaceState.thumbnails,
-                    density: appearance.rowDensity,
-                    snippetLineCount: appearance.snippetLineCount,
-                    fontSize: appearance.rowFontSize,
-                    isSearchFieldFocused: isSearchFieldFocused,
-                    selection: $surfaceState.selection,
-                    onFocusHistory: {
-                        isSearchFieldFocused = false
-                        // An actual click is a choice, not pointer transit.
-                        // Publish it before a subsequent preview-button click.
-                        previewState.handleSelectionChange(
-                            surfaceState.selectedReference(in: viewState.displayedRows),
-                            isExplicit: true
-                        )
-                    },
-                    onHoverRow: { id in surfaceState.handleRowHover(id) },
-                    onKeyboardNavigation: { surfaceState.noteKeyboardNavigation() },
-                    onPointerMovement: { surfaceState.notePointerMovement() },
-                    onShowDetails: { item in surfaceState.detailsPath.append(item) }
-                )
+                browsingRoot
                 .navigationDestination(for: HistoryItemReference.self) { item in
                     HistoryDetailsView(
                         viewState: viewState,
@@ -832,6 +813,41 @@ struct HistoryPanelView: View {
             .easeInOut(duration: 0.18),
             value: isFailureBannerVisible
         )
+    }
+
+    /// Search and list share the retained navigation destination (V2-11).
+    /// The native field applies the explicit search-focus binding on Back.
+    private var browsingRoot: some View {
+        VStack(spacing: 0) {
+            browsingHeader
+
+            HistoryListView(
+                viewState: viewState,
+                thumbnails: surfaceState.thumbnails,
+                density: appearance.rowDensity,
+                snippetLineCount: appearance.snippetLineCount,
+                fontSize: appearance.rowFontSize,
+                isSearchFieldFocused: isSearchFieldFocused,
+                selection: $surfaceState.selection,
+                onFocusHistory: {
+                    isSearchFieldFocused = false
+                    // An actual click is a choice, not pointer transit.
+                    // Publish it before a subsequent preview-button click.
+                    previewState.handleSelectionChange(
+                        surfaceState.selectedReference(in: viewState.displayedRows),
+                        isExplicit: true
+                    )
+                },
+                onHoverRow: { id in surfaceState.handleRowHover(id) },
+                onKeyboardNavigation: { surfaceState.noteKeyboardNavigation() },
+                onPointerMovement: { surfaceState.notePointerMovement() },
+                onShowDetails: { item in surfaceState.detailsPath.append(item) }
+            )
+        }
+        // Attach the browsing group to the actual navigation destination;
+        // NavigationStack does not preserve an outer wrapper's AX group.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.panel.root")
     }
 
     /// One lookup supplies both list reconciliation and preview's exact
@@ -1043,9 +1059,17 @@ struct HistoryPanelView: View {
                 }
                 .keyboardShortcut("q", modifiers: .command)
             } label: {
-                Image(systemName: keepPanelOpenIsActive ? "pin.fill" : "ellipsis")
-                    .foregroundStyle(keepPanelOpenIsActive ? Color.accentColor : Color.secondary)
+                Image(systemName: "ellipsis")
+                    .foregroundStyle(.secondary)
                     .frame(width: 24, height: 24)
+                    .overlay(alignment: .bottomTrailing) {
+                        if keepPanelOpenIsActive {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .accessibilityHidden(true)
+                        }
+                    }
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)

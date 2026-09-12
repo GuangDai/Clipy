@@ -296,20 +296,25 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
                 pasteboard.writeObjects([item]),
                 diagnostic(app, context: "write pasteboard item \(index)")
             )
+            var capturedIdentifier: String?
             XCTAssertTrue(
                 waitUntil(timeout: 20) {
                     let firstRow = rows.element(boundBy: 0)
                     guard firstRow.exists else { return false }
                     let identifier = firstRow.identifier
-                    return !identifier.isEmpty
-                        && identifier != lastFirstRowIdentifier
+                    guard !identifier.isEmpty,
+                          identifier != lastFirstRowIdentifier else { return false }
+                    capturedIdentifier = identifier
+                    return true
                 },
                 diagnostic(
                     app,
                     context: "capture \(index + 1)/\(count) surfaced a new row"
                 )
             )
-            lastFirstRowIdentifier = rows.element(boundBy: 0).identifier
+            // Reuse the exact row that acknowledged this capture. A second
+            // AX query repeats the expensive row lookup after every PNG.
+            lastFirstRowIdentifier = try XCTUnwrap(capturedIdentifier)
             identifiers.append(lastFirstRowIdentifier)
         }
         return identifiers
@@ -635,6 +640,9 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         timeout: TimeInterval,
         condition: @escaping () -> Bool
     ) -> Bool {
+        // Capture can finish while the preceding AX query settles. Avoid
+        // another initial polling interval when its new row already exists.
+        if condition() { return true }
         let expectation = XCTNSPredicateExpectation(
             predicate: NSPredicate { _, _ in condition() },
             object: nil

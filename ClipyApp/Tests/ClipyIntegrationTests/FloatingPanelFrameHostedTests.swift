@@ -3,8 +3,9 @@
 /// production `PanelRootView`; assertions observe only the real `NSPanel`
 /// frames, never SwiftUI/AX/private trees.
 ///
-/// The test opens through `.statusItem` with synthetic screen-space button
-/// rectangles, so persisted `.lastPosition` state is neither read nor needed.
+/// Most tests open through `.statusItem` with synthetic screen-space button
+/// rectangles. Placement regressions also exercise `.center` and `.lastPosition`
+/// on the pointer's display, without moving the system pointer.
 /// This proves same-process frame behavior only. It does not prove
 /// WindowServer animation/rendering, cross-Space behavior, accessibility, or
 /// the remaining Card 9C/9F acceptance cells.
@@ -24,8 +25,8 @@
 /// itself remains unproved here. The fit tests drive `fitToContent`
 /// directly (the AppDelegate's coalesced caller is thin wiring) and pin
 /// the top-edge-pinned, floor/ceiling-clamped, live-resize-suspended
-/// semantics; the persisted height is the content-fit CEILING, so a reopen
-/// starts at the ceiling and re-fits from the retained demand.
+/// semantics; the persisted height is the content-fit CEILING. Reopening
+/// positions the content-fitted frame when a retained demand is available.
 import AppKit
 import Testing
 @testable import ClipyApp
@@ -396,8 +397,8 @@ struct FloatingPanelFrameHostedTests {
         #expect(panel.frame.height == 300)
         #expect(panel.frame.maxY == draggedTop)
 
-        // Reopening starts at the persisted ceiling, then the retained
-        // demand fits the height again.
+        // Reopening uses the retained fitted height and preserves the
+        // persisted ceiling for future content.
         panel.close()
         panel.open(at: .statusItem, statusItemButtonScreenFrame: button)
         #expect(PanelGeometry.persistedSize(from: .standard).height == 640)
@@ -493,6 +494,97 @@ struct FloatingPanelFrameHostedTests {
         // Future content can still grow into the user's original ceiling.
         panel.fitToContent(idealHeight: 600)
         #expect(panel.frame.height == 420)
+    }
+
+    @Test func heightOnlyResizePreservesThePreferredWidthOnASmallerDisplay() throws {
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visible = screen.visibleFrame
+        try #require(visible.height >= 420)
+        let restore = isolatePersistedPanelGeometryKeys()
+        defer { restore() }
+        let preferredWidth = visible.width + 500
+        PanelGeometry.persistSize(contentWidth: preferredWidth, height: 420, to: .standard)
+        let appDelegate = AppDelegate()
+        let panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState, onClosed: {}
+        )
+        defer { panel.close() }
+        let button = NSRect(x: visible.minX, y: visible.maxY - 1, width: 1, height: 1)
+        panel.open(at: .statusItem, statusItemButtonScreenFrame: button)
+        #expect(panel.frame.width == visible.width)
+
+        panel.windowWillStartLiveResize(
+            Notification(name: NSWindow.willStartLiveResizeNotification, object: panel)
+        )
+        var resized = panel.frame
+        resized.size.height = 300
+        resized.origin.y = panel.frame.maxY - resized.height
+        panel.setFrame(resized, display: false)
+        panel.windowDidEndLiveResize(
+            Notification(name: NSWindow.didEndLiveResizeNotification, object: panel)
+        )
+        let saved = PanelGeometry.persistedSize(from: .standard)
+        #expect(saved.contentWidth == preferredWidth)
+        #expect(saved.height == 300)
+        #expect(panel.frame.width == visible.width)
+        panel.close()
+        panel.open(at: .statusItem, statusItemButtonScreenFrame: button)
+        #expect(panel.frame.width == visible.width)
+        #expect(PanelGeometry.persistedSize(from: .standard).contentWidth == preferredWidth)
+    }
+
+    @Test func centeredOpenPositionsTheFittedContentRatherThanItsCeiling() throws {
+        let visible = try #require(PopupPositionGeometry.targetVisibleFrame(
+            for: .center, statusItemButtonScreenFrame: nil,
+            mouseLocation: NSEvent.mouseLocation,
+            screens: NSScreen.screens.map { (frame: $0.frame, visibleFrame: $0.visibleFrame) }
+        ))
+        try #require(visible.width >= 360 && visible.height >= 420)
+        let restore = isolatePersistedPanelGeometryKeys()
+        defer { restore() }
+        let appDelegate = AppDelegate()
+        let panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState, onClosed: {}
+        )
+        defer { panel.close() }
+        panel.fitToContent(idealHeight: 80)
+        panel.open(at: .center, statusItemButtonScreenFrame: nil)
+        #expect(panel.frame.height == 80)
+        // AppKit may align window origins to a backing pixel.
+        #expect(abs(panel.frame.midX - visible.midX) <= 1)
+        #expect(abs(panel.frame.midY - visible.midY) <= 1)
+        #expect(PanelGeometry.persistedSize(from: .standard).height == 420)
+    }
+
+    @Test func lastPositionNearTheBottomDoesNotShiftUpToFitAnUnusedCeiling() throws {
+        let visible = try #require(PopupPositionGeometry.targetVisibleFrame(
+            for: .lastPosition, statusItemButtonScreenFrame: nil,
+            mouseLocation: NSEvent.mouseLocation,
+            screens: NSScreen.screens.map { (frame: $0.frame, visibleFrame: $0.visibleFrame) }
+        ))
+        try #require(visible.width >= 360 && visible.height >= 420)
+        let restore = isolatePersistedPanelGeometryKeys()
+        defer { restore() }
+        // The short content fits here; the taller default ceiling would not.
+        UserDefaults.standard.set(0.5, forKey: "clipy.panelAnchorX")
+        UserDefaults.standard.set(Double(200 / visible.height), forKey: "clipy.panelAnchorY")
+        let appDelegate = AppDelegate()
+        let panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState, onClosed: {}
+        )
+        defer { panel.close() }
+        panel.fitToContent(idealHeight: 80)
+        panel.open(at: .lastPosition, statusItemButtonScreenFrame: nil)
+        #expect(panel.frame.height == 80)
+        #expect(abs(panel.frame.maxY - (visible.minY + 200)) <= 1)
+        let positioned = panel.frame
+        panel.close()
+        panel.open(at: .lastPosition, statusItemButtonScreenFrame: nil)
+        #expect(panel.frame == positioned)
+        #expect(PanelGeometry.persistedSize(from: .standard).height == 420)
     }
 
     @Test func wideWindowUsesScreenLimitsAndKeepsItsSizeThroughPreview() throws {

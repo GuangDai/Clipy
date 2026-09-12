@@ -41,11 +41,15 @@ public struct PreviewText: Equatable, Sendable {
                 // sequence is split at scalar boundaries, without dropping or
                 // normalizing any bytes. Substrings share the immutable text
                 // buffer; only visible segments become native text strings.
+                // Combining-only segments occupy little vertical space, so
+                // the first viewport materializes many of them. Use smaller
+                // shaping work units for this exceptional grapheme (01 §6).
+                let scalarBudget = min(budget, 64)
                 var scalarIndex = index
                 while scalarIndex != next {
                     let scalar = text.unicodeScalars[scalarIndex]
                     let width = scalar.value > 0xFFFF ? 2 : 1
-                    if units + width > budget {
+                    if units + width > scalarBudget {
                         segments.append(text[start..<scalarIndex])
                         start = scalarIndex
                         units = 0

@@ -68,6 +68,20 @@ final class FloatingPreviewPanel: NSPanel {
         hostingView.layer?.cornerRadius = 12
         hostingView.layer?.masksToBounds = true
         contentView = hostingView
+
+        // Retry's pointer can already be over this non-key window while
+        // SwiftUI still reports only the main window's exit. Check actual
+        // screen containment before the shared exit grace hides the pane.
+        rootView.appDelegate.previewState.pointerSurfacesContainingPointer = { [weak self] in
+            guard let self, self.isPresented else { return [] }
+            let pointer = NSEvent.mouseLocation
+            var surfaces: Set<PreviewPaneState.PreviewPointerSurface> = []
+            if self.frame.contains(pointer) { surfaces.insert(.preview) }
+            if let parent = self.parent, parent.isVisible, parent.frame.contains(pointer) {
+                surfaces.insert(.mainPanel)
+            }
+            return surfaces
+        }
     }
 
     /// The pane is pure presentation: the browsing panel keeps key status.
@@ -159,7 +173,7 @@ struct FloatingPreviewRootView: View {
         .background(.regularMaterial)
         // The pane's half of the two-window pointer presence: leaving BOTH
         // windows hides the preview after its grace; re-entry cancels.
-        .onHover { isInside in
+        .background(PanelMouseMovementMonitor(onMouseMoved: {}, onHover: { isInside in
             if isInside {
                 appDelegate.previewState.pointerEntered(.preview)
                 if appDelegate.previewState.isPointerInteractionActive,
@@ -169,7 +183,7 @@ struct FloatingPreviewRootView: View {
             } else {
                 appDelegate.previewState.pointerExited(.preview)
             }
-        }
+        }))
     }
 }
 
@@ -178,23 +192,39 @@ struct FloatingPreviewRootView: View {
 /// list content scrolls beneath a STATIONARY pointer, so only a real
 /// `mouseMoved` event may flip the panel's input mode back to pointer
 /// control; `.inVisibleRect` keeps the tracked region on the visible
-/// portion without any layout updates. Lives in the AppKit-owning Panel
+/// portion without any layout updates. The non-key preview also uses this
+/// responder for native entry/exit, independently of SwiftUI content churn.
+/// Lives in the AppKit-owning Panel
 /// layer so the presentation views stay AppKit-free (01 §8).
 struct PanelMouseMovementMonitor: NSViewRepresentable {
     let onMouseMoved: () -> Void
+    /// The floating preview cannot become key. Its native tracking area
+    /// must therefore keep delivering entry/exit events while non-key,
+    /// including the real departure after an exit-grace containment rescue.
+    var onHover: ((Bool) -> Void)? = nil
 
-    /// AppKit responder that forwards `mouseMoved` events to the closure.
+    /// AppKit responder that forwards native movement and entry/exit.
     final class Coordinator: NSResponder {
         var onMouseMoved: () -> Void = {}
+        var onHover: ((Bool) -> Void)?
 
         override func mouseMoved(with event: NSEvent) {
             onMouseMoved()
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            onHover?(true)
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            onHover?(false)
         }
     }
 
     func makeCoordinator() -> Coordinator {
         let coordinator = Coordinator()
         coordinator.onMouseMoved = onMouseMoved
+        coordinator.onHover = onHover
         return coordinator
     }
 
@@ -203,7 +233,9 @@ struct PanelMouseMovementMonitor: NSViewRepresentable {
         view.addTrackingArea(
             NSTrackingArea(
                 rect: .zero,
-                options: [.activeInKeyWindow, .inVisibleRect, .mouseMoved],
+                options: onHover == nil
+                    ? [.activeInKeyWindow, .inVisibleRect, .mouseMoved]
+                    : [.activeAlways, .inVisibleRect, .mouseEnteredAndExited],
                 owner: context.coordinator,
                 userInfo: nil
             )
@@ -213,6 +245,7 @@ struct PanelMouseMovementMonitor: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         context.coordinator.onMouseMoved = onMouseMoved
+        context.coordinator.onHover = onHover
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {

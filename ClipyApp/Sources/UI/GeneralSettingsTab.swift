@@ -79,6 +79,16 @@ struct GeneralSettingsTab: View {
                             }
                             Button(SettingsCopy.text("Cancel"), role: .cancel) {}
                         }
+                        if isWorking {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text(SettingsCopy.text("Clearing history…"))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("clipy.settings.general.clear-progress")
+                        }
                         if let status {
                             SettingStatusView(status: status)
                         }
@@ -222,7 +232,9 @@ struct GeneralSettingsTab: View {
     /// receipt state maps to deliberate feedback in `clearStatusFeedback` —
     /// no blanket "Done." catch-all (deep review Card 10).
     private func performClear(_ scope: ClearScope) async {
+        guard !isWorking else { return }
         isWorking = true
+        status = nil
         defer { isWorking = false }
         do {
             let receipt = try await viewState.clearAwaitingReceipt(scope)

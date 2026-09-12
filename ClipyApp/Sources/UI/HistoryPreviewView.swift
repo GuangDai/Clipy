@@ -43,6 +43,9 @@ struct HistoryPreviewView: View {
     @State private var retryGeneration = 0
     @State private var fileConfirmationPresented = false
     @State private var pdfPageSelection: PDFPageSelection?
+    @State private var pinRequest: PinRequest?
+    @State private var pinFailure: (item: HistoryItemReference, message: String)?
+    @State private var informationItem: HistoryItemReference?
     @AppStorage(PreviewTextSettings.maximumCharactersKey)
     private var maximumTextCharacters = PreviewTextSettings.defaultMaximumCharacters
     @AppStorage(PreviewTextSettings.isLengthLimitedKey)
@@ -53,6 +56,11 @@ struct HistoryPreviewView: View {
     private struct PDFPageSelection {
         let item: HistoryItemReference
         let number: Int
+    }
+
+    private struct PinRequest: Equatable {
+        let item: HistoryItemReference
+        let isPinned: Bool
     }
 
     private var requestedPDFPage: Int {
@@ -170,7 +178,8 @@ struct HistoryPreviewView: View {
                     HStack(spacing: 8) {
                         Button { loader.showFileReference() } label: {
                             Image(systemName: "chevron.backward")
-                                .padding(3)
+                                .frame(width: 24, height: 24)
+                                .contentShape(Rectangle())
                         }
                         .buttonStyle(.borderless)
                         .accessibilityLabel(PreviewCopy.text("Back to File Reference"))
@@ -207,6 +216,26 @@ struct HistoryPreviewView: View {
                     metadataBar
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
+                    if let pinFailure, pinFailure.item == targetItem {
+                        HStack(alignment: .top, spacing: 8) {
+                            Label(pinFailure.message, systemImage: "exclamationmark.triangle")
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityIdentifier("clipy.preview.pin.failure")
+                            Button { self.pinFailure = nil } label: {
+                                Image(systemName: "xmark")
+                                    .frame(width: 24, height: 24)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel(PanelActionsCopy.text(
+                                "Dismiss", bundle: PanelActionsCopy.bundle(for: locale)
+                            ))
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 8)
+                    }
                 }
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { metadataHeight = $0 }
@@ -224,15 +253,45 @@ struct HistoryPreviewView: View {
                     maximumCharacters: maximumTextCharacters, isLengthLimited: isTextLengthLimited),
                 isRetry: retryGeneration > 0)
         }
+        .task(id: pinRequest) {
+            guard let request = pinRequest, !Task.isCancelled else { return }
+            await performPin(request)
+        }
         .onChange(of: targetItem) { _, target in
-            previewState.isInformationPresented = false
+            if let informationItem, informationItem != target {
+                previewState.isInformationPresented = false
+                self.informationItem = nil
+            }
             fileConfirmationPresented = false
             pdfPageSelection = nil
+            pinRequest = nil
+            pinFailure = nil
             if loader.requestedItem != target { loader.clear() }
+        }
+        .onChange(of: previewState.isInformationPresented) { _, presented in
+            // Escape is shared with the panel; retire this local anchor too
+            // so another preview opening information cannot resurrect it.
+            if !presented { informationItem = nil }
         }
         .onChange(of: viewState.surfacePurge) { _, purge in
             guard let purge else { return }
-            previewState.isInformationPresented = false
+            // An unrelated removal/revision must not interrupt reading this
+            // item's information; Clear Unpinned also preserves pinned rows.
+            let retiresTarget: Bool
+            switch purge.scope {
+            case .all:
+                retiresTarget = true
+            case .unpinned:
+                retiresTarget = observedRow?.pinnedPosition == nil
+            case .item(let id):
+                retiresTarget = targetItem?.id == id
+            case .revision(let old, _):
+                retiresTarget = targetItem == old
+            }
+            if retiresTarget, informationItem != nil {
+                previewState.isInformationPresented = false
+                informationItem = nil
+            }
             loader.purgePreview(purge.scope, isPinned: observedRow?.pinnedPosition != nil)
             if loader.fileLoadConfirmation == nil { fileConfirmationPresented = false }
         }
@@ -260,9 +319,14 @@ struct HistoryPreviewView: View {
             }
         }
         .onDisappear {
-            previewState.isInformationPresented = false
+            if informationItem != nil {
+                previewState.isInformationPresented = false
+                informationItem = nil
+            }
             pdfPageSelection = nil
             fileConfirmationPresented = false
+            pinRequest = nil
+            pinFailure = nil
             loader.clear()
         }
         .alert(PreviewCopy.text("Load File Contents?"), isPresented: $fileConfirmationPresented) {
@@ -303,7 +367,8 @@ struct HistoryPreviewView: View {
                 selectPDFPage(page - 1)
             } label: {
                 Image(systemName: "chevron.backward")
-                    .padding(3)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
             .disabled(page <= 1)
             .keyboardShortcut(.leftArrow, modifiers: [.option, .command])
@@ -311,16 +376,27 @@ struct HistoryPreviewView: View {
             .accessibilityLabel(PreviewCopy.text("Previous PDF Page"))
             .accessibilityIdentifier("clipy.preview.pdf.previous")
 
-            Text(PreviewCopy.pdfPageCaption(pageNumber: page, pageCount: count, locale: locale))
-                .font(.caption)
-                .monospacedDigit()
-                .accessibilityIdentifier("clipy.preview.pdf.page")
+            // Keep the full phrase when it fits; a narrow Quick Look uses
+            // the same localized numbers without squeezing the hit targets.
+            ViewThatFits(in: .horizontal) {
+                Text(PreviewCopy.pdfPageCaption(pageNumber: page, pageCount: count, locale: locale))
+                    .fixedSize()
+                Text(verbatim: LocalizedCountPresentation.number(page, locale: locale)
+                    + " / " + LocalizedCountPresentation.number(count, locale: locale))
+                    .fixedSize()
+            }
+            .font(.caption)
+            .monospacedDigit()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(PreviewCopy.pdfPageCaption(pageNumber: page, pageCount: count, locale: locale))
+            .accessibilityIdentifier("clipy.preview.pdf.page")
 
             Button {
                 selectPDFPage(page + 1)
             } label: {
                 Image(systemName: "chevron.forward")
-                    .padding(3)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
             .disabled(page >= count)
             .keyboardShortcut(.rightArrow, modifiers: [.option, .command])
@@ -493,66 +569,128 @@ struct HistoryPreviewView: View {
 
     // MARK: - Metadata bar
 
+    /// One footer intent waits for its receipt (03b §10). Cancelling this
+    /// view's task only retires its feedback; an admitted write may still
+    /// commit. A retargeted preview never accepts that task's late result.
+    private func performPin(_ request: PinRequest) async {
+        do {
+            if request.isPinned {
+                _ = try await viewState.unpinAwaitingReceipt(request.item.id)
+            } else {
+                _ = try await viewState.pinAwaitingReceipt(request.item.id)
+            }
+        } catch {
+            guard !Task.isCancelled, pinRequest == request else { return }
+            if let failure = error as? HistoryFailure {
+                pinFailure = (request.item, FailurePresentation.message(
+                    for: failure, bundle: PanelActionsCopy.bundle(for: locale)
+                ))
+            } else if !(error is CancellationError) {
+                pinFailure = (request.item, PanelActionsCopy.text(
+                    "Clipy couldn't update this item.", bundle: PanelActionsCopy.bundle(for: locale)
+                ))
+            }
+        }
+        guard !Task.isCancelled, pinRequest == request else { return }
+        pinRequest = nil
+    }
+
     @ViewBuilder
     private var metadataBar: some View {
-        if let occurrence = PreviewFooterMetadata(item: targetItem, row: observedRow) {
+        if let row = observedRow,
+           let occurrence = PreviewFooterMetadata(item: targetItem, row: row) {
             HStack(spacing: 8) {
                 SourceApplicationLabel(application: occurrence.lastSource, store: sourceIcons)
-
+                    .foregroundStyle(.secondary)
                 if occurrence.count > 1 {
-                    Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
-                        .lineLimit(1)
+                    // Copy count remains available in Information. Give the
+                    // source and actions room before this secondary detail;
+                    // resizing never replaces the source's icon-load owner.
+                    ViewThatFits(in: .horizontal) {
+                        Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
+                            .fixedSize()
+                            .foregroundStyle(.secondary)
+                        Color.clear.frame(width: 0, height: 0)
+                    }
+                    .layoutPriority(-1)
                 }
                 Spacer(minLength: 4)
+                    .layoutPriority(-2)
                 if let row = observedRow {
                     Button {
-                        if row.pinnedPosition == nil {
-                            viewState.pin(row.item.id, at: .first)
-                        } else {
-                            viewState.unpin(row.item.id)
-                        }
+                        // Resolve the live row on activation so repeated
+                        // shortcuts never reuse a rendered pin state.
+                        guard pinRequest == nil, let current = observedRow else { return }
+                        pinFailure = nil
+                        pinRequest = PinRequest(item: current.item, isPinned: current.pinnedPosition != nil)
                     } label: {
-                        Image(systemName: row.pinnedPosition == nil ? "pin" : "pin.fill")
-                            .font(.system(size: 12))
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
+                        Group {
+                            if pinRequest?.item == row.item {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: row.pinnedPosition == nil ? "pin" : "pin.fill")
+                                    .font(.system(size: 12))
+                            }
+                        }
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .disabled(pinRequest != nil)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.mini)
+                    .foregroundStyle(row.pinnedPosition == nil ? Color.secondary : Color.accentColor)
+                    // The floating pane is never key; Quick Look shares this
+                    // button in the key window while the list is disabled.
+                    .keyboardShortcut("p", modifiers: .command)
                     .help(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin") + "  ⌘P")
                     .accessibilityLabel(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin"))
                     .accessibilityIdentifier("clipy.preview.pin")
-                    Button { viewState.requestPasteFromDisplayedRow(row.item) } label: {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 12))
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(PanelActionsCopy.text("Copy to Clipboard") + "  ↵")
-                    .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard"))
-                    .accessibilityIdentifier("clipy.preview.copy")
+                    .fixedSize()
+                    .layoutPriority(1)
                 }
-                Button { previewState.isInformationPresented.toggle() } label: {
+                Button {
+                    guard observedRow?.item == row.item else { return }
+                    if informationItem == row.item, previewState.isInformationPresented {
+                        previewState.isInformationPresented = false
+                        informationItem = nil
+                    } else {
+                        informationItem = row.item
+                        previewState.isInformationPresented = true
+                    }
+                } label: {
                     Image(systemName: "info.circle")
                         .font(.system(size: 12))
                         .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
                 .controlSize(.mini)
                 .help(PreviewPresentationCopy.text("Preview Information"))
                 .accessibilityLabel(PreviewPresentationCopy.text("Preview Information"))
                 .accessibilityIdentifier("clipy.preview.information")
+                .fixedSize()
+                .layoutPriority(1)
                 .popover(isPresented: Binding(
-                    get: { previewState.isInformationPresented },
-                    set: { previewState.isInformationPresented = $0 }
+                    get: {
+                        previewState.isInformationPresented
+                            && informationItem == row.item
+                            && observedRow?.item == row.item
+                    },
+                    set: { presented in
+                        // A dismissed old anchor cannot close information
+                        // the user has already opened for a newer target.
+                        guard informationItem == row.item else { return }
+                        previewState.isInformationPresented = presented
+                        if !presented { informationItem = nil }
+                    }
                 ), arrowEdge: .bottom) {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text(PreviewPresentationCopy.text("Preview Information"))
-                            .font(.headline)
-                        if let row = observedRow {
-                            PreviewMetadataView(history: viewState.history, row: row, sourceIcons: sourceIcons)
-                                .id(row.item)
+                        if informationItem == row.item,
+                           let currentRow = observedRow, currentRow.item == row.item {
+                            PreviewMetadataView(history: viewState.history, row: currentRow, sourceIcons: sourceIcons)
+                                .id(currentRow.item)
                         }
                     }
                     .font(.callout)
@@ -562,9 +700,29 @@ struct HistoryPreviewView: View {
                     .padding(16)
                     .frame(idealWidth: 240, maxWidth: 360, alignment: .leading)
                 }
+                if let row = observedRow {
+                    Button { viewState.requestPasteFromDisplayedRow(row.item) } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.mini)
+                    .help(PanelActionsCopy.text("Copy to Clipboard") + "  ↵")
+                    .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard"))
+                    .accessibilityIdentifier("clipy.preview.copy")
+                    .fixedSize()
+                    .layoutPriority(1)
+                }
             }
             .font(.caption2)
-            .foregroundStyle(.secondary)
+            .onDisappear {
+                guard informationItem == row.item else { return }
+                previewState.isInformationPresented = false
+                informationItem = nil
+            }
         }
     }
 }

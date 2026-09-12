@@ -13,7 +13,7 @@ import SwiftUI
 /// `SourceIconProvider` (the composition root's AppKit loader) is consulted
 /// at most once per retained bundle ID; the result — including a negative
 /// `nil` — is retained so rows do not re-ask until eviction. Retention is
-/// bounded with FIFO eviction:
+/// bounded with FIFO eviction among non-displayed applications first:
 /// distinct source apps are few in practice, and the bound keeps a
 /// long-lived panel from accumulating an unbounded set of decoded
 /// application icons behind an adversarial bundle-ID stream.
@@ -51,6 +51,12 @@ final class SourceIconStore {
     func setDisplayed(_ bundleID: String, _ displayed: Bool) {
         let count = (displayedBundleCounts[bundleID] ?? 0) + (displayed ? 1 : -1)
         displayedBundleCounts[bundleID] = count > 0 ? count : nil
+        // Appearance can follow the view's task. A request declined while
+        // every retained entry was visible now expresses actual display
+        // demand and must get another chance without waiting for a new task.
+        if displayed, entries[bundleID] == nil {
+            icon(forBundleID: bundleID)
+        }
     }
 
     func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
@@ -74,7 +80,7 @@ final class SourceIconStore {
     /// The retained icon for one bundle ID, or `nil` when unresolved or
     /// recorded negative. A pure read for application-label bodies: view body evaluation
     /// must not mutate observable state, so provider resolution happens in
-    /// the row's `.task` via `icon(forBundleID:)`.
+    /// the row's appearance or `.task` via `icon(forBundleID:)`.
     func cachedIcon(forBundleID bundleID: String) -> CGImage? {
         entries[bundleID]?.icon
     }
@@ -85,8 +91,10 @@ final class SourceIconStore {
 
     /// Resolves and retains the icon for one bundle ID, consulting the
     /// provider at most once per ID (negative results are retained too).
-    /// Capacity eviction drops the oldest resolutions; a row whose icon was
-    /// evicted simply re-resolves the next time its `.task` runs.
+    /// Capacity eviction drops the oldest non-displayed resolutions first.
+    /// A displayed label's task need not run again when another application
+    /// resolves, so preserve its icon and readable name while cold entries
+    /// can make room. If every entry is displayed, the hard bound still wins.
     @discardableResult
     func icon(forBundleID bundleID: String) -> CGImage? {
         if let entry = entries[bundleID] { return entry.icon }
@@ -98,8 +106,15 @@ final class SourceIconStore {
         entries[bundleID] = entry
         insertionOrder.append(bundleID)
         while entries.count > Self.maximumEntries {
-            entries.removeValue(forKey: insertionOrder.removeFirst())
+            let evictionIndex = insertionOrder.firstIndex {
+                !isSurfaceActive || displayedBundleCounts[$0] == nil
+            } ?? 0
+            entries.removeValue(forKey: insertionOrder.remove(at: evictionIndex))
         }
+        // All retained entries can already be displayed, making this new
+        // cold request its own eviction victim. Do not invoke a provider
+        // without the placeholder that prevents synchronous same-ID reentry.
+        guard entries[bundleID] === entry else { return nil }
         let resolved = provider.loadIcon(bundleID)
         let name = provider.loadName(bundleID)
         // Nested loads may evict this entry and then resolve the same bundle

@@ -46,27 +46,52 @@ struct HistoryQuickLookOverlay: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Label(PreviewCopy.text("Quick Look preview"), systemImage: "eye")
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            HStack(spacing: 8) {
+                // The overlay covers the selected history row. Retain that
+                // exact item's identity in the existing navigation line
+                // without adding a second heading above the content (V2-11).
+                if let row = viewState.rows.first(where: { $0.item == item }) {
+                    Image(systemName: HistoryRowView.typeSymbol(for: row.typeIdentifiers))
+                        .frame(width: 16)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text(verbatim: row.title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(row.title)
+                        .accessibilityIdentifier("clipy.panel.quicklook.title")
+                } else {
+                    Image(systemName: "eye")
+                        .frame(width: 16)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
                 Spacer(minLength: 8)
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
                         .font(.body.weight(.medium))
-                        .padding(4)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
                 .controlSize(.small)
                 .accessibilityLabel(PreviewCopy.text("Close"))
                 .help(PreviewCopy.text("Close"))
                 .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("clipy.panel.quicklook.dismiss")
+                .fixedSize()
             }
+            .font(.subheadline.weight(.medium))
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(.regularMaterial)
+            .background {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(WindowDragGesture())
+                    .allowsWindowActivationEvents()
+            }
             Divider().opacity(0.5)
             HistoryPreviewView(
                 viewState: viewState,
@@ -79,6 +104,16 @@ struct HistoryQuickLookOverlay: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+        .background {
+            // The covered browsing surface is disabled while Quick Look is
+            // open. Own its second Space here, beside the active Escape
+            // control, so closing never depends on a disabled list shortcut.
+            Button(PreviewCopy.text("Close"), action: onDismiss)
+                .keyboardShortcut(.space, modifiers: [])
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.panel.quicklook")
         .accessibilityLabel(PreviewCopy.text("Quick Look preview"))

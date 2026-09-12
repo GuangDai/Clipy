@@ -102,6 +102,82 @@ struct SourceIconStoreTests {
     }
 
     @Test
+    func capacityPreservesDisplayedIconAndNameUntilItsLastLabelDisappears() throws {
+        let calls = IconProviderCalls()
+        calls.image = try image()
+        let store = SourceIconStore(provider: SourceIconProvider(loadIcon: { bundleID in
+            calls.bundleIDs.append(bundleID)
+            return calls.image
+        }, loadName: { _ in "Text Editor" }))
+        store.icon(forBundleID: "editor")
+        store.setDisplayed("editor", true)
+        store.setDisplayed("editor", true)
+        store.setDisplayed("editor", false)
+
+        for index in 0..<SourceIconStore.maximumEntries {
+            store.icon(forBundleID: "cold\(index)")
+        }
+        #expect(store.cachedIcon(forBundleID: "editor") === calls.image)
+        #expect(store.cachedName(forBundleID: "editor") == "Text Editor")
+        #expect(store.cachedIcon(forBundleID: "cold0") == nil)
+        #expect(store.cachedIcon(forBundleID: "cold1") === calls.image)
+        store.icon(forBundleID: "editor")
+        #expect(calls.bundleIDs.filter { $0 == "editor" }.count == 1)
+
+        store.setDisplayed("editor", false)
+        store.icon(forBundleID: "newcomer")
+        #expect(store.cachedIcon(forBundleID: "editor") == nil)
+        #expect(store.cachedName(forBundleID: "editor") == nil)
+        #expect(store.cachedIcon(forBundleID: "cold1") === calls.image)
+    }
+
+    @Test
+    func allDisplayedEntriesStillRespectTheCapacityBound() throws {
+        let calls = IconProviderCalls()
+        calls.image = try image()
+        let store = SourceIconStore(provider: SourceIconProvider { _ in calls.image })
+        for index in 0...SourceIconStore.maximumEntries {
+            let bundleID = "visible\(index)"
+            store.setDisplayed(bundleID, true)
+            store.icon(forBundleID: bundleID)
+        }
+        #expect(store.cachedIcon(forBundleID: "visible0") == nil)
+        for index in 1...SourceIconStore.maximumEntries {
+            #expect(store.cachedIcon(forBundleID: "visible\(index)") === calls.image)
+        }
+    }
+
+    @Test
+    func coldRequestAtVisibleCapacityWaitsForAppearanceBeforeLoading() throws {
+        let calls = IconProviderCalls()
+        calls.image = try image()
+        let newcomer = "newcomer"
+        let store = SourceIconStore(provider: SourceIconProvider(loadIcon: { bundleID in
+            calls.bundleIDs.append(bundleID)
+            if bundleID == newcomer, calls.bundleIDs.filter({ $0 == newcomer }).count == 1 {
+                calls.reentrantImage = calls.store?.icon(forBundleID: bundleID)
+            }
+            return calls.image
+        }, loadName: { _ in "Text Editor" }))
+        calls.store = store
+        for index in 0..<SourceIconStore.maximumEntries {
+            store.setDisplayed("visible\(index)", true)
+        }
+
+        // A task may run before onAppear. No provider work should run for
+        // an entry the capacity policy cannot retain yet.
+        #expect(store.icon(forBundleID: newcomer) == nil)
+        #expect(!calls.bundleIDs.contains(newcomer))
+        #expect(store.cachedIcon(forBundleID: "visible0") === calls.image)
+        store.setDisplayed(newcomer, true)
+        #expect(calls.bundleIDs.filter { $0 == newcomer }.count == 1)
+        #expect(calls.reentrantImage == nil)
+        #expect(store.cachedIcon(forBundleID: newcomer) === calls.image)
+        #expect(store.cachedName(forBundleID: newcomer) == "Text Editor")
+        #expect(store.cachedIcon(forBundleID: "visible0") == nil)
+    }
+
+    @Test
     func sameBundleReentryLoadsOnceAndPublishesTheOuterResult() throws {
         let calls = IconProviderCalls()
         calls.image = try image()

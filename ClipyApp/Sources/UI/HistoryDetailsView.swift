@@ -6,8 +6,8 @@
 /// nothing here sees SwiftData, Domain state, or fingerprints.
 /// Owning spec: docs/01-architecture.md §6 (Main-actor UI) and §5.4 (detail
 /// flow); detail DTOs docs/03b-instruction-set.md §9; revise semantics
-/// docs/03a-instruction-set.md §5; thumbnail discipline
-/// docs/01-architecture.md §5.7 / docs/04-coherence.md §9; roadmap:
+/// docs/03a-instruction-set.md §5; explicit representation reads
+/// docs/v2/V2-09-multilevel-storage.md §5; roadmap:
 /// docs/roadmap/05-presentationui.md (step 9).
 import ClipboardFormats
 import ContentPreview
@@ -35,6 +35,12 @@ struct HistoryDetailsLoadFence {
         guard !isPurged else { return nil }
         generation += 1
         return generation
+    }
+
+    /// Handing the surface to its editor retires prior overview reads without
+    /// purging the item or cancelling an already-submitted History mutation.
+    mutating func invalidateReads() {
+        generation += 1
     }
 
     mutating func purge(
@@ -133,12 +139,6 @@ struct HistoryDetailsView: View {
         (@MainActor (HistoryItemReference, HistoryItemReference) -> Bool)?
     @State private var currentItem: HistoryItemReference
 
-    /// Reference-exact thumbnail cache (01 §5.7; 04 §9): keyed by
-    /// `HistoryItemReference`, so a revised item never shows stale pixels.
-    /// 128 px ≈ 2× the 64 pt header cell, keeping the header sharp on
-    /// retina displays (the row list keeps the 112 px default).
-    @State private var thumbnails: ThumbnailStore
-
     @State private var phase: DetailsPhase = .loading
     @State private var basis: ContentBasis = .effective
     @State private var showsStaleNotice = false
@@ -167,12 +167,6 @@ struct HistoryDetailsView: View {
                 baselinePurgeGeneration: viewState.surfacePurge?.generation ?? 0
             )
         )
-        self._thumbnails = State(
-            initialValue: ThumbnailStore(
-                history: viewState.history,
-                pixels: PixelSize(width: 128, height: 128)
-            )
-        )
     }
 
     init(
@@ -192,12 +186,6 @@ struct HistoryDetailsView: View {
                     viewState.surfacePurge?.generation ?? 0
             )
         )
-        self._thumbnails = State(
-            initialValue: ThumbnailStore(
-                history: viewState.history,
-                pixels: PixelSize(width: 128, height: 128)
-            )
-        )
     }
 
     var body: some View {
@@ -210,6 +198,7 @@ struct HistoryDetailsView: View {
                     onReferenceAdvance: advanceDetailsReference
                 )
             } else {
+                backToHistory
                 switch phase {
                 case .loading:
                     ProgressView(PanelActionsCopy.text("Loading…", bundle: copyBundle))
@@ -245,8 +234,7 @@ struct HistoryDetailsView: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.details.root")
         .navigationTitle(PanelActionsCopy.text("Details", bundle: copyBundle))
-        .navigationBarBackButtonHidden(showsEditor)
-        .overlay { detailsEscapeShortcut }
+        .navigationBarBackButtonHidden(true)
         .task { await load() }
         .confirmationDialog(
             PanelActionsCopy.text("Remove this item from your clipboard history?", bundle: copyBundle),
@@ -267,36 +255,50 @@ struct HistoryDetailsView: View {
             cancelExport()
             cancelRepresentationPreview()
         }
-        .onChange(of: showsEditor) { _, opened in
-            if opened {
-                cancelExport()
-                cancelRepresentationPreview()
-            }
-        }
         .onChange(of: viewState.surfacePurge, initial: true) { _, _ in
             _ = reconcileSurfacePurge(viewState.surfacePurge)
         }
         .onChange(of: memoryPressureGeneration, initial: true) { _, _ in
-            thumbnails.respondToMemoryPressure(memoryPressure)
             if memoryPressure == .critical { cancelRepresentationPreview() }
         }
 
     }
 
-    /// Details owns settled Esc as a navigation dismissal. While its inline
-    /// editor or remove confirmation is visible, that child/modal's own
-    /// `.cancelAction` remains the only Esc owner so a dirty draft or pending
-    /// destructive choice cannot be bypassed (review UI-7 / Card 3C / 14A).
-    @ViewBuilder
-    private var detailsEscapeShortcut: some View {
-        if !showsEditor, !showsRemoveConfirmation {
-            Button(PanelActionsCopy.text("Back to History", bundle: copyBundle)) {
+    /// NSPanel does not expose NavigationStack's toolbar Back button. Keep
+    /// this navigation visible and outside the scrolling content (V2-07 §3).
+    /// The editor replaces it; a remove confirmation owns its own Escape.
+    private var backToHistory: some View {
+        HStack {
+            Button {
                 dismiss()
+            } label: {
+                Label(PanelActionsCopy.text("Back to History", bundle: copyBundle), systemImage: "chevron.backward")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
+            .buttonStyle(.borderless)
+            .help(PanelActionsCopy.text("Back to History", bundle: copyBundle))
+            .accessibilityLabel(PanelActionsCopy.text("Back to History", bundle: copyBundle))
             .keyboardShortcut(.cancelAction)
-            .opacity(0)
-            .frame(width: 0, height: 0)
-            .accessibilityHidden(true)
+            .disabled(showsRemoveConfirmation)
+            .accessibilityIdentifier("clipy.details.back")
+            Spacer(minLength: 0)
+            Text(PanelActionsCopy.text("Details", bundle: copyBundle))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Color.clear.frame(width: 24, height: 24)
+                .accessibilityHidden(true)
+        }
+        .controlSize(.small)
+        .padding(.horizontal, PanelTheme.spacingSmall)
+        .padding(.vertical, PanelTheme.spacingXXSmall)
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(WindowDragGesture())
+                .allowsWindowActivationEvents()
         }
     }
 
@@ -308,7 +310,25 @@ struct HistoryDetailsView: View {
     @MainActor
     private func closeEditor() {
         showsEditor = false
-        Task { await load(presentingTransition: false) }
+        // Save/Reload Latest may have advanced currentItem while this phase
+        // still contains the opening metadata. Do not expose its old Edit or
+        // Revert controls before the authoritative readback returns.
+        phase = .loading
+        Task { await load() }
+    }
+
+    /// A Pin readback or a previous editor dismissal may still be suspended.
+    /// Retire those overview reads before exposing a new editable draft so a
+    /// late success/failure cannot replace its loaded phase and discard edits.
+    @MainActor
+    private func openEditor() {
+        guard !showsEditor, reconcileSurfacePurge(viewState.surfacePurge),
+              case .loaded(let details, _) = phase,
+              details.item == currentItem else { return }
+        loadFence.invalidateReads()
+        cancelExport()
+        cancelRepresentationPreview()
+        showsEditor = true
     }
 
     /// Explicit revision recovery and committed Save/Revert are the sources
@@ -334,9 +354,6 @@ struct HistoryDetailsView: View {
             cancelRepresentationPreview()
         }
         currentItem = latest
-        if latest != previous {
-            thumbnails.purge(.revision(old: previous, new: latest))
-        }
     }
 
     // MARK: Loaded layout
@@ -369,7 +386,6 @@ struct HistoryDetailsView: View {
             DetailsBody(
                 details: details,
                 content: content,
-                thumbnails: thumbnails,
                 basis: $basis,
                 onRevise: { intent in
                     Task {
@@ -402,29 +418,24 @@ struct HistoryDetailsView: View {
     private func actionBar(isPinned: Bool) -> some View {
         HStack(spacing: PanelTheme.spacingSmall) {
             Button {
-                // The only History→pasteboard hand-off (01 §5.6); the view
-                // state routes it to the composition root's paste closure.
-                viewState.requestPaste(currentItem)
-            } label: {
-                Label(DetailsPresentationCopy.text("Copy", bundle: copyBundle), systemImage: "doc.on.doc")
-            }
-            .buttonStyle(.borderedProminent)
-            .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard", bundle: copyBundle))
-            Spacer(minLength: PanelTheme.spacingSmall)
-            Button {
                 Task { await togglePin(isPinned: isPinned) }
             } label: {
-                if isTogglingPin {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Label(
-                        isPinned ? PanelActionsCopy.text("Unpin", bundle: copyBundle) : PanelActionsCopy.text("Pin", bundle: copyBundle),
-                        systemImage: isPinned ? "pin.slash" : "pin"
-                    )
+                Group {
+                    if isTogglingPin {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label(
+                            isPinned ? PanelActionsCopy.text("Unpin", bundle: copyBundle) : PanelActionsCopy.text("Pin", bundle: copyBundle),
+                            systemImage: isPinned ? "pin.fill" : "pin"
+                        )
+                    }
                 }
+                .frame(width: 28, height: 24)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderless)
+            .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
             .controlSize(.small)
             .labelStyle(.iconOnly)
             .help(isPinned ? PanelActionsCopy.text("Unpin", bundle: copyBundle) : PanelActionsCopy.text("Pin", bundle: copyBundle))
@@ -435,21 +446,27 @@ struct HistoryDetailsView: View {
             .accessibilityIdentifier("clipy.details.pin-toggle")
             .disabled(isTogglingPin)
             Button {
-                showsEditor = true
+                openEditor()
             } label: {
                 Label(PanelActionsCopy.text("Edit Content", bundle: copyBundle), systemImage: "square.and.pencil")
+                    .frame(width: 28, height: 24)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderless)
             .controlSize(.small)
+            .labelStyle(.iconOnly)
             .help(PanelActionsCopy.text("Edit Content…", bundle: copyBundle))
             .accessibilityLabel(PanelActionsCopy.text("Edit Content", bundle: copyBundle))
             .accessibilityHint(PanelActionsCopy.text("Opens the revision editor for this item.", bundle: copyBundle))
+            Divider().frame(height: 16)
             Button {
                 showsRemoveConfirmation = true
             } label: {
                 Label(PanelActionsCopy.text("Remove", bundle: copyBundle), systemImage: "trash")
+                    .frame(width: 28, height: 24)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderless)
             .controlSize(.small)
             .labelStyle(.iconOnly)
             .help(PanelActionsCopy.text("Remove", bundle: copyBundle))
@@ -459,6 +476,21 @@ struct HistoryDetailsView: View {
             )
             .accessibilityIdentifier("clipy.details.remove")
             .disabled(isRemoving)
+            Spacer(minLength: PanelTheme.spacingSmall)
+            Button {
+                viewState.requestPaste(currentItem)
+            } label: {
+                Label(DetailsPresentationCopy.text("Copy", bundle: copyBundle), systemImage: "doc.on.doc")
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.circle)
+            .controlSize(.mini)
+            .help(PanelActionsCopy.text("Copy to Clipboard", bundle: copyBundle))
+            .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard", bundle: copyBundle))
+            .accessibilityIdentifier("clipy.details.copy")
         }
         .padding(.horizontal, PanelTheme.spacingLarge)
         .padding(.vertical, PanelTheme.spacingSmall)
@@ -605,6 +637,10 @@ struct HistoryDetailsView: View {
     /// user-facing `FailurePresentation` message (03b §10).
     @MainActor
     private func load(presentingTransition: Bool = true) async {
+        // A previously submitted Pin still commits normally. Its subsequent
+        // metadata readback waits for the editor's own dismissal instead of
+        // replacing a live authored draft (V2-09 §5).
+        guard !showsEditor else { return }
         cancelRepresentationPreview()
         cancelExport()
         guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
@@ -683,10 +719,9 @@ struct HistoryDetailsView: View {
     private func reconcileSurfacePurge(
         _ purge: HistorySurfacePurge?
     ) -> Bool {
-        if let scope = loadFence.reconcile(purge, item: currentItem) {
+        if loadFence.reconcile(purge, item: currentItem) != nil {
             cancelExport()
             cancelRepresentationPreview()
-            thumbnails.purge(scope)
             showsEditor = false
             phase = .removed
         }
@@ -791,7 +826,6 @@ private struct DetailsBody: View {
 
     let details: HistoryDetails
     let content: DetailsContentPresentation
-    let thumbnails: ThumbnailStore
     @Binding var basis: ContentBasis
     let onRevise: (RevisionIntent) -> Void
     var onExport: (HistoryRepresentationRequest) -> Void = { _ in }
@@ -804,71 +838,41 @@ private struct DetailsBody: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: PanelTheme.spacingLarge) {
                 headerSection
                 contentSection
                 Divider()
                 infoSection
-                revisionsSection
+                if !details.revisions.isEmpty {
+                    revisionsSection
+                }
             }
-            .padding(PanelTheme.spacingXLarge)
+            .padding(PanelTheme.spacingLarge)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
-            HStack(alignment: .top, spacing: PanelTheme.spacingLarge) {
-                thumbnail
-                    .frame(width: 64, height: 64)
-                VStack(
-                    alignment: .leading,
-                    spacing: PanelTheme.spacingXXSmall
-                ) {
-                    Text(content.title ?? PanelActionsCopy.text("Clipboard Item", bundle: copyBundle))
-                        .font(.title2.weight(.semibold))
-                        .lineLimit(3)
-                        .textSelection(.enabled)
-                        .accessibilityIdentifier("clipy.details.title")
-                    pinBadge
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, PanelTheme.spacingXXSmall)
+        HStack(alignment: .top, spacing: PanelTheme.spacingSmall) {
+            contentTypeIcon
+            Text(content.title ?? PanelActionsCopy.text("Clipboard Item", bundle: copyBundle))
+                .font(.headline)
+                .lineLimit(2)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("clipy.details.title")
+            pinBadge
         }
     }
 
-    @ViewBuilder
-    private var thumbnail: some View {
-        if let raster = thumbnails.raster(for: details.item),
-           let image = PreviewRasterDisplay.image(
-               raster,
-               scale: 2,
-               label: Text(PanelActionsCopy.text("Item thumbnail", bundle: copyBundle))
-           ) {
-            image
-                .resizable()
-                .scaledToFill()
-                .frame(width: 64, height: 64)
-                .clipShape(
-                    RoundedRectangle(
-                        cornerRadius: PanelTheme.cornerRadiusMedium
-                    )
-                )
-                .accessibilityLabel(PanelActionsCopy.text("Item thumbnail", bundle: copyBundle))
-        } else {
-            Image(systemName: content.symbolName)
-            .font(.system(size: 28))
+    /// The overview uses metadata only (V2-09 §5). Image bytes belong to
+    /// the explicitly requested representation preview below.
+    private var contentTypeIcon: some View {
+        Image(systemName: content.symbolName)
+            .font(.system(size: 18))
             .foregroundStyle(.secondary)
-            .frame(width: 64, height: 64)
-            .background(
-                Color.primary.opacity(0.06),
-                in: RoundedRectangle(
-                    cornerRadius: PanelTheme.cornerRadiusMedium
-                )
-            )
+            .frame(width: 24, height: 24)
             .accessibilityLabel(PanelActionsCopy.text("Content type icon", bundle: copyBundle))
-        }
     }
 
     @ViewBuilder
@@ -887,12 +891,12 @@ private struct DetailsBody: View {
                 .accessibilityLabel(PanelActionsCopy.pinnedPosition(position + 1, bundle: copyBundle, locale: locale))
                 .accessibilityIdentifier("clipy.details.pin-status")
         } else {
-            Text(PanelActionsCopy.text("Unpinned", bundle: copyBundle))
+            Label(PanelActionsCopy.text("Unpinned", bundle: copyBundle), systemImage: "pin.slash")
+                .labelStyle(.iconOnly)
                 .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, PanelTheme.spacingXSmall)
-                .padding(.vertical, PanelTheme.spacingXXXSmall)
-                .background(Color.primary.opacity(0.06), in: Capsule())
+                .foregroundStyle(.tertiary)
+                .help(PanelActionsCopy.text("Unpinned", bundle: copyBundle))
+                .accessibilityLabel(PanelActionsCopy.text("Unpinned", bundle: copyBundle))
                 .accessibilityIdentifier("clipy.details.pin-status")
         }
     }
@@ -930,7 +934,7 @@ private struct DetailsBody: View {
     }
 
     private var contentSection: some View {
-        VStack(alignment: .leading, spacing: PanelTheme.spacingXLarge) {
+        VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
             Picker(PanelActionsCopy.text("Content", bundle: copyBundle), selection: $basis) {
                 Text(PanelActionsCopy.text("Effective", bundle: copyBundle)).tag(ContentBasis.effective)
                 Text(PanelActionsCopy.text("Canonical", bundle: copyBundle)).tag(ContentBasis.canonical)
@@ -993,11 +997,6 @@ private struct DetailsBody: View {
             .accessibilityHint(
                 PanelActionsCopy.text("Restores the canonical content as this item's current content.", bundle: copyBundle)
             )
-            if details.revisions.isEmpty {
-                Text(PanelActionsCopy.text("No revisions", bundle: copyBundle))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
             ForEach(details.revisions, id: \.id) { revision in
                 RevisionRow(revision: revision) {
                     onRevise(.revert(to: .revision(revision.id)))
@@ -1051,23 +1050,28 @@ private struct RepresentationRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
-            HStack(alignment: .firstTextBaseline) {
-                if representation.isImage {
-                    Image(systemName: "photo")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                }
+            HStack(spacing: PanelTheme.spacingSmall) {
+                Image(systemName: typeSymbol(for: [representation.typeIdentifier]))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                    .accessibilityHidden(true)
                 if representation.pasteboardItemIndex > 0 {
                     Text("\(representation.pasteboardItemIndex + 1) ·")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(verbatim: DetailsPresentationCopy.formatName(representation.typeIdentifier, bundle: copyBundle))
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                VStack(alignment: .leading, spacing: PanelTheme.spacingXXXSmall) {
+                    Text(verbatim: DetailsPresentationCopy.formatName(representation.typeIdentifier, bundle: copyBundle))
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(DetailsFormat.bytes(representation.byteCount, locale: locale))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: PanelTheme.spacingSmall)
                 if isHiddenFromEffective {
                     Label(PanelActionsCopy.text("Hidden", bundle: copyBundle), systemImage: "eye.slash")
+                        .labelStyle(.iconOnly)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, PanelTheme.spacingXSmall)
@@ -1078,25 +1082,31 @@ private struct RepresentationRow: View {
                         )
                         .accessibilityLabel(PanelActionsCopy.text("Hidden from effective content", bundle: copyBundle))
                 }
-            }
-            HStack(spacing: PanelTheme.spacingLarge) {
-                Button(action: onExport) {
-                    Label(PanelActionsCopy.text("Save As…", bundle: copyBundle), systemImage: "square.and.arrow.down")
-                }
-                .controlSize(.small)
-                .disabled(isExporting)
-                .accessibilityIdentifier("clipy.details.save-as." + representation.identity.accessibilitySuffix)
-                .accessibilityLabel(PanelActionsCopy.format("Save %@ As…", representation.identity.accessibilityLabel, bundle: copyBundle))
-                .accessibilityHint(PanelActionsCopy.text("Saves the complete bytes of this displayed representation to a file you choose.", bundle: copyBundle))
                 Button(action: onPreview) {
                     Label(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle),
-                          systemImage: isLoading ? "xmark.circle" : "eye")
+                          systemImage: isLoading ? "xmark" : (preview == nil ? "eye" : "eye.fill"))
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
+                .foregroundStyle(preview == nil ? Color.secondary : Color.accentColor)
+                .help(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle))
                 .accessibilityIdentifier("clipy.details.show-preview." + representation.identity.accessibilitySuffix)
                 .accessibilityLabel(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle)
                     + ": " + representation.identity.accessibilityLabel)
+                Button(action: onExport) {
+                    Label(PanelActionsCopy.text("Save As…", bundle: copyBundle), systemImage: "square.and.arrow.down")
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
+                }
+                .controlSize(.small)
+                .disabled(isExporting)
+                .help(PanelActionsCopy.text("Save As…", bundle: copyBundle))
+                .accessibilityIdentifier("clipy.details.save-as." + representation.identity.accessibilitySuffix)
+                .accessibilityLabel(PanelActionsCopy.format("Save %@ As…", representation.identity.accessibilityLabel, bundle: copyBundle))
+                .accessibilityHint(PanelActionsCopy.text("Saves the complete bytes of this displayed representation to a file you choose.", bundle: copyBundle))
             }
             .buttonStyle(.borderless)
+            .labelStyle(.iconOnly)
             .controlSize(.small)
             if isLoading { ProgressView().controlSize(.small) }
             if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
@@ -1127,7 +1137,10 @@ private struct RepresentationRow: View {
             if let raster = preview?.raster,
                let image = PreviewRasterDisplay.image(raster, scale: 1,
                    label: Text(PanelActionsCopy.format("Preview of %@", representation.identity.accessibilityLabel, bundle: copyBundle))) {
-                image.resizable().scaledToFit().frame(maxWidth: .infinity)
+                // Like the floating preview, small images retain their
+                // natural footprint instead of filling the whole column.
+                image.resizable().scaledToFit()
+                    .frame(maxWidth: CGFloat(raster.width))
                     .accessibilityIdentifier("clipy.details.image-preview." + representation.identity.accessibilitySuffix)
             }
             if case .some(.pdf(let pdf)) = preview {
@@ -1164,15 +1177,10 @@ private struct RepresentationRow: View {
                     )
             }
             DisclosureGroup(DetailsPresentationCopy.text("Format Details", bundle: copyBundle)) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(verbatim: representation.typeIdentifier)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                    Spacer(minLength: PanelTheme.spacingSmall)
-                    Text(DetailsFormat.bytes(representation.byteCount, locale: locale))
-                        .font(.caption)
-                }
-                .foregroundStyle(.secondary)
+                Text(verbatim: representation.typeIdentifier)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .foregroundStyle(.secondary)
             }
             .disclosureGroupStyle(AppDisclosureGroupStyle(
                 identifier: "clipy.details.format-details." + representation.identity.accessibilitySuffix,
@@ -1180,7 +1188,8 @@ private struct RepresentationRow: View {
             ))
             .font(.caption)
         }
-        .padding(.vertical, PanelTheme.spacingSmall)
+        .padding(PanelTheme.spacingSmall)
+        .background(.background.opacity(0.55), in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
     }
 }
 
@@ -1218,15 +1227,22 @@ private struct RevisionRow: View {
             }
             Spacer(minLength: PanelTheme.spacingSmall)
             if revision.isActive {
-                Label(PanelActionsCopy.text("Active", bundle: copyBundle), systemImage: "checkmark.circle")
+                Label(PanelActionsCopy.text("Active", bundle: copyBundle), systemImage: "checkmark.circle.fill")
+                    .labelStyle(.iconOnly)
                     .font(.caption)
                     .foregroundStyle(Color.accentColor)
                     .accessibilityLabel(PanelActionsCopy.text("Active revision", bundle: copyBundle))
             }
-            Button(PanelActionsCopy.text("Revert", bundle: copyBundle), action: onRevert)
-                .buttonStyle(.bordered)
+            Button(action: onRevert) {
+                Label(PanelActionsCopy.text("Revert", bundle: copyBundle), systemImage: "arrow.uturn.backward")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+                .buttonStyle(.borderless)
                 .controlSize(.small)
                 .disabled(revision.isActive)
+                .help(PanelActionsCopy.format("Revert to %@", revision.title, bundle: copyBundle))
                 .accessibilityLabel(PanelActionsCopy.format("Revert to %@", revision.title, bundle: copyBundle))
                 .accessibilityHint(
                     PanelActionsCopy.text("Restores this revision as the item's current content.", bundle: copyBundle)
@@ -1493,7 +1509,6 @@ private func typeSymbol(for typeIdentifiers: [String]) -> String {
         DetailsBody(
             details: details,
             content: content,
-            thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
             basis: .constant(.effective),
             onRevise: { _ in }
         )
@@ -1507,7 +1522,6 @@ private func typeSymbol(for typeIdentifiers: [String]) -> String {
         DetailsBody(
             details: details,
             content: content,
-            thumbnails: ThumbnailStore(history: PreviewClipboardHistory.empty),
             basis: .constant(.effective),
             onRevise: { _ in }
         )

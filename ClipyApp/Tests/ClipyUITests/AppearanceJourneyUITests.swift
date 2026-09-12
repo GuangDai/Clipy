@@ -5,7 +5,7 @@
 /// rows. The DEBUG launch seam changes only the store path and
 /// capture-access posture; the `clipy.appearance.*` preferences live in the
 /// app's real UserDefaults domain, and every journey that edits one
-/// (density, auto-open) resets it in-test to keep the suite
+/// (density, typography, auto-open) resets it in-test to keep the suite
 /// order-independent.
 ///
 /// Row-density points (`PanelTheme` metrics) are not published through the
@@ -34,7 +34,8 @@ final class AppearanceJourneyUITests: XCTestCase {
     /// The density switch persists through `@AppStorage` and applies live;
     /// this journey proves the wiring end-to-end across a resummon: after
     /// switching to Comfortable, the resummoned panel still renders the captured
-    /// row. Density pixels are not AX-assertable.
+    /// row. The Settings sample also grows with density, line count and
+    /// font size; screenshots retain the actual appearance for review.
     @MainActor
     func testRowDensitySwitchPersistsAcrossSummons() throws {
         let captured = "clipy-density-row-check"
@@ -50,7 +51,32 @@ final class AppearanceJourneyUITests: XCTestCase {
             "clipy.settings.appearance.row-density"
         ]
         assertExists(density, timeout: 5, in: app, context: "row density control")
+        let sample = app.descendants(matching: .any)["clipy.settings.appearance.list-sample"]
+        let lines = app.descendants(matching: .any)["clipy.settings.appearance.snippet-lines"]
+        let font = app.descendants(matching: .any)["clipy.settings.appearance.font-size"]
+        assertExists(sample, timeout: 5, in: app, context: "live list sample")
+        assertExists(lines, timeout: 5, in: app, context: "visible text line choices")
+        assertExists(font, timeout: 5, in: app, context: "visible font choices")
+        chooseOption("Auto", in: lines, app: app, context: "automatic sample lines")
+        chooseOption("Medium", in: font, app: app, context: "medium sample font")
+        chooseOption("Compact", in: density, app: app, context: "compact sample")
+        let compactHeight = sample.frame.height
+        attachAppearance(in: app, named: "Appearance — compact list sample")
         chooseOption("Comfortable", in: density, app: app, context: "row density")
+        XCTAssertTrue(waitUntil(timeout: 5) { sample.frame.height > compactHeight },
+                      diagnostic(app, context: "density changes the visible sample spacing"))
+        chooseOption("1", in: lines, app: app, context: "single-line sample")
+        let oneLineHeight = sample.frame.height
+        chooseOption("3", in: lines, app: app, context: "three-line sample")
+        XCTAssertTrue(waitUntil(timeout: 5) { sample.frame.height > oneLineHeight },
+                      diagnostic(app, context: "line choice expands the sample rows"))
+        let mediumFontHeight = sample.frame.height
+        chooseOption("Large", in: font, app: app, context: "large sample font")
+        XCTAssertTrue(waitUntil(timeout: 5) { sample.frame.height > mediumFontHeight },
+                      diagnostic(app, context: "font choice enlarges the sample rows"))
+        attachAppearance(in: app, named: "Appearance — comfortable three-line large text")
+        chooseOption("Auto", in: lines, app: app, context: "restore automatic lines")
+        chooseOption("Medium", in: font, app: app, context: "restore medium font")
 
         closeSettingsAndSummonPanel(control: density, panel: panel, app: app)
         assertRowCount(
@@ -119,6 +145,8 @@ final class AppearanceJourneyUITests: XCTestCase {
             in: app,
             context: "preview auto-open toggle"
         )
+        SettingsJourneyControls.scroll(autoOpen,
+            into: app.scrollViews.containing(.any, identifier: autoOpen.identifier).firstMatch, app: app)
         // The preference persists across launches in the app's real
         // UserDefaults domain, so a previous run may have left it off; only
         // an on toggle needs the click to reach the disabled state.
@@ -164,6 +192,8 @@ final class AppearanceJourneyUITests: XCTestCase {
             in: app,
             context: "auto-open restore toggle"
         )
+        SettingsJourneyControls.scroll(restoreToggle,
+            into: app.scrollViews.containing(.any, identifier: restoreToggle.identifier).firstMatch, app: app)
         if (restoreToggle.value as? Int) == 0 {
             restoreToggle.click()
         }
@@ -304,6 +334,8 @@ final class AppearanceJourneyUITests: XCTestCase {
         app: XCUIApplication,
         context: String
     ) {
+        SettingsJourneyControls.scroll(control,
+            into: app.scrollViews.containing(.any, identifier: control.identifier).firstMatch, app: app)
         let labeledChoice = control.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@", title)
         ).firstMatch
@@ -371,6 +403,20 @@ final class AppearanceJourneyUITests: XCTestCase {
             for: [expectation],
             timeout: timeout
         ) == .completed
+    }
+
+    @MainActor
+    private func attachAppearance(in app: XCUIApplication, named name: String) {
+        let settings = app.windows.containing(
+            .button, identifier: "clipy.settings.category.appearance"
+        ).firstMatch
+        let sample = app.descendants(matching: .any)["clipy.settings.appearance.list-sample"]
+        SettingsJourneyControls.scroll(sample,
+            into: app.scrollViews.containing(.any, identifier: sample.identifier).firstMatch, app: app)
+        let attachment = XCTAttachment(screenshot: settings.screenshot())
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 
     @MainActor

@@ -98,17 +98,20 @@ struct ReviseEditorView: View {
     /// "Keep Current" into HistoryCore actions itself.
     @State private var draft: ReviseEditorDraft
 
+    @State private var singleFormatHeaderHeight: CGFloat = 0
     @State private var isSaving = false
     @State private var isReloading = false
     @State private var reloadTask: Task<Void, Never>?
     @State private var replacementTask: Task<Void, Never>?
     @State private var replacementFailure: String?
     @State private var replacementType: RepresentationIdentity?
+    @State private var replacementIsDirectEditing = false
     @State private var readFence: HistoryDetailsLoadFence
     /// A fixed product-copy key, localized at render time rather than
     /// retaining the language active when the reload completed.
     @State private var reloadNotice: String?
     @State private var activeAlert: EditorAlert?
+    @FocusState private var focusedReplacement: RepresentationIdentity?
 
     init(viewState: HistoryViewState, details: HistoryDetails) {
         self.viewState = viewState
@@ -141,32 +144,40 @@ struct ReviseEditorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: PanelTheme.spacingLarge) {
-                    if draft.canonicalRepresentations.count > 1 {
-                        DisclosureGroup(DetailsPresentationCopy.text("About Formats", bundle: copyBundle)) {
-                            Text(
-                                ReviseEditorPresentation.formatIndependenceDisclosure(bundle: copyBundle)
-                            )
+            navigationBar
+            GeometryReader { viewport in
+                ScrollView {
+                    VStack(spacing: PanelTheme.spacingSmall) {
+                        if draft.canonicalRepresentations.count > 1 {
+                            DisclosureGroup(DetailsPresentationCopy.text("About Formats", bundle: copyBundle)) {
+                                Text(
+                                    ReviseEditorPresentation.formatIndependenceDisclosure(bundle: copyBundle)
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityIdentifier("clipy.editor.format-independence-disclosure")
+                            }
+                            .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.editor.about-formats"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityIdentifier("clipy.editor.format-independence-disclosure")
                         }
-                        .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.editor.about-formats"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        ForEach(
+                            draft.canonicalRepresentations,
+                            id: \.representationIdentity
+                        ) {
+                            representation in
+                            decisionRow(
+                                for: representation,
+                                viewportHeight: draft.canonicalRepresentations.count == 1
+                                    ? viewport.size.height : nil
+                            )
+                        }
                     }
-                    ForEach(
-                        draft.canonicalRepresentations,
-                        id: \.representationIdentity
-                    ) {
-                        representation in
-                        decisionRow(for: representation)
-                    }
+                    .padding(PanelTheme.spacingLarge)
                 }
-                .padding(PanelTheme.spacingXLarge)
+                .accessibilityIdentifier("clipy.editor.formats")
             }
             Divider()
             revisionDisclosure
@@ -176,10 +187,12 @@ struct ReviseEditorView: View {
                     .padding(.horizontal)
             }
             if let replacementFailure {
-                HStack {
-                    Text(replacementFailure).font(.caption)
+                SettingsFieldLayout {
+                    Text(replacementFailure)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button(PanelActionsCopy.text("Retry", bundle: copyBundle)) {
-                        if let replacementType { loadReplacement(for: replacementType.typeIdentifier, pasteboardItemIndex: replacementType.pasteboardItemIndex) }
+                        if let replacementType { loadReplacement(for: replacementType.typeIdentifier, pasteboardItemIndex: replacementType.pasteboardItemIndex, forDirectEditing: replacementIsDirectEditing) }
                     }
                 }.padding(.horizontal)
             }
@@ -193,6 +206,8 @@ struct ReviseEditorView: View {
             idealHeight: layout == .standaloneSheet ? 520 : nil,
             maxHeight: .infinity
         )
+        .interactiveDismissDisabled(draft.isDirty || isSaving)
+        .onAppear { prepareDirectEditing() }
         .onDisappear {
             cancelReplacementLoad()
             cancelReload()
@@ -207,6 +222,47 @@ struct ReviseEditorView: View {
             alertActions
         } message: {
             Text(verbatim: alertMessage)
+        }
+    }
+
+    /// Embedded editing has the same navigation position as Details. The
+    /// icon still uses the dirty-draft dismissal decision, including Escape.
+    private var navigationBar: some View {
+        HStack(spacing: PanelTheme.spacingSmall) {
+            Button {
+                requestDismissal()
+            } label: {
+                Label(PanelActionsCopy.text("Cancel", bundle: copyBundle), systemImage: layout == .embeddedInDetails ? "chevron.backward" : "xmark")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .keyboardShortcut(.cancelAction)
+            .disabled(isSaving)
+            .help(PanelActionsCopy.text("Cancel", bundle: copyBundle))
+            .accessibilityLabel(PanelActionsCopy.text("Cancel", bundle: copyBundle))
+            .accessibilityIdentifier("clipy.editor.cancel")
+            .accessibilityHint(
+                draft.isDirty
+                    ? PanelActionsCopy.text("Asks before discarding unsaved changes.", bundle: copyBundle)
+                    : PanelActionsCopy.text("Closes the editor without changing the item.", bundle: copyBundle)
+            )
+            Spacer(minLength: 0)
+            Label(PanelActionsCopy.text("Edit Content", bundle: copyBundle), systemImage: "square.and.pencil")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Color.clear.frame(width: 24, height: 24)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, PanelTheme.spacingSmall)
+        .padding(.vertical, PanelTheme.spacingXXSmall)
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(WindowDragGesture())
+                .allowsWindowActivationEvents()
         }
     }
 
@@ -269,28 +325,34 @@ struct ReviseEditorView: View {
     /// visible before submission so the editor cannot imply destructive
     /// redaction of sensitive clipboard bytes (review Card 3D).
     private var revisionDisclosure: some View {
-        Text(ReviseEditorPresentation.revisionDisclosure(bundle: copyBundle))
+        Label {
+            Text(ReviseEditorPresentation.revisionDisclosure(bundle: copyBundle))
+        } icon: {
+            Image(systemName: "clock.arrow.circlepath")
+        }
         .font(.caption)
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, PanelTheme.spacingLarge)
         .padding(.top, PanelTheme.spacingMedium)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(ReviseEditorPresentation.revisionDisclosure(bundle: copyBundle))
         .accessibilityIdentifier("clipy.editor.revision-disclosure")
     }
 
     @ViewBuilder
     private var reloadStatus: some View {
         if draft.isAwaitingLatestContent {
-            HStack(spacing: PanelTheme.spacingLarge) {
+            SettingsFieldLayout {
                 Label(
                     PanelActionsCopy.text("Reload latest content before saving again.", bundle: copyBundle),
                     systemImage: "arrow.clockwise"
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("clipy.editor.awaiting-reload")
-                Spacer(minLength: PanelTheme.spacingSmall)
                 Button(isReloading ? PanelActionsCopy.text("Reloading…", bundle: copyBundle) : PanelActionsCopy.text("Reload Latest", bundle: copyBundle)) {
                     startReload()
                 }
@@ -326,16 +388,6 @@ struct ReviseEditorView: View {
             }
             HStack(spacing: PanelTheme.spacingLarge) {
                 Spacer(minLength: PanelTheme.spacingSmall)
-                Button(PanelActionsCopy.text("Cancel", bundle: copyBundle)) {
-                    requestDismissal()
-                }
-                .keyboardShortcut(.cancelAction)
-                .accessibilityIdentifier("clipy.editor.cancel")
-                .accessibilityHint(
-                    draft.isDirty
-                        ? PanelActionsCopy.text("Asks before discarding unsaved changes.", bundle: copyBundle)
-                        : PanelActionsCopy.text("Closes the editor without changing the item.", bundle: copyBundle)
-                )
                 Button {
                     Task { await save() }
                 } label: {
@@ -345,7 +397,7 @@ struct ReviseEditorView: View {
                         Label(PanelActionsCopy.text("Save Revision", bundle: copyBundle), systemImage: "checkmark")
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(!canSave || isSaving || isReloading || replacementTask != nil)
                 .accessibilityLabel(isSaving ? PanelActionsCopy.text("Saving revision", bundle: copyBundle) : PanelActionsCopy.text("Save Revision", bundle: copyBundle))
@@ -356,6 +408,7 @@ struct ReviseEditorView: View {
             }
         }
         .padding(PanelTheme.spacingLarge)
+        .background(.bar)
     }
 
     /// The draft must leave at least one representation effective. An
@@ -386,6 +439,7 @@ struct ReviseEditorView: View {
     /// Cancel and the `.cancelAction` keyboard shortcut share this intent so
     /// neither path can bypass dirty-draft confirmation (review Card 3C).
     private func requestDismissal() {
+        guard !isSaving else { return }
         switch draft.dismissalDecision {
         case .dismiss:
             completeDismissal()
@@ -397,98 +451,142 @@ struct ReviseEditorView: View {
     // MARK: Rows
 
     private func decisionRow(
-        for representation: HistoryRepresentationMetadata
+        for representation: HistoryRepresentationMetadata,
+        viewportHeight: CGFloat?
     ) -> some View {
         let typeIdentifier = representation.typeIdentifier
         let pasteboardItemIndex = representation.pasteboardItemIndex
         let identity = representation.representationIdentity
         let replacementIsAvailable = draft.canReplace(representation)
+        let choice = draft.choice(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
         let replacementAccessibilityHint = replacementIsAvailable
             ? PanelActionsCopy.text(" Replace edits UTF-8 or UTF-16 plain text while preserving its encoding.", bundle: copyBundle)
             : PanelActionsCopy.text(" Replace requires a supported UTF-8 or UTF-16 plain-text format with valid content. Other formats can be preserved, restored, or hidden.", bundle: copyBundle)
-        return VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(
-                    alignment: .leading,
-                    spacing: PanelTheme.spacingXXXSmall
-                ) {
-                    if Set(draft.canonicalRepresentations.map(\.pasteboardItemIndex)).count > 1 {
-                        Text("\(pasteboardItemIndex + 1)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Text(verbatim: DetailsPresentationCopy.formatName(typeIdentifier, bundle: copyBundle))
-                        .font(.headline)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
-                }
-                Spacer(minLength: PanelTheme.spacingLarge)
-                Picker(
-                    PanelActionsCopy.text("Decision", bundle: copyBundle),
-                    selection: choiceBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
-                ) {
-                    Text(PanelActionsCopy.text("Keep Current", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.keepCurrent)
-                    Text(PanelActionsCopy.text("Use Original", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.useOriginal)
-                    Text(PanelActionsCopy.text("Hide", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.hide)
-                    if replacementIsAvailable {
-                        // Metadata offers only exact declared encodings. The
-                        // selected source must load and validate before the
-                        // TextEditor or a replacement decision is installed.
-                        Text(PanelActionsCopy.text("Replace", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.replace)
-                    }
-                }
-                .pickerStyle(.menu)
-                .disabled(isSaving || isReloading || replacementTask != nil)
-                .labelsHidden()
-                .fixedSize()
-                .accessibilityLabel(PanelActionsCopy.format("Editing decision for %@", identity.accessibilityLabel, bundle: copyBundle))
-                .accessibilityIdentifier(
-                    "clipy.editor.decision.\(identity.accessibilitySuffix)"
-                )
-                .accessibilityHint(
-                    PanelActionsCopy.text("Keep Current preserves the bytes currently used for pasting. Use Original restores the captured bytes. Hide omits this type from pasting.", bundle: copyBundle)
-                        + replacementAccessibilityHint
-                )
+        let formatTitle = VStack(
+            alignment: .leading,
+            spacing: PanelTheme.spacingXXXSmall
+        ) {
+            if Set(draft.canonicalRepresentations.map(\.pasteboardItemIndex)).count > 1 {
+                Text("\(pasteboardItemIndex + 1)")
+                    .font(.caption).foregroundStyle(.secondary)
             }
-            DisclosureGroup(DetailsPresentationCopy.text("Format Details", bundle: copyBundle)) {
-                VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
-                    Text(verbatim: typeIdentifier)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                    Text(verbatim: EditorFormat.bytes(representation.byteCount, locale: locale))
-                    if !replacementIsAvailable {
-                        Text(PanelActionsCopy.text(
-                            "Replace supports valid UTF-8 and UTF-16 plain-text formats. Keep Current preserves exact bytes.",
-                            bundle: copyBundle
-                        ))
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .foregroundStyle(.secondary)
-            }
-            .disclosureGroupStyle(AppDisclosureGroupStyle(
-                identifier: "clipy.editor.format-details." + identity.accessibilitySuffix,
-                accessibilityLabel: DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + identity.accessibilityLabel
-            ))
-            .font(.caption)
-            if draft.choice(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) == .replace {
-                TextEditor(text: textBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex))
-                    .disabled(isSaving || isReloading || replacementTask != nil)
-                    .font(.system(.body, design: .monospaced))
-                    .scrollContentBackground(.hidden)
-                    .containerRelativeFrame(.vertical) { height, _ in height * 0.65 }
-                    .frame(minHeight: 140)
-                    .padding(PanelTheme.spacingSmall)
-                    .background(.background, in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
-                    .accessibilityLabel(
-                        PanelActionsCopy.format("Replacement text for %@", identity.accessibilityLabel, bundle: copyBundle)
-                    )
-                    .accessibilityIdentifier(
-                        "clipy.editor.replacement.\(identity.accessibilitySuffix)"
-                    )
+            Text(verbatim: DetailsPresentationCopy.formatName(typeIdentifier, bundle: copyBundle))
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .textSelection(.enabled)
+        }
+        let decisionPicker = Picker(
+            PanelActionsCopy.text("Decision", bundle: copyBundle),
+            selection: choiceBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+        ) {
+            Label(PanelActionsCopy.text("Keep Current", bundle: copyBundle), systemImage: "checkmark")
+                .tag(ReviseEditorDraft.Choice.keepCurrent)
+            Label(PanelActionsCopy.text("Use Original", bundle: copyBundle), systemImage: "arrow.uturn.backward")
+                .tag(ReviseEditorDraft.Choice.useOriginal)
+            Label(PanelActionsCopy.text("Hide", bundle: copyBundle), systemImage: "eye.slash")
+                .tag(ReviseEditorDraft.Choice.hide)
+            if replacementIsAvailable {
+                // Metadata offers only exact declared encodings. The
+                // selected source must load and validate before the
+                // TextEditor or a replacement decision is installed.
+                Label(PanelActionsCopy.text("Replace", bundle: copyBundle), systemImage: "pencil")
+                    .tag(ReviseEditorDraft.Choice.replace)
             }
         }
-        .padding(.vertical, PanelTheme.spacingSmall)
+        .pickerStyle(.menu)
+        .controlSize(.small)
+        .tint(choice == .keepCurrent ? Color.secondary : Color.accentColor)
+        .disabled(isSaving || isReloading || replacementTask != nil)
+        .labelsHidden()
+        .fixedSize()
+        .accessibilityLabel(PanelActionsCopy.format("Editing decision for %@", identity.accessibilityLabel, bundle: copyBundle))
+        .accessibilityIdentifier(
+            "clipy.editor.decision.\(identity.accessibilitySuffix)"
+        )
+        .accessibilityHint(
+            PanelActionsCopy.text("Keep Current preserves the bytes currently used for pasting. Use Original restores the captured bytes. Hide omits this type from pasting.", bundle: copyBundle)
+                + replacementAccessibilityHint
+        )
+        return VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
+            VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
+                SettingsFieldLayout {
+                    formatTitle
+                    decisionPicker
+                }
+                DisclosureGroup(DetailsPresentationCopy.text("Format Details", bundle: copyBundle)) {
+                    VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
+                        Text(verbatim: typeIdentifier)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                        Text(verbatim: EditorFormat.bytes(representation.byteCount, locale: locale))
+                        if !replacementIsAvailable {
+                            Text(PanelActionsCopy.text(
+                                "Replace supports valid UTF-8 and UTF-16 plain-text formats. Keep Current preserves exact bytes.",
+                                bundle: copyBundle
+                            ))
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .disclosureGroupStyle(AppDisclosureGroupStyle(
+                    identifier: "clipy.editor.format-details." + identity.accessibilitySuffix,
+                    accessibilityLabel: DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + identity.accessibilityLabel
+                ))
+                .font(.caption)
+            }
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                geometry.size.height
+            } action: { height in
+                if viewportHeight != nil { singleFormatHeaderHeight = height }
+            }
+            if choice == .replace || draft.directEditingIdentity == identity {
+                let editor = TextEditor(text: textBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex))
+                    .disabled(isSaving || isReloading || replacementTask != nil)
+                    .font(.system(.body, design: .monospaced))
+                    .autocorrectionDisabled(true)
+                    .scrollContentBackground(.hidden)
+                    .focused($focusedReplacement, equals: identity)
+                Group {
+                    if let viewportHeight {
+                        // A single format gives its text the actual remaining
+                        // viewport after measured metadata and every inset.
+                        // Keep this same TextEditor mounted through resizing;
+                        // only its height changes, preserving selection/undo.
+                        // Very short windows retain a few editable lines and
+                        // let the outer scroll view expose the full card.
+                        editor.frame(height: max(
+                            64,
+                            viewportHeight - singleFormatHeaderHeight
+                                - 2 * PanelTheme.spacingLarge
+                                - 4 * PanelTheme.spacingSmall
+                                - PanelTheme.spacingXSmall
+                        ))
+                    } else {
+                        editor.containerRelativeFrame(.vertical) { height, _ in height * 0.65 }
+                    }
+                }
+                .padding(PanelTheme.spacingSmall)
+                .background(.background, in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
+                .overlay {
+                    RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
+                        .strokeBorder(
+                            focusedReplacement == identity ? Color.accentColor : Color.primary.opacity(0.12),
+                            lineWidth: focusedReplacement == identity ? 2 : 1
+                        )
+                        .allowsHitTesting(false)
+                }
+                .accessibilityLabel(
+                    PanelActionsCopy.format("Replacement text for %@", identity.accessibilityLabel, bundle: copyBundle)
+                )
+                .accessibilityIdentifier(
+                    "clipy.editor.replacement.\(identity.accessibilitySuffix)"
+                )
+            }
+        }
+        .padding(PanelTheme.spacingSmall)
+        .background(.background.opacity(0.55), in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
     }
 
     private func choiceBinding(
@@ -502,6 +600,9 @@ struct ReviseEditorView: View {
                     loadReplacement(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
                 } else {
                     draft.setChoice($0, for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+                    focusedReplacement = $0 == .replace
+                        ? RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+                        : nil
                 }
             }
         )
@@ -519,14 +620,25 @@ struct ReviseEditorView: View {
 
     // MARK: Save
 
+    /// Opening Edit is sufficient intent for one Effective plain-text format.
+    /// Source installation leaves Keep Current intact until actual text input.
     @MainActor
-    private func loadReplacement(for typeIdentifier: String, pasteboardItemIndex: Int) {
+    private func prepareDirectEditing() {
+        guard let request = draft.directEditingRequest else { return }
+        loadReplacement(for: request.typeIdentifier,
+                        pasteboardItemIndex: request.pasteboardItemIndex,
+                        forDirectEditing: true)
+    }
+
+    @MainActor
+    private func loadReplacement(for typeIdentifier: String, pasteboardItemIndex: Int, forDirectEditing: Bool = false) {
         guard replacementTask == nil, !isSaving, !isReloading,
               let request = draft.replacementRequest(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) else { return }
         _ = readFence.reconcile(viewState.surfacePurge, item: request.item)
         guard !readFence.isPurged else { return }
         replacementFailure = nil
         replacementType = RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+        replacementIsDirectEditing = forDirectEditing
         let snapshot = draft
         replacementTask = Task {
             do {
@@ -536,7 +648,7 @@ struct ReviseEditorView: View {
                 guard !Task.isCancelled, draft.itemReference == request.item else { return }
                 let decoding = Task.detached {
                     var loaded = snapshot
-                    guard !Task.isCancelled, loaded.installReplacementSource(source) else { return Optional<ReviseEditorDraft>.none }
+                    guard !Task.isCancelled, loaded.installReplacementSource(source, forDirectEditing: forDirectEditing) else { return Optional<ReviseEditorDraft>.none }
                     return loaded
                 }
                 let loaded = await withTaskCancellationHandler {
@@ -551,7 +663,12 @@ struct ReviseEditorView: View {
                     return
                 }
                 draft = loaded
-                draft.setChoice(.replace, for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+                if !forDirectEditing {
+                    draft.setChoice(.replace, for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+                }
+                focusedReplacement = RepresentationIdentity(
+                    typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex
+                )
             } catch {
                 guard !Task.isCancelled else { return }
                 _ = readFence.reconcile(viewState.surfacePurge, item: request.item)
@@ -581,16 +698,30 @@ struct ReviseEditorView: View {
     /// the row list (03b §10; 04 §5; review Card 3B).
     @MainActor
     private func save() async {
-        guard !isSaving, replacementTask == nil, draft.canSubmit else { return }
+        guard !isSaving, !isReloading, replacementTask == nil, draft.canSubmit else { return }
         // The submitted request is a snapshot. Keep its draft controls fixed
         // until it settles, so successful dismissal cannot discard later
         // input that was never included in the committed revision.
         isSaving = true
         defer { isSaving = false }
+        let snapshot = draft
         do {
-            _ = try await viewState.reviseKeepingDetails(
-                draft.revisionRequest()
-            ) { reference in
+            // UTF-16 replacement encoding visits every code unit. Prepare the
+            // immutable request away from MainActor so large pastes leave the
+            // Saving state and the rest of the application responsive.
+            let encoding = Task.detached {
+                try Task.checkCancellation()
+                let request = snapshot.revisionRequest()
+                try Task.checkCancellation()
+                return request
+            }
+            let request = try await withTaskCancellationHandler {
+                try await encoding.value
+            } onCancel: {
+                encoding.cancel()
+            }
+            try Task.checkCancellation()
+            _ = try await viewState.reviseKeepingDetails(request) { reference in
                 onReferenceAdvance?(reference)
             }
             completeDismissal()
@@ -654,7 +785,10 @@ struct ReviseEditorView: View {
         replacementFailure = nil
         isReloading = true
         defer {
-            if !Task.isCancelled { isReloading = false }
+            if !Task.isCancelled {
+                isReloading = false
+                prepareDirectEditing()
+            }
         }
         do {
             let latest = try await viewState.details(for: reference.id)

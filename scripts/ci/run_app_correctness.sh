@@ -18,23 +18,31 @@ shard="${6:-all}"
 # Balance the existing running-app journeys by their measured elapsed time.
 # Each CI shard owns a separate runner: General pasteboard, focus and windows
 # cannot be shared by concurrent UI runners on the same desktop.
+# Leave room in shard 4 for both hosted bundles, not only its GUI journeys.
 gui_group_1=(
   AppearanceJourneyUITests
+  ClipboardJourneyUITests
   RetentionCountJourneyUITests
+  RetentionPolicyJourneyUITests
   PDFPreviewJourneyUITests
   TextPreviewTruncationJourneyUITests
 )
 gui_group_2=(
   ThumbnailScrollMeasurementJourneyUITests
   CaptureAccessJourneyUITests
+  ContentFirstRowJourneyUITests
+  PreviewSettingsJourneyUITests
   StoreOpenRecoveryJourneyUITests
-  DetailsUnavailableImageJourneyUITests
 )
 gui_group_3=(
   RTLPreviewGeometryJourneyUITests
   EditorRuntimeJourneyUITests
   FileReferencePreviewJourneyUITests
+  HistoryBackupJourneyUITests
+  MultiItemDragJourneyUITests
+  NarrowSearchHeaderJourneyUITests
   PreviewRecoveryJourneyUITests
+  DetailsUnavailableImageJourneyUITests
 )
 test_arguments=(-parallel-testing-enabled NO)
 case "$shard" in

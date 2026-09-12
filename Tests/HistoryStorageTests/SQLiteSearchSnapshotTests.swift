@@ -339,6 +339,42 @@ struct SQLiteSearchSnapshotTests {
         #expect(try await inspector.checkpointIsUnblocked())
     }
 
+    @Test(arguments: [
+        SQLiteValue.text("invalid"),
+        .real(0.5),
+        .integer(Int64(HistoryLimits.standard.maximumRevisionsPerItem + 1)),
+    ])
+    func revisionCountReadsRejectMalformedStoredFactsAndReleaseSnapshot(value: SQLiteValue) async throws {
+        let fixture = try await makeFixture(["needle revision count"])
+        let item = try #require(fixture.recent.rows.first?.item)
+        try await fixture.history.authority.withTestDatabase { authority in
+            try authority.database.execute(
+                "UPDATE history_items SET revisionCount = ? WHERE id = ?",
+                bindings: [value, .text(item.id.rawValue.uuidString)]
+            )
+        }
+        let worker = SearchWorker()
+        let request = HistoryBrowseRequest(kind: .search(text: "needle", mode: .exact), limit: 7)
+        // Ordinary list rows do not consume revision counts. External
+        // search does, and must preserve the stored-value failure class.
+        let ordinary = try await worker.page(request, store: fixture.location, processMarker: UUID())
+        #expect(ordinary.rows.map(\.item) == [item])
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            _ = try await worker.searchPage(request, store: fixture.location, processMarker: UUID())
+        }
+        let inspector = Inspector(location: fixture.location)
+        #expect(try await inspector.checkpointIsUnblocked())
+        try await fixture.history.authority.withTestDatabase { authority in
+            try authority.database.execute(
+                "UPDATE history_items SET revisionCount = 0 WHERE id = ?",
+                bindings: [.text(item.id.rawValue.uuidString)]
+            )
+        }
+        let restored = try await worker.searchPage(request, store: fixture.location, processMarker: UUID())
+        #expect(restored.page.rows.map(\.item) == [item])
+        #expect(restored.revisionCounts[item.id] == 0)
+    }
+
     private func backwardCursor(
         worker: SearchWorker, fixture: Fixture, kind: HistoryBrowseKind, marker: UUID
     ) async throws -> HistoryPageCursor {

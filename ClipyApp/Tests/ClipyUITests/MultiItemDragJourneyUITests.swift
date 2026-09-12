@@ -25,7 +25,10 @@ final class MultiItemDragJourneyUITests: XCTestCase {
 
         let traceURL = directory.appendingPathComponent("native-drag.trace")
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments += [
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-clipy.appearance.previewAutoOpen", "YES",
+        ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_DRAG_TRACE_PATH"] = traceURL.path
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
@@ -45,6 +48,8 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         let beforeHover = row.frame
         row.hover()
         let afterHover = row.frame
+        let preview = app.descendants(matching: .any)["clipy.panel.floatingPreview"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 5), app.debugDescription)
         // The floating NSPanel is exposed as an AX Dialog in the running app.
         let sourceWindow = app.descendants(matching: .dialog)
             .containing(.button, identifier: row.identifier).firstMatch
@@ -55,9 +60,18 @@ final class MultiItemDragJourneyUITests: XCTestCase {
             x: sourceAXFrame.minX, y: desktopTop - sourceAXFrame.maxY,
             width: sourceAXFrame.width, height: sourceAXFrame.height
         )
+        let previewAXFrame = preview.frame
+        let previewFrame = NSRect(
+            x: previewAXFrame.minX, y: desktopTop - previewAXFrame.maxY,
+            width: previewAXFrame.width, height: previewAXFrame.height
+        )
+        // The child preview follows the source's ordering when a drag begins.
+        // A receiver beside only the main panel can pass its ready handshake,
+        // then become covered when the source and its child come forward.
+        let occupiedFrame = sourceFrame.union(previewFrame)
         let screen = try XCTUnwrap(NSScreen.screens.first { $0.frame.intersects(sourceFrame) })
-        let targetFrame = try XCTUnwrap(Self.receiverFrame(outside: sourceFrame, on: screen.visibleFrame),
-            "No separate receiver area beside the actual source window: \(sourceFrame)")
+        let targetFrame = try XCTUnwrap(Self.receiverFrame(outside: occupiedFrame, on: screen.visibleFrame),
+            "No separate receiver area around the source and preview windows: \(occupiedFrame)")
         let readyURL = directory.appendingPathComponent("ready.json")
         let receivedURL = directory.appendingPathComponent("received.json")
         let receiverLogURL = directory.appendingPathComponent("receiver.log")
@@ -103,7 +117,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
             width: XCTUnwrap(frame["width"]).doubleValue, height: XCTUnwrap(frame["height"]).doubleValue
         )
         let destination = NSPoint(x: actualTargetFrame.midX, y: actualTargetFrame.midY)
-        XCTAssertFalse(actualTargetFrame.intersects(sourceFrame))
+        XCTAssertFalse(actualTargetFrame.intersects(occupiedFrame))
         let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = start.withOffset(CGVector(
             dx: destination.x - row.frame.midX,
@@ -116,6 +130,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         let receiverLogText = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
         let diagnostics = """
             row before hover: \(beforeHover), after hover: \(afterHover), source window: \(sourceFrame)
+            preview window: \(previewFrame), occupied source area: \(occupiedFrame)
             receiver running: \(receiver.isRunning), frame: \(actualTargetFrame), destination: \(destination)
             \(receiverLogText)
             \(trace)
@@ -154,7 +169,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         return result
     }
 
-    /// Choose a real free rectangle around the measured source, in AppKit
+    /// Choose a real free rectangle around the measured source windows, in AppKit
     /// screen coordinates. Target dimensions shrink to available space; its
     /// position is never guessed from a fixed screen corner.
     private static func receiverFrame(outside source: CGRect, on screen: CGRect) -> CGRect? {
