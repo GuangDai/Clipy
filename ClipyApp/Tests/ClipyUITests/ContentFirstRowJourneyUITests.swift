@@ -47,6 +47,8 @@ final class ContentFirstRowJourneyUITests: XCTestCase {
             rows.count == 1 && rows.element(boundBy: 0).identifier == identifier
                 && rows.element(boundBy: 0).label.contains("Pinned at position 1")
         }, app.debugDescription)
+        XCTAssertEqual(rows.element(boundBy: 0).label.components(separatedBy: "Pinned at position 1").count, 2,
+                       "The pin icon and ordinal should announce one combined status.")
         let attachment = XCTAttachment(screenshot: panel.screenshot())
         attachment.name = "Content-first history row"
         attachment.lifetime = .keepAlways

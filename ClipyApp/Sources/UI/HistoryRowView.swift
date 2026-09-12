@@ -370,6 +370,7 @@ struct HistoryRowView: View {
             .font(PanelTheme.metadataFont(for: fontSize))
             .foregroundStyle(.secondary)
             .fixedSize()
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(PanelActionsCopy.pinnedPosition(ordinal, bundle: copyBundle, locale: locale))
         }
     }
