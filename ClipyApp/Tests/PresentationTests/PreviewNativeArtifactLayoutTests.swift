@@ -133,6 +133,82 @@ struct PreviewNativeArtifactLayoutTests {
         }
     }
 
+    @Test func fullReferenceWrapsAndCopiesCompleteNativeSelections() async throws {
+        let address = boundedAddress(
+            prefix: "file:///clipy-preview-uncreated/e%CC%81/", token: "x"
+        )
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "public.file-url", bytes: Data(address.utf8))
+        ])
+        guard case .content(.reference(let reference)) = outcome else {
+            Issue.record("Expected the complete file reference")
+            return
+        }
+        let path = try #require(reference.filePath)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: fullReferenceViewport(reference))
+        host.sizingOptions = []
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        host.displayIfNeeded()
+
+        let fields = nativeReferenceFields(in: host)
+        #expect(fields.count == 2)
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        for (identifier, value) in [
+            ("clipy.preview.reference.full.path", path),
+            ("clipy.preview.reference.full.address", address)
+        ] {
+            let field = try #require(fields.first { $0.accessibilityIdentifier() == identifier })
+            #expect(Data(field.stringValue.utf8) == Data(value.utf8))
+            #expect(field.isSelectable)
+            #expect(!field.isEditable)
+            #expect(field.frame.width <= 340)
+            // Both 16 KiB spellings occupy many wrapped lines. A short or
+            // clipped label cannot satisfy the content-height assertion.
+            #expect(field.frame.height > 480)
+            let originalHeight = field.frame.height
+            window.setContentSize(NSSize(width: 220, height: 480))
+            host.layoutSubtreeIfNeeded()
+            #expect(field.frame.height > originalHeight)
+
+            // Use AppKit's actual field editor and copy serialization, on a
+            // private pasteboard so this proof cannot disturb capture tests.
+            field.selectText(nil)
+            let editor = try #require(field.currentEditor() as? NSTextView)
+            #expect(editor.selectedRange() == NSRange(location: 0, length: (value as NSString).length))
+            pasteboard.clearContents()
+            let copiedEntireValue = editor.writeSelection(to: pasteboard, types: [.string])
+            #expect(copiedEntireValue)
+            #expect(pasteboard.string(forType: .string).map { Data($0.utf8) } == Data(value.utf8))
+
+            // A contiguous range spanning many visual lines copies unchanged,
+            // without inserting the line breaks used only for presentation.
+            let range = NSRange(location: 2, length: (value as NSString).length - 4)
+            editor.setSelectedRange(range)
+            pasteboard.clearContents()
+            let copiedRange = editor.writeSelection(to: pasteboard, types: [.string])
+            #expect(copiedRange)
+            #expect(pasteboard.string(forType: .string).map { Data($0.utf8) }
+                == Data((value as NSString).substring(with: range).utf8))
+            window.endEditing(for: nil)
+            window.setContentSize(NSSize(width: 340, height: 480))
+            host.layoutSubtreeIfNeeded()
+        }
+    }
+
+    private func nativeReferenceFields(in view: NSView) -> [NSTextField] {
+        let own = (view as? NSTextField).map { [$0] } ?? []
+        return own + view.subviews.flatMap { nativeReferenceFields(in: $0) }
+    }
+
     private func fullReferenceViewport(_ reference: PreviewReference) -> some View {
         ScrollView(.vertical) {
             FullReferencePreviewContent(reference: reference)

@@ -177,7 +177,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         let fullAddress = quickReference.descendants(matching: .any)["clipy.preview.reference.full.address"]
         XCTAssertFalse(fullPath.exists, app.debugDescription)
         XCTAssertFalse(fullAddress.exists, app.debugDescription)
-        let fullReferenceToggle = quickReference.disclosureTriangles.firstMatch
+        let fullReferenceToggle = quickReference.buttons["clipy.preview.reference.full.toggle"]
         XCTAssertTrue(fullReferenceToggle.exists && fullReferenceToggle.isHittable, app.debugDescription)
         fullReferenceToggle.click()
         XCTAssertTrue(waitUntil(timeout: 5) {

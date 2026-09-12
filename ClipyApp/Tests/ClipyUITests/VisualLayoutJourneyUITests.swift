@@ -30,16 +30,6 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         app.launchEnvironment["CLIPY_UI_TEST_FOCUS_TRACE"] = "1"
         app.launch()
         defer { app.terminate() }
-        defer {
-            let traceURL = directory.appendingPathComponent("panel-focus-trace.txt")
-            let trace = (try? String(contentsOf: traceURL, encoding: .utf8))
-                ?? "[DEBUG-panel-focus] Trace file was not created."
-            let attachment = XCTAttachment(string: trace)
-            attachment.name = "panel-focus-trace"
-            attachment.lifetime = .keepAlways
-            add(attachment)
-            print(trace)
-        }
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
         let rows = panel.descendants(matching: .any).matching(NSPredicate(
@@ -144,6 +134,15 @@ final class VisualLayoutJourneyUITests: XCTestCase {
                 && app.textFields["clipy.search.field"].exists
         }, app.debugDescription)
         app.typeText("Reading notes")
+        // Preserve diagnostics before XCTest can abort this failing journey.
+        let traceURL = directory.appendingPathComponent("panel-focus-trace.txt")
+        let trace = (try? String(contentsOf: traceURL, encoding: .utf8))
+            ?? "[DEBUG-panel-focus] Trace file was not created."
+        let attachment = XCTAttachment(string: trace)
+        attachment.name = "panel-focus-trace"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        print(trace)
         XCTAssertTrue(waitUntil {
             app.textFields["clipy.search.field"].value as? String == "Reading notes"
         }, "Returning from Details must let typing search immediately.\n\(app.debugDescription)")

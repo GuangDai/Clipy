@@ -646,7 +646,10 @@ struct HistoryPanelView: View {
                 if !isActive { isSearchFieldFocused = false }
             }
             .onChange(of: surfaceState.isAtListRoot) { _, isAtRoot in
-                if !isAtRoot { isSearchFieldFocused = false }
+                // NavigationStack retains its root while Details is pushed.
+                // Its initial/default preference is not a fresh focus request
+                // on Back; restore the retained search binding explicitly.
+                isSearchFieldFocused = isAtRoot && surfaceState.isSessionActive
             }
 #if DEBUG
             .onChange(of: isSearchFieldFocused, initial: true) { _, focused in
