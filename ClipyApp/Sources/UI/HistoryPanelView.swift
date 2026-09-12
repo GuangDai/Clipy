@@ -599,8 +599,6 @@ struct HistoryPanelView: View {
             .onChange(of: surfaceState.memoryPressureGeneration, initial: true) { _, _ in
                 sourceIcons?.respondToMemoryPressure(surfaceState.memoryPressure)
             }
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier("clipy.panel.root")
             .background { hiddenShortcuts }
             .task(id: surfaceState.sessionGeneration) {
                 guard surfaceState.isSessionActive else { return }
@@ -849,6 +847,10 @@ struct HistoryPanelView: View {
             )
         }
         .defaultFocus($isSearchFieldFocused, true, priority: .userInitiated)
+        // Attach the browsing group to the actual navigation destination;
+        // NavigationStack does not preserve an outer wrapper's AX group.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.panel.root")
     }
 
     /// One lookup supplies both list reconciliation and preview's exact

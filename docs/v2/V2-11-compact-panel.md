@@ -31,6 +31,10 @@ the list.
   the list restores search focus. Quick Look retains the exact item's type and
   title above the content. An unedited item's Details omits the empty revision
   disclosure; saved revisions expose the existing history and restore actions.
+  Search and the list share the navigation root so Back resolves focus within
+  that root. A single-format editor allocates its remaining viewport after
+  measuring metadata; resizing keeps the same native text editor and its
+  selection/undo state. Short windows retain outer scrolling for all controls.
 - Native semantic colors and monochrome SF Symbols for controls. Application
   branding uses blue/pearl layered paper and a simple clip, without heavy
   metal texture. Menu-bar/control icons must remain legible as templates and
@@ -51,7 +55,9 @@ parameters. `PreviewTextSettings` owns their app preferences, and
 `PanelGeometry` owns window dimensions and gap preferences. Text segmentation
 is prepared off the main actor; the view renders a lazy sequence of bounded
 segments, sharing the immutable source buffer. No global full-document height
-measurement is required to open the pane. The timing tests use the actual
+measurement is required to open the pane. Only changes to the actual viewport
+height publish geometry state; unchanged selectable segments reuse their view
+leaves. The timing tests use the actual
 AppKit-hosted preview body; passing decoder tests alone is not rendering proof.
 
 Dwell starts the prospective preview read before opening the floating window.
