@@ -114,6 +114,8 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         showDetails.click()
         let details = app.descendants(matching: .any)["clipy.details.root"]
         XCTAssertTrue(details.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertFalse(app.textFields["clipy.search.field"].exists,
+                       "Details owns its navigation instead of retaining a second search toolbar.")
         let pin = details.buttons["clipy.details.pin-toggle"]
         XCTAssertTrue(waitUntil { pin.exists && pin.isEnabled }, app.debugDescription)
         attach(panel, named: "Details — Image and actions")
@@ -122,7 +124,10 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(back.frame.width, 24)
         XCTAssertGreaterThanOrEqual(back.frame.height, 24)
         back.click()
-        XCTAssertTrue(waitUntil { !details.exists && panel.exists && rows.count == 3 }, app.debugDescription)
+        XCTAssertTrue(waitUntil {
+            !details.exists && panel.exists && rows.count == 3
+                && app.textFields["clipy.search.field"].exists
+        }, app.debugDescription)
     }
 
     @MainActor

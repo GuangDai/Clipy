@@ -294,6 +294,12 @@ struct HistoryDetailsView: View {
         .controlSize(.small)
         .padding(.horizontal, PanelTheme.spacingSmall)
         .padding(.vertical, PanelTheme.spacingXXSmall)
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(WindowDragGesture())
+                .allowsWindowActivationEvents()
+        }
     }
 
     /// The floating nonactivating panel's attached SwiftUI sheet is exposed

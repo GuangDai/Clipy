@@ -84,6 +84,10 @@ final class QuickLookJourneyUITests: XCTestCase {
         alphaRow.click()
         app.typeKey(.space, modifierFlags: [])
         assertQuickLook(alpha, in: quickLook, app: app)
+        let attachment = XCTAttachment(screenshot: panel.screenshot())
+        attachment.name = "Quick Look — Item identity and content"
+        attachment.lifetime = .keepAlways
+        add(attachment)
         XCTAssertEqual(search.value as? String, "")
         // The underlying list is disabled. The visible preview owns ⌘P,
         // and its authoritative footer must reflect both committed changes.
@@ -141,6 +145,9 @@ final class QuickLookJourneyUITests: XCTestCase {
     @MainActor
     private func assertQuickLook(_ expected: String, in overlay: XCUIElement, app: XCUIApplication) {
         XCTAssertTrue(overlay.waitForExistence(timeout: 5), app.debugDescription)
+        let title = overlay.staticTexts["clipy.panel.quicklook.title"]
+        XCTAssertTrue(title.exists, app.debugDescription)
+        XCTAssertEqual(title.label, expected)
         // Scope beneath Quick Look: the side pane uses the same preview IDs
         // and may be open because of the normal selection dwell.
         let text = overlay.descendants(matching: .any)["clipy.preview.text"]

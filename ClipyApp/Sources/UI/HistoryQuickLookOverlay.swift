@@ -46,12 +46,26 @@ struct HistoryQuickLookOverlay: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                Label(PreviewCopy.text("Quick Look preview"), systemImage: "eye")
-                    .labelStyle(.iconOnly)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
+            HStack(spacing: 8) {
+                // The overlay covers the selected history row. Retain that
+                // exact item's identity in the existing navigation line
+                // without adding a second heading above the content (V2-11).
+                if let row = viewState.rows.first(where: { $0.item == item }) {
+                    Image(systemName: HistoryRowView.typeSymbol(for: row.typeIdentifiers))
+                        .frame(width: 16)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                    Text(verbatim: row.title)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(row.title)
+                        .accessibilityIdentifier("clipy.panel.quicklook.title")
+                } else {
+                    Image(systemName: "eye")
+                        .frame(width: 16)
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
                 Spacer(minLength: 8)
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
@@ -66,10 +80,18 @@ struct HistoryQuickLookOverlay: View {
                 .help(PreviewCopy.text("Close"))
                 .keyboardShortcut(.cancelAction)
                 .accessibilityIdentifier("clipy.panel.quicklook.dismiss")
+                .fixedSize()
             }
+            .font(.subheadline.weight(.medium))
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
             .background(.regularMaterial)
+            .background {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(WindowDragGesture())
+                    .allowsWindowActivationEvents()
+            }
             Divider().opacity(0.5)
             HistoryPreviewView(
                 viewState: viewState,

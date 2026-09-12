@@ -643,6 +643,9 @@ struct HistoryPanelView: View {
                 sourceIcons?.isSurfaceActive = isActive
                 if !isActive { isSearchFieldFocused = false }
             }
+            .onChange(of: surfaceState.isAtListRoot) { _, isAtRoot in
+                isSearchFieldFocused = isAtRoot && surfaceState.isSessionActive
+            }
             .onChange(of: surfaceState.selection) { _, newSelection in
                 previewState.handleSelectionChange(
                     PreviewSelectionResolution.resolve(
@@ -747,42 +750,47 @@ struct HistoryPanelView: View {
 
     // MARK: Main column
 
-    /// The browsing column: search header, the list in its details
-    /// NavigationStack and failure banner. Search and secondary actions share
-    /// one compact toolbar; the list absorbs the remaining window height.
+    /// Search and secondary actions share the list's compact toolbar.
+    /// Details and its editor own their navigation and window drag surface.
+    private var browsingHeader: some View {
+        HStack(alignment: .top, spacing: PanelTheme.spacingXSmall) {
+            SearchHeaderView(
+                viewState: viewState,
+                searchFieldFocused: $isSearchFieldFocused,
+                onMoveSelection: { offset in
+                    surfaceState.moveSelection(
+                        in: displayedSelectionRows,
+                        direction: offset < 0 ? .previous : .next
+                    )
+                },
+                onSubmitSelection: {
+                    guard let selected = surfaceState.selectedReference(
+                        in: viewState.displayedRows
+                    )
+                    else { return }
+                    viewState.requestPasteFromDisplayedRow(selected)
+                }
+            )
+            panelActions
+        }
+        .padding(.horizontal, PanelTheme.headerHorizontalPadding)
+        .padding(.top, PanelTheme.headerTopPadding)
+        .padding(.bottom, PanelTheme.headerBottomPadding)
+        .background {
+            // Only the header's empty background drags the window;
+            // foreground search controls keep their own interactions.
+            // List drag-out remains independent.
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(WindowDragGesture())
+                .allowsWindowActivationEvents()
+        }
+    }
+
     private var mainColumn: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: PanelTheme.spacingXSmall) {
-                SearchHeaderView(
-                    viewState: viewState,
-                    searchFieldFocused: $isSearchFieldFocused,
-                    onMoveSelection: { offset in
-                        surfaceState.moveSelection(
-                            in: displayedSelectionRows,
-                            direction: offset < 0 ? .previous : .next
-                        )
-                    },
-                    onSubmitSelection: {
-                        guard let selected = surfaceState.selectedReference(
-                            in: viewState.displayedRows
-                        )
-                        else { return }
-                        viewState.requestPasteFromDisplayedRow(selected)
-                    }
-                )
-                panelActions
-            }
-            .padding(.horizontal, PanelTheme.headerHorizontalPadding)
-            .padding(.top, PanelTheme.headerTopPadding)
-            .padding(.bottom, PanelTheme.headerBottomPadding)
-            .background {
-                // Only the header's empty background drags the window;
-                // foreground search controls keep their own interactions.
-                // List drag-out remains independent.
-                Color.clear
-                    .contentShape(Rectangle())
-                    .gesture(WindowDragGesture())
-                    .allowsWindowActivationEvents()
+            if surfaceState.isAtListRoot {
+                browsingHeader
             }
 
             NavigationStack(path: $surfaceState.detailsPath) {

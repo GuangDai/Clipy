@@ -21,7 +21,8 @@ struct ReviseEditorDraftTests {
         #expect(request.typeIdentifier == textType)
         #expect(request.pasteboardItemIndex == 0)
         #expect(!draft.hasReplacementSource(for: textType))
-        #expect(draft.installReplacementSource(current, forDirectEditing: true))
+        let sourceAccepted = draft.installReplacementSource(current, forDirectEditing: true)
+        #expect(sourceAccepted)
         #expect(draft.directEditingRequest == nil)
         #expect(draft.directEditingIdentity == RepresentationIdentity(typeIdentifier: textType))
         #expect(draft.replacementText(for: textType) == "current")
@@ -39,7 +40,8 @@ struct ReviseEditorDraftTests {
         for representations in [[text, sibling], [text, secondItem], [sibling]] {
             var draft = ReviseEditorDraft(details: details(canonical: representations, effective: representations))
             #expect(draft.directEditingRequest == nil)
-            #expect(!draft.installReplacementSource(text, forDirectEditing: true))
+            let sourceAccepted = draft.installReplacementSource(text, forDirectEditing: true)
+            #expect(!sourceAccepted)
             #expect(!draft.hasReplacementSource(for: textType))
             #expect(!draft.isDirty)
         }
@@ -48,13 +50,15 @@ struct ReviseEditorDraftTests {
     @Test func directEditingRequiresAValidSourceAndOnlyActualByteChangesAuthorReplacement() {
         let original = HistoryRepresentation(typeIdentifier: textType, bytes: Data([0xC3, 0xA9]))
         var draft = ReviseEditorDraft(details: details(canonical: [original], effective: [original]))
-        #expect(!draft.installReplacementSource(
+        let invalidSourceAccepted = draft.installReplacementSource(
             HistoryRepresentation(typeIdentifier: textType, bytes: Data([0xFF])),
             forDirectEditing: true
-        ))
+        )
+        #expect(!invalidSourceAccepted)
         #expect(draft.directEditingIdentity == nil)
         #expect(!draft.isDirty)
-        #expect(draft.installReplacementSource(original, forDirectEditing: true))
+        let originalSourceAccepted = draft.installReplacementSource(original, forDirectEditing: true)
+        #expect(originalSourceAccepted)
         draft.setReplacementText("e\u{301}", for: textType)
         #expect(draft.dismissalDecision == .confirmDiscard)
         #expect(decisions(from: draft.revisionRequest())[textType] == .replace(bytes: Data([0x65, 0xCC, 0x81])))
@@ -71,7 +75,8 @@ struct ReviseEditorDraftTests {
     @Test func directEditingLeavesExplicitFormatDecisionsUnderUserControl() {
         let original = HistoryRepresentation(typeIdentifier: textType, bytes: Data("original".utf8))
         var draft = ReviseEditorDraft(details: details(canonical: [original], effective: [original]))
-        #expect(draft.installReplacementSource(original, forDirectEditing: true))
+        let sourceAccepted = draft.installReplacementSource(original, forDirectEditing: true)
+        #expect(sourceAccepted)
         draft.setChoice(.useOriginal, for: textType)
         #expect(draft.directEditingIdentity == nil)
         #expect(decisions(from: draft.revisionRequest())[textType] == .inheritCanonical)
@@ -88,7 +93,8 @@ struct ReviseEditorDraftTests {
         var draft = ReviseEditorDraft(details: utf16Details(
             type: fixture.type, canonical: fixture.initial, effective: fixture.initial
         ))
-        #expect(draft.installReplacementSource(source, forDirectEditing: true))
+        let sourceAccepted = draft.installReplacementSource(source, forDirectEditing: true)
+        #expect(sourceAccepted)
         #expect(!draft.isDirty)
         draft.setReplacementText("B🌿", for: fixture.type)
         #expect(decisions(from: draft.revisionRequest())[fixture.type] == .replace(bytes: fixture.edited))
@@ -99,14 +105,16 @@ struct ReviseEditorDraftTests {
         draft.setReplacementText("B🌿", for: fixture.type)
         draft.markStale()
         #expect(!draft.canSubmit)
-        #expect(!draft.reloadLatest(details: utf16Details(
+        let olderReloadAccepted = draft.reloadLatest(details: utf16Details(
             type: fixture.type, canonical: fixture.initial, effective: fixture.initial, version: 1
-        )))
+        ))
+        #expect(!olderReloadAccepted)
         #expect(draft.directEditingIdentity != nil)
-        #expect(draft.reloadLatest(details: utf16Details(
+        let latestReloadAccepted = draft.reloadLatest(details: utf16Details(
             type: fixture.type, canonical: fixture.initial,
             effective: Data([0xFE, 0xFF, 0x00, 0x43]), version: 3
-        )))
+        ))
+        #expect(latestReloadAccepted)
         #expect(draft.directEditingIdentity == nil)
         #expect(draft.directEditingRequest == nil)
         #expect(draft.revisionRequest().expected == ContentVersion(rawValue: 3))
@@ -122,19 +130,22 @@ struct ReviseEditorDraftTests {
         let original = Data([0xFF, 0xFE, 0x41, 0x00])
         let latest = Data([0xFE, 0xFF, 0x00, 0x43])
         var draft = ReviseEditorDraft(details: utf16Details(type: type, canonical: original, effective: original))
-        #expect(draft.installReplacementSource(
+        let originalSourceAccepted = draft.installReplacementSource(
             HistoryRepresentation(typeIdentifier: type, bytes: original), forDirectEditing: true
-        ))
+        )
+        #expect(originalSourceAccepted)
         draft.markStale()
         #expect(draft.directEditingRequest == nil)
-        #expect(draft.reloadLatest(details: utf16Details(
+        let latestReloadAccepted = draft.reloadLatest(details: utf16Details(
             type: type, canonical: original, effective: latest, version: 3
-        )))
+        ))
+        #expect(latestReloadAccepted)
         #expect(!draft.hasReplacementSource(for: type))
         #expect(draft.directEditingRequest?.item.contentVersion == ContentVersion(rawValue: 3))
-        #expect(draft.installReplacementSource(
+        let latestSourceAccepted = draft.installReplacementSource(
             HistoryRepresentation(typeIdentifier: type, bytes: latest), forDirectEditing: true
-        ))
+        )
+        #expect(latestSourceAccepted)
         #expect(draft.replacementText(for: type) == "C")
         #expect(draft.dismissalDecision == .dismiss)
         draft.setReplacementText("D", for: type)

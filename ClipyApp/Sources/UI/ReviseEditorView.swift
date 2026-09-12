@@ -248,6 +248,12 @@ struct ReviseEditorView: View {
         }
         .padding(.horizontal, PanelTheme.spacingSmall)
         .padding(.vertical, PanelTheme.spacingXXSmall)
+        .background {
+            Color.clear
+                .contentShape(Rectangle())
+                .gesture(WindowDragGesture())
+                .allowsWindowActivationEvents()
+        }
     }
 
     @ViewBuilder
