@@ -1043,9 +1043,17 @@ struct HistoryPanelView: View {
                 }
                 .keyboardShortcut("q", modifiers: .command)
             } label: {
-                Image(systemName: keepPanelOpenIsActive ? "pin.fill" : "ellipsis")
-                    .foregroundStyle(keepPanelOpenIsActive ? Color.accentColor : Color.secondary)
+                Image(systemName: "ellipsis")
+                    .foregroundStyle(.secondary)
                     .frame(width: 24, height: 24)
+                    .overlay(alignment: .bottomTrailing) {
+                        if keepPanelOpenIsActive {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .accessibilityHidden(true)
+                        }
+                    }
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)

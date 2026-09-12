@@ -32,7 +32,7 @@ struct AppearanceSettingsTab: View {
     @AppStorage(PanelAppearanceSettings.previewAutoOpenDefaultsKey)
     private var isPreviewAutoOpenEnabled = true
 
-    @State private var isShowingTextAppearance = false
+    @State private var isShowingTextAppearance = true
     @State private var isShowingPreviewOptions = false
     @State private var hasResetPanelSize = false
     @AppStorage(PreviewTextSettings.maximumCharactersKey)
@@ -53,14 +53,23 @@ struct AppearanceSettingsTab: View {
                 SettingsFieldLayout {
                     Text(SettingsCopy.text("Row density"))
                         .fixedSize(horizontal: false, vertical: true)
-                    Picker(SettingsCopy.text("Row density"), selection: $rowDensity) {
-                        ForEach(HistoryRowDensity.allCases, id: \.self) { density in
-                            Text(rowDensityLabel(density)).tag(density)
+                    VStack(spacing: 6) {
+                        HStack(spacing: 0) {
+                            ForEach(HistoryRowDensity.allCases, id: \.self) { density in
+                                densitySample(density)
+                                    .frame(maxWidth: .infinity)
+                            }
                         }
+                        .accessibilityHidden(true)
+                        Picker(SettingsCopy.text("Row density"), selection: $rowDensity) {
+                            ForEach(HistoryRowDensity.allCases, id: \.self) { density in
+                                Text(rowDensityLabel(density)).tag(density)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .accessibilityIdentifier("clipy.settings.appearance.row-density")
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .accessibilityIdentifier("clipy.settings.appearance.row-density")
                 }
                 DisclosureGroup(
                     AdaptiveSettingsCopy.text("Text Appearance"),
@@ -96,13 +105,14 @@ struct AppearanceSettingsTab: View {
                 Text(SettingsCopy.text("List"))
             }
             Section {
+                previewPlacementSample
                 Toggle(
                     SettingsCopy.text("Open preview automatically"),
                     isOn: $isPreviewAutoOpenEnabled
                 )
                 .accessibilityIdentifier("clipy.settings.appearance.preview-auto-open")
                 SettingsFieldLayout {
-                    Text(AdaptiveSettingsCopy.text("Preferred panel gap (pt)"))
+                    Label(SettingsCopy.text("Panel gap"), systemImage: "arrow.left.and.right")
                     TextField("", value: Binding(
                         get: { previewGap },
                         set: { previewGap = $0.isFinite ? max(0, $0) : Double(PanelGeometry.floatingPreviewGap) }
@@ -112,6 +122,7 @@ struct AppearanceSettingsTab: View {
                         .frame(minWidth: 64, idealWidth: 80, maxWidth: 120)
                         .accessibilityLabel(AdaptiveSettingsCopy.text("Preferred panel gap (pt)"))
                         .accessibilityIdentifier("clipy.settings.preview.panel-gap")
+                        .help(AdaptiveSettingsCopy.text("The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap."))
                 }
                 DisclosureGroup(AdaptiveSettingsCopy.text("Advanced Preview"), isExpanded: $isShowingPreviewOptions) {
                     Toggle(AdaptiveSettingsCopy.text("Show complete text"), isOn: Binding(
@@ -148,8 +159,6 @@ struct AppearanceSettingsTab: View {
                 .accessibilityIdentifier("clipy.settings.preview.reset")
             } header: {
                 Text(AdaptiveSettingsCopy.text("Preview"))
-            } footer: {
-                Text(AdaptiveSettingsCopy.text("The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap."))
             }
             Section {
                 if let popupPosition {
@@ -180,25 +189,127 @@ struct AppearanceSettingsTab: View {
         .formStyle(.grouped)
     }
 
-    /// A harmless sample reacts to the same preferences as the real list,
-    /// giving typography and spacing choices visible context.
+    /// V2-11: ordinary rows have a title, never a fabricated body excerpt.
+    /// The sample uses the same metrics and configured title-line allowance
+    /// as HistoryRowView, so its size changes with the actual preference.
     private var sampleRow: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "doc.text")
-                .font(.title2)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(AdaptiveSettingsCopy.text("A note for later"))
-                    .font(PanelTheme.titleFont(for: rowFontSize))
-                Text(AdaptiveSettingsCopy.text("Text, links and files stay close at hand. Copy something and find it here when you need it."))
-                    .font(PanelTheme.snippetFont(for: rowFontSize))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(snippetLineCount.baseLineLimit(density: rowDensity))
-            }
-            Spacer(minLength: 0)
+        VStack(spacing: 0) {
+            sampleHistoryRow(
+                SettingsCopy.text("Reading notes — collect useful ideas, save a link, and pick up where you left off."),
+                symbol: "text.alignleft", selected: true
+            )
+            sampleHistoryRow("https://example.org/reading-list", symbol: "link")
+            sampleHistoryRow(SettingsCopy.text("Weekend itinerary.pdf"), symbol: "doc")
         }
-        .padding(.vertical, PanelTheme.rowVerticalPadding(for: rowDensity))
-        .accessibilityHidden(true)
+        .padding(6)
+        .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(.quaternary, lineWidth: 1)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(SettingsCopy.text("List sample"))
+        .accessibilityIdentifier("clipy.settings.appearance.list-sample")
+    }
+
+    private func sampleHistoryRow(
+        _ title: String, symbol: String, selected: Bool = false
+    ) -> some View {
+        let lines = snippetLineCount.baseLineLimit(density: rowDensity)
+        let descriptor = PanelContentFit.RowDescriptor(
+            isImageRow: false, titleLineCount: lines, snippetLineCount: 0
+        )
+        return HStack(spacing: PanelTheme.spacingSmall) {
+            Image(systemName: symbol)
+                .font(.system(size: 15))
+                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                .frame(width: PanelTheme.thumbnailSize(for: rowDensity))
+            Text(title)
+                .font(PanelTheme.titleFont(for: rowFontSize))
+                .lineLimit(lines)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.horizontal, PanelTheme.spacingXSmall)
+        .frame(height: PanelContentFit.rowHeight(
+            descriptor, density: rowDensity, fontSize: rowFontSize
+        ))
+        .background {
+            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
+                .fill(selected ? Color.accentColor.opacity(0.14) : Color.clear)
+        }
+    }
+
+    /// Keep the picker itself native. Its paired diagrams compare actual
+    /// density spacing without relying on custom NSSegmentedControl content.
+    private func densitySample(_ density: HistoryRowDensity) -> some View {
+        VStack(spacing: density == .compact ? 3 : 7) {
+            ForEach(0..<3) { _ in
+                HStack(spacing: 4) {
+                    RoundedRectangle(cornerRadius: 1).frame(width: 5, height: 5)
+                    Capsule().frame(width: 42, height: 3)
+                }
+            }
+        }
+        .foregroundStyle(rowDensity == density ? Color.accentColor : Color.secondary)
+        .frame(height: 30)
+    }
+
+    /// A small scale drawing expresses the relationship between the windows.
+    /// Only the drawing scales to fit; the persisted gap stays unbounded.
+    private var previewPlacementSample: some View {
+        VStack(spacing: 6) {
+            GeometryReader { geometry in
+                let gap = CGFloat(previewGap.isFinite ? max(0, previewGap) : 2)
+                let scale = min(1, max(0, geometry.size.width) / (220 + gap))
+                HStack(alignment: .top, spacing: gap * scale) {
+                    miniatureWindow(isPreview: false)
+                        .frame(width: 120 * scale, height: 60)
+                    miniatureWindow(isPreview: true)
+                        .frame(width: 100 * scale, height: 48)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+            .frame(height: 60)
+            Label {
+                Text("\(previewGap, format: .number) pt")
+                    .monospacedDigit()
+            } icon: {
+                Image(systemName: "arrow.left.and.right")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(SettingsCopy.text("Panel gap"))
+        .accessibilityValue(Text("\(previewGap, format: .number) pt"))
+        .accessibilityIdentifier("clipy.settings.appearance.gap-sample")
+    }
+
+    private func miniatureWindow(isPreview: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if !isPreview {
+                HStack(spacing: 3) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 6))
+                    Capsule().frame(maxWidth: .infinity).frame(height: 2)
+                }
+                .padding(.bottom, 2)
+            }
+            ForEach(0..<(isPreview ? 3 : 4), id: \.self) { index in
+                Capsule()
+                    .fill(!isPreview && index == 0 ? Color.accentColor : Color.secondary.opacity(0.3))
+                    .frame(height: isPreview ? 2 : 4)
+                    .padding(.trailing, isPreview && index == 2 ? 16 : 0)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(.background, in: RoundedRectangle(cornerRadius: 5))
+        .overlay {
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(.tertiary, lineWidth: 1)
+        }
+        .clipped()
     }
 
     private func rowDensityLabel(_ density: HistoryRowDensity) -> String {

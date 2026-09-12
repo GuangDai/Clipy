@@ -48,9 +48,10 @@ struct HistoryQuickLookOverlay: View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Label(PreviewCopy.text("Quick Look preview"), systemImage: "eye")
+                    .labelStyle(.iconOnly)
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .accessibilityHidden(true)
                 Spacer(minLength: 8)
                 Button(action: onDismiss) {
                     Image(systemName: "xmark")
@@ -58,7 +59,8 @@ struct HistoryQuickLookOverlay: View {
                         .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
                 .controlSize(.small)
                 .accessibilityLabel(PreviewCopy.text("Close"))
                 .help(PreviewCopy.text("Close"))

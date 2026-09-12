@@ -70,15 +70,21 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         choose("At Mouse Cursor", in: positionControl, app: app)
         let autoOpen = app.switches["clipy.settings.appearance.preview-auto-open"]
         XCTAssertTrue(autoOpen.waitForExistence(timeout: 5), app.debugDescription)
+        SettingsJourneyControls.scroll(autoOpen,
+            into: app.scrollViews.containing(.any, identifier: autoOpen.identifier).firstMatch, app: app)
         if (autoOpen.value as? Int) == 0 { autoOpen.click() }
         XCTAssertTrue(waitUntil(timeout: 5) {
             (autoOpen.value as? Int) == 1
         }, app.debugDescription)
         let reset = app.buttons["clipy.settings.appearance.reset-panel-size"]
         XCTAssertTrue(reset.waitForExistence(timeout: 5), app.debugDescription)
+        SettingsJourneyControls.scroll(reset,
+            into: app.scrollViews.containing(.button, identifier: reset.identifier).firstMatch, app: app)
         reset.click()
         // Keep the real pointer in place through Cmd-W and keyboard summon:
         // x=40 leaves room for the 360-point panel plus the trailing pane.
+        SettingsJourneyControls.scroll(positionControl,
+            into: app.scrollViews.containing(.any, identifier: positionControl.identifier).firstMatch, app: app)
         positionControl.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             .withOffset(CGVector(dx: 40 - positionControl.frame.midX, dy: 0))
             .hover()
@@ -150,6 +156,8 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
     @MainActor
     private func choose(_ title: String, in control: XCUIElement, app: XCUIApplication) {
         XCTAssertTrue(control.waitForExistence(timeout: 5), app.debugDescription)
+        SettingsJourneyControls.scroll(control,
+            into: app.scrollViews.containing(.any, identifier: control.identifier).firstMatch, app: app)
         control.click()
         // Scope to this real picker; the Window menu also has Left/Right.
         let option = control.menuItems[title]

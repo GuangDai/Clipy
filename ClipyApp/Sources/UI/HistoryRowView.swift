@@ -130,7 +130,13 @@ struct HistoryRowView: View {
         ) - 2 * PanelContentFit.listRowVerticalInset)
         .background {
             RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
-                .fill(isHovered && !isSelected ? Color.primary.opacity(0.045) : .clear)
+                .fill(isSelected ? Color.accentColor.opacity(0.12)
+                    : (isHovered ? Color.primary.opacity(0.045) : .clear))
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
+                .strokeBorder(isSelected ? Color.accentColor.opacity(0.35) : .clear, lineWidth: 1)
+                .allowsHitTesting(false)
         }
         .background {
             if dragSource != nil { HistoryRowDragRegion(view: dragRegion) }

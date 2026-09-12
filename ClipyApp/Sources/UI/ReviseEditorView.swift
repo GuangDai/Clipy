@@ -142,8 +142,9 @@ struct ReviseEditorView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            navigationBar
             ScrollView {
-                VStack(spacing: PanelTheme.spacingLarge) {
+                VStack(spacing: PanelTheme.spacingSmall) {
                     if draft.canonicalRepresentations.count > 1 {
                         DisclosureGroup(DetailsPresentationCopy.text("About Formats", bundle: copyBundle)) {
                             Text(
@@ -167,7 +168,7 @@ struct ReviseEditorView: View {
                         decisionRow(for: representation)
                     }
                 }
-                .padding(PanelTheme.spacingXLarge)
+                .padding(PanelTheme.spacingLarge)
             }
             Divider()
             revisionDisclosure
@@ -210,6 +211,40 @@ struct ReviseEditorView: View {
         } message: {
             Text(verbatim: alertMessage)
         }
+    }
+
+    /// Embedded editing has the same navigation position as Details. The
+    /// icon still uses the dirty-draft dismissal decision, including Escape.
+    private var navigationBar: some View {
+        HStack(spacing: PanelTheme.spacingSmall) {
+            Button {
+                requestDismissal()
+            } label: {
+                Label(PanelActionsCopy.text("Cancel", bundle: copyBundle), systemImage: layout == .embeddedInDetails ? "chevron.backward" : "xmark")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .keyboardShortcut(.cancelAction)
+            .disabled(isSaving)
+            .help(PanelActionsCopy.text("Cancel", bundle: copyBundle))
+            .accessibilityLabel(PanelActionsCopy.text("Cancel", bundle: copyBundle))
+            .accessibilityIdentifier("clipy.editor.cancel")
+            .accessibilityHint(
+                draft.isDirty
+                    ? PanelActionsCopy.text("Asks before discarding unsaved changes.", bundle: copyBundle)
+                    : PanelActionsCopy.text("Closes the editor without changing the item.", bundle: copyBundle)
+            )
+            Spacer(minLength: 0)
+            Label(PanelActionsCopy.text("Edit Content", bundle: copyBundle), systemImage: "square.and.pencil")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Color.clear.frame(width: 24, height: 24)
+                .accessibilityHidden(true)
+        }
+        .padding(.horizontal, PanelTheme.spacingSmall)
+        .padding(.vertical, PanelTheme.spacingXXSmall)
     }
 
     @ViewBuilder
@@ -271,13 +306,19 @@ struct ReviseEditorView: View {
     /// visible before submission so the editor cannot imply destructive
     /// redaction of sensitive clipboard bytes (review Card 3D).
     private var revisionDisclosure: some View {
-        Text(ReviseEditorPresentation.revisionDisclosure(bundle: copyBundle))
+        Label {
+            Text(ReviseEditorPresentation.revisionDisclosure(bundle: copyBundle))
+        } icon: {
+            Image(systemName: "clock.arrow.circlepath")
+        }
         .font(.caption)
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, PanelTheme.spacingLarge)
         .padding(.top, PanelTheme.spacingMedium)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(ReviseEditorPresentation.revisionDisclosure(bundle: copyBundle))
         .accessibilityIdentifier("clipy.editor.revision-disclosure")
     }
 
@@ -328,17 +369,6 @@ struct ReviseEditorView: View {
             }
             HStack(spacing: PanelTheme.spacingLarge) {
                 Spacer(minLength: PanelTheme.spacingSmall)
-                Button(PanelActionsCopy.text("Cancel", bundle: copyBundle)) {
-                    requestDismissal()
-                }
-                .keyboardShortcut(.cancelAction)
-                .disabled(isSaving)
-                .accessibilityIdentifier("clipy.editor.cancel")
-                .accessibilityHint(
-                    draft.isDirty
-                        ? PanelActionsCopy.text("Asks before discarding unsaved changes.", bundle: copyBundle)
-                        : PanelActionsCopy.text("Closes the editor without changing the item.", bundle: copyBundle)
-                )
                 Button {
                     Task { await save() }
                 } label: {
@@ -348,7 +378,7 @@ struct ReviseEditorView: View {
                         Label(PanelActionsCopy.text("Save Revision", bundle: copyBundle), systemImage: "checkmark")
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(!canSave || isSaving || isReloading || replacementTask != nil)
                 .accessibilityLabel(isSaving ? PanelActionsCopy.text("Saving revision", bundle: copyBundle) : PanelActionsCopy.text("Save Revision", bundle: copyBundle))
@@ -359,6 +389,7 @@ struct ReviseEditorView: View {
             }
         }
         .padding(PanelTheme.spacingLarge)
+        .background(.bar)
     }
 
     /// The draft must leave at least one representation effective. An
@@ -407,6 +438,7 @@ struct ReviseEditorView: View {
         let pasteboardItemIndex = representation.pasteboardItemIndex
         let identity = representation.representationIdentity
         let replacementIsAvailable = draft.canReplace(representation)
+        let choice = draft.choice(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
         let replacementAccessibilityHint = replacementIsAvailable
             ? PanelActionsCopy.text(" Replace edits UTF-8 or UTF-16 plain text while preserving its encoding.", bundle: copyBundle)
             : PanelActionsCopy.text(" Replace requires a supported UTF-8 or UTF-16 plain-text format with valid content. Other formats can be preserved, restored, or hidden.", bundle: copyBundle)
@@ -419,7 +451,7 @@ struct ReviseEditorView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Text(verbatim: DetailsPresentationCopy.formatName(typeIdentifier, bundle: copyBundle))
-                .font(.headline)
+                .font(.subheadline.weight(.semibold))
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .textSelection(.enabled)
@@ -428,17 +460,23 @@ struct ReviseEditorView: View {
             PanelActionsCopy.text("Decision", bundle: copyBundle),
             selection: choiceBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
         ) {
-            Text(PanelActionsCopy.text("Keep Current", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.keepCurrent)
-            Text(PanelActionsCopy.text("Use Original", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.useOriginal)
-            Text(PanelActionsCopy.text("Hide", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.hide)
+            Label(PanelActionsCopy.text("Keep Current", bundle: copyBundle), systemImage: "checkmark")
+                .tag(ReviseEditorDraft.Choice.keepCurrent)
+            Label(PanelActionsCopy.text("Use Original", bundle: copyBundle), systemImage: "arrow.uturn.backward")
+                .tag(ReviseEditorDraft.Choice.useOriginal)
+            Label(PanelActionsCopy.text("Hide", bundle: copyBundle), systemImage: "eye.slash")
+                .tag(ReviseEditorDraft.Choice.hide)
             if replacementIsAvailable {
                 // Metadata offers only exact declared encodings. The
                 // selected source must load and validate before the
                 // TextEditor or a replacement decision is installed.
-                Text(PanelActionsCopy.text("Replace", bundle: copyBundle)).tag(ReviseEditorDraft.Choice.replace)
+                Label(PanelActionsCopy.text("Replace", bundle: copyBundle), systemImage: "pencil")
+                    .tag(ReviseEditorDraft.Choice.replace)
             }
         }
         .pickerStyle(.menu)
+        .controlSize(.small)
+        .tint(choice == .keepCurrent ? Color.secondary : Color.accentColor)
         .disabled(isSaving || isReloading || replacementTask != nil)
         .labelsHidden()
         .fixedSize()
@@ -476,16 +514,23 @@ struct ReviseEditorView: View {
                 accessibilityLabel: DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + identity.accessibilityLabel
             ))
             .font(.caption)
-            if draft.choice(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) == .replace {
+            if choice == .replace {
                 TextEditor(text: textBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex))
                     .disabled(isSaving || isReloading || replacementTask != nil)
                     .font(.system(.body, design: .monospaced))
                     .scrollContentBackground(.hidden)
                     .focused($focusedReplacement, equals: identity)
                     .containerRelativeFrame(.vertical) { height, _ in height * 0.65 }
-                    .frame(minHeight: 140)
                     .padding(PanelTheme.spacingSmall)
                     .background(.background, in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
+                            .strokeBorder(
+                                focusedReplacement == identity ? Color.accentColor : Color.primary.opacity(0.12),
+                                lineWidth: focusedReplacement == identity ? 2 : 1
+                            )
+                            .allowsHitTesting(false)
+                    }
                     .accessibilityLabel(
                         PanelActionsCopy.format("Replacement text for %@", identity.accessibilityLabel, bundle: copyBundle)
                     )
@@ -494,7 +539,8 @@ struct ReviseEditorView: View {
                     )
             }
         }
-        .padding(.vertical, PanelTheme.spacingSmall)
+        .padding(PanelTheme.spacingSmall)
+        .background(.background.opacity(0.55), in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
     }
 
     private func choiceBinding(

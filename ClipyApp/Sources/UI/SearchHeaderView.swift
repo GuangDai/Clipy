@@ -44,7 +44,9 @@ struct SearchHeaderView: View {
                 searchField
                     .frame(maxWidth: .infinity)
                 modeMenu
+                    .frame(width: 24, height: 24)
                 filterMenu
+                    .frame(width: 24, height: 24)
             }
             if hasActiveFilters {
                 Button {
@@ -52,16 +54,29 @@ struct SearchHeaderView: View {
                     viewState.showsPinnedOnly = false
                     searchFieldFocused.wrappedValue = true
                 } label: {
-                    Label(filterSummary, systemImage: "xmark.circle.fill")
+                    HStack(spacing: 5) {
+                        switch viewState.typeFilter {
+                        case .all: EmptyView()
+                        case .text: Image(systemName: "text.alignleft")
+                        case .images: Image(systemName: "photo")
+                        case .links: Image(systemName: "link")
+                        }
+                        if viewState.showsPinnedOnly {
+                            Image(systemName: "pin.fill")
+                        }
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .semibold))
+                    }
                         .font(.caption)
-                        .lineLimit(1)
+                        .padding(.horizontal, 6)
+                        .background(Color.accentColor.opacity(0.1), in: Capsule())
                 }
                 .buttonStyle(.borderless)
                 .tint(.accentColor)
                 .accessibilityIdentifier("clipy.search.clear-filters")
                 .accessibilityLabel(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
                 .accessibilityValue(filterSummary)
-                .help(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
+                .help(filterSummary + " · " + PanelChromeCopy.text("Clear filters", bundle: copyBundle))
             }
         }
         .background { modeShortcuts }
@@ -140,6 +155,12 @@ struct SearchHeaderView: View {
             .quaternary,
             in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
         )
+        .overlay {
+            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
+                .strokeBorder(searchFieldFocused.wrappedValue
+                    ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
     }
 
     /// Counts include traversed rows in the complete filtered query. A
@@ -213,10 +234,12 @@ struct SearchHeaderView: View {
             Divider()
             Toggle(PanelActionsCopy.text("Pinned Only", bundle: copyBundle), isOn: pinnedOnlyBinding)
         } label: {
-            Image(systemName: hasActiveFilters
-                ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(hasActiveFilters ? Color.accentColor : Color.secondary)
                 .frame(width: 24, height: 24)
+                .background(hasActiveFilters ? Color.accentColor.opacity(0.12) : .clear,
+                            in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall))
         }
         .fixedSize()
         .menuStyle(.borderlessButton)

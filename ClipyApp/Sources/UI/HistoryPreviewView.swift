@@ -572,6 +572,7 @@ struct HistoryPreviewView: View {
         if let occurrence = PreviewFooterMetadata(item: targetItem, row: observedRow) {
             HStack(spacing: 8) {
                 SourceApplicationLabel(application: occurrence.lastSource, store: sourceIcons)
+                    .foregroundStyle(.secondary)
                 if occurrence.count > 1 {
                     // Copy count remains available in Information. Give the
                     // source and actions room before this secondary detail;
@@ -579,6 +580,7 @@ struct HistoryPreviewView: View {
                     ViewThatFits(in: .horizontal) {
                         Text(PreviewCopy.copyCount(occurrence.count, locale: locale))
                             .fixedSize()
+                            .foregroundStyle(.secondary)
                         Color.clear.frame(width: 0, height: 0)
                     }
                     .layoutPriority(-1)
@@ -587,9 +589,11 @@ struct HistoryPreviewView: View {
                     .layoutPriority(-2)
                 if let row = observedRow {
                     Button {
-                        guard pinRequest == nil else { return }
+                        // Resolve the live row on activation so repeated
+                        // shortcuts never reuse a rendered pin state.
+                        guard pinRequest == nil, let current = observedRow else { return }
                         pinFailure = nil
-                        pinRequest = PinRequest(item: row.item, isPinned: row.pinnedPosition != nil)
+                        pinRequest = PinRequest(item: current.item, isPinned: current.pinnedPosition != nil)
                     } label: {
                         Group {
                             if pinRequest?.item == row.item {
@@ -603,25 +607,16 @@ struct HistoryPreviewView: View {
                         .contentShape(Rectangle())
                     }
                     .disabled(pinRequest != nil)
-                    .buttonStyle(.plain)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.mini)
+                    .foregroundStyle(row.pinnedPosition == nil ? Color.secondary : Color.accentColor)
                     // The floating pane is never key; Quick Look shares this
                     // button in the key window while the list is disabled.
                     .keyboardShortcut("p", modifiers: .command)
                     .help(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin") + "  ⌘P")
                     .accessibilityLabel(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin"))
                     .accessibilityIdentifier("clipy.preview.pin")
-                    .fixedSize()
-                    .layoutPriority(1)
-                    Button { viewState.requestPasteFromDisplayedRow(row.item) } label: {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 12))
-                            .frame(width: 24, height: 24)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(PanelActionsCopy.text("Copy to Clipboard") + "  ↵")
-                    .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard"))
-                    .accessibilityIdentifier("clipy.preview.copy")
                     .fixedSize()
                     .layoutPriority(1)
                 }
@@ -631,7 +626,8 @@ struct HistoryPreviewView: View {
                         .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
                 .controlSize(.mini)
                 .help(PreviewPresentationCopy.text("Preview Information"))
                 .accessibilityLabel(PreviewPresentationCopy.text("Preview Information"))
@@ -657,9 +653,24 @@ struct HistoryPreviewView: View {
                     .padding(16)
                     .frame(idealWidth: 240, maxWidth: 360, alignment: .leading)
                 }
+                if let row = observedRow {
+                    Button { viewState.requestPasteFromDisplayedRow(row.item) } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.circle)
+                    .controlSize(.mini)
+                    .help(PanelActionsCopy.text("Copy to Clipboard") + "  ↵")
+                    .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard"))
+                    .accessibilityIdentifier("clipy.preview.copy")
+                    .fixedSize()
+                    .layoutPriority(1)
+                }
             }
             .font(.caption2)
-            .foregroundStyle(.secondary)
         }
     }
 }

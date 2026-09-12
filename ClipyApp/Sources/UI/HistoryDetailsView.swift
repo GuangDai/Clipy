@@ -273,16 +273,26 @@ struct HistoryDetailsView: View {
                 dismiss()
             } label: {
                 Label(PanelActionsCopy.text("Back to History", bundle: copyBundle), systemImage: "chevron.backward")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 24, height: 24)
             }
             .buttonStyle(.borderless)
+            .help(PanelActionsCopy.text("Back to History", bundle: copyBundle))
+            .accessibilityLabel(PanelActionsCopy.text("Back to History", bundle: copyBundle))
             .keyboardShortcut(.cancelAction)
             .disabled(showsRemoveConfirmation)
             .accessibilityIdentifier("clipy.details.back")
             Spacer(minLength: 0)
+            Text(PanelActionsCopy.text("Details", bundle: copyBundle))
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            Color.clear.frame(width: 24, height: 24)
+                .accessibilityHidden(true)
         }
         .controlSize(.small)
-        .padding(.horizontal, PanelTheme.spacingXLarge)
-        .padding(.vertical, PanelTheme.spacingSmall)
+        .padding(.horizontal, PanelTheme.spacingSmall)
+        .padding(.vertical, PanelTheme.spacingXXSmall)
     }
 
     /// The floating nonactivating panel's attached SwiftUI sheet is exposed
@@ -383,29 +393,23 @@ struct HistoryDetailsView: View {
     private func actionBar(isPinned: Bool) -> some View {
         HStack(spacing: PanelTheme.spacingSmall) {
             Button {
-                // The only History→pasteboard hand-off (01 §5.6); the view
-                // state routes it to the composition root's paste closure.
-                viewState.requestPaste(currentItem)
-            } label: {
-                Label(DetailsPresentationCopy.text("Copy", bundle: copyBundle), systemImage: "doc.on.doc")
-            }
-            .buttonStyle(.borderedProminent)
-            .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard", bundle: copyBundle))
-            Spacer(minLength: PanelTheme.spacingSmall)
-            Button {
                 Task { await togglePin(isPinned: isPinned) }
             } label: {
-                if isTogglingPin {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Label(
-                        isPinned ? PanelActionsCopy.text("Unpin", bundle: copyBundle) : PanelActionsCopy.text("Pin", bundle: copyBundle),
-                        systemImage: isPinned ? "pin.slash" : "pin"
-                    )
+                Group {
+                    if isTogglingPin {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label(
+                            isPinned ? PanelActionsCopy.text("Unpin", bundle: copyBundle) : PanelActionsCopy.text("Pin", bundle: copyBundle),
+                            systemImage: isPinned ? "pin.fill" : "pin"
+                        )
+                    }
                 }
+                .frame(width: 28, height: 24)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderless)
+            .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
             .controlSize(.small)
             .labelStyle(.iconOnly)
             .help(isPinned ? PanelActionsCopy.text("Unpin", bundle: copyBundle) : PanelActionsCopy.text("Pin", bundle: copyBundle))
@@ -419,18 +423,22 @@ struct HistoryDetailsView: View {
                 showsEditor = true
             } label: {
                 Label(PanelActionsCopy.text("Edit Content", bundle: copyBundle), systemImage: "square.and.pencil")
+                    .frame(width: 28, height: 24)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderless)
             .controlSize(.small)
+            .labelStyle(.iconOnly)
             .help(PanelActionsCopy.text("Edit Content…", bundle: copyBundle))
             .accessibilityLabel(PanelActionsCopy.text("Edit Content", bundle: copyBundle))
             .accessibilityHint(PanelActionsCopy.text("Opens the revision editor for this item.", bundle: copyBundle))
+            Divider().frame(height: 16)
             Button {
                 showsRemoveConfirmation = true
             } label: {
                 Label(PanelActionsCopy.text("Remove", bundle: copyBundle), systemImage: "trash")
+                    .frame(width: 28, height: 24)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.borderless)
             .controlSize(.small)
             .labelStyle(.iconOnly)
             .help(PanelActionsCopy.text("Remove", bundle: copyBundle))
@@ -440,6 +448,21 @@ struct HistoryDetailsView: View {
             )
             .accessibilityIdentifier("clipy.details.remove")
             .disabled(isRemoving)
+            Spacer(minLength: PanelTheme.spacingSmall)
+            Button {
+                viewState.requestPaste(currentItem)
+            } label: {
+                Label(DetailsPresentationCopy.text("Copy", bundle: copyBundle), systemImage: "doc.on.doc")
+                    .labelStyle(.iconOnly)
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.glassProminent)
+            .buttonBorderShape(.circle)
+            .controlSize(.mini)
+            .help(PanelActionsCopy.text("Copy to Clipboard", bundle: copyBundle))
+            .accessibilityLabel(PanelActionsCopy.text("Copy to Clipboard", bundle: copyBundle))
+            .accessibilityIdentifier("clipy.details.copy")
         }
         .padding(.horizontal, PanelTheme.spacingLarge)
         .padding(.vertical, PanelTheme.spacingSmall)
@@ -783,37 +806,28 @@ private struct DetailsBody: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: PanelTheme.spacingLarge) {
                 headerSection
                 contentSection
                 Divider()
                 infoSection
                 revisionsSection
             }
-            .padding(PanelTheme.spacingXLarge)
+            .padding(PanelTheme.spacingLarge)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var headerSection: some View {
-        VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
-            HStack(alignment: .top, spacing: PanelTheme.spacingLarge) {
-                contentTypeIcon
-                    .frame(width: 64, height: 64)
-                VStack(
-                    alignment: .leading,
-                    spacing: PanelTheme.spacingXXSmall
-                ) {
-                    Text(content.title ?? PanelActionsCopy.text("Clipboard Item", bundle: copyBundle))
-                        .font(.title2.weight(.semibold))
-                        .lineLimit(3)
-                        .textSelection(.enabled)
-                        .accessibilityIdentifier("clipy.details.title")
-                    pinBadge
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, PanelTheme.spacingXXSmall)
+        HStack(alignment: .top, spacing: PanelTheme.spacingSmall) {
+            contentTypeIcon
+            Text(content.title ?? PanelActionsCopy.text("Clipboard Item", bundle: copyBundle))
+                .font(.headline)
+                .lineLimit(2)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("clipy.details.title")
+            pinBadge
         }
     }
 
@@ -821,15 +835,9 @@ private struct DetailsBody: View {
     /// the explicitly requested representation preview below.
     private var contentTypeIcon: some View {
         Image(systemName: content.symbolName)
-            .font(.system(size: 28))
+            .font(.system(size: 18))
             .foregroundStyle(.secondary)
-            .frame(width: 64, height: 64)
-            .background(
-                Color.primary.opacity(0.06),
-                in: RoundedRectangle(
-                    cornerRadius: PanelTheme.cornerRadiusMedium
-                )
-            )
+            .frame(width: 24, height: 24)
             .accessibilityLabel(PanelActionsCopy.text("Content type icon", bundle: copyBundle))
     }
 
@@ -849,12 +857,12 @@ private struct DetailsBody: View {
                 .accessibilityLabel(PanelActionsCopy.pinnedPosition(position + 1, bundle: copyBundle, locale: locale))
                 .accessibilityIdentifier("clipy.details.pin-status")
         } else {
-            Text(PanelActionsCopy.text("Unpinned", bundle: copyBundle))
+            Label(PanelActionsCopy.text("Unpinned", bundle: copyBundle), systemImage: "pin.slash")
+                .labelStyle(.iconOnly)
                 .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, PanelTheme.spacingXSmall)
-                .padding(.vertical, PanelTheme.spacingXXXSmall)
-                .background(Color.primary.opacity(0.06), in: Capsule())
+                .foregroundStyle(.tertiary)
+                .help(PanelActionsCopy.text("Unpinned", bundle: copyBundle))
+                .accessibilityLabel(PanelActionsCopy.text("Unpinned", bundle: copyBundle))
                 .accessibilityIdentifier("clipy.details.pin-status")
         }
     }
@@ -892,7 +900,7 @@ private struct DetailsBody: View {
     }
 
     private var contentSection: some View {
-        VStack(alignment: .leading, spacing: PanelTheme.spacingXLarge) {
+        VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
             Picker(PanelActionsCopy.text("Content", bundle: copyBundle), selection: $basis) {
                 Text(PanelActionsCopy.text("Effective", bundle: copyBundle)).tag(ContentBasis.effective)
                 Text(PanelActionsCopy.text("Canonical", bundle: copyBundle)).tag(ContentBasis.canonical)
@@ -1013,23 +1021,28 @@ private struct RepresentationRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
-            HStack(alignment: .firstTextBaseline) {
-                if representation.isImage {
-                    Image(systemName: "photo")
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                }
+            HStack(spacing: PanelTheme.spacingSmall) {
+                Image(systemName: typeSymbol(for: [representation.typeIdentifier]))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18)
+                    .accessibilityHidden(true)
                 if representation.pasteboardItemIndex > 0 {
                     Text("\(representation.pasteboardItemIndex + 1) ·")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                Text(verbatim: DetailsPresentationCopy.formatName(representation.typeIdentifier, bundle: copyBundle))
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                VStack(alignment: .leading, spacing: PanelTheme.spacingXXXSmall) {
+                    Text(verbatim: DetailsPresentationCopy.formatName(representation.typeIdentifier, bundle: copyBundle))
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(DetailsFormat.bytes(representation.byteCount, locale: locale))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer(minLength: PanelTheme.spacingSmall)
                 if isHiddenFromEffective {
                     Label(PanelActionsCopy.text("Hidden", bundle: copyBundle), systemImage: "eye.slash")
+                        .labelStyle(.iconOnly)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, PanelTheme.spacingXSmall)
@@ -1040,25 +1053,29 @@ private struct RepresentationRow: View {
                         )
                         .accessibilityLabel(PanelActionsCopy.text("Hidden from effective content", bundle: copyBundle))
                 }
-            }
-            HStack(spacing: PanelTheme.spacingLarge) {
-                Button(action: onExport) {
-                    Label(PanelActionsCopy.text("Save As…", bundle: copyBundle), systemImage: "square.and.arrow.down")
-                }
-                .controlSize(.small)
-                .disabled(isExporting)
-                .accessibilityIdentifier("clipy.details.save-as." + representation.identity.accessibilitySuffix)
-                .accessibilityLabel(PanelActionsCopy.format("Save %@ As…", representation.identity.accessibilityLabel, bundle: copyBundle))
-                .accessibilityHint(PanelActionsCopy.text("Saves the complete bytes of this displayed representation to a file you choose.", bundle: copyBundle))
                 Button(action: onPreview) {
                     Label(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle),
-                          systemImage: isLoading ? "xmark.circle" : "eye")
+                          systemImage: isLoading ? "xmark" : (preview == nil ? "eye" : "eye.fill"))
+                        .frame(width: 24, height: 24)
                 }
+                .foregroundStyle(preview == nil ? Color.secondary : Color.accentColor)
+                .help(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle))
                 .accessibilityIdentifier("clipy.details.show-preview." + representation.identity.accessibilitySuffix)
                 .accessibilityLabel(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle)
                     + ": " + representation.identity.accessibilityLabel)
+                Button(action: onExport) {
+                    Label(PanelActionsCopy.text("Save As…", bundle: copyBundle), systemImage: "square.and.arrow.down")
+                        .frame(width: 24, height: 24)
+                }
+                .controlSize(.small)
+                .disabled(isExporting)
+                .help(PanelActionsCopy.text("Save As…", bundle: copyBundle))
+                .accessibilityIdentifier("clipy.details.save-as." + representation.identity.accessibilitySuffix)
+                .accessibilityLabel(PanelActionsCopy.format("Save %@ As…", representation.identity.accessibilityLabel, bundle: copyBundle))
+                .accessibilityHint(PanelActionsCopy.text("Saves the complete bytes of this displayed representation to a file you choose.", bundle: copyBundle))
             }
             .buttonStyle(.borderless)
+            .labelStyle(.iconOnly)
             .controlSize(.small)
             if isLoading { ProgressView().controlSize(.small) }
             if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
@@ -1126,15 +1143,10 @@ private struct RepresentationRow: View {
                     )
             }
             DisclosureGroup(DetailsPresentationCopy.text("Format Details", bundle: copyBundle)) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(verbatim: representation.typeIdentifier)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                    Spacer(minLength: PanelTheme.spacingSmall)
-                    Text(DetailsFormat.bytes(representation.byteCount, locale: locale))
-                        .font(.caption)
-                }
-                .foregroundStyle(.secondary)
+                Text(verbatim: representation.typeIdentifier)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .foregroundStyle(.secondary)
             }
             .disclosureGroupStyle(AppDisclosureGroupStyle(
                 identifier: "clipy.details.format-details." + representation.identity.accessibilitySuffix,
@@ -1142,7 +1154,8 @@ private struct RepresentationRow: View {
             ))
             .font(.caption)
         }
-        .padding(.vertical, PanelTheme.spacingSmall)
+        .padding(PanelTheme.spacingSmall)
+        .background(.background.opacity(0.55), in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
     }
 }
 
@@ -1180,15 +1193,21 @@ private struct RevisionRow: View {
             }
             Spacer(minLength: PanelTheme.spacingSmall)
             if revision.isActive {
-                Label(PanelActionsCopy.text("Active", bundle: copyBundle), systemImage: "checkmark.circle")
+                Label(PanelActionsCopy.text("Active", bundle: copyBundle), systemImage: "checkmark.circle.fill")
+                    .labelStyle(.iconOnly)
                     .font(.caption)
                     .foregroundStyle(Color.accentColor)
                     .accessibilityLabel(PanelActionsCopy.text("Active revision", bundle: copyBundle))
             }
-            Button(PanelActionsCopy.text("Revert", bundle: copyBundle), action: onRevert)
-                .buttonStyle(.bordered)
+            Button(action: onRevert) {
+                Label(PanelActionsCopy.text("Revert", bundle: copyBundle), systemImage: "arrow.uturn.backward")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 24, height: 24)
+            }
+                .buttonStyle(.borderless)
                 .controlSize(.small)
                 .disabled(revision.isActive)
+                .help(PanelActionsCopy.format("Revert to %@", revision.title, bundle: copyBundle))
                 .accessibilityLabel(PanelActionsCopy.format("Revert to %@", revision.title, bundle: copyBundle))
                 .accessibilityHint(
                     PanelActionsCopy.text("Restores this revision as the item's current content.", bundle: copyBundle)
