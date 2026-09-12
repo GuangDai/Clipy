@@ -102,23 +102,6 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// callbacks without introducing a second lifecycle owner (Card 14D).
     private var deferredFocusLossCloseTask: Task<Void, Never>?
 
-#if DEBUG
-    // Temporary [DEBUG-panel-focus] experiment for the failing Back → typing
-    // journey. No text content is recorded, and other launches do no I/O.
-    private let focusFactsForTesting: () -> (root: Bool, active: Bool, focused: Bool)?
-    private let focusTraceURLForTesting: URL? = {
-        guard ProcessInfo.processInfo.environment["CLIPY_UI_TEST_FOCUS_TRACE"] == "1",
-              let configuration = RunningUITestConfiguration.current()
-        else { return nil }
-        return configuration.storeURL.deletingLastPathComponent()
-            .appendingPathComponent("panel-focus-trace.txt")
-    }()
-    private var focusTraceFileForTesting: FileHandle?
-    private var focusTraceCountForTesting = 0
-    private var lastFocusTraceRootForTesting: Bool?
-    private var hasTracedTypingFieldsForTesting = false
-#endif
-
     init(
         rootView: PanelRootView,
         previewState: PreviewPaneState,
@@ -136,12 +119,6 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         self.onDidChangeScreen = onDidChangeScreen
         self.onFrameChanged = onFrameChanged
         self.onPanelClosed = onClosed
-#if DEBUG
-        focusFactsForTesting = { [weak appDelegate = rootView.appDelegate] in
-            guard let surface = appDelegate?.panelSurfaceState else { return nil }
-            return (surface.isAtListRoot, surface.isSessionActive, surface.searchFieldFocusForTesting)
-        }
-#endif
         super.init(
             contentRect: NSRect(
                 x: 0, y: 0,
@@ -202,22 +179,6 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// Only an unmodified settled Return enters the product paste intent
     /// (REVIEW Card 14A/15; UI-7).
     override func sendEvent(_ event: NSEvent) {
-#if DEBUG
-        let tracesFocus = focusTraceURLForTesting != nil && (
-            event.type == .keyDown || event.type == .leftMouseDown
-            || event.type == .leftMouseUp || event.type == .rightMouseDown
-            || event.type == .rightMouseUp
-        )
-        if tracesFocus {
-            traceFocusForTesting(
-                "event.begin type=\(event.type.rawValue) key=\(event.type == .keyDown ? String(event.keyCode) : "none")",
-                isKeyDown: event.type == .keyDown
-            )
-        }
-        defer {
-            if tracesFocus { traceFocusForTesting("event.end type=\(event.type.rawValue)") }
-        }
-#endif
         // `keyCode` is valid only for key events. Reading it from a mouse
         // event raises an AppKit exception before `super` can deliver the
         // click, which made every SwiftUI control in this panel inert under
@@ -484,9 +445,6 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
 
     /// Arms preview dwell auto-open while the panel is key.
     func windowDidBecomeKey(_ notification: Notification) {
-#if DEBUG
-        traceFocusForTesting("window.didBecomeKey")
-#endif
         deferredFocusLossCloseTask?.cancel()
         deferredFocusLossCloseTask = nil
         previewState.panelBecameKey()
@@ -494,9 +452,6 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
 
     /// Disarms preview dwell auto-open when the panel loses key.
     func windowDidResignKey(_ notification: Notification) {
-#if DEBUG
-        traceFocusForTesting("window.didResignKey")
-#endif
         previewState.panelResignedKey()
     }
 
@@ -545,54 +500,6 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     }
 
 #if DEBUG
-    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
-        let accepted = super.makeFirstResponder(responder)
-        traceFocusForTesting("makeFirstResponder requested=\(focusObjectForTesting(responder)) accepted=\(accepted)")
-        return accepted
-    }
-
-    private func focusObjectForTesting(_ object: AnyObject?) -> String {
-        guard let object else { return "nil" }
-        return "\(type(of: object))@\(ObjectIdentifier(object))"
-    }
-
-    private func traceFocusForTesting(_ stage: String, isKeyDown: Bool = false) {
-        guard let url = focusTraceURLForTesting,
-              let facts = focusFactsForTesting(),
-              focusTraceCountForTesting < 64
-        else { return }
-        // Ignore launch, Settings, resizing and preview. Start only when
-        // this fixture enters Details, immediately before its Back action.
-        if focusTraceFileForTesting == nil {
-            guard !facts.root else { return }
-            guard FileManager.default.createFile(atPath: url.path, contents: Data()),
-                  let file = try? FileHandle(forWritingTo: url)
-            else { return }
-            focusTraceFileForTesting = file
-        }
-        var fields: [String] = []
-        // Inspect mounted fields at Details/Back and the first returned key;
-        // subsequent events only read the responder and field editor.
-        let startsTyping = facts.root && isKeyDown && !hasTracedTypingFieldsForTesting
-        if lastFocusTraceRootForTesting != facts.root || startsTyping {
-            if startsTyping { hasTracedTypingFieldsForTesting = true }
-            lastFocusTraceRootForTesting = facts.root
-            var pending = contentView.map { [$0] } ?? []
-            var visited = 0
-            while let view = pending.popLast(), visited < 256, fields.count < 8 {
-                visited += 1
-                if let field = view as? NSTextField, field.isEditable {
-                    fields.append("\(focusObjectForTesting(field)){hidden=\(field.isHiddenOrHasHiddenAncestor),window=\(field.window?.windowNumber ?? -1),editor=\(focusObjectForTesting(field.currentEditor()))}")
-                }
-                pending.append(contentsOf: view.subviews.reversed())
-            }
-        }
-        let editor = firstResponder as? NSTextView
-        let line = "[DEBUG-panel-focus] t=\(ProcessInfo.processInfo.systemUptime) \(stage) panel=\(windowNumber) key=\(isKeyWindow) appKey=\(NSApp.keyWindow?.windowNumber ?? -1) responder=\(focusObjectForTesting(firstResponder)) fieldEditor=\(editor?.isFieldEditor ?? false) delegate=\(focusObjectForTesting(editor?.delegate)) root=\(facts.root) active=\(facts.active) focusState=\(facts.focused) fields=\(fields.joined(separator: ";"))\n"
-        focusTraceCountForTesting += 1
-        try? focusTraceFileForTesting?.write(contentsOf: Data(line.utf8))
-    }
-
     /// Deterministic hosted-test join for the public-state focus-loss decision.
     /// Production has no caller-facing lifecycle seam.
     func waitForDeferredFocusLossCloseForTesting() async {

@@ -44,7 +44,7 @@ public struct PreviewText: Equatable, Sendable {
                 // Combining-only segments occupy little vertical space, so
                 // the first viewport materializes many of them. Use smaller
                 // shaping work units for this exceptional grapheme (01 §6).
-                let scalarBudget = min(budget, 128)
+                let scalarBudget = min(budget, 64)
                 var scalarIndex = index
                 while scalarIndex != next {
                     let scalar = text.unicodeScalars[scalarIndex]

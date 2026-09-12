@@ -131,6 +131,13 @@ private struct FullReferenceText: NSViewRepresentable {
     let value: String
     let identifier: String
 
+    @MainActor
+    final class Coordinator {
+        var measuredSize: CGSize?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField(wrappingLabelWithString: value)
         field.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
@@ -145,15 +152,24 @@ private struct FullReferenceText: NSViewRepresentable {
     func updateNSView(_ field: NSTextField, context: Context) {
         if !field.stringValue.utf8.elementsEqual(value.utf8) {
             field.stringValue = value
+            context.coordinator.measuredSize = nil
         }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextField, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite, width > 0,
               let cell = nsView.cell else { return nil }
+        // SwiftUI can ask for the same size repeatedly during layout. Keep
+        // only this label's last actual measurement; a text or width change
+        // measures again, so resizing never reuses the old wrapping height.
+        if let measuredSize = context.coordinator.measuredSize, measuredSize.width == width {
+            return measuredSize
+        }
         let size = cell.cellSize(forBounds: NSRect(
             x: 0, y: 0, width: width, height: .greatestFiniteMagnitude
         ))
-        return CGSize(width: width, height: ceil(size.height))
+        let measuredSize = CGSize(width: width, height: ceil(size.height))
+        context.coordinator.measuredSize = measuredSize
+        return measuredSize
     }
 }

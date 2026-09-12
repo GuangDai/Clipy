@@ -167,10 +167,6 @@ final class HistoryPanelSurfaceState {
     private(set) var memoryPressure: DisplayMemoryPressure = .normal
     private(set) var memoryPressureGeneration = 0
     var isAtListRoot: Bool { detailsPath.isEmpty }
-#if DEBUG
-    // Temporary native-focus experiment; never participates in rendering.
-    @ObservationIgnored var searchFieldFocusForTesting = false
-#endif
 
     func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
         memoryPressure = pressure
@@ -646,16 +642,8 @@ struct HistoryPanelView: View {
                 if !isActive { isSearchFieldFocused = false }
             }
             .onChange(of: surfaceState.isAtListRoot) { _, isAtRoot in
-                // NavigationStack retains its root while Details is pushed.
-                // Its initial/default preference is not a fresh focus request
-                // on Back; restore the retained search binding explicitly.
-                isSearchFieldFocused = isAtRoot && surfaceState.isSessionActive
+                if !isAtRoot { isSearchFieldFocused = false }
             }
-#if DEBUG
-            .onChange(of: isSearchFieldFocused, initial: true) { _, focused in
-                surfaceState.searchFieldFocusForTesting = focused
-            }
-#endif
             .onChange(of: surfaceState.selection) { _, newSelection in
                 previewState.handleSelectionChange(
                     PreviewSelectionResolution.resolve(
@@ -827,10 +815,9 @@ struct HistoryPanelView: View {
         )
     }
 
-    /// Search belongs to the same navigation destination as the list
-    /// (V2-11). When Back restores this branch, SwiftUI evaluates its search
-    /// preference as part of that focus transition. A sibling header's task
-    /// races NavigationStack restoring first responder to its list instead.
+    /// Search and list share the retained navigation destination (V2-11).
+    /// Its keyed task requests focus when Back reactivates that destination;
+    /// an outer onChange runs inside the pop's focus teardown instead.
     private var browsingRoot: some View {
         VStack(spacing: 0) {
             browsingHeader
@@ -859,6 +846,10 @@ struct HistoryPanelView: View {
             )
         }
         .defaultFocus($isSearchFieldFocused, true, priority: .userInitiated)
+        .task(id: surfaceState.isAtListRoot) {
+            guard surfaceState.isAtListRoot, surfaceState.isSessionActive else { return }
+            isSearchFieldFocused = true
+        }
         // Attach the browsing group to the actual navigation destination;
         // NavigationStack does not preserve an outer wrapper's AX group.
         .accessibilityElement(children: .contain)

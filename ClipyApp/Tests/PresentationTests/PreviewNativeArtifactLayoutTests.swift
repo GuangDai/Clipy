@@ -144,6 +144,14 @@ struct PreviewNativeArtifactLayoutTests {
             Issue.record("Expected the complete file reference")
             return
         }
+        let shortAddress = "file:///clipy-preview-uncreated/short"
+        let shortOutcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "public.file-url", bytes: Data(shortAddress.utf8))
+        ])
+        guard case .content(.reference(let shortReference)) = shortOutcome else {
+            Issue.record("Expected the replacement file reference")
+            return
+        }
         let path = try #require(reference.filePath)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
@@ -185,8 +193,9 @@ struct PreviewNativeArtifactLayoutTests {
             let editor = try #require(field.currentEditor() as? NSTextView)
             #expect(editor.selectedRange() == NSRange(location: 0, length: (value as NSString).length))
             pasteboard.clearContents()
-            let copiedEntireValue = editor.writeSelection(to: pasteboard, types: [.string])
-            #expect(copiedEntireValue)
+            let wholeValueTypes = editor.writablePasteboardTypes
+            let copiedEntireValue = editor.writeSelection(to: pasteboard, types: wholeValueTypes)
+            #expect(copiedEntireValue, "Native selection copy types: \(wholeValueTypes)")
             #expect(pasteboard.string(forType: .string).map { Data($0.utf8) } == Data(value.utf8))
 
             // A contiguous range spanning many visual lines copies unchanged,
@@ -194,14 +203,27 @@ struct PreviewNativeArtifactLayoutTests {
             let range = NSRange(location: 2, length: (value as NSString).length - 4)
             editor.setSelectedRange(range)
             pasteboard.clearContents()
-            let copiedRange = editor.writeSelection(to: pasteboard, types: [.string])
-            #expect(copiedRange)
+            let rangeTypes = editor.writablePasteboardTypes
+            let copiedRange = editor.writeSelection(to: pasteboard, types: rangeTypes)
+            #expect(copiedRange, "Native selection copy types: \(rangeTypes)")
             #expect(pasteboard.string(forType: .string).map { Data($0.utf8) }
                 == Data((value as NSString).substring(with: range).utf8))
             window.endEditing(for: nil)
             window.setContentSize(NSSize(width: 340, height: 480))
             host.layoutSubtreeIfNeeded()
         }
+
+        // Keep the same SwiftUI identity so native-view reuse must invalidate
+        // the old measurement when the selected reference changes.
+        host.rootView = fullReferenceViewport(shortReference)
+        host.layoutSubtreeIfNeeded()
+        let replacementFields = nativeReferenceFields(in: host)
+        let replacementAddress = try #require(replacementFields.first {
+            $0.accessibilityIdentifier() == "clipy.preview.reference.full.address"
+        })
+        #expect(Data(replacementAddress.stringValue.utf8) == Data(shortAddress.utf8))
+        #expect(replacementAddress.frame.height > 0)
+        #expect(replacementAddress.frame.height < 480)
     }
 
     private func nativeReferenceFields(in view: NSView) -> [NSTextField] {
