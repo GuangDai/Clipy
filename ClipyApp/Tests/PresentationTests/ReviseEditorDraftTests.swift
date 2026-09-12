@@ -10,6 +10,137 @@ struct ReviseEditorDraftTests {
     private let textType = "public.utf8-plain-text"
     private let siblingType = "com.example.sibling"
 
+    @Test func directEditingLoadsOnlyTheSoleEffectivePlainTextWithoutChangingDecisions() throws {
+        let original = HistoryRepresentation(typeIdentifier: textType, bytes: Data("original".utf8))
+        let current = HistoryRepresentation(typeIdentifier: textType, bytes: Data("current".utf8))
+        let hidden = HistoryRepresentation(typeIdentifier: siblingType, bytes: Data([0x10]))
+        var draft = ReviseEditorDraft(details: details(canonical: [original, hidden], effective: [current]))
+
+        let request = try #require(draft.directEditingRequest)
+        #expect(request.basis == .effective)
+        #expect(request.typeIdentifier == textType)
+        #expect(request.pasteboardItemIndex == 0)
+        #expect(!draft.hasReplacementSource(for: textType))
+        #expect(draft.installReplacementSource(current, forDirectEditing: true))
+        #expect(draft.directEditingRequest == nil)
+        #expect(draft.directEditingIdentity == RepresentationIdentity(typeIdentifier: textType))
+        #expect(draft.replacementText(for: textType) == "current")
+        #expect(!draft.isDirty)
+        #expect(draft.dismissalDecision == .dismiss)
+        #expect(decisions(from: draft.revisionRequest())[textType] == .inheritCurrent)
+        #expect(decisions(from: draft.revisionRequest())[siblingType] == .hide)
+        #expect(!draft.hasReplacementSource(for: siblingType))
+    }
+
+    @Test func directEditingDoesNotChooseBetweenFormatsOrClipboardItems() {
+        let text = HistoryRepresentation(typeIdentifier: textType, bytes: Data("text".utf8))
+        let sibling = HistoryRepresentation(typeIdentifier: siblingType, bytes: Data([0x10]))
+        let secondItem = HistoryRepresentation(typeIdentifier: textType, bytes: Data("second".utf8), pasteboardItemIndex: 1)
+        for representations in [[text, sibling], [text, secondItem], [sibling]] {
+            var draft = ReviseEditorDraft(details: details(canonical: representations, effective: representations))
+            #expect(draft.directEditingRequest == nil)
+            #expect(!draft.installReplacementSource(text, forDirectEditing: true))
+            #expect(!draft.hasReplacementSource(for: textType))
+            #expect(!draft.isDirty)
+        }
+    }
+
+    @Test func directEditingRequiresAValidSourceAndOnlyActualByteChangesAuthorReplacement() {
+        let original = HistoryRepresentation(typeIdentifier: textType, bytes: Data([0xC3, 0xA9]))
+        var draft = ReviseEditorDraft(details: details(canonical: [original], effective: [original]))
+        #expect(!draft.installReplacementSource(
+            HistoryRepresentation(typeIdentifier: textType, bytes: Data([0xFF])),
+            forDirectEditing: true
+        ))
+        #expect(draft.directEditingIdentity == nil)
+        #expect(!draft.isDirty)
+        #expect(draft.installReplacementSource(original, forDirectEditing: true))
+        draft.setReplacementText("e\u{301}", for: textType)
+        #expect(draft.dismissalDecision == .confirmDiscard)
+        #expect(decisions(from: draft.revisionRequest())[textType] == .replace(bytes: Data([0x65, 0xCC, 0x81])))
+        draft.setReplacementText("", for: textType)
+        #expect(draft.hasEmptyReplacement)
+        #expect(!draft.canSubmit)
+        draft.setReplacementText("\u{E9}", for: textType)
+        #expect(draft.canSubmit)
+        #expect(!draft.isDirty)
+        #expect(draft.dismissalDecision == .dismiss)
+        #expect(decisions(from: draft.revisionRequest())[textType] == .inheritCurrent)
+    }
+
+    @Test func directEditingLeavesExplicitFormatDecisionsUnderUserControl() {
+        let original = HistoryRepresentation(typeIdentifier: textType, bytes: Data("original".utf8))
+        var draft = ReviseEditorDraft(details: details(canonical: [original], effective: [original]))
+        #expect(draft.installReplacementSource(original, forDirectEditing: true))
+        draft.setChoice(.useOriginal, for: textType)
+        #expect(draft.directEditingIdentity == nil)
+        #expect(decisions(from: draft.revisionRequest())[textType] == .inheritCanonical)
+        draft.setChoice(.replace, for: textType)
+        draft.setReplacementText("edit", for: textType)
+        draft.setReplacementText("original", for: textType)
+        #expect(draft.isDirty)
+        #expect(decisions(from: draft.revisionRequest())[textType] == .replace(bytes: original.bytes))
+    }
+
+    @Test(arguments: ReviseEditorDraftTests.utf16EncodingFixtures)
+    func directUTF16EditingKeepsEncodingAndReturnsCleanOnlyBeforeRebase(fixture: UTF16EncodingFixture) {
+        let source = HistoryRepresentation(typeIdentifier: fixture.type, bytes: fixture.initial)
+        var draft = ReviseEditorDraft(details: utf16Details(
+            type: fixture.type, canonical: fixture.initial, effective: fixture.initial
+        ))
+        #expect(draft.installReplacementSource(source, forDirectEditing: true))
+        #expect(!draft.isDirty)
+        draft.setReplacementText("B🌿", for: fixture.type)
+        #expect(decisions(from: draft.revisionRequest())[fixture.type] == .replace(bytes: fixture.edited))
+        draft.setReplacementText("A", for: fixture.type)
+        #expect(draft.dismissalDecision == .dismiss)
+        #expect(decisions(from: draft.revisionRequest())[fixture.type] == .inheritCurrent)
+
+        draft.setReplacementText("B🌿", for: fixture.type)
+        draft.markStale()
+        #expect(!draft.canSubmit)
+        #expect(!draft.reloadLatest(details: utf16Details(
+            type: fixture.type, canonical: fixture.initial, effective: fixture.initial, version: 1
+        )))
+        #expect(draft.directEditingIdentity != nil)
+        #expect(draft.reloadLatest(details: utf16Details(
+            type: fixture.type, canonical: fixture.initial,
+            effective: Data([0xFE, 0xFF, 0x00, 0x43]), version: 3
+        )))
+        #expect(draft.directEditingIdentity == nil)
+        #expect(draft.directEditingRequest == nil)
+        #expect(draft.revisionRequest().expected == ContentVersion(rawValue: 3))
+        #expect(decisions(from: draft.revisionRequest())[fixture.type] == .replace(bytes: fixture.edited))
+        // Returning to the old source means A, not the competitor's C.
+        draft.setReplacementText("A", for: fixture.type)
+        #expect(draft.dismissalDecision == .confirmDiscard)
+        #expect(decisions(from: draft.revisionRequest())[fixture.type] == .replace(bytes: fixture.initial))
+    }
+
+    @Test func untouchedDirectEditorReloadsLatestSourceAndItsEncoding() {
+        let type = "public.utf16-plain-text"
+        let original = Data([0xFF, 0xFE, 0x41, 0x00])
+        let latest = Data([0xFE, 0xFF, 0x00, 0x43])
+        var draft = ReviseEditorDraft(details: utf16Details(type: type, canonical: original, effective: original))
+        #expect(draft.installReplacementSource(
+            HistoryRepresentation(typeIdentifier: type, bytes: original), forDirectEditing: true
+        ))
+        draft.markStale()
+        #expect(draft.directEditingRequest == nil)
+        #expect(draft.reloadLatest(details: utf16Details(
+            type: type, canonical: original, effective: latest, version: 3
+        )))
+        #expect(!draft.hasReplacementSource(for: type))
+        #expect(draft.directEditingRequest?.item.contentVersion == ContentVersion(rawValue: 3))
+        #expect(draft.installReplacementSource(
+            HistoryRepresentation(typeIdentifier: type, bytes: latest), forDirectEditing: true
+        ))
+        #expect(draft.replacementText(for: type) == "C")
+        #expect(draft.dismissalDecision == .dismiss)
+        draft.setReplacementText("D", for: type)
+        #expect(decisions(from: draft.revisionRequest())[type] == .replace(bytes: Data([0xFE, 0xFF, 0x00, 0x44])))
+    }
+
     @Test func metadataDoesNotDownloadOrDecodeAnyReplacementUntilExplicitlyLoaded() {
         var draft = ReviseEditorDraft(details: details(
             canonicalText: Data("original".utf8), effectiveText: Data("current".utf8)
@@ -928,7 +1059,7 @@ struct ReviseEditorDraftTests {
     }
 
     private func metadata(_ representation: HistoryRepresentation) -> HistoryRepresentationMetadata {
-        HistoryRepresentationMetadata(typeIdentifier: representation.typeIdentifier, byteCount: representation.bytes.count)
+        HistoryRepresentationMetadata(typeIdentifier: representation.typeIdentifier, byteCount: representation.bytes.count, pasteboardItemIndex: representation.pasteboardItemIndex)
     }
 
     /// Simulate only the UI's explicit one-representation read result. The

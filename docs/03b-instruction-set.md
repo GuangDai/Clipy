@@ -6,7 +6,10 @@
 > `representation` reads return one original representation without truncation;
 > missing requested payload is an error, while unrelated payload files are not
 > read. Details previews and Save As request only the chosen representation.
-> Editor Replace loads its selected text source; Keep Current uses
+> Opening Edit loads the sole Effective representation when one clipboard item
+> has exactly one Effective format and it is supported plain text; other replacements load only
+> their explicitly selected text source. Loading alone keeps the draft clean;
+> Keep Current uses
 > `inheritCurrent`. Metadata reload preserves an already valid authored draft
 > and codec without reading unrelated Canonical or new Effective bytes.
 

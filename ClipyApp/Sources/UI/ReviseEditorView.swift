@@ -104,6 +104,7 @@ struct ReviseEditorView: View {
     @State private var replacementTask: Task<Void, Never>?
     @State private var replacementFailure: String?
     @State private var replacementType: RepresentationIdentity?
+    @State private var replacementIsDirectEditing = false
     @State private var readFence: HistoryDetailsLoadFence
     /// A fixed product-copy key, localized at render time rather than
     /// retaining the language active when the reload completed.
@@ -181,7 +182,7 @@ struct ReviseEditorView: View {
                 HStack {
                     Text(replacementFailure).font(.caption)
                     Button(PanelActionsCopy.text("Retry", bundle: copyBundle)) {
-                        if let replacementType { loadReplacement(for: replacementType.typeIdentifier, pasteboardItemIndex: replacementType.pasteboardItemIndex) }
+                        if let replacementType { loadReplacement(for: replacementType.typeIdentifier, pasteboardItemIndex: replacementType.pasteboardItemIndex, forDirectEditing: replacementIsDirectEditing) }
                     }
                 }.padding(.horizontal)
             }
@@ -196,6 +197,7 @@ struct ReviseEditorView: View {
             maxHeight: .infinity
         )
         .interactiveDismissDisabled(draft.isDirty || isSaving)
+        .onAppear { prepareDirectEditing() }
         .onDisappear {
             cancelReplacementLoad()
             cancelReload()
@@ -223,6 +225,7 @@ struct ReviseEditorView: View {
                 Label(PanelActionsCopy.text("Cancel", bundle: copyBundle), systemImage: layout == .embeddedInDetails ? "chevron.backward" : "xmark")
                     .labelStyle(.iconOnly)
                     .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .keyboardShortcut(.cancelAction)
@@ -514,7 +517,7 @@ struct ReviseEditorView: View {
                 accessibilityLabel: DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + identity.accessibilityLabel
             ))
             .font(.caption)
-            if choice == .replace {
+            if choice == .replace || draft.directEditingIdentity == identity {
                 TextEditor(text: textBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex))
                     .disabled(isSaving || isReloading || replacementTask != nil)
                     .font(.system(.body, design: .monospaced))
@@ -574,14 +577,25 @@ struct ReviseEditorView: View {
 
     // MARK: Save
 
+    /// Opening Edit is sufficient intent for one Effective plain-text format.
+    /// Source installation leaves Keep Current intact until actual text input.
     @MainActor
-    private func loadReplacement(for typeIdentifier: String, pasteboardItemIndex: Int) {
+    private func prepareDirectEditing() {
+        guard let request = draft.directEditingRequest else { return }
+        loadReplacement(for: request.typeIdentifier,
+                        pasteboardItemIndex: request.pasteboardItemIndex,
+                        forDirectEditing: true)
+    }
+
+    @MainActor
+    private func loadReplacement(for typeIdentifier: String, pasteboardItemIndex: Int, forDirectEditing: Bool = false) {
         guard replacementTask == nil, !isSaving, !isReloading,
               let request = draft.replacementRequest(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) else { return }
         _ = readFence.reconcile(viewState.surfacePurge, item: request.item)
         guard !readFence.isPurged else { return }
         replacementFailure = nil
         replacementType = RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+        replacementIsDirectEditing = forDirectEditing
         let snapshot = draft
         replacementTask = Task {
             do {
@@ -591,7 +605,7 @@ struct ReviseEditorView: View {
                 guard !Task.isCancelled, draft.itemReference == request.item else { return }
                 let decoding = Task.detached {
                     var loaded = snapshot
-                    guard !Task.isCancelled, loaded.installReplacementSource(source) else { return Optional<ReviseEditorDraft>.none }
+                    guard !Task.isCancelled, loaded.installReplacementSource(source, forDirectEditing: forDirectEditing) else { return Optional<ReviseEditorDraft>.none }
                     return loaded
                 }
                 let loaded = await withTaskCancellationHandler {
@@ -606,7 +620,9 @@ struct ReviseEditorView: View {
                     return
                 }
                 draft = loaded
-                draft.setChoice(.replace, for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+                if !forDirectEditing {
+                    draft.setChoice(.replace, for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+                }
                 focusedReplacement = RepresentationIdentity(
                     typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex
                 )
@@ -712,7 +728,10 @@ struct ReviseEditorView: View {
         replacementFailure = nil
         isReloading = true
         defer {
-            if !Task.isCancelled { isReloading = false }
+            if !Task.isCancelled {
+                isReloading = false
+                prepareDirectEditing()
+            }
         }
         do {
             let latest = try await viewState.details(for: reference.id)

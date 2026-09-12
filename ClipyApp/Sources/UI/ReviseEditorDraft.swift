@@ -1,5 +1,6 @@
 /// Metadata-first revision authoring. Keep Current is an instruction to the
-/// sole History writer; only an explicitly selected text replacement loads bytes.
+/// sole History writer; opening Edit for one unambiguous plain-text format or
+/// explicitly selecting Replace loads only that representation's bytes.
 import ClipboardFormats
 import Foundation
 import HistoryCore
@@ -17,6 +18,9 @@ struct ReviseEditorDraft: Sendable {
     /// Exact comparison is performed when text changes, not every time the
     /// footer, dismissal protection, or accessibility hints render a large draft.
     private var editedTextIdentities: Set<RepresentationIdentity> = []
+    /// Opening the simple editor prepares text without authoring a decision.
+    /// This identity may restore Keep Current only until its base is reloaded.
+    private(set) var directEditingIdentity: RepresentationIdentity?
     private(set) var isAwaitingLatestContent = false
 
     init(details: HistoryDetails) {
@@ -27,6 +31,18 @@ struct ReviseEditorDraft: Sendable {
     var itemID: HistoryItemID { item.id }
     var itemReference: HistoryItemReference { item }
     var canonicalRepresentations: [HistoryRepresentationMetadata] { canonical }
+    /// Edit itself is the explicit read intent (V2-09 §5). Never choose among
+    /// multiple Effective formats or clipboard items, or restore a hidden type.
+    var directEditingRequest: HistoryRepresentationRequest? {
+        guard !isAwaitingLatestContent,
+              effectiveTypes.count == 1,
+              canonical.allSatisfy({ $0.pasteboardItemIndex == 0 }),
+              let identity = effectiveTypes.first,
+              choice(for: identity.typeIdentifier, pasteboardItemIndex: identity.pasteboardItemIndex) == .keepCurrent,
+              !hasReplacementSource(for: identity.typeIdentifier, pasteboardItemIndex: identity.pasteboardItemIndex)
+        else { return nil }
+        return replacementRequest(for: identity.typeIdentifier, pasteboardItemIndex: identity.pasteboardItemIndex)
+    }
     var canSubmit: Bool { !isAwaitingLatestContent && !hasEmptyPasteboardItem && !hasEmptyReplacement }
     var isDirty: Bool {
         choices.values.contains { $0 != .keepCurrent }
@@ -62,6 +78,9 @@ struct ReviseEditorDraft: Sendable {
     mutating func setChoice(_ choice: Choice, for typeIdentifier: String, pasteboardItemIndex: Int = 0) {
         guard canonical.contains(where: { $0.typeIdentifier == typeIdentifier && $0.pasteboardItemIndex == pasteboardItemIndex }) else { return }
         guard choice != .replace || replacementCodecs[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] != nil else { return }
+        if directEditingIdentity == RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) {
+            directEditingIdentity = nil
+        }
         choices[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] = choice
     }
     func replacementText(for typeIdentifier: String, pasteboardItemIndex: Int = 0) -> String { replacementTexts[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] ?? "" }
@@ -73,6 +92,9 @@ struct ReviseEditorDraft: Sendable {
             editedTextIdentities.remove(identity)
         } else {
             editedTextIdentities.insert(identity)
+        }
+        if directEditingIdentity == identity {
+            choices[identity] = editedTextIdentities.contains(identity) ? .replace : .keepCurrent
         }
     }
 
@@ -89,7 +111,12 @@ struct ReviseEditorDraft: Sendable {
     }
     func hasReplacementSource(for typeIdentifier: String, pasteboardItemIndex: Int = 0) -> Bool { replacementCodecs[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] != nil }
     @discardableResult
-    mutating func installReplacementSource(_ source: HistoryRepresentation) -> Bool {
+    mutating func installReplacementSource(_ source: HistoryRepresentation, forDirectEditing: Bool = false) -> Bool {
+        if forDirectEditing {
+            guard let request = directEditingRequest,
+                  request.typeIdentifier == source.typeIdentifier,
+                  request.pasteboardItemIndex == source.pasteboardItemIndex else { return false }
+        }
         guard replacementRequest(for: source.typeIdentifier, pasteboardItemIndex: source.pasteboardItemIndex) != nil,
               let decoded = EditorTextCodec.decode(source) else { return false }
         let key = RepresentationIdentity(typeIdentifier: source.typeIdentifier, pasteboardItemIndex: source.pasteboardItemIndex)
@@ -97,6 +124,7 @@ struct ReviseEditorDraft: Sendable {
         replacementCodecs[key] = decoded.codec
         openingTexts[key] = decoded.text
         editedTextIdentities.remove(key)
+        if forDirectEditing { directEditingIdentity = key }
         return true
     }
     mutating func markStale() { isAwaitingLatestContent = true }
@@ -107,6 +135,9 @@ struct ReviseEditorDraft: Sendable {
     mutating func reloadLatest(details: HistoryDetails) -> Bool {
         guard details.item.id == item.id, details.item.contentVersion >= item.contentVersion,
               details.canonical == canonical else { return false }
+        // Authored text keeps its explicit replacement across rebase. Returning
+        // to the old opening text must not silently inherit a competitor's bytes.
+        directEditingIdentity = nil
         for type in Array(replacementTexts.keys) {
             if choice(for: type.typeIdentifier, pasteboardItemIndex: type.pasteboardItemIndex) != .replace,
                !editedTextIdentities.contains(type) {

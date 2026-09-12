@@ -81,7 +81,7 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         ) else { return }
         hideUTF8.click()
 
-        _ = try authorReplacement("After", in: app, typeIdentifier: typeIdentifier)
+        _ = try authorReplacement("After", in: app, typeIdentifier: typeIdentifier, directly: false)
         let save = app.buttons["clipy.editor.save"]
         guard assertEventually(
             { save.exists && save.isEnabled && save.isHittable },
@@ -426,10 +426,12 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
                 editorDecision.exists
                     && cancel.exists
                     && cancel.isHittable
+                    && replacement.exists
+                    && replacement.value as? String == original
                     && !alert.exists
             },
             in: app,
-            message: "The clean editor did not reopen without a discard alert."
+            message: "The clean editor did not reopen with its original text ready to edit."
         ) else { return }
         cancel.click()
 
@@ -443,6 +445,23 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             in: app,
             message: "A clean Cancel did not return directly to Details."
         ) else { return }
+
+        // Returning to the exact opening text before a rebase is clean too.
+        // Reuse this launch and type through the app to keep focus observable.
+        edit.click()
+        _ = try authorReplacement(draft, in: app)
+        app.typeKey("a", modifierFlags: .command)
+        app.typeText(original)
+        XCTAssertEqual(replacement.value as? String, original)
+        cancel.click()
+        _ = assertEventually(
+            {
+                !editorDecision.exists && !alert.exists && detailsTitle.exists
+                    && self.accessibilityText(of: detailsTitle) == original
+            },
+            in: app,
+            message: "Restoring the exact opening text still required discarding changes."
+        )
     }
 
     // MARK: - Product navigation
@@ -544,25 +563,28 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
     private func authorReplacement(
         _ draft: String,
         in app: XCUIApplication,
-        typeIdentifier: String = "public.utf8-plain-text"
+        typeIdentifier: String = "public.utf8-plain-text",
+        directly: Bool = true
     ) throws -> XCUIElement {
-        let decision = app.descendants(matching: .any)[
-            "clipy.editor.decision.\(typeIdentifier)"
-        ]
-        guard assertEventually(
-            { decision.exists && decision.isHittable },
-            in: app,
-            message: "The \(typeIdentifier) editor decision control was not publicly usable."
-        ) else { throw JourneyFailure.precondition }
-        decision.click()
+        if !directly {
+            let decision = app.descendants(matching: .any)[
+                "clipy.editor.decision.\(typeIdentifier)"
+            ]
+            guard assertEventually(
+                { decision.exists && decision.isHittable },
+                in: app,
+                message: "The \(typeIdentifier) editor decision control was not publicly usable."
+            ) else { throw JourneyFailure.precondition }
+            decision.click()
 
-        let replace = app.menuItems["Replace"]
-        guard assertEventually(
-            { replace.exists && replace.isHittable },
-            in: app,
-            message: "The real decision menu did not expose Replace."
-        ) else { throw JourneyFailure.precondition }
-        replace.click()
+            let replace = app.menuItems["Replace"]
+            guard assertEventually(
+                { replace.exists && replace.isHittable },
+                in: app,
+                message: "The real decision menu did not expose Replace."
+            ) else { throw JourneyFailure.precondition }
+            replace.click()
+        }
 
         let replacement = app.descendants(matching: .any)[
             "clipy.editor.replacement.\(typeIdentifier)"
@@ -570,9 +592,11 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         guard assertEventually(
             { replacement.exists && replacement.isHittable },
             in: app,
-            message: "Replace did not materialize the actual TextEditor."
+            message: directly
+                ? "Opening the single-format text editor did not make its text directly editable."
+                : "Replace did not materialize the actual TextEditor."
         ) else { throw JourneyFailure.precondition }
-        // Replace should hand keyboard focus to its loaded text immediately.
+        // Opening Edit or choosing Replace hands focus to the loaded text.
         // Send keys through the application: targeting/clicking the TextEditor
         // here would hide a product focus failure by focusing it for the user.
         app.typeKey("a", modifierFlags: .command)
