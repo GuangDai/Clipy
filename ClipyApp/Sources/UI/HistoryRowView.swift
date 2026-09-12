@@ -94,7 +94,7 @@ struct HistoryRowView: View {
         self.onShowDetails = onShowDetails
     }
 
-    var body: some View {
+    private var rowLayout: some View {
         HStack(alignment: .center, spacing: PanelTheme.spacingSmall) {
             thumbnail
             VStack(alignment: .leading, spacing: PanelTheme.spacingXXSmall) {
@@ -138,6 +138,10 @@ struct HistoryRowView: View {
                 .strokeBorder(isSelected ? Color.accentColor.opacity(0.35) : .clear, lineWidth: 1)
                 .allowsHitTesting(false)
         }
+    }
+
+    var body: some View {
+        rowLayout
         .background {
             if dragSource != nil { HistoryRowDragRegion(view: dragRegion) }
         }
@@ -157,7 +161,7 @@ struct HistoryRowView: View {
         .contextMenu { contextMenu }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("clipy.history.row.\(row.item.id.description)")
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAddTraits(rowAccessibilityTraits)
         .accessibilityValue(copyAccessibilityLabel)
         .accessibilityAction {
             performAccessibilityAction(.paste)
@@ -175,6 +179,10 @@ struct HistoryRowView: View {
     }
 
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
+
+    private var rowAccessibilityTraits: AccessibilityTraits {
+        isSelected ? [.isButton, .isSelected] : .isButton
+    }
 
     /// Rendering and content fitting share the same line counts so explicit
     /// multi-line preferences cannot outgrow the row's fixed frame (V2-11).
