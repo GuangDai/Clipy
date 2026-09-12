@@ -352,13 +352,33 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
     func testDirtyDismissalConfirmsAndCleanCancelClosesDirectly() throws {
         let original = "clipy-editor-dirty-original"
         let draft = "clipy-editor-dirty-draft"
-        let app = try launchEditor(capturing: original)
+        let app = try launchEditor(capturing: original, arguments: [
+            "-clipy.panelContentWidth", "360", "-clipy.panelHeight", "420",
+            "-AppleShowScrollBars", "Always",
+        ])
         defer {
             app.terminate()
             NSPasteboard.general.clearContents()
         }
 
         let replacement = try authorReplacement(draft, in: app)
+        // At the default window size, metadata and padding must leave a
+        // complete text viewport. The native text scroller owns editing;
+        // the enclosing format list must not also need a visible scrollbar.
+        let formats = app.scrollViews["clipy.editor.formats"]
+        guard assertEventually(
+            {
+                formats.exists && formats.frame.contains(replacement.frame)
+                    && !formats.children(matching: .scrollBar)
+                        .allElementsBoundByIndex.contains { $0.isHittable }
+                    && app.buttons["clipy.editor.save"].isHittable
+                    && app.descendants(matching: .any)[
+                        "clipy.editor.revision-disclosure"
+                    ].isHittable
+            },
+            in: app,
+            message: "Single-format editing overflowed its default viewport or obscured Save/disclosure."
+        ) else { return }
         let attachment = XCTAttachment(screenshot: editorDetailsDialog(in: app).screenshot())
         attachment.name = "Editor — Direct text editing and focused navigation"
         attachment.lifetime = .keepAlways
@@ -475,7 +495,8 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         capturing value: String,
         typeIdentifier: String = "public.utf8-plain-text",
         bytes: Data? = nil,
-        editorJourney: String? = nil
+        editorJourney: String? = nil,
+        arguments: [String] = []
     ) throws -> XCUIApplication {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -494,6 +515,7 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
 
         let app = XCUIApplication()
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments += arguments
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store")

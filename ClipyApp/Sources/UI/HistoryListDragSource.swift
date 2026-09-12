@@ -41,7 +41,8 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     // the native session. AppKit's ended callback releases this scoped owner.
     private var activeSource: HistoryListDraggingView?
 #if DEBUG
-    private var dragTraceLines: [String] = []
+    private let dragTraceStartedAt = ProcessInfo.processInfo.systemUptime
+    private var dragTraceLines: [(stage: String, elapsed: TimeInterval)] = []
     private let dragTraceURL: URL? = {
         let environment = ProcessInfo.processInfo.environment
         guard environment["CLIPY_RUNNING_UI_TEST"] == "1",
@@ -170,7 +171,7 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
                         self?.trace("payload-read-empty")
                         return
                     }
-                    self?.trace("payload-read-returned left-held=\(NSEvent.pressedMouseButtons & 1 != 0) cancelled=\(Task.isCancelled)")
+                    self?.trace("payload-read-returned left-held=\(NSEvent.pressedMouseButtons & 1 != 0) cancelled=\(Task.isCancelled) pointer=\(NSEvent.mouseLocation)")
                     try Task.checkCancellation()
                     guard let self, let window, self.window === window,
                           self.pressed?.event === pressed.event,
@@ -232,11 +233,11 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
-        trace("session-will-begin")
+        trace("session-will-begin point=\(screenPoint) pointer=\(NSEvent.mouseLocation)")
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        trace("session-ended operation=\(operation.rawValue)")
+        trace("session-ended operation=\(operation.rawValue) point=\(screenPoint)")
         self.session = nil
         activeSource = nil
         cancelPreparation()
@@ -245,9 +246,11 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
 #if DEBUG
         guard let dragTraceURL, dragTraceLines.count < 32 else { return }
         let value = stage()
-        guard !dragTraceLines.contains(value) else { return }
-        dragTraceLines.append(value)
-        let lines = dragTraceLines.map { "[DEBUG-native-drag] " + $0 }.joined(separator: "\n")
+        guard !dragTraceLines.contains(where: { $0.stage == value }) else { return }
+        dragTraceLines.append((value, ProcessInfo.processInfo.systemUptime - dragTraceStartedAt))
+        let lines = dragTraceLines.map {
+            "[DEBUG-native-drag] \($0.stage) elapsed=\($0.elapsed)"
+        }.joined(separator: "\n")
         try? Data(lines.utf8).write(to: dragTraceURL, options: .atomic)
 #endif
     }

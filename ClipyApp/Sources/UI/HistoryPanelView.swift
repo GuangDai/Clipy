@@ -644,7 +644,7 @@ struct HistoryPanelView: View {
                 if !isActive { isSearchFieldFocused = false }
             }
             .onChange(of: surfaceState.isAtListRoot) { _, isAtRoot in
-                isSearchFieldFocused = isAtRoot && surfaceState.isSessionActive
+                if !isAtRoot { isSearchFieldFocused = false }
             }
             .onChange(of: surfaceState.selection) { _, newSelection in
                 previewState.handleSelectionChange(
@@ -776,6 +776,12 @@ struct HistoryPanelView: View {
         .padding(.horizontal, PanelTheme.headerHorizontalPadding)
         .padding(.top, PanelTheme.headerTopPadding)
         .padding(.bottom, PanelTheme.headerBottomPadding)
+        .task {
+            // Returning from Details inserts a new field. Hand it focus only
+            // once its focused binding is mounted, not during path removal.
+            guard surfaceState.isAtListRoot, surfaceState.isSessionActive else { return }
+            isSearchFieldFocused = true
+        }
         .background {
             // Only the header's empty background drags the window;
             // foreground search controls keep their own interactions.

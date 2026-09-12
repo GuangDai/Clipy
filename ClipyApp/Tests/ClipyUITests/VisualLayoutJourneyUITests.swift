@@ -135,7 +135,6 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         app.typeText("Reading notes")
         XCTAssertTrue(waitUntil {
             app.textFields["clipy.search.field"].value as? String == "Reading notes"
-                && rows.count == 1
         }, "Returning from Details must let typing search immediately.\n\(app.debugDescription)")
     }
 

@@ -33,7 +33,6 @@ gui_group_2=(
   ContentFirstRowJourneyUITests
   PreviewSettingsJourneyUITests
   StoreOpenRecoveryJourneyUITests
-  DetailsUnavailableImageJourneyUITests
 )
 gui_group_3=(
   RTLPreviewGeometryJourneyUITests
@@ -43,6 +42,7 @@ gui_group_3=(
   MultiItemDragJourneyUITests
   NarrowSearchHeaderJourneyUITests
   PreviewRecoveryJourneyUITests
+  DetailsUnavailableImageJourneyUITests
 )
 test_arguments=(-parallel-testing-enabled NO)
 case "$shard" in

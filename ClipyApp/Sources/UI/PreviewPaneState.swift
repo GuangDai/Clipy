@@ -177,6 +177,12 @@ final class PreviewPaneState {
     /// `isPointerInteractionActive` is set.
     private var pointerPresence: Set<PreviewPointerSurface> = []
 
+    /// The native windows confirm pointer presence when hover's exit grace
+    /// expires. SwiftUI can omit/delay the non-key preview's entry while a
+    /// pointer crosses from the list to a control such as Retry (Card 9D).
+    /// AppKit stays at the window boundary; this state receives surfaces only.
+    var pointerSurfacesContainingPointer: (() -> Set<PreviewPointerSurface>)?
+
     /// The pending pointer-exit grace task; cancelled by any re-entry.
     private var pointerExitTask: Task<Void, Never>?
 
@@ -427,6 +433,11 @@ final class PreviewPaneState {
                   !self.isInformationPresented
             else { return }
             self.pointerExitTask = nil
+            if let nativePresence = self.pointerSurfacesContainingPointer?(),
+               !nativePresence.isEmpty {
+                self.pointerPresence = nativePresence
+                return
+            }
             // Lightweight hide: no manual-close suppression — pointer
             // re-entry re-dwells the current selection and reopens.
             self.closePreview()

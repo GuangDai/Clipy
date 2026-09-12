@@ -98,6 +98,7 @@ struct ReviseEditorView: View {
     /// "Keep Current" into HistoryCore actions itself.
     @State private var draft: ReviseEditorDraft
 
+    @State private var singleFormatHeaderHeight: CGFloat = 0
     @State private var isSaving = false
     @State private var isReloading = false
     @State private var reloadTask: Task<Void, Never>?
@@ -144,32 +145,39 @@ struct ReviseEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             navigationBar
-            ScrollView {
-                VStack(spacing: PanelTheme.spacingSmall) {
-                    if draft.canonicalRepresentations.count > 1 {
-                        DisclosureGroup(DetailsPresentationCopy.text("About Formats", bundle: copyBundle)) {
-                            Text(
-                                ReviseEditorPresentation.formatIndependenceDisclosure(bundle: copyBundle)
-                            )
+            GeometryReader { viewport in
+                ScrollView {
+                    VStack(spacing: PanelTheme.spacingSmall) {
+                        if draft.canonicalRepresentations.count > 1 {
+                            DisclosureGroup(DetailsPresentationCopy.text("About Formats", bundle: copyBundle)) {
+                                Text(
+                                    ReviseEditorPresentation.formatIndependenceDisclosure(bundle: copyBundle)
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .accessibilityIdentifier("clipy.editor.format-independence-disclosure")
+                            }
+                            .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.editor.about-formats"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .accessibilityIdentifier("clipy.editor.format-independence-disclosure")
                         }
-                        .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.editor.about-formats"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        ForEach(
+                            draft.canonicalRepresentations,
+                            id: \.representationIdentity
+                        ) {
+                            representation in
+                            decisionRow(
+                                for: representation,
+                                viewportHeight: draft.canonicalRepresentations.count == 1
+                                    ? viewport.size.height : nil
+                            )
+                        }
                     }
-                    ForEach(
-                        draft.canonicalRepresentations,
-                        id: \.representationIdentity
-                    ) {
-                        representation in
-                        decisionRow(for: representation)
-                    }
+                    .padding(PanelTheme.spacingLarge)
                 }
-                .padding(PanelTheme.spacingLarge)
+                .accessibilityIdentifier("clipy.editor.formats")
             }
             Divider()
             revisionDisclosure
@@ -443,7 +451,8 @@ struct ReviseEditorView: View {
     // MARK: Rows
 
     private func decisionRow(
-        for representation: HistoryRepresentationMetadata
+        for representation: HistoryRepresentationMetadata,
+        viewportHeight: CGFloat?
     ) -> some View {
         let typeIdentifier = representation.typeIdentifier
         let pasteboardItemIndex = representation.pasteboardItemIndex
@@ -500,55 +509,80 @@ struct ReviseEditorView: View {
                 + replacementAccessibilityHint
         )
         return VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
-            SettingsFieldLayout {
-                formatTitle
-                decisionPicker
-            }
-            DisclosureGroup(DetailsPresentationCopy.text("Format Details", bundle: copyBundle)) {
-                VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
-                    Text(verbatim: typeIdentifier)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                    Text(verbatim: EditorFormat.bytes(representation.byteCount, locale: locale))
-                    if !replacementIsAvailable {
-                        Text(PanelActionsCopy.text(
-                            "Replace supports valid UTF-8 and UTF-16 plain-text formats. Keep Current preserves exact bytes.",
-                            bundle: copyBundle
-                        ))
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
+            VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
+                SettingsFieldLayout {
+                    formatTitle
+                    decisionPicker
                 }
-                .foregroundStyle(.secondary)
+                DisclosureGroup(DetailsPresentationCopy.text("Format Details", bundle: copyBundle)) {
+                    VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
+                        Text(verbatim: typeIdentifier)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                        Text(verbatim: EditorFormat.bytes(representation.byteCount, locale: locale))
+                        if !replacementIsAvailable {
+                            Text(PanelActionsCopy.text(
+                                "Replace supports valid UTF-8 and UTF-16 plain-text formats. Keep Current preserves exact bytes.",
+                                bundle: copyBundle
+                            ))
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .foregroundStyle(.secondary)
+                }
+                .disclosureGroupStyle(AppDisclosureGroupStyle(
+                    identifier: "clipy.editor.format-details." + identity.accessibilitySuffix,
+                    accessibilityLabel: DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + identity.accessibilityLabel
+                ))
+                .font(.caption)
             }
-            .disclosureGroupStyle(AppDisclosureGroupStyle(
-                identifier: "clipy.editor.format-details." + identity.accessibilitySuffix,
-                accessibilityLabel: DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + identity.accessibilityLabel
-            ))
-            .font(.caption)
+            .onGeometryChange(for: CGFloat.self) { geometry in
+                geometry.size.height
+            } action: { height in
+                if viewportHeight != nil { singleFormatHeaderHeight = height }
+            }
             if choice == .replace || draft.directEditingIdentity == identity {
-                TextEditor(text: textBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex))
+                let editor = TextEditor(text: textBinding(for: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex))
                     .disabled(isSaving || isReloading || replacementTask != nil)
                     .font(.system(.body, design: .monospaced))
                     .autocorrectionDisabled(true)
                     .scrollContentBackground(.hidden)
                     .focused($focusedReplacement, equals: identity)
-                    .containerRelativeFrame(.vertical) { height, _ in height * 0.65 }
-                    .padding(PanelTheme.spacingSmall)
-                    .background(.background, in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
-                            .strokeBorder(
-                                focusedReplacement == identity ? Color.accentColor : Color.primary.opacity(0.12),
-                                lineWidth: focusedReplacement == identity ? 2 : 1
-                            )
-                            .allowsHitTesting(false)
+                Group {
+                    if let viewportHeight {
+                        // A single format gives its text the actual remaining
+                        // viewport after measured metadata and every inset.
+                        // Keep this same TextEditor mounted through resizing;
+                        // only its height changes, preserving selection/undo.
+                        // Very short windows retain a few editable lines and
+                        // let the outer scroll view expose the full card.
+                        editor.frame(height: max(
+                            64,
+                            viewportHeight - singleFormatHeaderHeight
+                                - 2 * PanelTheme.spacingLarge
+                                - 4 * PanelTheme.spacingSmall
+                                - PanelTheme.spacingXSmall
+                        ))
+                    } else {
+                        editor.containerRelativeFrame(.vertical) { height, _ in height * 0.65 }
                     }
-                    .accessibilityLabel(
-                        PanelActionsCopy.format("Replacement text for %@", identity.accessibilityLabel, bundle: copyBundle)
-                    )
-                    .accessibilityIdentifier(
-                        "clipy.editor.replacement.\(identity.accessibilitySuffix)"
-                    )
+                }
+                .padding(PanelTheme.spacingSmall)
+                .background(.background, in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
+                .overlay {
+                    RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium)
+                        .strokeBorder(
+                            focusedReplacement == identity ? Color.accentColor : Color.primary.opacity(0.12),
+                            lineWidth: focusedReplacement == identity ? 2 : 1
+                        )
+                        .allowsHitTesting(false)
+                }
+                .accessibilityLabel(
+                    PanelActionsCopy.format("Replacement text for %@", identity.accessibilityLabel, bundle: copyBundle)
+                )
+                .accessibilityIdentifier(
+                    "clipy.editor.replacement.\(identity.accessibilitySuffix)"
+                )
             }
         }
         .padding(PanelTheme.spacingSmall)

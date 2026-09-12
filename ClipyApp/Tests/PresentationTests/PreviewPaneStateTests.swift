@@ -672,6 +672,53 @@ struct PreviewPaneStateTests {
         return state
     }
 
+    @Test func staleHoverExitCannotCloseThePreviewUnderItsControls() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        let item = reference()
+        var nativePresence: Set<PreviewPaneState.PreviewPointerSurface> = [.preview]
+        var didReadNativePresence = false
+        state.pointerSurfacesContainingPointer = {
+            didReadNativePresence = true
+            return nativePresence
+        }
+        state.togglePreview(for: item)
+        state.pointerEntered(.mainPanel)
+
+        // Moving from the list to Retry can deliver the main-window exit
+        // before SwiftUI reports entry into the non-key preview window.
+        state.pointerExited(.mainPanel)
+        await waitForScheduledDwell { didReadNativePresence }
+        #expect(didReadNativePresence)
+        #expect(state.isOpen)
+        #expect(state.previewedItem == item)
+
+        // A later real departure still uses the ordinary exit grace.
+        nativePresence = []
+        state.pointerExited(.preview)
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+    }
+
+    @Test func nativePointerReentryIntoMainPanelCancelsAStalePreviewExit() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        var didReadNativePresence = false
+        state.pointerSurfacesContainingPointer = {
+            didReadNativePresence = true
+            return [.mainPanel]
+        }
+        state.togglePreview(for: reference())
+        state.pointerEntered(.preview)
+        state.pointerExited(.preview)
+        await waitForScheduledDwell { didReadNativePresence }
+        #expect(didReadNativePresence)
+        #expect(state.isOpen)
+        #expect(state.dismissPreview(), "Escape is independent of pointer containment")
+        #expect(!state.isOpen)
+    }
+
     @Test func informationPopoverKeepsItsPreviewAliveOutsideBothWindowSurfaces() async {
         let state = makePointerState()
         defer { state.panelClosed() }
