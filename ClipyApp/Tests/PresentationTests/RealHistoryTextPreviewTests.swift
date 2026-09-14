@@ -54,9 +54,11 @@ struct RealHistoryTextPreviewTests {
         await loader.load(item: longItem, textConfiguration: .init(maximumCharacters: nil))
         #expect(loader.phase == .content(.text(String(decoding: completeLongBytes, as: UTF8.self))))
         #expect(Data(loader.textSegments.joined().utf8) == completeLongBytes)
+        #expect(loader.textSegmentGroups.flatMap { Array($0) } == Array(loader.textSegments.indices))
         #expect(try await history.pastePayload(for: longItem.id) == longPaste)
         loader.clear()
         #expect(loader.textSegments.isEmpty)
+        #expect(loader.textSegmentGroups.isEmpty)
     }
 
     private func capture(

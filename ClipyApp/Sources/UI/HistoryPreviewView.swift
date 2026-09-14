@@ -479,7 +479,7 @@ struct HistoryPreviewView: View {
                 }
             case .content(.text(_, let wasTruncated)):
                 VStack(spacing: 0) {
-                    PreviewTextBody(segments: loader.textSegments,
+                    PreviewTextBody(segments: loader.textSegments, groups: loader.textSegmentGroups,
                         maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) })
                     .id(targetItem)
                     // The body scrolls independently; the disclosure stays
