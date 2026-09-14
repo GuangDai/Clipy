@@ -1,5 +1,18 @@
 import AppKit
 import SwiftUI
+#if DEBUG
+import Darwin
+
+/// Content-free owner-test observations. Creation excludes text assignment;
+/// measurements exclude cache hits, so the three CPU sums do not overlap.
+enum PreviewTextNativeLayoutEvent {
+    case created(cpuNanoseconds: UInt64?)
+    case textAssigned(cpuNanoseconds: UInt64?)
+    case measured(width: CGFloat, cpuNanoseconds: UInt64?)
+    case reusedMeasurement(width: CGFloat)
+    case unmeasuredProposal(width: CGFloat?)
+}
+#endif
 
 /// Selectable preview text shared by the floating pane and Quick Look.
 struct PreviewTextBody: View {
@@ -8,6 +21,7 @@ struct PreviewTextBody: View {
     @State private var contentHeight: CGFloat?
     #if DEBUG
     var onSegmentMaterialized: ((Int) -> Void)?
+    var onNativeLayout: ((Int, PreviewTextNativeLayoutEvent) -> Void)?
     #endif
 
     var body: some View {
@@ -41,7 +55,8 @@ struct PreviewTextBody: View {
     private func textSegment(_ index: Int) -> some View {
         #if DEBUG
         return PreviewTextSegment(text: segments[index], index: index,
-                                  onMaterialized: onSegmentMaterialized).equatable()
+                                  onMaterialized: onSegmentMaterialized,
+                                  onNativeLayout: onNativeLayout).equatable()
         #else
         return PreviewTextSegment(text: segments[index], index: index).equatable()
         #endif
@@ -56,6 +71,7 @@ private struct PreviewTextSegment: View, Equatable {
     let index: Int
     #if DEBUG
     var onMaterialized: ((Int) -> Void)?
+    var onNativeLayout: ((Int, PreviewTextNativeLayoutEvent) -> Void)?
     #endif
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
@@ -65,10 +81,16 @@ private struct PreviewTextSegment: View, Equatable {
     var body: some View {
         #if DEBUG
         onMaterialized?(index)
-        #endif
-        return PreviewTextLabel(value: String(text), identifier: index == 0
+        let label = PreviewTextLabel(value: String(text), identifier: index == 0
+                ? "clipy.preview.text" : "clipy.preview.text.segment.\(index)",
+            onNativeLayout: onNativeLayout.map { observe in
+                { event in observe(index, event) }
+            })
+        #else
+        let label = PreviewTextLabel(value: String(text), identifier: index == 0
                 ? "clipy.preview.text" : "clipy.preview.text.segment.\(index)")
-            .frame(maxWidth: .infinity, alignment: .leading)
+        #endif
+        return label.frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -79,6 +101,9 @@ private struct PreviewTextLabel: NSViewRepresentable {
     let value: String
     let identifier: String
     @Environment(\.layoutDirection) private var layoutDirection
+    #if DEBUG
+    var onNativeLayout: ((PreviewTextNativeLayoutEvent) -> Void)?
+    #endif
 
     private var alignment: NSTextAlignment {
         layoutDirection == .rightToLeft ? .right : .left
@@ -92,6 +117,9 @@ private struct PreviewTextLabel: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSTextField {
+        #if DEBUG
+        let cpuStart = onNativeLayout == nil ? nil : currentCPU()
+        #endif
         let field = NSTextField(wrappingLabelWithString: "")
         field.font = .preferredFont(forTextStyle: .body)
         field.textColor = .labelColor
@@ -100,6 +128,9 @@ private struct PreviewTextLabel: NSViewRepresentable {
         field.lineBreakStrategy = []
         field.maximumNumberOfLines = 0
         field.setAccessibilityIdentifier(identifier)
+        #if DEBUG
+        onNativeLayout?(.created(cpuNanoseconds: elapsedCPU(since: cpuStart)))
+        #endif
         setText(on: field)
         return field
     }
@@ -113,21 +144,38 @@ private struct PreviewTextLabel: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSTextField, context: Context) -> CGSize? {
         guard let width = proposal.width, width.isFinite, width > 0,
-              let cell = nsView.cell else { return nil }
+              let cell = nsView.cell else {
+            #if DEBUG
+            onNativeLayout?(.unmeasuredProposal(width: proposal.width))
+            #endif
+            return nil
+        }
         if let measuredSize = context.coordinator.measuredSize, measuredSize.width == width {
+            #if DEBUG
+            onNativeLayout?(.reusedMeasurement(width: width))
+            #endif
             return measuredSize
         }
         // Cache only this row's last measured size. A width or text change
         // remeasures its full content; no estimated or clipped document height.
+        #if DEBUG
+        let cpuStart = onNativeLayout == nil ? nil : currentCPU()
+        #endif
         let size = cell.cellSize(forBounds: NSRect(
             x: 0, y: 0, width: width, height: .greatestFiniteMagnitude
         ))
+        #if DEBUG
+        onNativeLayout?(.measured(width: width, cpuNanoseconds: elapsedCPU(since: cpuStart)))
+        #endif
         let measuredSize = CGSize(width: width, height: ceil(size.height))
         context.coordinator.measuredSize = measuredSize
         return measuredSize
     }
 
     private func setText(on field: NSTextField) {
+        #if DEBUG
+        let cpuStart = onNativeLayout == nil ? nil : currentCPU()
+        #endif
         field.alignment = alignment
         let paragraph = NSMutableParagraphStyle()
         paragraph.alignment = alignment
@@ -139,5 +187,21 @@ private struct PreviewTextLabel: NSViewRepresentable {
             .foregroundColor: NSColor.labelColor,
             .paragraphStyle: paragraph
         ])
+        #if DEBUG
+        onNativeLayout?(.textAssigned(cpuNanoseconds: elapsedCPU(since: cpuStart)))
+        #endif
     }
+
+    #if DEBUG
+    private func currentCPU() -> UInt64? {
+        var value = timespec()
+        guard clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value) == 0 else { return nil }
+        return UInt64(value.tv_sec) * 1_000_000_000 + UInt64(value.tv_nsec)
+    }
+
+    private func elapsedCPU(since start: UInt64?) -> UInt64? {
+        guard let start, let end = currentCPU(), end >= start else { return nil }
+        return end - start
+    }
+    #endif
 }

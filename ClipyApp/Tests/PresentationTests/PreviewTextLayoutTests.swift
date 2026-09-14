@@ -121,10 +121,12 @@ struct PreviewTextLayoutTests {
             var preview = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480)
             var materialized: Set<Int> = []
             var materializationCalls = 0
+            var nativeLayout = NativeLayoutTotals()
             preview.onSegmentMaterialized = {
                 materialized.insert($0)
                 materializationCalls += 1
             }
+            preview.onNativeLayout = { nativeLayout.record(segment: $0, event: $1) }
             #else
             let preview = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480)
             #endif
@@ -140,6 +142,8 @@ struct PreviewTextLayoutTests {
             print("Preview initial layout: wall: \(elapsed), main-thread CPU: \(cpuElapsed), UTF-16 units: \(source.utf16.count)")
             #if DEBUG
             print("[DEBUG-preview-layout] materialized=\(materialized.count) total=\(text.displaySegments.count) calls=\(materializationCalls)")
+            print("[DEBUG-preview-native-layout] \(nativeLayout.summary), UTF-16 units: \(source.utf16.count)")
+            #expect(nativeLayout.clockFailures == 0)
             #endif
             #expect(elapsed < .milliseconds(34))
             // Whole-process figures are observations, not per-view memory
@@ -154,4 +158,56 @@ struct PreviewTextLayoutTests {
         try #require(clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value) == 0)
         return .seconds(value.tv_sec) + .nanoseconds(value.tv_nsec)
     }
+
+    #if DEBUG
+    private struct NativeLayoutTotals {
+        var created = 0
+        var textAssignments = 0
+        var cacheHits = 0
+        var clockFailures = 0
+        var creationCPU: UInt64 = 0
+        var assignmentCPU: UInt64 = 0
+        var measurementCPU: UInt64 = 0
+        var measurementsBySegment: [Int: [CGFloat: Int]] = [:]
+        var unmeasuredWidths: [CGFloat?: Int] = [:]
+
+        mutating func record(segment: Int, event: PreviewTextNativeLayoutEvent) {
+            switch event {
+            case .created(let cpu):
+                created += 1
+                if let cpu { creationCPU += cpu } else { clockFailures += 1 }
+            case .textAssigned(let cpu):
+                textAssignments += 1
+                if let cpu { assignmentCPU += cpu } else { clockFailures += 1 }
+            case .measured(let width, let cpu):
+                measurementsBySegment[segment, default: [:]][width, default: 0] += 1
+                if let cpu { measurementCPU += cpu } else { clockFailures += 1 }
+            case .reusedMeasurement:
+                cacheHits += 1
+            case .unmeasuredProposal(let width):
+                unmeasuredWidths[width, default: 0] += 1
+            }
+        }
+
+        var summary: String {
+            var widths: [CGFloat: Int] = [:]
+            var repeatedWidthMisses = 0
+            for measurements in measurementsBySegment.values {
+                for (width, count) in measurements {
+                    widths[width, default: 0] += count
+                    repeatedWidthMisses += max(0, count - 1)
+                }
+            }
+            let widthSummary = widths.keys.sorted().map { "\($0):\(widths[$0] ?? 0)" }.joined(separator: ",")
+            let unmeasuredSummary = unmeasuredWidths.map { width, count in
+                "\(width.map { String(describing: $0) } ?? "nil"):\(count)"
+            }.sorted().joined(separator: ",")
+            return "created=\(created) makeCPUms=\(Double(creationCPU) / 1_000_000)"
+                + " setText=\(textAssignments) setTextCPUms=\(Double(assignmentCPU) / 1_000_000)"
+                + " cellSize=\(widths.values.reduce(0, +)) cellSizeCPUms=\(Double(measurementCPU) / 1_000_000)"
+                + " cacheHits=\(cacheHits) repeatedSameSegmentWidthMisses=\(repeatedWidthMisses)"
+                + " measuredWidths=[\(widthSummary)] unmeasuredWidths=[\(unmeasuredSummary)]"
+        }
+    }
+    #endif
 }
