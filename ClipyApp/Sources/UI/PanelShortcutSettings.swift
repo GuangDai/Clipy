@@ -71,8 +71,8 @@ struct PanelShortcutModifiers: OptionSet, Codable, Hashable, Sendable {
     static let control = Self(rawValue: 4)
     static let shift = Self(rawValue: 8)
 
-    var eventModifiers: EventModifiers {
-        var result: EventModifiers = []
+    var eventModifiers: SwiftUI.EventModifiers {
+        var result: SwiftUI.EventModifiers = []
         if contains(.command) { result.insert(.command) }
         if contains(.option) { result.insert(.option) }
         if contains(.control) { result.insert(.control) }
