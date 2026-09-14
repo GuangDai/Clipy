@@ -42,18 +42,6 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 20), "The real multi-item row must be captured before dragging")
         XCTAssertTrue(row.isHittable)
 
-        // The first launch fits content after opening its default ceiling.
-        // Reopen once after the captured row is visible so center placement
-        // uses that retained fitted size, just like the summon after the
-        // receiver's activation below. This is setup, not a retrying drag.
-        app.typeKey(.escape, modifierFlags: [])
-        let initiallyClosed = NSPredicate { _, _ in !row.exists }
-        XCTAssertEqual(XCTWaiter.wait(for: [
-            XCTNSPredicateExpectation(predicate: initiallyClosed, object: nil)
-        ], timeout: 5), .completed)
-        app.typeKey("c", modifierFlags: [.command, .shift])
-        XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
-
         // Establish the source's active/hovered layout before creating the
         // cooperating receiver. A fixed corner can lie under Clipy's persisted
         // status-bar-level panel, and orderFrontRegardless only orders within
@@ -83,8 +71,16 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         // then become covered when the source and its child come forward.
         let occupiedFrame = sourceFrame.union(previewFrame)
         let screen = try XCTUnwrap(NSScreen.screens.first { $0.frame.intersects(sourceFrame) })
-        let targetFrame = try XCTUnwrap(Self.receiverFrame(outside: occupiedFrame, on: screen.visibleFrame),
-            "No separate receiver area around the source and preview windows: \(occupiedFrame)")
+        // Center placement preserves horizontal position while first-open
+        // content fitting and a later summon can differ vertically. Reserve
+        // the source/preview columns for the full screen height, so the
+        // receiver occupies a side area that stays free after re-summoning.
+        let occupiedColumns = CGRect(
+            x: occupiedFrame.minX, y: screen.visibleFrame.minY,
+            width: occupiedFrame.width, height: screen.visibleFrame.height
+        )
+        let targetFrame = try XCTUnwrap(Self.receiverFrame(outside: occupiedColumns, on: screen.visibleFrame),
+            "No separate receiver area beside the source and preview columns: \(occupiedColumns)")
         let readyURL = directory.appendingPathComponent("ready.json")
         let receivedURL = directory.appendingPathComponent("received.json")
         let receiverLogURL = directory.appendingPathComponent("receiver.log")
