@@ -90,7 +90,9 @@ private struct PreviewTextSegment: View, Equatable {
         let label = PreviewTextLabel(value: String(text), identifier: index == 0
                 ? "clipy.preview.text" : "clipy.preview.text.segment.\(index)")
         #endif
-        return label.frame(maxWidth: .infinity, alignment: .leading)
+        // The native sizeThatFits returns the proposed width itself. An
+        // extra flexible frame would repeat that negotiation for every leaf.
+        return label
     }
 }
 
@@ -120,7 +122,7 @@ private struct PreviewTextLabel: NSViewRepresentable {
         #if DEBUG
         let cpuStart = onNativeLayout == nil ? nil : currentCPU()
         #endif
-        let field = NSTextField(wrappingLabelWithString: "")
+        let field = PreviewTextField(wrappingLabelWithString: "")
         field.font = .preferredFont(forTextStyle: .body)
         field.textColor = .labelColor
         field.isSelectable = true
@@ -204,4 +206,25 @@ private struct PreviewTextLabel: NSViewRepresentable {
         return end - start
     }
     #endif
+}
+
+/// Reserve the native legacy scrollbar's space before text layout settles.
+/// Otherwise its appearance narrows the viewport and lays out every visible
+/// segment again. Overlay scrollers keep their system behavior and do not
+/// reserve a gutter; this view never overrides the user's scroller style.
+private final class PreviewTextField: NSTextField {
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        keepNativeScrollerSpace()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        keepNativeScrollerSpace()
+    }
+
+    private func keepNativeScrollerSpace() {
+        guard let scrollView = enclosingScrollView, scrollView.autohidesScrollers else { return }
+        scrollView.autohidesScrollers = false
+    }
 }

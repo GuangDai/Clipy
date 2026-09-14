@@ -21,6 +21,8 @@ struct PreviewTextLayoutTests {
         host.layoutSubtreeIfNeeded()
 
         let field = try #require(textField(in: host))
+        let scrollView = try #require(field.enclosingScrollView)
+        #expect(!scrollView.autohidesScrollers)
         #expect(field.stringValue.utf8.elementsEqual(source.utf8))
         #expect(field.isSelectable)
         #expect(!field.isEditable)
@@ -29,6 +31,8 @@ struct PreviewTextLayoutTests {
 
         window.setContentSize(NSSize(width: 180, height: 480))
         host.layoutSubtreeIfNeeded()
+        #expect(!scrollView.autohidesScrollers)
+        #expect(field.frame.width > 0 && field.frame.width <= scrollView.contentSize.width)
         #expect(field.frame.height > originalHeight)
         let cell = try #require(field.cell)
         let completeSize = cell.cellSize(forBounds: NSRect(
@@ -60,6 +64,7 @@ struct PreviewTextLayoutTests {
         host.layoutSubtreeIfNeeded()
         let rightToLeftField = try #require(textField(in: host))
         #expect(rightToLeftField.alignment == .right)
+        #expect(rightToLeftField.stringValue.utf8.elementsEqual(source.utf8))
         host.rootView = segmentViewport("Replacement")
         host.layoutSubtreeIfNeeded()
         let replacement = try #require(textField(in: host))
