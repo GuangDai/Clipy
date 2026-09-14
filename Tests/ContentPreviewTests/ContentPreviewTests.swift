@@ -497,7 +497,12 @@ struct ContentPreviewTests {
             let text = await renderer.renderHistoryPane([
                 PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("still available".utf8)),
             ])
-            #expect(text == .content(.text(PreviewText(text: "still available", wasTruncated: false))))
+            if case .content(.text(let artifact)) = text {
+                #expect(artifact.text == "still available")
+                #expect(!artifact.wasTruncated)
+            } else {
+                Issue.record("Text preview must remain available while rasterization is occupied.")
+            }
 
             // Bound the observation separately from the product's two-second
             // wait. A regression must fail and release the parked renderer,
