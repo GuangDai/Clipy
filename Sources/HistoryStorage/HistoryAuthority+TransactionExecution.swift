@@ -248,7 +248,8 @@ extension HistoryAuthority {
 
         case .delete(let itemID, _):
             let old = try requireMutationRow(itemID, in: database)
-            // FK cascades delete content/representation references, never files.
+            // The item is the live owner. Removing it hides every revision
+            // immediately; bounded cleanup later reclaims detached content.
             try database.execute("DELETE FROM history_items WHERE id = ?", bindings: [.text(itemID.rawValue.uuidString)])
             try database.execute("""
                 UPDATE history_state SET retainedItemCount = retainedItemCount - 1,
@@ -376,7 +377,7 @@ extension HistoryAuthority {
     ) throws {
         for id in ids {
             try database.execute("""
-                DELETE FROM contents WHERE id = ? AND itemID = ? AND revisionOrdinal > 0
+                UPDATE contents SET itemID = NULL WHERE id = ? AND itemID = ? AND revisionOrdinal > 0
                     AND id != (SELECT currentContentID FROM history_items WHERE id = ?)
                 """, bindings: [
                     .text(id.rawValue.uuidString), .text(itemID.rawValue.uuidString),

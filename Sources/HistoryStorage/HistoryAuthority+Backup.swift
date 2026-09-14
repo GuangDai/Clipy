@@ -57,6 +57,7 @@ extension HistoryAuthority {
             state.finalize()
             let metadata = partial.appendingPathComponent("history.sqlite")
             try database.backup(to: metadata)
+            try removeDetachedBackupContent(at: metadata)
             let content = partial.appendingPathComponent("history.sqlite-content", isDirectory: true)
             try files.createDirectory(at: content.appendingPathComponent("blobs"), withIntermediateDirectories: true)
             try files.createDirectory(at: content.appendingPathComponent("staging"), withIntermediateDirectories: false)
@@ -66,9 +67,12 @@ extension HistoryAuthority {
                 // The existing blob index supplies distinct shared references
                 // in bounded pages. No complete set of IDs or content is held.
                 let batch = try database.prepare("""
-                    SELECT blobID, MIN(byteCount), MAX(byteCount) FROM representations
-                    WHERE blobID IS NOT NULL \(after == nil ? "" : "AND blobID > ?")
-                    GROUP BY blobID ORDER BY blobID LIMIT 64
+                    SELECT r.blobID, MIN(r.byteCount), MAX(r.byteCount)
+                    FROM representations r
+                    JOIN contents c ON c.id = r.contentID
+                    JOIN history_items h ON h.id = c.itemID
+                    WHERE r.blobID IS NOT NULL \(after == nil ? "" : "AND r.blobID > ?")
+                    GROUP BY r.blobID ORDER BY r.blobID LIMIT 64
                     """, bindings: after.map { [.text($0)] } ?? [])
                 defer { batch.finalize() }
                 var visited = 0
@@ -138,6 +142,27 @@ extension HistoryAuthority {
         } catch {
             throw HistoryBackupFailure.writeFailed
         }
+    }
+
+    /// V2-09 §6: logical deletion may precede physical reclamation in the
+    /// source. Only the private export is compacted: it must not carry retired
+    /// inline content, even as recoverable bytes in SQLite's free pages.
+    private func removeDetachedBackupContent(at metadata: URL) throws {
+        let exported = try SQLiteDatabase(url: metadata)
+        defer { try? exported.close() }
+        try exported.writeTransaction(checkingCancellation: true) {
+            try exported.execute("""
+                DELETE FROM contents
+                WHERE NOT EXISTS (SELECT 1 FROM history_items h WHERE h.id = contents.itemID)
+                """)
+        }
+        try Task.checkCancellation()
+        // DELETE cascades the detached representations; VACUUM removes their
+        // free-page bytes as well as content already reclaimed in the source.
+        try exported.execute("VACUUM")
+        try Task.checkCancellation()
+        try exported.execute("PRAGMA journal_mode = DELETE")
+        try exported.close()
     }
 
     /// Mirror immutable source publication: fsync directories and files, then

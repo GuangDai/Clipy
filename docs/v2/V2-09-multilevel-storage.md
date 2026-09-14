@@ -202,13 +202,31 @@ Details 的显式表示预览也先按 renderer 元数据限额决定是否读�
 无引用文件，旧 History 不变；不得先删除旧历史为新写入腾位置。断电耐久性、目录同步
 和 APFS 行为仍需要真实平台验证，不能从 rename 的原子性外推全部耐久性。
 
-删除/prune 先提交数据库引用变化，再删除已无引用的文件。清理只查询当前真实引用，
-按固定批次枚举文件，不在启动时构建全仓 live-ID Set，不依赖额外持久账本。
+**2026-09-14 用户选择：先逻辑删除，再分批回收物理内容。** `history_items`
+是公开 History 的存活拥有者。删除/clear/retire 的一次原子提交移除该行及搜索索引，
+同时更新逻辑用量、策略、HCR/Gateway 审计和 ChangePosition；该 receipt 返回后，
+列表、搜索、详情、粘贴、预览、修订和去重均立即看不到已删除条目。
+`contents.itemID` 不再向 `history_items` 建级联外键，删除条目不触碰其 payload
+行；R3 prune 将指定非活动修订的 `contents.itemID` 置 NULL，使它立即脱离 lineage。
+不引入需要所有读通道重复过滤的 tombstone 标志，也不增加公开分批 Apply 语义。
+
+未回收的 content 要么没有 owner，要么其 owner 已不存在。GC 用 covering keyset
+每批最多访问 32 个 content ownership 行、删除 32 个 representation 行，最后删除
+已空的无 owner content；不会一次按 content 数级联删除无界 payload。每批 SQL
+完成后即对少量 blob UUID 复查剩余 representation 引用，最后引用消失才 unlink。
+共享 blob 的任何未回收引用仍保护其文件。批间让出 Authority，物理事务不改变逻辑
+计数、HCR、ChangePosition，也不发布额外 HistoryCommit。取消/退出留下的无 owner
+行本身足够让重启从有界遍历继续，无持久任务账本、常驻全仓集合或第二个 writer。
+
+为防止罕见 UUID 重用将旧 content 接回新条目，捕获候选 ID 的占用检查同时查询
+未回收 content 的旧 owner ID；去重候选必须 join 存活 `history_items`。旧级联
+schema 被原样拒绝为 openStore 失败，不迁移、不清空、不自动删除已有存储。
+此处承诺逻辑删除立即完成，物理空间随后回收，不承诺安全擦除或满盘时零写入开销。
 清理与同一 blob 引用的发布仍由 Authority 排序；staging 和最终文件分开处理。
 不复用一个已经删除的 BlobID 来写另一份内容。
 
 打开存储、实际删除/prune 或新文件发布后的事务失败会请求一次有限后台遍历。
-每批最多访问 64 个目录项，批次之间让出 Authority；遍历中新增请求合并为一次补跑，
+content 回收之后，每批最多访问 64 个目录项，批次之间让出 Authority；遍历中新增请求合并为一次补跑，
 完成即退出，不依赖后续复制来推进，也不保留永久轮询任务。普通复制/置顶不触发
 全目录遍历。清理失败不改写已提交的 receipt；下一次实际清理请求或重新打开时重试。
 

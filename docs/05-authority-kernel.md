@@ -83,8 +83,12 @@ filter candidates; byte-exact confirmation decides equality. Item IDs and
 blob UUIDs are independent identities, never content hashes.
 
 Files are published and synchronized before SQL references commit. Removal
-commits reference changes first, then bounded cleanup checks current references
-before unlinking. Schema shape, content placement and startup are specified in
+disconnects the live item owner in its History transaction; revision pruning
+disconnects only the retired revision owners. Detached content is immediately
+ineligible for public reads and dedup. Bounded cleanup later removes at most
+32 representation rows per transaction, then checks remaining references before
+unlinking shared files; it does not emit another History commit. Schema shape,
+content placement and startup are specified in
 [V2-09 §§3–6](v2/V2-09-multilevel-storage.md); no dual writing, migration,
 legacy-store reading or automatic deletion of an unreadable store is added.
 
@@ -404,7 +408,8 @@ Stamping is mechanical by semantic case:
 - create receives `ContentVersion.initial`, the prepared Canonical/projection, empty revision state, initial occurrence, and no pin;
 - occurrence and pin mutations preserve the loaded Content Version and projections;
 - append revision requires `currentVersion.successor()`, appends the complete revision, stores its active ID, and writes the prepared projection;
-- delete removes the row and its Canonical signature postings;
+- delete removes the live row and excludes its content from candidate queries;
+  detached content/signature rows are physically reclaimed in bounded batches;
 - set retention policy writes the new `maximumUnpinnedItems` to the singleton row and emits any required `retire` victim mutations computed by `planRetention`; it preserves every item's Content Version and projections, and advances `ChangePosition` once only when the value actually changes or at least one victim retires (a same-value no-victim set returns `.unchanged` before stamping);
 - the current singleton position must have a checked successor; the same successor is used for the whole plan.
 

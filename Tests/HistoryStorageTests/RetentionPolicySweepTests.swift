@@ -497,8 +497,8 @@ struct RetentionPolicySweepTests {
         #expect(retiredItems == 1)
         #expect(prunedRevisions == 0)
 
-        // Storage side: H and all of its immutable contents are gone with
-        // retirement. Only T's single representation remains.
+        // Storage side: H and all of its immutable contents cease to be
+        // retained at commit. Physical payload cleanup may still be pending.
         let survivors = Set(
             try await Self.rows(container).map { HistoryItemID(rawValue: $0.id) }
         )
@@ -506,12 +506,17 @@ struct RetentionPolicySweepTests {
         #expect(!survivors.contains(heavy.id))
         #expect(try await Self.fetchBytesRows(container).count == 1)
         try await container.withTestDatabase { owner in
-            let contents = try owner.database.prepare("SELECT count(*) FROM contents WHERE itemID=?",
+            let contents = try owner.database.prepare("""
+                SELECT count(*) FROM contents c JOIN history_items i ON i.id = c.itemID WHERE c.itemID=?
+                """,
                 bindings: [.text(heavy.id.rawValue.uuidString)])
             defer { contents.finalize() }
             try #require(try contents.step())
             #expect(try contents.integer(at: 0) == 0)
-            let representations = try owner.database.prepare("SELECT count(*) FROM representations")
+            let representations = try owner.database.prepare("""
+                SELECT count(*) FROM representations r JOIN contents c ON c.id = r.contentID
+                JOIN history_items i ON i.id = c.itemID
+                """)
             defer { representations.finalize() }
             try #require(try representations.step())
             #expect(try representations.integer(at: 0) == 1)

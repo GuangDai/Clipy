@@ -63,10 +63,14 @@ struct BackgroundBlobCleanupTests {
         await Self.parkCleanup(history, at: gate)
         await history.authority.requestBlobCleanup()
         await gate.waitForPark(Self.park)
-        // Let one bounded batch inspect referenced files, then stop before
-        // the second batch. They become orphaned only AFTER that inspection.
-        await gate.resume(Self.park)
-        await gate.waitForPark(Self.park)
+        // Finish the bounded ownership-metadata phase and run its first
+        // file batch, then park before the next file batch. Merely resuming
+        // once would now inspect content metadata only and would not prove
+        // revisiting files whose live references disappear after inspection.
+        repeat {
+            await gate.resume(Self.park)
+            await gate.waitForPark(Self.park)
+        } while await !history.authority.contentCleanupFinished
         do {
             #expect(try Self.blobFiles(root: root).count == 130)
             let receipt = try await history.perform(.clear(.all))

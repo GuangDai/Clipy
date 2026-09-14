@@ -59,6 +59,8 @@ internal actor HistoryAuthority {
     internal var injectedTransactionFailure: InjectedTransactionFailure?
     internal var blobCleanupTask: Task<Void, Never>?
     internal var blobCleanupNeedsAnotherPass = false
+    internal var contentCleanupAfterID = ""
+    internal var contentCleanupFinished = false
 
 #if DEBUG
     internal var searchDebugProbe = SearchDebugProbe.environmentConfigured()

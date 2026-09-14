@@ -220,9 +220,12 @@ enum RetainedBytesTestSupport {
                 SELECT (SELECT count(*) FROM history_items),
                     (SELECT coalesce(sum(canonicalBytes),0) FROM history_items),
                     (SELECT coalesce(sum(revisionBytes),0) FROM history_items),
-                    (SELECT coalesce(sum(contentByteCount),0) FROM contents WHERE revisionOrdinal=0),
-                    (SELECT coalesce(sum(contentByteCount),0) FROM contents WHERE revisionOrdinal>0),
-                    (SELECT coalesce(sum(byteCount),0) FROM representations)
+                    (SELECT coalesce(sum(c.contentByteCount),0) FROM contents c
+                        JOIN history_items i ON i.id=c.itemID WHERE c.revisionOrdinal=0),
+                    (SELECT coalesce(sum(c.contentByteCount),0) FROM contents c
+                        JOIN history_items i ON i.id=c.itemID WHERE c.revisionOrdinal>0),
+                    (SELECT coalesce(sum(r.byteCount),0) FROM representations r
+                        JOIN contents c ON c.id=r.contentID JOIN history_items i ON i.id=c.itemID)
                 """)
             defer { row.finalize() }
             guard try row.step() else { throw HistoryFailure.persistence(.invariantViolation) }

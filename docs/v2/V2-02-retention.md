@@ -693,16 +693,18 @@ no policy or retirement effects. The caller may explicitly retry against
 current History. No stale prefix is applied and no automatic retry loop is
 introduced.
 
-The final R1/R2 retirement, surviving R3 prunes, policy, accounting, HCR, and
-position still commit together. Swift loops check task cancellation; SQLite's
-progress callback also checks cancellation during a long cascading DELETE.
+The final R1/R2 logical retirement, surviving R3 ownership detachments, policy,
+accounting, HCR, and position still commit together. Under the user-selected
+V2-09 §6 reclamation model, representation payload deletion is deferred to
+bounded physical batches with no extra History Commit. Swift loops check task
+cancellation; SQLite's progress callback also checks cancellation during SQL.
 Cancellation before the COMMIT boundary rolls back and throws
 `CancellationError`; rollback itself is never interruptible. Once that
 boundary is crossed, a successful commit returns its receipt even if the
 caller subsequently cancels. This improves responsiveness during preparation
-and allows an in-progress write to be cancelled; it does **not** bound a
-successful write's duration or eliminate the disk space needed by its atomic
-WAL transaction. Tight-volume failure remains all-or-nothing.
+and allows an in-progress write to be cancelled. Logical metadata changes
+still need an atomic WAL transaction and can fail when disk space is entirely
+exhausted; payload-page reclamation no longer joins that large transaction.
 
 ```text
 Authority.commitRetentionPolicies(newPolicies):
@@ -1526,17 +1528,17 @@ write, X2, `V2-05`). Its security record:
 
 - **Trust boundary:** the process boundary; no external/network input. Policies
   are set by the local user via the v1 `ClipboardHistory` seam.
-- **Deletion is atomic and prompt (contrast V2-01).** R1/R2 retirement deletes
-  `HistoryItemRow` rows **in the retirement History Commit** (`05` §10); R3
-  pruning rewrites `revisionStateBlob` **in the same commit**. There is no
-  orphan/decoupled-cleanup window (contrast V2-01's `EnrichmentRow` orphan
-  sweep, `V2-01` §6.5): a `remove`/retire/prune is durably complete when the
-  receipt returns. `RET-SECURITY-1` confirms this.
+- **Logical deletion is atomic and prompt.** R1/R2 remove the live
+  `history_items` owner; R3 detaches inactive `contents.itemID`, in the same
+  retirement History Commit. Public reads and capture dedup cannot recover
+  those values after its receipt. Physical payload rows and files are reclaimed
+  later in bounded Authority batches (V2-09 §6, user direction 2026-09-14).
+  This is not secure erasure and physical allocation can remain temporarily.
 - **Content-sensitivity reduction.** R1/R2/R3 are *data-minimization* controls:
   they retire items and prune revisions, reducing retained sensitive content.
   This is a privacy-positive direction (no new searchable exposure, contrast
   V2-01's OCR-text amplification, `V2-01` §9). Pruned revisions are gone
-  durably (no tombstone, `02` §3.3 "removal is absence"); a backup of the store
+  from live History durably (`02` §3.3 "removal is absence"); a backup of the store
   taken before pruning retains them, which is a backup/restore property outside
   V2-02's scope (honest note, not a gate).
 - **TCC/sandbox/entitlement:** none. Retention is purely internal mutation of

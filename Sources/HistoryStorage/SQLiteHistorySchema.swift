@@ -41,6 +41,17 @@ internal enum SQLiteHistorySchema {
                 """)
             defer { itemIndex.finalize() }
             guard try itemIndex.step() else { throw HistoryFailure.persistence(.openStore) }
+            // Logical retirement disconnects ownership before physical
+            // reclamation. Older cascading stores cannot provide this
+            // behavior and are rejected intact, never migrated or deleted.
+            let detachedOwnership = try database.prepare("""
+                SELECT 1 FROM pragma_table_info('contents')
+                WHERE name='itemID' AND "notnull"=0
+                  AND NOT EXISTS (SELECT 1 FROM pragma_foreign_key_list('contents') WHERE "from"='itemID')
+                LIMIT 1
+                """)
+            defer { detachedOwnership.finalize() }
+            guard try detachedOwnership.step() else { throw HistoryFailure.persistence(.openStore) }
             return
         }
 
@@ -118,7 +129,7 @@ internal enum SQLiteHistorySchema {
         """
         CREATE TABLE contents (
             id TEXT PRIMARY KEY NOT NULL,
-            itemID TEXT NOT NULL REFERENCES history_items(id) ON DELETE CASCADE,
+            itemID TEXT,
             revisionOrdinal INTEGER NOT NULL CHECK (revisionOrdinal >= 0),
             createdAt REAL NOT NULL,
             titleUTF8 BLOB NOT NULL,
@@ -127,6 +138,9 @@ internal enum SQLiteHistorySchema {
             UNIQUE (itemID, revisionOrdinal)
         )
         """,
+        // A covering cursor visits bounded ownership metadata during physical
+        // cleanup without loading content titles or representation payloads.
+        "CREATE INDEX contents_cleanup ON contents(id,itemID)",
         """
         CREATE TABLE representations (
             contentID TEXT NOT NULL REFERENCES contents(id) ON DELETE CASCADE,

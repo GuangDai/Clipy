@@ -99,7 +99,12 @@ struct SingletonShapeStartupClassifierTests {
     private static func seed(at url: URL, clear: Bool = false) async throws {
         let history = try await WSSupport.openHistory(storeURL: url)
         _ = try await history.perform(.capture(WSSupport.textCapture("retained singleton evidence", observedAt: Date(timeIntervalSinceReferenceDate: 1000))))
-        if clear { _ = try await history.perform(.clear(.all)) }
+        if clear {
+            _ = try await history.perform(.clear(.all))
+            // This startup test deliberately requires an entirely reclaimed
+            // physical store, beyond the clear receipt's logical absence.
+            await history.authority.waitForBlobCleanup()
+        }
     }
 
     private static func removeLaterConfiguration(in database: SQLiteDatabase) throws {
