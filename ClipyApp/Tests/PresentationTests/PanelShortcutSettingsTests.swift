@@ -106,7 +106,17 @@ struct PanelShortcutSettingsTests {
     }
 
     @Test func corruptDuplicateBindingsDisableBothActionsInsteadOfChoosingTheDestructiveOne() throws {
-        let data = Data(#"{"remove":{"key":"P","modifiers":{"rawValue":1}}}"#.utf8)
+        // Keep the uppercase key to exercise load normalization, but encode
+        // the OptionSet using its actual Codable representation. A malformed
+        // hand-written modifier object tests whole-document fallback instead
+        // of the duplicate-binding path this test is meant to exercise.
+        struct SavedBinding: Encodable {
+            let key: String
+            let modifiers: PanelShortcutModifiers
+        }
+        let data = try JSONEncoder().encode([
+            "remove": SavedBinding(key: "P", modifiers: .command)
+        ])
         let loaded = PanelShortcutSettings.load(data: data)
         #expect(loaded.binding(for: .remove) == nil)
         #expect(loaded.binding(for: .togglePin) == nil)
