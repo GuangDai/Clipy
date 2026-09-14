@@ -35,11 +35,11 @@ struct PublishedHistoryContentTests {
     }
 
     @Test
-    func failedBeginCannotReferenceAnAlreadyPublishedFile() async throws {
+    func failedBeginDoesNotPublishAFile() async throws {
         let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
         let reference = try await insertOriginal(history)
         let before = try await history.authority.publicationSQLFactsForTest()
-        let cleanup = await pauseCleanupForFailureProof(history)
+        await history.authority.waitForBlobCleanup()
         // The same actual connection refuses BEGIN IMMEDIATE. The first
         // transaction-body injection must remain unconsumed, proving no body
         // was entered; no second writer or replacement database is involved.
@@ -48,20 +48,16 @@ struct PublishedHistoryContentTests {
         await #expect(throws: HistoryFailure.persistence(.transaction)) {
             try await history.perform(.capture(capture(bytes: Data(repeating: 86, count: original.count), text: "new")))
         }
-        await cleanup.waitForPark(AuthoritySuspensionPoint.blobCleanupBatchEntry.rawValue)
         do {
             #expect(await history.authority.injectedTransactionFailure == .positionChanged)
             try await history.authority.setQueryOnlyForPublicationTest(false)
             await history.authority.setTransactionFailureInjection(nil)
             #expect(try await history.authority.publicationSQLFactsForTest() == before)
-            #expect(try await history.authority.publicationBlobCountForTest() == 2)
-            await resumeCleanup(history, gate: cleanup)
             #expect(try await history.authority.publicationBlobCountForTest() == 1)
             #expect(try await history.pastePayload(for: reference.id).representations.contains { $0.bytes == original })
         } catch {
             try? await history.authority.setQueryOnlyForPublicationTest(false)
             await history.authority.setTransactionFailureInjection(nil)
-            await resumeCleanup(history, gate: cleanup)
             throw error
         }
     }

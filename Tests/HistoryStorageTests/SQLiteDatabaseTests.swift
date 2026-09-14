@@ -166,7 +166,7 @@ struct SQLiteDatabaseTests {
     }
 
     @Test(arguments: [false, true])
-    func openingWaitDoesNotChangeNormalConnectionContention(readOnly: Bool) throws {
+    func finiteBusyWaitRemainsInstalledAfterOpening(readOnly: Bool) throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let url = directory.appendingPathComponent("history.sqlite")
@@ -176,9 +176,57 @@ struct SQLiteDatabaseTests {
         let reopened = try SQLiteDatabase(url: url, readOnly: readOnly)
         let timeout = try reopened.prepare("PRAGMA busy_timeout")
         #expect(try timeout.step())
-        #expect(try timeout.integer(at: 0) == 0)
+        #expect(try timeout.integer(at: 0) == 1_000)
         timeout.finalize()
         try reopened.close()
+    }
+
+    @Test func cleanupTransactionAfterConnectionOpenCanFinishBeforeTheNextWrite() async throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.sqlite")
+        let next = try SQLiteDatabase(url: url)
+        try next.execute("CREATE TABLE items (value INTEGER)")
+        try next.execute("INSERT INTO items VALUES (1)")
+        let (entered, entry) = AsyncThrowingStream<Void, any Error>.makeStream()
+        let (finished, completion) = AsyncThrowingStream<Void, any Error>.makeStream()
+        let releaseCleanup = DispatchSemaphore(value: 0)
+        // A native thread owns this connection entirely. Keeping the prior
+        // cleanup's transaction open reproduces contention after `next` has
+        // finished construction, independently of last-close checkpointing.
+        DispatchQueue.global().async {
+            do {
+                let previous = try SQLiteDatabase(url: url)
+                try previous.writeTransaction {
+                    try previous.execute("DELETE FROM items")
+                    _ = entry.yield(())
+                    entry.finish()
+                    releaseCleanup.wait()
+                }
+                completion.finish()
+            } catch {
+                entry.finish(throwing: error)
+                completion.finish(throwing: error)
+            }
+        }
+        defer { releaseCleanup.signal() }
+        for try await _ in entered {}
+        // This finite hold widens the actual race; it is not a retry or a
+        // join before the write. The exact PRAGMA assertion above also makes
+        // removal of the busy handler deterministically observable.
+        DispatchQueue.global().asyncAfter(deadline: .now() + .milliseconds(100)) {
+            releaseCleanup.signal()
+        }
+        try next.writeTransaction {
+            try next.execute("INSERT INTO items VALUES (2)")
+        }
+        for try await _ in finished {}
+        let row = try next.prepare("SELECT value FROM items")
+        #expect(try row.step())
+        #expect(try row.integer(at: 0) == 2)
+        #expect(try !row.step())
+        row.finalize()
+        try next.close()
     }
 
     @Test func competingWriterReportsBusyWithoutLosingFirstTransaction() throws {

@@ -1,4 +1,4 @@
-/// V2-09 §6: a best-effort hint while publishing new content before SQL BEGIN.
+/// V2-09 §6: a best-effort hint while publishing content before SQL references.
 /// Demand accumulates new blob bytes and newly inserted inline bytes; reused
 /// blob references add zero. Actual SQLite/file errors remain authoritative.
 import Foundation

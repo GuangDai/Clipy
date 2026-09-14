@@ -75,10 +75,14 @@ internal final class SQLiteDatabase {
         handle = opened
         do {
             try check(sqlite3_extended_result_codes(opened, 1))
-            // A released owner's final GC batch can close its last connection
-            // while this connection configures WAL. SQLite briefly excludes
-            // new readers during that close/checkpoint (WAL documentation §9).
-            // Let SQLite wait only during construction, with a finite limit.
+            // A released owner's final physical cleanup transaction can
+            // overlap a newly opened owner, including AFTER this initializer
+            // returns. Keep SQLite's finite busy wait for the connection's
+            // whole lifetime; replaying a History operation is unnecessary.
+            // WAL last-close/checkpoint contention uses the same mechanism.
+            // Lock waits can delay cancellation by this 1-second budget;
+            // cancellable writes recheck before mutation and before COMMIT.
+            // https://www.sqlite.org/c3ref/busy_timeout.html
             try check(sqlite3_busy_timeout(opened, 1_000))
             try execute("PRAGMA foreign_keys = ON")
             try execute("PRAGMA cache_size = -4096")
@@ -92,9 +96,6 @@ internal final class SQLiteDatabase {
                 try execute("PRAGMA synchronous = FULL")
                 try execute("PRAGMA wal_autocheckpoint = 256")
             }
-            // Ordinary reads/transactions still report BUSY immediately; this
-            // is not a second writer coordinator or an application retry loop.
-            try check(sqlite3_busy_timeout(opened, 0))
         } catch {
             sqlite3_close_v2(opened)
             handle = nil
@@ -245,6 +246,7 @@ internal final class SQLiteDatabase {
         do {
             return try transaction(begin: "BEGIN IMMEDIATE") {
                 do {
+                    try Task.checkCancellation()
                     let result = try body()
                     try Task.checkCancellation()
                     // COMMIT is the point of no return. Cancellation after
@@ -258,7 +260,10 @@ internal final class SQLiteDatabase {
                     throw error
                 }
             }
-        } catch let failure as SQLiteFailure where failure.primaryCode == SQLITE_INTERRUPT {
+        } catch let failure as SQLiteFailure
+            where failure.primaryCode == SQLITE_INTERRUPT || failure.primaryCode == SQLITE_BUSY {
+            // A cancelled task can finish SQLite's bounded lock wait with
+            // BUSY before BEGIN succeeds. No mutation has committed there.
             try Task.checkCancellation()
             throw failure
         }

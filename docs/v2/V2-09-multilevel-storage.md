@@ -192,11 +192,19 @@ Details 的显式表示预览也先按 renderer 元数据限额决定是否读�
 
 新增内容的顺序固定为：
 
-1. 在 staging 完成新文件，检查写入结果，完成所要求的文件同步。
-2. 将文件发布到最终不可变路径。
-3. 唯一 Authority 用一次 SQLite transaction 提交引用、计数、业务变化、审计和
+1. Authority 先进入 SQLite `BEGIN IMMEDIATE`，复核 position 与外部写授权。
+2. 在 staging 完成新文件，检查写入结果，完成所要求的文件同步。
+3. 将文件发布到最终不可变路径。
+4. 在同一次 SQLite transaction 提交引用、计数、业务变化、审计和
    ChangePosition。
-4. 返回真实 receipt，释放输入及临时内存。
+5. 返回真实 receipt，释放输入及临时内存。
+
+原生 write transaction 覆盖文件发布到引用提交的完整区间；GC 的目录引用检查到
+unlink 也使用短 `BEGIN IMMEDIATE` 区间。这样即使同进程旧 owner 最后一批维护
+暂时延续到新 owner 打开之后，也不能将新发布而尚未插入引用的文件误删。复用
+SQLite 的互斥，不引入额外锁、owner 注册表或重放 History 动作。连接整个寿命保留
+原生 1,000 ms busy timeout，给旧物理事务/连接关闭机会完成；锁等待可增加约一秒
+取消延迟，获取事务后和 COMMIT 前都重查取消，未成功提交的取消不能产生 receipt。
 
 数据库永远不先引用一个尚未发布的文件。文件已发布而 transaction 失败时，留下的是
 无引用文件，旧 History 不变；不得先删除旧历史为新写入腾位置。断电耐久性、目录同步
@@ -213,7 +221,9 @@ Details 的显式表示预览也先按 renderer 元数据限额决定是否读�
 未回收的 content 要么没有 owner，要么其 owner 已不存在。GC 用 covering keyset
 每批最多访问 32 个 content ownership 行、删除 32 个 representation 行，最后删除
 已空的无 owner content；不会一次按 content 数级联删除无界 payload。每批 SQL
-完成后即对少量 blob UUID 复查剩余 representation 引用，最后引用消失才 unlink。
+完成后即在另一个短 write transaction 中对少量 blob UUID 复查剩余 representation
+引用，最后引用消失才 unlink。引用删除必须先 COMMIT，后续 unlink 失败/取消不能
+使 SQL 回滚恢复一个指向已删除文件的引用。
 共享 blob 的任何未回收引用仍保护其文件。批间让出 Authority，物理事务不改变逻辑
 计数、HCR、ChangePosition，也不发布额外 HistoryCommit。取消/退出留下的无 owner
 行本身足够让重启从有界遍历继续，无持久任务账本、常驻全仓集合或第二个 writer。

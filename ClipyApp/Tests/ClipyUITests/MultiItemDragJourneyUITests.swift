@@ -123,13 +123,43 @@ final class MultiItemDragJourneyUITests: XCTestCase {
             dx: destination.x - row.frame.midX,
             dy: desktopTop - destination.y - row.frame.midY
         ))
-        start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.5)
+        // Join the actual receiver view's event loop before starting the one
+        // native drag. The window-only handshake above cannot establish that
+        // the content view has received events or installed its tracking area.
+        let pointerReadyURL = directory.appendingPathComponent("hovered.json")
+        end.hover()
+        let pointerReady = NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: pointerReadyURL.path)
+        }
+        let pointerReadiness = XCTWaiter.wait(for: [
+            XCTNSPredicateExpectation(predicate: pointerReady, object: nil)
+        ], timeout: 5)
+        let pointerLog = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
+        XCTAssertEqual(pointerReadiness, .completed,
+            "Receiver view did not receive the pointer; running=\(receiver.isRunning); \(pointerLog)")
+        let pointerFacts = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: pointerReadyURL)
+        ) as? [String: NSNumber])
+        XCTAssertEqual(pointerFacts["windowNumber"]?.intValue, receiverWindowNumber)
+        XCTAssertEqual(pointerFacts["hitWindowNumber"]?.intValue, receiverWindowNumber)
+        // Returning to the source restores the row-owned native drag candidate.
+        // Hovering the receiver neither clicks it nor activates another app.
+        row.hover()
+        XCTAssertTrue(row.isHittable)
+        let beforeDrag = row.frame
+        let dragStart = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let dragEnd = dragStart.withOffset(CGVector(
+            dx: destination.x - beforeDrag.midX,
+            dy: desktopTop - destination.y - beforeDrag.midY
+        ))
+        dragStart.press(forDuration: 0.3, thenDragTo: dragEnd, withVelocity: .slow, thenHoldForDuration: 0.5)
         let delivered = NSPredicate { _, _ in FileManager.default.fileExists(atPath: receivedURL.path) }
         let delivery = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: delivered, object: nil)], timeout: 10)
         let trace = (try? String(contentsOf: traceURL, encoding: .utf8)) ?? "no source trace"
         let receiverLogText = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
         let diagnostics = """
             row before hover: \(beforeHover), after hover: \(afterHover), source window: \(sourceFrame)
+            row immediately before drag: \(beforeDrag), receiver view handshake: \(pointerFacts)
             preview window: \(previewFrame), occupied source area: \(occupiedFrame)
             receiver running: \(receiver.isRunning), frame: \(actualTargetFrame), destination: \(destination)
             \(receiverLogText)

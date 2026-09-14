@@ -19,12 +19,20 @@ extension HistoryAuthority {
             if publishedNewFiles && !committed { requestBlobCleanup() }
         }
         do {
-            let published = try publishHistoryContent(for: plan) { publishedNewFiles = true }
             try database.writeTransaction(checkingCancellation: true) {
                 let auditConfig = try validateHistoryCommit(
                     expectedPreviousPosition: expectedPreviousPosition,
                     auditAppend: plan.auditAppend, in: database
                 )
+                // BEGIN IMMEDIATE also excludes the last cleanup batch of a
+                // released owner. It cannot unlink a newly published file
+                // while that file is awaiting its first SQL reference.
+                let published = try publishHistoryContent(for: plan) { publishedNewFiles = true }
+#if DEBUG
+                if publishedNewFiles {
+                    storageLifecycleDebugProbe.record(phase: .contentPublishedBeforeReferences)
+                }
+#endif
                 for (index, mutation) in plan.mutations.enumerated() {
                     try apply(mutation, published: published[index], in: database)
                 }
@@ -342,7 +350,8 @@ extension HistoryAuthority {
     }
 
     /// SQL writes consume only published locators and small inline values.
-    /// File reads, writes and fsync have completed before this transaction.
+    /// File reads, writes and fsync complete before references are inserted,
+    /// while this same transaction excludes competing physical reclamation.
     private func insertContent(
         _ published: PublishedHistoryContent,
         itemID: HistoryItemID, ordinal: Int64, createdAt: Date, title: String,

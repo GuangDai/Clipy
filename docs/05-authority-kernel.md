@@ -418,9 +418,12 @@ The Authority never decides after planning that `.recordCopy` means “increment
 ### 10. Atomic transaction
 
 `SQLiteDatabase.writeTransaction` is the durable commit primitive, using
-SQLite BEGIN/COMMIT and ROLLBACK on failure. The Authority publishes new
-immutable files before the transaction, validates the expected previous
-position and any external authorization, applies typed mutations, validates
+SQLite BEGIN/COMMIT and ROLLBACK on failure. The Authority enters BEGIN
+IMMEDIATE, validates the expected previous position and external authorization,
+then publishes and synchronizes new immutable files before inserting their SQL
+references. Physical cleanup uses the same native writer exclusion for its
+reference-check/unlink interval, including a released owner's last batch.
+The Authority applies typed mutations, validates
 required final pin order, and commits accounting, HCR, Gateway audit and the
 new ChangePosition together.
 

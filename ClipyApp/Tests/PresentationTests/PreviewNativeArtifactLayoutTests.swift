@@ -1,6 +1,7 @@
 import AppKit
 import ContentPreview
 import CoreGraphics
+import Darwin
 import Foundation
 import ImageIO
 import SwiftUI
@@ -43,6 +44,7 @@ struct PreviewNativeArtifactLayoutTests {
         #expect(raster.rowBytes == 640 * 4)
         #expect(raster.pixels.count == 640 * 640 * 4)
 
+        let cpuStart = try threadCPUTime()
         let start = ContinuousClock.now
         // Use the actual display edge shared by the pane, Details and rows;
         // include its provider/CGImage construction in first display timing.
@@ -56,7 +58,8 @@ struct PreviewNativeArtifactLayoutTests {
         host.layoutSubtreeIfNeeded()
         host.displayIfNeeded()
         let elapsed = start.duration(to: .now)
-        print("Raster preview initial layout/draw: \(elapsed), pixels: 640 × 640")
+        let cpuElapsed = try threadCPUTime() - cpuStart
+        print("Raster preview initial layout/draw: wall: \(elapsed), main-thread CPU: \(cpuElapsed), pixels: 640 × 640")
         #expect(elapsed < .milliseconds(34))
     }
 
@@ -109,6 +112,7 @@ struct PreviewNativeArtifactLayoutTests {
                 #expect(reference.filePath?.unicodeScalars.contains(where: { $0.value == 0x301 }) == true)
             }
 
+            let cpuStart = try threadCPUTime()
             let start = ContinuousClock.now
             // Replacing identity matches selecting another item. Exercise the
             // actual product view, including filename, fields and disclosure.
@@ -116,19 +120,22 @@ struct PreviewNativeArtifactLayoutTests {
             host.layoutSubtreeIfNeeded()
             host.displayIfNeeded()
             let elapsed = start.duration(to: .now)
-            print("Collapsed reference initial layout/draw: \(elapsed), fixture: \(fixture.name)")
+            let cpuElapsed = try threadCPUTime() - cpuStart
+            print("Collapsed reference initial layout/draw: wall: \(elapsed), main-thread CPU: \(cpuElapsed), fixture: \(fixture.name)")
             #expect(elapsed < .milliseconds(34))
 
             // Mount the actual disclosure content in a standard viewport.
             // SwiftUI's hosted in-process AX tree does not expose its toggle;
             // the file-reference XCUI journey separately proves the real
             // DisclosureGroup mounts these exact path/address elements.
+            let expansionCPUStart = try threadCPUTime()
             let expansionStart = ContinuousClock.now
             fullHost.rootView = fullReferenceViewport(reference).id(index)
             fullHost.layoutSubtreeIfNeeded()
             fullHost.displayIfNeeded()
             let expansionElapsed = expansionStart.duration(to: .now)
-            print("Full reference content initial layout/draw: \(expansionElapsed), fixture: \(fixture.name)")
+            let expansionCPUElapsed = try threadCPUTime() - expansionCPUStart
+            print("Full reference content initial layout/draw: wall: \(expansionElapsed), main-thread CPU: \(expansionCPUElapsed), fixture: \(fixture.name)")
             #expect(expansionElapsed < .milliseconds(34))
         }
     }
@@ -278,6 +285,18 @@ struct PreviewNativeArtifactLayoutTests {
                 }
             }
         }
+    }
+
+    /// Adjacent samples around the unchanged synchronous wall-time interval.
+    /// This suite runs that interval on the main thread without an await.
+    /// Darwin's thread clock includes only this thread's user/kernel CPU;
+    /// it excludes both scheduling delays and actual blocking waits. CPU is
+    /// diagnostic only: the 34ms wall assertion still owns the frame budget.
+    private func threadCPUTime() throws -> Duration {
+        var value = timespec()
+        let result = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value)
+        try #require(result == 0, "The native thread CPU clock must be available")
+        return .seconds(value.tv_sec) + .nanoseconds(value.tv_nsec)
     }
 
     private func nativeReferenceFields(in view: NSView) -> [NSTextField] {

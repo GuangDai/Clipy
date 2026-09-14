@@ -41,14 +41,7 @@ extension HistoryAuthority {
                 contentCleanupFinished = try reclaimDetachedContentBatch()
                 if !contentCleanupFinished { return true }
             }
-            let result = try blobStore.cleanupBatch { id in
-                let statement = try database.prepare(
-                    "SELECT 1 FROM representations WHERE blobID = ? LIMIT 1",
-                    bindings: [.text(id.uuidString)]
-                )
-                defer { statement.finalize() }
-                return try statement.step()
-            }
+            let result = try reclaimUnreferencedBlobBatch()
             if !result.completedPass { return true }
             if blobCleanupNeedsAnotherPass {
                 blobCleanupNeedsAnotherPass = false
@@ -64,6 +57,23 @@ extension HistoryAuthority {
         blobCleanupNeedsAnotherPass = false
         blobCleanupTask = nil
         return false
+    }
+
+    /// SQLite's existing writer exclusion covers the entire reference-check
+    /// and unlink interval, including overlap with a released owner's last
+    /// batch. A new owner acquires the same exclusion BEFORE publishing files.
+    /// This transaction changes no SQL values, History position or audit.
+    internal func reclaimUnreferencedBlobBatch() throws -> BlobCleanupBatchResult {
+        try database.writeTransaction(checkingCancellation: true) {
+            try blobStore.cleanupBatch { id in
+                let statement = try database.prepare(
+                    "SELECT 1 FROM representations WHERE blobID = ? LIMIT 1",
+                    bindings: [.text(id.uuidString)]
+                )
+                defer { statement.finalize() }
+                return try statement.step()
+            }
+        }
     }
 
     /// Visit at most 32 small content ownership rows and delete at most 32
@@ -143,13 +153,20 @@ extension HistoryAuthority {
         // complete directory scan. Shared files survive until the final
         // representation reference disappears. No suspension splits check
         // and unlink from a competing publication on this Authority.
-        for id in unreferencedCandidates {
-            let references = try database.prepare(
-                "SELECT 1 FROM representations WHERE blobID=? LIMIT 1", bindings: [.text(id.uuidString)]
-            )
-            let referenced = try references.step()
-            references.finalize()
-            if !referenced { try blobStore.remove(id: id) }
+        if !unreferencedCandidates.isEmpty {
+            // Reference deletion above has already COMMITted. A separate
+            // short transaction excludes publication while checking/unlinking;
+            // rollback can never restore a reference to a removed file.
+            try database.writeTransaction(checkingCancellation: true) {
+                for id in unreferencedCandidates {
+                    let references = try database.prepare(
+                        "SELECT 1 FROM representations WHERE blobID=? LIMIT 1", bindings: [.text(id.uuidString)]
+                    )
+                    let referenced = try references.step()
+                    references.finalize()
+                    if !referenced { try blobStore.remove(id: id) }
+                }
+            }
         }
         return false
     }

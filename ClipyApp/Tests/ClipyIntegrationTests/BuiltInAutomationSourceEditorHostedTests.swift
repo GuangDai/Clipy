@@ -46,6 +46,10 @@ struct BuiltInAutomationSourceEditorHostedTests {
     }
 
     @Test func focusDisablesInheritedSubstitutionsAndTypingPublishesExactBytes() throws {
+        // This is a distinct input-system preference, not one of the
+        // NSTextView checking flags verified below. The actual App entry
+        // point installs the Clipy-only override before hosted views exist.
+        #expect(!NSSpellChecker.isAutomaticPeriodSubstitutionEnabled)
         let editor = BuiltInAutomationSourceTextView()
         let window = makeWindow(editor: editor)
         defer { window.close() }
