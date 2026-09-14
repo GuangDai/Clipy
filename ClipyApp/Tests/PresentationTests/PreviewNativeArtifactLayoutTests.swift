@@ -226,6 +226,60 @@ struct PreviewNativeArtifactLayoutTests {
         #expect(replacementAddress.frame.height < 480)
     }
 
+    @Test func collapsedReferencesKeepCompleteSelectableValuesWithinTwoNativeLines() async throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        for fixture in [referenceFixtures[0], referenceFixtures[2], referenceFixtures[3]] {
+            let outcome = await ContentPreview().renderHistoryPane([
+                PreviewRepresentation(typeIdentifier: fixture.type, bytes: Data(fixture.address.utf8))
+            ])
+            guard case .content(.reference(let reference)) = outcome else {
+                Issue.record("Expected the bounded \(fixture.name) reference")
+                return
+            }
+            let host = NSHostingView(rootView: ReferencePreviewView(reference: reference, maximumHeight: 480))
+            host.sizingOptions = []
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            var values = [("clipy.preview.reference.address", reference.address)]
+            if let path = reference.filePath {
+                values.append(("clipy.preview.reference.path", path))
+                values.append(("clipy.preview.reference.name", URL(fileURLWithPath: path).lastPathComponent))
+            } else {
+                values.append(("clipy.preview.reference.name", "example.invalid"))
+            }
+            for width in [CGFloat(340), CGFloat(180)] {
+                window.setContentSize(NSSize(width: width, height: 480))
+                host.layoutSubtreeIfNeeded()
+                host.displayIfNeeded()
+                let fields = nativeReferenceFields(in: host)
+                #expect(fields.count == values.count)
+                for (identifier, value) in values {
+                    let field = try #require(fields.first { $0.accessibilityIdentifier() == identifier })
+                    #expect(field.stringValue.utf8.elementsEqual(value.utf8))
+                    #expect(field.maximumNumberOfLines == 2)
+                    #expect(field.lineBreakMode == .byTruncatingMiddle)
+                    #expect(field.frame.width > 0 && field.frame.width <= width)
+                    #expect(field.frame.height > 0 && field.frame.height <= 40)
+                    #expect(field.isSelectable && !field.isEditable)
+                    field.selectText(nil)
+                    let editor = try #require(field.currentEditor() as? NSTextView)
+                    #expect(editor.selectedRange() == NSRange(location: 0, length: (value as NSString).length))
+                    pasteboard.clearContents()
+                    #expect(editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
+                    #expect(pasteboard.string(forType: .string).map { Data($0.utf8) } == Data(value.utf8))
+                    window.endEditing(for: nil)
+                }
+            }
+        }
+    }
+
     private func nativeReferenceFields(in view: NSView) -> [NSTextField] {
         let own = (view as? NSTextField).map { [$0] } ?? []
         return own + view.subviews.flatMap { nativeReferenceFields(in: $0) }
