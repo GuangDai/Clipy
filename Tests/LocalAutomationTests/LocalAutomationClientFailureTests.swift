@@ -35,11 +35,17 @@ final class LocalAutomationClientFailureTests: XCTestCase {
         }
     }
 
-    func testMutationDisconnectedBeforeAnySendIsNotUnknown() async throws {
+    func testMutationOnClosedClientSendsNothingAndIsNotUnknown() async throws {
         try await withConnection { client, peer in
-            XCTAssertEqual(Darwin.shutdown(peer, SHUT_RDWR), 0)
+            // A peer shutdown does not establish a zero-byte client send:
+            // Darwin can still accept request bytes into the local socket.
+            // Closing the client's connection establishes that condition
+            // before request(), and the peer's EOF independently confirms it.
+            await client.close()
             let output = await client.request(Self.mutation, credential: Self.credential)
             Self.expect(output, code: "not_ready")
+            var byte: UInt8 = 0
+            XCTAssertEqual(Darwin.recv(peer, &byte, 1, 0), 0)
         }
     }
 

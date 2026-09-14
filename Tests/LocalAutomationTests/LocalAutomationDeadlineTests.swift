@@ -85,6 +85,27 @@ final class LocalAutomationDeadlineTests: XCTestCase {
         }
     }
 
+    func testLocallyDisabledWriteFailsWithoutCountingOrSendingBytes() async throws {
+        try await withSocketPair { sender, receiver in
+            // Disable this descriptor's writes synchronously. Unlike a peer
+            // shutdown, this guarantees the next send cannot accept bytes.
+            XCTAssertEqual(Darwin.shutdown(sender, SHUT_WR), 0)
+            var bytesSent = 0
+            do {
+                try await LocalAutomationSocket.send(
+                    Data([0x41]), to: sender,
+                    deadline: .now.advanced(by: .seconds(2)), bytesSent: &bytesSent
+                )
+                XCTFail("a locally closed write side must reject the send")
+            } catch let failure as LocalAutomationSocket.Failure {
+                XCTAssertEqual(failure, .disconnected)
+            }
+            XCTAssertEqual(bytesSent, 0)
+            var byte: UInt8 = 0
+            XCTAssertEqual(Darwin.recv(receiver, &byte, 1, 0), 0)
+        }
+    }
+
     func testPartialInputStillTimesOutWithoutACompleteFrame() async throws {
         try await withSocketPair { sender, receiver in
             let bytes = Data([0x41])
