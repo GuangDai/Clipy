@@ -170,7 +170,7 @@ struct FloatingPreviewRootView: View {
         }
         // The window is transparent; the content carries the material so
         // the rounded corners show material, not the desktop behind it.
-        .background(.regularMaterial)
+        .background { NativePanelBackground() }
         // The pane's half of the two-window pointer presence: leaving BOTH
         // windows hides the preview after its grace; re-entry cancels.
         .background(PanelMouseMovementMonitor(onMouseMoved: {}, onHover: { isInside in

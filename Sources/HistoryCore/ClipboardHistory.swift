@@ -123,8 +123,11 @@ public protocol ClipboardHistory: Sendable {
 
     /// Creates a consistent backup in a new directory, containing
     /// `history.sqlite` and `history.sqlite-content`. The parent must exist;
-    /// an existing destination is never overwritten. A failed or cancelled
-    /// operation removes only the directory that operation created.
+    /// an existing destination is never overwritten. Files are synchronized
+    /// in a new `.incomplete` sibling before atomically publishing the chosen
+    /// directory. Failure/cancellation cleans up only that temporary sibling;
+    /// failure to synchronize the publication preserves the complete copy
+    /// but returns no success receipt.
     /// The sole writer serializes the complete metadata/file copy so the
     /// receipt identifies exactly the exported snapshot.
     func backup(to directory: URL) async throws -> HistoryBackupReceipt

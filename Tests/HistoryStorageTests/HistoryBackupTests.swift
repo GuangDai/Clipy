@@ -4,6 +4,85 @@ import Testing
 @testable import HistoryStorage
 
 struct HistoryBackupTests {
+    @Test func finalDestinationAppearsOnlyAfterTheCompleteCopy() async throws {
+        let history = try await WSSupport.makeHistory()
+        _ = try await history.perform(.capture(capture(byte: 81)))
+        let root = WSSupport.tempStoreURL("backup-publication")
+        defer { WSSupport.removeStore(root) }
+        let parent = root.deletingLastPathComponent()
+        let destination = parent.appendingPathComponent("export")
+        let receipt = try await history.authority.backup(to: destination) {
+            #expect(!FileManager.default.fileExists(atPath: destination.path))
+            let siblings = try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            #expect(siblings?.filter { $0.pathExtension == "incomplete" }.count == 1)
+        }
+        #expect(receipt.retainedItemCount == 1)
+        #expect(FileManager.default.fileExists(atPath: destination.appendingPathComponent("history.sqlite").path))
+        #expect(try FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            .allSatisfy { $0.pathExtension != "incomplete" })
+    }
+
+    @Test func concurrentDestinationCreationNeverOverwritesExistingFiles() async throws {
+        let history = try await WSSupport.makeHistory()
+        let root = WSSupport.tempStoreURL("backup-publication-race")
+        defer { WSSupport.removeStore(root) }
+        let destination = root.deletingLastPathComponent().appendingPathComponent("export")
+        let marker = destination.appendingPathComponent("keep.txt")
+        let bytes = Data("created while backup was running".utf8)
+        await #expect(throws: HistoryBackupFailure.destinationAlreadyExists) {
+            try await history.authority.backup(to: destination, synchronize: { url, isDirectory in
+                if isDirectory && url.pathExtension == "incomplete" {
+                    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+                    try bytes.write(to: marker)
+                }
+                try HistoryAuthority.synchronizeBackupItem(url, isDirectory)
+            })
+        }
+        #expect(try Data(contentsOf: marker) == bytes)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: destination.path) == ["keep.txt"])
+    }
+
+    enum SynchronizationFailure: CaseIterable, Sendable {
+        case blob, beforePublication, afterPublication
+    }
+
+    @Test(arguments: SynchronizationFailure.allCases)
+    func synchronizationFailureNeverAcknowledgesSuccess(_ failure: SynchronizationFailure) async throws {
+        let history = try await WSSupport.makeHistory()
+        _ = try await history.perform(.capture(capture(byte: 82)))
+        let before = try await history.usage()
+        let root = WSSupport.tempStoreURL("backup-sync-failure")
+        defer { WSSupport.removeStore(root) }
+        let parent = root.deletingLastPathComponent()
+        let destination = parent.appendingPathComponent("export")
+        await #expect(throws: HistoryBackupFailure.writeFailed) {
+            try await history.authority.backup(to: destination, synchronize: { url, isDirectory in
+                let shouldFail: Bool = switch failure {
+                case .blob: url.pathExtension == "blob"
+                case .beforePublication: isDirectory && url.pathExtension == "incomplete"
+                case .afterPublication: url == parent
+                }
+                if shouldFail { throw HistoryBackupFailure.writeFailed }
+                try HistoryAuthority.synchronizeBackupItem(url, isDirectory)
+            })
+        }
+        #expect(try await history.usage() == before)
+        #expect(try FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            .allSatisfy { $0.pathExtension != "incomplete" })
+        if failure == .afterPublication {
+            // Publication already made a complete copy visible. Keep it for
+            // recovery even though durable publication was not acknowledged.
+            let restored = try await WSSupport.openHistory(storeURL: destination.appendingPathComponent("history.sqlite"))
+            #expect(try await restored.usage() == before)
+            let row = try #require(try await restored.browse(.init(kind: .recent, limit: 1)).rows.first)
+            #expect(try await restored.pastePayload(for: row.item.id).representations.contains {
+                $0.bytes == Data(repeating: 82, count: 128 * 1_024)
+            })
+        } else {
+            #expect(!FileManager.default.fileExists(atPath: destination.path))
+        }
+    }
+
     @Test func backupCopiesReferencesBeyondTheFirstBoundedPage() async throws {
         let history = try await WSSupport.makeHistory()
         let root = WSSupport.tempStoreURL("backup-pages")

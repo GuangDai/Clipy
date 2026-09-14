@@ -101,8 +101,9 @@ actor** and **no cache**; it is planner/facts/commit-surface only.
   alone exceeds `maxRevisionBytesPerItem`, §8.3), the revise fails with a typed
   capacity failure rather than leaving the item over threshold.
 - **A second writer, a background reaper, or a wall-clock retention sweep.**
-  All V2-02 retention runs synchronously inside a History Commit through
-  `HistoryAuthority` (decision §16; `00` §3.3). There is no async retention
+  All V2-02 retention writes run synchronously inside a History Commit through
+  `HistoryAuthority` (decision §16; `00` §3.3). Read-only policy-sweep preparation
+  may yield with position validation as described in §4.4. There is no async retention
   worker (contrast V2-01's `EnrichmentWorker`, which is a derivation, not a
   writer). **DEC-RET-AGE (resolved): age retention is event-triggered.** An
   eligible row can remain past its age threshold until an R1 trigger named in
@@ -682,6 +683,27 @@ prune mutation is built.
 
 ### 4.4 setRetentionPolicies — full R1 + R2 + R3 sweep
 
+**SQLite implementation, 2026-09-14:** the R3 projection and R1/R2 selection
+passes run before the write transaction, in keyset batches of at most 32
+items. Each batch releases its statements before yielding the Authority so
+list, paste, and capture requests can proceed. Preparation retains the initial
+`ChangePosition`; after each yield and again inside the final transaction, a
+different position rejects the request with `.snapshotExpired(current:)` and
+no policy or retirement effects. The caller may explicitly retry against
+current History. No stale prefix is applied and no automatic retry loop is
+introduced.
+
+The final R1/R2 retirement, surviving R3 prunes, policy, accounting, HCR, and
+position still commit together. Swift loops check task cancellation; SQLite's
+progress callback also checks cancellation during a long cascading DELETE.
+Cancellation before the COMMIT boundary rolls back and throws
+`CancellationError`; rollback itself is never interruptible. Once that
+boundary is crossed, a successful commit returns its receipt even if the
+caller subsequently cancels. This improves responsiveness during preparation
+and allows an in-progress write to be cancelled; it does **not** bound a
+successful write's duration or eliminate the disk space needed by its atomic
+WAL transaction. Tight-volume failure remains all-or-nothing.
+
 ```text
 Authority.commitRetentionPolicies(newPolicies):
   load RetentionExpansionFacts over current retained set + currentPolicies
@@ -726,7 +748,8 @@ Authority.commitRetentionPolicies(newPolicies):
   could retire an item whose post-prune bytes fit the budget - silent data
   loss beyond what the policy requires, violating D14/D24 (projected effect of
   the `.setRetentionPolicies` commit includes the R3 prunes). The composition is
-  one Authority interval, not two independent storage loads (§3.2).
+  one validated History position across preparation and commit, not two
+  independent unvalidated storage loads (§3.2).
 
 - This is the R1/R2/R3 analog of v1 `.setRetentionPolicy` (WS21, `06` §8):
   lowering a threshold retires/prunes in the same History Commit; setting the

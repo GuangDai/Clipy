@@ -1,7 +1,7 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// Step-0 scaffold manifest (docs/roadmap/README.md §3, phase 0; target graph:
+// SwiftPM library graph (target graph:
 // docs/01-architecture.md §1, target list: docs/06-cross-cutting.md §5).
 // The HistoryStorage→Fuse edge landed at roadmap step 3 (pinned below; first
 // imported at step 7). xxh3 is package-internal (no product) and vendors
@@ -68,7 +68,7 @@ let package = Package(
         .executableTarget(
             name: "HistoryPerfRunner",
             // HistoryStorage added at step 8: the §9 runner drives the public
-            // SwiftDataHistory concrete facade. WL8 also calls the package
+            // SQLiteHistory concrete facade. WL8 also calls the package
             // ThumbnailService seam after one prefetched immutable source so
             // it measures the shared decode rather than Authority serialization
             // (docs/06-cross-cutting.md §9; V1-Verified/04).

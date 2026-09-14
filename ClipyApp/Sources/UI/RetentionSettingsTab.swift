@@ -36,6 +36,8 @@ struct RetentionSettingsTab: View {
     @State private var usage: HistoryUsage?
     @State private var usageFailed = false
     @State private var isWorking = false
+    @State private var applyTask: Task<Void, Never>?
+    @State private var isCancelling = false
     @State private var pendingCountSubmission:
         RetentionSettingsDraft.CountSubmission?
     @State private var isConfirmingCountTightening = false
@@ -96,224 +98,240 @@ struct RetentionSettingsTab: View {
                 }
             }
             Section {
-                Toggle(RetentionSettingsCopy.countToggle, isOn: countEnabled)
-                    .accessibilityIdentifier("clipy.settings.retention.count-enabled")
-                if draft.countEnabled {
+                // One grouped Form row owns this setting. Separate Form
+                // children each receive native row padding, which formerly
+                // left blank-looking rows between the checkbox and its value.
+                VStack(alignment: .leading, spacing: 10) {
                     SettingsFieldLayout {
-                        Text(RetentionSettingsCopy.itemsKeepAtMost)
-                        HStack(spacing: 8) {
-                            TextField("200", text: maximumUnpinnedText)
-                                .frame(minWidth: 96, idealWidth: 140, maxWidth: 180)
-                                .multilineTextAlignment(.trailing)
-                                .accessibilityLabel(RetentionSettingsCopy.maximumUnpinnedAccessibilityLabel)
-                                .accessibilityIdentifier("clipy.settings.retention.maximum-unpinned")
-                            Stepper("", value: maximumUnpinnedStepperValue,
-                                in: HistoryLimits.standard.userMaximumUnpinnedRange)
-                                .labelsHidden()
-                                .accessibilityLabel(RetentionSettingsCopy.maximumUnpinnedAccessibilityLabel)
-                            Text(RetentionSettingsCopy.unpinnedItemsUnit)
+                        Toggle(RetentionSettingsCopy.countToggle, isOn: countEnabled)
+                            .toggleStyle(.checkbox)
+                            .accessibilityIdentifier("clipy.settings.retention.count-enabled")
+                        if draft.countEnabled {
+                            HStack(spacing: 8) {
+                                Text(RetentionSettingsCopy.itemsKeepAtMost)
+                                TextField("200", text: maximumUnpinnedText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 88)
+                                    .multilineTextAlignment(.trailing)
+                                    .accessibilityLabel(RetentionSettingsCopy.maximumUnpinnedAccessibilityLabel)
+                                    .accessibilityIdentifier("clipy.settings.retention.maximum-unpinned")
+                                Stepper("", value: maximumUnpinnedStepperValue,
+                                    in: HistoryLimits.standard.userMaximumUnpinnedRange)
+                                    .labelsHidden()
+                                    .accessibilityLabel(RetentionSettingsCopy.maximumUnpinnedAccessibilityLabel)
+                                Text(RetentionSettingsCopy.unpinnedItemsUnit)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        } else {
+                            Text(RetentionSettingsCopy.noLimit)
                                 .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    if !draft.maximumUnpinnedInputIsValid {
+                    .disabled(isWorking || !hasLoadedRetentionConfiguration)
+                    if draft.countEnabled && !draft.maximumUnpinnedInputIsValid {
                         Text(RetentionSettingsCopy.countInputHint)
                             .font(.caption)
                             .foregroundStyle(.red)
                     }
-                }
-                Button(RetentionSettingsCopy.applyItemLimit) {
-                    requestMaximumUnpinnedApply()
-                }
-                .accessibilityIdentifier(
-                    "clipy.settings.retention.apply-item-limit"
-                )
-                .disabled(
-                    !draft.maximumUnpinnedInputIsValid
-                        || !draft.hasCountChanges
-                        || isWorking
-                        || !hasLoadedRetentionConfiguration
-                )
-                .confirmationDialog(
-                    RetentionSettingsCopy.confirmItemLimitTitle,
-                    isPresented: $isConfirmingCountTightening,
-                    titleVisibility: .visible
-                ) {
-                    Button(
-                        RetentionSettingsCopy.confirmItemLimitApply,
-                        role: .destructive
+                    Button(RetentionSettingsCopy.applyItemLimit) {
+                        requestMaximumUnpinnedApply()
+                    }
+                    .accessibilityIdentifier(
+                        "clipy.settings.retention.apply-item-limit"
+                    )
+                    .disabled(
+                        !draft.maximumUnpinnedInputIsValid
+                            || !draft.hasCountChanges
+                            || isWorking
+                            || !hasLoadedRetentionConfiguration
+                    )
+                    .confirmationDialog(
+                        RetentionSettingsCopy.confirmItemLimitTitle,
+                        isPresented: $isConfirmingCountTightening,
+                        titleVisibility: .visible
                     ) {
-                        guard let submission = pendingCountSubmission else {
-                            return
+                        Button(
+                            RetentionSettingsCopy.confirmItemLimitApply,
+                            role: .destructive
+                        ) {
+                            guard let submission = pendingCountSubmission else {
+                                return
+                            }
+                            startApply { await applyMaximumUnpinned(submission) }
                         }
-                        Task { await applyMaximumUnpinned(submission) }
+                        Button(RetentionSettingsCopy.confirmCancel, role: .cancel) {
+                            pendingCountSubmission = nil
+                        }
+                    } message: {
+                        Text(RetentionSettingsCopy.confirmItemLimitMessage)
                     }
-                    Button(RetentionSettingsCopy.confirmCancel, role: .cancel) {
-                        pendingCountSubmission = nil
+                    // The status sits on its own row below the button so a
+                    // long receipt or failure message can never squeeze the
+                    // Apply button (V2-07 §9 inline feedback).
+                    if let successMessage = draft.acceptedCountSuccessMessage {
+                        SettingStatusView(status: .success(successMessage))
+                            .accessibilityIdentifier(
+                                "clipy.settings.retention.item-limit-status"
+                            )
+                    } else if let countStatus {
+                        SettingStatusView(status: countStatus)
+                            .accessibilityIdentifier(
+                                "clipy.settings.retention.item-limit-status"
+                            )
                     }
-                } message: {
-                    Text(RetentionSettingsCopy.confirmItemLimitMessage)
+                    DisclosureGroup(RetentionLayoutCopy.countDetails) {
+                        Text(RetentionSettingsCopy.countEnforcementNote)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.retention.count-details"))
                 }
-                // The status sits on its own row below the button so a
-                // long receipt or failure message can never squeeze the
-                // Apply button (V2-07 §9 inline feedback).
-                if let successMessage = draft.acceptedCountSuccessMessage {
-                    SettingStatusView(status: .success(successMessage))
-                        .accessibilityIdentifier(
-                            "clipy.settings.retention.item-limit-status"
-                        )
-                } else if let countStatus {
-                    SettingStatusView(status: countStatus)
-                        .accessibilityIdentifier(
-                            "clipy.settings.retention.item-limit-status"
-                        )
-                }
-                DisclosureGroup(RetentionLayoutCopy.countDetails) {
-                    Text(RetentionSettingsCopy.countEnforcementNote)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.retention.count-details"))
             } header: {
                 Text(RetentionSettingsCopy.itemsSection)
             }
             Section {
-                Toggle(RetentionSettingsCopy.ageToggle, isOn: ageEnabled)
-                    .accessibilityHint(RetentionSettingsCopy.ageToggleHint)
-                    .accessibilityIdentifier("clipy.settings.retention.age-enabled")
-                if draft.ageEnabled {
-                    ValueFieldRow(
-                        label: RetentionSettingsCopy.ageFieldLabel,
-                        unit: RetentionSettingsCopy.ageUnit,
-                        accessibilityIdentifier: "clipy.settings.retention.age-days",
-                        text: ageDaysText,
-                        isEnabled: draft.ageEnabled,
-                        isValid: draft.ageInputIsValid,
-                        range: RetentionSettingsDraft.ageDaysRange
-                    )
-                }
-                Divider()
-                Toggle(RetentionSettingsCopy.storageToggle, isOn: storageEnabled)
-                    .accessibilityHint(RetentionSettingsCopy.storageToggleHint)
-                    .accessibilityIdentifier("clipy.settings.retention.storage-enabled")
-                if draft.storageEnabled {
-                    ValueFieldRow(
-                        label: RetentionSettingsCopy.storageFieldLabel,
-                        unit: RetentionSettingsDraft.mebibyteUnitLabel,
-                        accessibilityIdentifier: "clipy.settings.retention.storage-mib",
-                        text: storageMiBText,
-                        isEnabled: draft.storageEnabled,
-                        isValid: draft.storageInputIsValid,
-                        range: RetentionSettingsDraft.storageMiBRange
-                    )
-                }
-                Divider()
-                Text(RetentionSettingsCopy.revisionsSection)
-                    .font(.subheadline.weight(.medium))
-                Toggle(
-                    RetentionSettingsCopy.revisionCountKeepAtMost,
-                    isOn: revisionCountEnabled
-                )
-                    .accessibilityHint(
-                        RetentionSettingsCopy.revisionCountToggleHint
-                    )
-                    .accessibilityIdentifier(
-                        "clipy.settings.retention.revision-count-enabled"
-                    )
-                if draft.revisionCountEnabled {
-                    ValueFieldRow(
-                        label: RetentionSettingsCopy.revisionCountFieldLabel,
-                        unit: RetentionSettingsCopy.revisionCountUnit,
-                        accessibilityIdentifier: "clipy.settings.retention.revision-count",
-                        text: revisionCountText,
-                        isEnabled: draft.revisionCountEnabled,
-                        isValid: draft.revisionCountInputIsValid,
-                        range: RetentionSettingsDraft.revisionCountRange
-                    )
-                }
-                Toggle(
-                    RetentionSettingsCopy.revisionBytesToggle,
-                    isOn: revisionBytesEnabled
-                )
-                    .accessibilityHint(
-                        RetentionSettingsCopy.revisionBytesToggleHint
-                    )
-                    .accessibilityIdentifier(
-                        "clipy.settings.retention.revision-bytes-enabled"
-                    )
-                if draft.revisionBytesEnabled {
-                    ValueFieldRow(
-                        label: RetentionSettingsCopy.revisionBytesFieldLabel,
-                        unit: RetentionSettingsDraft.mebibyteUnitLabel,
-                        accessibilityIdentifier: "clipy.settings.retention.revision-mib",
-                        text: revisionMiBText,
-                        isEnabled: draft.revisionBytesEnabled,
-                        isValid: draft.revisionBytesInputIsValid,
-                        range: RetentionSettingsDraft.revisionMiBRange
-                    )
-                }
-                Button(RetentionSettingsCopy.applyPolicies) {
-                    requestApply()
-                }
-                .accessibilityIdentifier("clipy.settings.retention.apply")
-                .disabled(
-                    !draft.inputIsValid || !draft.hasPolicyChanges || isWorking
-                        || !hasLoadedRetentionConfiguration
-                )
-                .confirmationDialog(
-                    RetentionSettingsCopy.confirmPoliciesTitle,
-                    isPresented: $isConfirmingTightening,
-                    titleVisibility: .visible
-                ) {
-                    Button(
-                        RetentionSettingsCopy.confirmPoliciesApply,
-                        role: .destructive
-                    ) {
-                        guard let submission = pendingSubmission else { return }
-                        Task { await applyRetention(submission) }
-                    }
-                    Button(RetentionSettingsCopy.confirmCancel, role: .cancel) {
-                        pendingSubmission = nil
-                    }
-                } message: {
-                    // Deep review `04` Red 10D: only a strict local
-                    // tightening is destructive-confirmed; equal or
-                    // looser policy values apply directly.
-                    Text(RetentionSettingsCopy.confirmPoliciesMessage)
-                }
-                // Same own-row treatment as the item-limit status above:
-                // a long receipt or failure message must not squeeze the
-                // Apply button.
-                if let successMessage = draft.acceptedSuccessMessage {
-                    SettingStatusView(status: .success(successMessage))
-                        .accessibilityIdentifier(
-                            "clipy.settings.retention.policy-status"
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        RetentionLimitField(
+                            toggleLabel: RetentionSettingsCopy.ageToggle,
+                            toggleHint: RetentionSettingsCopy.ageToggleHint,
+                            toggleIdentifier: "clipy.settings.retention.age-enabled",
+                            isEnabled: ageEnabled,
+                            label: RetentionSettingsCopy.ageFieldLabel,
+                            unit: RetentionSettingsCopy.ageUnit,
+                            accessibilityIdentifier: "clipy.settings.retention.age-days",
+                            text: ageDaysText,
+                            isValid: draft.ageInputIsValid,
+                            range: RetentionSettingsDraft.ageDaysRange
                         )
-                } else if let policyStatus {
-                    SettingStatusView(status: policyStatus)
-                        .accessibilityIdentifier(
-                            "clipy.settings.retention.policy-status"
+                        RetentionLimitField(
+                            toggleLabel: RetentionSettingsCopy.storageToggle,
+                            toggleHint: RetentionSettingsCopy.storageToggleHint,
+                            toggleIdentifier: "clipy.settings.retention.storage-enabled",
+                            isEnabled: storageEnabled,
+                            label: RetentionSettingsCopy.storageFieldLabel,
+                            unit: RetentionSettingsDraft.mebibyteUnitLabel,
+                            accessibilityIdentifier: "clipy.settings.retention.storage-mib",
+                            text: storageMiBText,
+                            isValid: draft.storageInputIsValid,
+                            range: RetentionSettingsDraft.storageMiBRange
                         )
-                }
-                DisclosureGroup(RetentionLayoutCopy.policyDetails) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if draft.ageEnabled {
-                            Text(RetentionSettingsDraft.ageEnforcementExplanation)
-                                .accessibilityIdentifier("clipy.settings.retention.age-enforcement")
+                    }
+                    .disabled(isWorking || !hasLoadedRetentionConfiguration)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Divider()
+                        Text(RetentionSettingsCopy.revisionsSection)
+                            .font(.subheadline.weight(.medium))
+                        RetentionLimitField(
+                            toggleLabel: RetentionSettingsCopy.revisionCountFieldLabel,
+                            toggleHint: RetentionSettingsCopy.revisionCountToggleHint,
+                            toggleIdentifier: "clipy.settings.retention.revision-count-enabled",
+                            isEnabled: revisionCountEnabled,
+                            label: RetentionSettingsCopy.revisionCountFieldLabel,
+                            unit: RetentionSettingsCopy.revisionCountUnit,
+                            accessibilityIdentifier: "clipy.settings.retention.revision-count",
+                            text: revisionCountText,
+                            isValid: draft.revisionCountInputIsValid,
+                            range: RetentionSettingsDraft.revisionCountRange
+                        )
+                        RetentionLimitField(
+                            toggleLabel: RetentionSettingsCopy.revisionBytesToggle,
+                            toggleHint: RetentionSettingsCopy.revisionBytesToggleHint,
+                            toggleIdentifier: "clipy.settings.retention.revision-bytes-enabled",
+                            isEnabled: revisionBytesEnabled,
+                            label: RetentionSettingsCopy.revisionBytesFieldLabel,
+                            unit: RetentionSettingsDraft.mebibyteUnitLabel,
+                            accessibilityIdentifier: "clipy.settings.retention.revision-mib",
+                            text: revisionMiBText,
+                            isValid: draft.revisionBytesInputIsValid,
+                            range: RetentionSettingsDraft.revisionMiBRange
+                        )
+                    }
+                    .disabled(isWorking || !hasLoadedRetentionConfiguration)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Button(RetentionSettingsCopy.applyPolicies) {
+                            requestApply()
                         }
-                        Text(RetentionSettingsCopy.applyNote)
+                        .accessibilityIdentifier("clipy.settings.retention.apply")
+                        .disabled(
+                            !draft.inputIsValid || !draft.hasPolicyChanges || isWorking
+                                || !hasLoadedRetentionConfiguration
+                        )
+                        .confirmationDialog(
+                            RetentionSettingsCopy.confirmPoliciesTitle,
+                            isPresented: $isConfirmingTightening,
+                            titleVisibility: .visible
+                        ) {
+                            Button(
+                                RetentionSettingsCopy.confirmPoliciesApply,
+                                role: .destructive
+                            ) {
+                                guard let submission = pendingSubmission else { return }
+                                startApply { await applyRetention(submission) }
+                            }
+                            Button(RetentionSettingsCopy.confirmCancel, role: .cancel) {
+                                pendingSubmission = nil
+                            }
+                        } message: {
+                            // Deep review `04` Red 10D: only a strict local
+                            // tightening is destructive-confirmed; equal or
+                            // looser policy values apply directly.
+                            Text(RetentionSettingsCopy.confirmPoliciesMessage)
+                        }
+                        // Same own-row treatment as the item-limit status above:
+                        // a long receipt or failure message must not squeeze the
+                        // Apply button.
+                        if let successMessage = draft.acceptedSuccessMessage {
+                            SettingStatusView(status: .success(successMessage))
+                                .accessibilityIdentifier(
+                                    "clipy.settings.retention.policy-status"
+                                )
+                        } else if let policyStatus {
+                            SettingStatusView(status: policyStatus)
+                                .accessibilityIdentifier(
+                                    "clipy.settings.retention.policy-status"
+                                )
+                        }
+                        DisclosureGroup(RetentionLayoutCopy.policyDetails) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                if draft.ageEnabled {
+                                    Text(RetentionSettingsDraft.ageEnforcementExplanation)
+                                        .accessibilityIdentifier("clipy.settings.retention.age-enforcement")
+                                }
+                                Text(RetentionSettingsCopy.applyNote)
+                            }
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.retention.cleanup-details"))
                     }
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.retention.cleanup-details"))
             } header: {
                 Text(RetentionLayoutCopy.automaticPolicies)
             }
         }
         .formStyle(.grouped)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isWorking {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(isCancelling ? RetentionSettingsCopy.cancelling : RetentionSettingsCopy.applying)
+                        .font(.callout)
+                    Spacer()
+                    Button(RetentionSettingsCopy.confirmCancel) {
+                        cancelApply()
+                    }
+                    .disabled(isCancelling)
+                    .accessibilityIdentifier("clipy.settings.retention.cancel-apply")
+                }
+                .padding(12)
+                .background(.bar)
+                .accessibilityIdentifier("clipy.settings.retention.pending")
+            }
+        }
         // The tab owns this task, so scrolling the usage section offscreen
         // cannot start another read. Refresh and successful policy changes
         // replace the task; tab/window disappearance cancels it.
@@ -327,10 +345,34 @@ struct RetentionSettingsTab: View {
             usageRefreshGeneration += 1
         }
         .onDisappear {
+            cancelApply()
             usageRefreshGeneration += 1
             usage = nil
             usageFailed = false
         }
+    }
+
+    /// Set pending synchronously with the click, before the task can suspend.
+    /// Cancellation requests rollback; only the actual result decides whether
+    /// to report cancellation or accept an already committed receipt.
+    private func startApply(_ operation: @escaping @MainActor () async -> Void) {
+        guard !isWorking, hasLoadedRetentionConfiguration else { return }
+        isWorking = true
+        isCancelling = false
+        applyTask = Task {
+            defer {
+                isWorking = false
+                isCancelling = false
+                applyTask = nil
+            }
+            await operation()
+        }
+    }
+
+    private func cancelApply() {
+        guard isWorking else { return }
+        isCancelling = true
+        applyTask?.cancel()
     }
 
     private func refreshUsage() async {
@@ -393,13 +435,13 @@ struct RetentionSettingsTab: View {
     /// thresholds: lowering the configured value requires confirmation;
     /// equal or looser values apply directly (`04` Red 10D).
     private func requestMaximumUnpinnedApply() {
-        guard draft.hasCountChanges,
+        guard !isWorking, hasLoadedRetentionConfiguration, draft.hasCountChanges,
               let submission = draft.countSubmission() else { return }
         if draft.maximumUnpinnedRequiresTightening(for: submission) {
             pendingCountSubmission = submission
             isConfirmingCountTightening = true
         } else {
-            Task { await applyMaximumUnpinned(submission) }
+            startApply { await applyMaximumUnpinned(submission) }
         }
     }
 
@@ -413,8 +455,6 @@ struct RetentionSettingsTab: View {
     ) async {
         guard draft.isCurrent(submission) else { return }
         pendingCountSubmission = nil
-        isWorking = true
-        defer { isWorking = false }
         do {
             let receipt = try await viewState.applyMaximumUnpinnedItems(
                 submission.maximumUnpinnedItems
@@ -427,7 +467,7 @@ struct RetentionSettingsTab: View {
                     successMessage: successMessage
                 ) else { return }
                 countStatus = nil
-            case .failure(let message):
+            case .failure(let message), .cancelled(let message):
                 // A committed receipt without `.retentionPolicySet` cannot
                 // confirm this submission; the configured comparison
                 // baseline stays put so the next Apply still compares
@@ -435,9 +475,12 @@ struct RetentionSettingsTab: View {
                 guard draft.isCurrent(submission) else { return }
                 countStatus = .failure(message)
             }
+        } catch is CancellationError {
+            guard draft.isCurrent(submission) else { return }
+            countStatus = .cancelled(RetentionSettingsCopy.countApplyCancelled)
         } catch let failure as HistoryFailure {
             guard draft.isCurrent(submission) else { return }
-            countStatus = .failure(FailurePresentation.message(for: failure))
+            countStatus = .failure(RetentionSettingsCopy.countFailureMessage(for: failure))
         } catch {
             guard draft.isCurrent(submission) else { return }
             countStatus = .failure(RetentionSettingsCopy.countSaveFailure)
@@ -525,13 +568,13 @@ struct RetentionSettingsTab: View {
     }
 
     private func requestApply() {
-        guard draft.hasPolicyChanges,
+        guard !isWorking, hasLoadedRetentionConfiguration, draft.hasPolicyChanges,
               let submission = draft.submission() else { return }
         if draft.requiresTighteningConfirmation(for: submission.policies) {
             pendingSubmission = submission
             isConfirmingTightening = true
         } else {
-            Task { await applyRetention(submission) }
+            startApply { await applyRetention(submission) }
         }
     }
 
@@ -545,8 +588,6 @@ struct RetentionSettingsTab: View {
     ) async {
         guard draft.isCurrent(submission) else { return }
         pendingSubmission = nil
-        isWorking = true
-        defer { isWorking = false }
         do {
             let receipt = try await viewState.applyRetentionPolicies(submission.policies)
             switch retentionPoliciesStatusFeedback(receipt) {
@@ -557,7 +598,7 @@ struct RetentionSettingsTab: View {
                     successMessage: successMessage
                 ) else { return }
                 policyStatus = nil
-            case .failure(let message):
+            case .failure(let message), .cancelled(let message):
                 // A committed receipt without `.retentionPoliciesSet`
                 // cannot confirm this submission; the configured
                 // comparison baseline stays put so the next Apply still
@@ -565,6 +606,9 @@ struct RetentionSettingsTab: View {
                 guard draft.isCurrent(submission) else { return }
                 policyStatus = .failure(message)
             }
+        } catch is CancellationError {
+            guard draft.isCurrent(submission) else { return }
+            policyStatus = .cancelled(RetentionSettingsCopy.policyApplyCancelled)
         } catch let failure as HistoryFailure {
             guard draft.isCurrent(submission) else { return }
             policyStatus = .failure(RetentionSettingsCopy.failureMessage(
@@ -573,6 +617,54 @@ struct RetentionSettingsTab: View {
         } catch {
             guard draft.isCurrent(submission) else { return }
             policyStatus = .failure(RetentionSettingsCopy.policiesSaveFailure)
+        }
+    }
+}
+
+/// A checkbox and its optional value are one native form row. The adaptive
+/// layout moves these same controls vertically when space is constrained;
+/// resizing never creates a second TextField or discards an in-progress edit.
+private struct RetentionLimitField: View {
+    let toggleLabel: String
+    let toggleHint: String
+    let toggleIdentifier: String
+    @Binding var isEnabled: Bool
+    let label: String
+    let unit: String
+    let accessibilityIdentifier: String
+    @Binding var text: String
+    let isValid: Bool
+    let range: ClosedRange<Int>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SettingsFieldLayout {
+                Toggle(toggleLabel, isOn: $isEnabled)
+                    .toggleStyle(.checkbox)
+                    .accessibilityHint(toggleHint)
+                    .accessibilityIdentifier(toggleIdentifier)
+                if isEnabled {
+                    HStack(spacing: 8) {
+                        TextField("", text: $text)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 88)
+                            .multilineTextAlignment(.trailing)
+                            .accessibilityLabel(label)
+                            .accessibilityIdentifier(accessibilityIdentifier)
+                        Text(unit)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    Text(RetentionSettingsCopy.noLimit)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if isEnabled && !isValid {
+                Text(RetentionSettingsCopy.rangeHint(from: range.lowerBound, to: range.upperBound))
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
         }
     }
 }

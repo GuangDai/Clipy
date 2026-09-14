@@ -118,6 +118,16 @@ package enum LocalAutomationSocket {
         _ bytes: Data, to descriptor: Int32,
         deadline: ContinuousClock.Instant
     ) async throws {
+        var bytesSent = 0
+        try await send(bytes, to: descriptor, deadline: deadline, bytesSent: &bytesSent)
+    }
+
+    /// Count only bytes accepted by the socket, including a partial write before
+    /// cancellation/failure. Callers may accumulate across header and body (07 §8.3).
+    package static func send(
+        _ bytes: Data, to descriptor: Int32,
+        deadline: ContinuousClock.Instant, bytesSent: inout Int
+    ) async throws {
         var offset = 0
         while offset < bytes.count {
             try Task.checkCancellation()
@@ -125,7 +135,11 @@ package enum LocalAutomationSocket {
             let sent = bytes.withUnsafeBytes { buffer in
                 Darwin.send(descriptor, buffer.baseAddress!.advanced(by: offset), bytes.count - offset, 0)
             }
-            if sent > 0 { offset += sent; continue }
+            if sent > 0 {
+                offset += sent
+                bytesSent += sent
+                continue
+            }
             if sent == 0 { throw Failure.disconnected }
             if errno == EINTR { continue }
             guard errno == EAGAIN || errno == EWOULDBLOCK else { throw Failure.disconnected }

@@ -25,6 +25,7 @@ internal enum AuthoritySuspensionPoint: String, Sendable {
     case positionRecheckEntry = "HistoryAuthority.currentPosition.entry"
     case gatewayAuditCompactionEntry = "HistoryAuthority.compactExternalAudit.entry"
     case blobCleanupBatchEntry = "HistoryAuthority.blobCleanup.batch"
+    case retentionPlanningBatch = "HistoryAuthority.retention.planningBatch"
 }
 
 /// Existing one-shot probes now exercise actual SQLite transaction rollback.

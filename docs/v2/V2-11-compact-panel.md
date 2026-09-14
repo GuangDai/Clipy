@@ -9,6 +9,20 @@ the list.
 
 ## Information hierarchy
 
+2026-09-14 refinement: pinned and recent groups share one native separator
+only when both are visible; neither group renders a heading. Its 9 pt height
+replaces both 28 pt heading allowances in content fitting. Use native menu
+material and paired macOS selection colors; selected search matches retain
+bold emphasis with the selected foreground. Appearance defaults to following
+macOS with optional app-wide light/dark choices. See
+[`../design/native-clipy.md`](../design/native-clipy.md) for the interaction
+design and reference image.
+
+Content measurement retains its zero floor. Persisted resizing has a separate
+usability check: collapsed preferences cannot become a permanent ceiling;
+an invalid drag restores the previous usable size and invalid old preferences
+fall back to the default. This does not enlarge genuinely short content.
+
 - Default browsing width: 360 pt, user-resizable with no forced minimum.
   The default 420 pt height is a ceiling, never a minimum. Both the list and
   the independent 340 pt floating preview fit their own content.

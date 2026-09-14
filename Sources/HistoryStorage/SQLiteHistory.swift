@@ -338,8 +338,9 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
                 // V2-02 §8.1 case (roadmap R.6, policy sweep): the full R1/R2/R3
                 // sweep — boundary validation, R3 prunes per exceeding item, the
                 // projected R1/R2 pass, the survivor-scoped unsatisfiable-R3 veto,
-                // and the same-value/satisfied `.unchanged` no-op — all inside
-                // the Authority's one serialized commit interval (`V2-02` §4.4).
+                // and the same-value/satisfied `.unchanged` no-op. Read-only
+                // preparation yields in batches with a position check; all
+                // writes still share one atomic commit (`V2-02` §4.4).
                 return try await authority.commitRetentionPolicies(policies)
             }
         } catch {

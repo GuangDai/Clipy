@@ -358,29 +358,51 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// to its displayed content (Maccy's popup semantics).
     func windowDidEndLiveResize(_ notification: Notification) {
         isLiveResizeActive = false
-        let contentWidth = PanelGeometry.clampedContentWidth(frame.width)
-        let height = PanelGeometry.clampedHeight(frame.height)
+        let saved = PanelGeometry.persistedSize(from: .standard)
+        let widthChanged = liveResizeStartingSize?.width != frame.width
+        let heightChanged = liveResizeStartingSize?.height != frame.height
+        // An edge dragged through the toolbar is not a usable future
+        // ceiling. Recover the previous preference, while an untouched
+        // content-fitted dimension remains free to be arbitrarily short.
+        let contentWidth = widthChanged
+            ? PanelGeometry.usableContentWidth(frame.width, fallback: saved.contentWidth)
+            : frame.width
+        let height = heightChanged
+            ? PanelGeometry.usableHeightCeiling(frame.height, fallback: saved.height)
+            : frame.height
         // Preserve each untouched dimension (V2-11). A width-only drag must
         // not save a short fitted height; a height-only drag on a smaller
         // screen must not erase the preferred width for a larger display.
-        let saved = PanelGeometry.persistedSize(from: .standard)
-        let preferredWidth = liveResizeStartingSize?.width == frame.width
-            ? saved.contentWidth : contentWidth
-        let heightCeiling = liveResizeStartingSize?.height == frame.height
-            ? saved.height : height
+        let preferredWidth = widthChanged ? contentWidth : saved.contentWidth
+        let heightCeiling = heightChanged ? height : saved.height
         liveResizeStartingSize = nil
         PanelGeometry.persistSize(
             contentWidth: preferredWidth,
             height: heightCeiling,
             to: .standard
         )
+        let visibleFrame = screen?.visibleFrame
         let clampedSize = NSSize(
-            width: contentWidth,
-            height: height
+            width: min(contentWidth, visibleFrame?.width ?? contentWidth),
+            height: min(height, visibleFrame?.height ?? height)
         )
         if clampedSize != frame.size {
+            var restoredFrame = NSRect(
+                x: frame.minX, y: frame.maxY - clampedSize.height,
+                width: clampedSize.width, height: clampedSize.height
+            )
+            if let visibleFrame {
+                restoredFrame.origin.x = min(
+                    max(restoredFrame.minX, visibleFrame.minX),
+                    visibleFrame.maxX - restoredFrame.width
+                )
+                restoredFrame.origin.y = min(
+                    max(restoredFrame.minY, visibleFrame.minY),
+                    visibleFrame.maxY - restoredFrame.height
+                )
+            }
             setFrameProgrammatically(
-                NSRect(origin: frame.origin, size: clampedSize),
+                restoredFrame,
                 display: isPresented
             )
         }

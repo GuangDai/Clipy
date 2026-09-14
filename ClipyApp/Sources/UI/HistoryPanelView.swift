@@ -191,6 +191,11 @@ final class HistoryPanelSurfaceState {
     /// moves (Maccy's `hoverSelectionWhileKeyboardNavigating` deferral).
     private(set) var inputMode: PanelInputMode = .keyboard
     private(set) var deferredHoverSelection: HistoryItemID?
+    var selectsOnHover = true {
+        didSet {
+            if !selectsOnHover { deferredHoverSelection = nil }
+        }
+    }
 
     init(
         history: any ClipboardHistory,
@@ -393,6 +398,7 @@ final class HistoryPanelSurfaceState {
     func notePointerMovement() {
         guard inputMode == .keyboard else { return }
         inputMode = .mouse
+        guard selectsOnHover else { return }
         guard let hovered = deferredHoverSelection else { return }
         deferredHoverSelection = nil
         selection = hovered
@@ -403,7 +409,7 @@ final class HistoryPanelSurfaceState {
     /// mode only remembers the row, so arrows and the pointer never fight;
     /// the deferral applies on the next real mouse movement.
     func handleRowHover(_ id: HistoryItemID) {
-        guard isSessionActive, selection != id else { return }
+        guard isSessionActive, selectsOnHover, selection != id else { return }
         switch inputMode {
         case .mouse:
             selection = id

@@ -20,7 +20,7 @@ extension HistoryAuthority {
         }
         do {
             let published = try publishHistoryContent(for: plan) { publishedNewFiles = true }
-            try database.writeTransaction {
+            try database.writeTransaction(checkingCancellation: true) {
                 let auditConfig = try validateHistoryCommit(
                     expectedPreviousPosition: expectedPreviousPosition,
                     auditAppend: plan.auditAppend, in: database
@@ -47,6 +47,8 @@ extension HistoryAuthority {
                 )
             }
             committed = true
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let rejection as ExternalWriteGateRejection {
             throw rejection
         } catch let failure as ExternalFailure {

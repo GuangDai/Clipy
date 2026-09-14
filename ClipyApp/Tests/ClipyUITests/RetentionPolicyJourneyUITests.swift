@@ -44,7 +44,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
 
         openRetentionSettings(in: app)
 
-        let storageEnabled = app.switches[
+        let storageEnabled = app.checkBoxes[
             "clipy.settings.retention.storage-enabled"
         ]
         assertExists(
@@ -58,7 +58,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             owningToggle: "clipy.settings.retention.storage-enabled"
         )
         let retentionScrollView = owningWindow.scrollViews.containing(
-            .switch, identifier: "clipy.settings.retention.age-enabled"
+            .checkBox, identifier: "clipy.settings.retention.age-enabled"
         ).firstMatch
         assertExists(
             retentionScrollView,
@@ -174,7 +174,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         )
         openRetentionSettings(in: app)
 
-        let ageEnabled = app.switches[
+        let ageEnabled = app.checkBoxes[
             "clipy.settings.retention.age-enabled"
         ]
         let ageDays = app.textFields[
@@ -185,7 +185,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             owningToggle: "clipy.settings.retention.age-enabled"
         )
         let retentionScrollView = owningWindow.scrollViews.containing(
-            .switch, identifier: "clipy.settings.retention.age-enabled"
+            .checkBox, identifier: "clipy.settings.retention.age-enabled"
         ).firstMatch
         assertExists(ageEnabled, timeout: 5, in: app, context: "age toggle")
         assertExists(
@@ -297,7 +297,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         app.typeKey(",", modifierFlags: .command)
         openRetentionTab(in: app)
 
-        let reopenedAgeEnabled = app.switches[
+        let reopenedAgeEnabled = app.checkBoxes[
             "clipy.settings.retention.age-enabled"
         ]
         let reopenedAgeDays = app.textFields[
@@ -391,7 +391,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         // matrix pins the semantics; this journey runs the control). The
         // toggle is queried by identifier like the age/storage toggles —
         // its text renders as an unbound StaticText in the AX tree.
-        let revisionCountToggle = app.switches[
+        let revisionCountToggle = app.checkBoxes[
             "clipy.settings.retention.revision-count-enabled"
         ]
         let revisionCountField = app.textFields[
@@ -402,7 +402,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             owningToggle: "clipy.settings.retention.revision-count-enabled"
         )
         let retentionScrollView = owningWindow.scrollViews.containing(
-            .switch, identifier: "clipy.settings.retention.age-enabled"
+            .checkBox, identifier: "clipy.settings.retention.age-enabled"
         ).firstMatch
         assertExists(
             revisionCountToggle,
@@ -603,7 +603,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         owningToggle identifier: String
     ) -> XCUIElement {
         let window = app.windows.containing(
-            .switch,
+            .checkBox,
             identifier: identifier
         ).firstMatch
         assertExists(

@@ -2,7 +2,7 @@
 
 > **2026-09-07:** [V2-09](v2/V2-09-multilevel-storage.md) supersedes the
 > SwiftData models, aggregate Canonical/revision persistence, context lifecycle
-> and full Signature Index described below. The replacement uses normalized
+> and full Signature Index from the original v1 design. The replacement uses normalized
 > SQLite rows and immutable blob files. File publication precedes reference
 > insertion; item mutations, accounting, HCR, Gateway audit and ChangePosition
 > share one SQL transaction. Failed commits preserve old History; cleanup only
@@ -28,182 +28,69 @@ It does not duplicate dedup winner selection, Copy Occurrence folding, pin-order
 
 ### 2. Public concrete adapter and internal actors
 
-```swift
-public struct SwiftDataHistory: ClipboardHistory, Sendable {
-    // All six stored fields are `actor` types, so each is Sendable and the
-    // Sendable conformance is derived without @unchecked Sendable.
-    private let authority: HistoryAuthority
-    private let ingestPreparation: IngestPreparationActor
-    private let revisionPreparation: RevisionPreparationActor
-    private let searchWorker: SearchWorker
-    private let thumbnailService: ThumbnailService
-    private let externalGateway: ExternalGateway
+The public adapter is `SQLiteHistory: ClipboardHistory, Sendable`.
+`SQLiteHistory.open(configuration:)` accepts `HistoryConfiguration` with
+`persistence: HistoryPersistence` and `initialMaximumUnpinnedItems: Int? = 200`.
+Persistence is either `.persistent(storeURL:)` or `.temporary`; both use the
+same SQLite database and immutable blob implementation. A temporary directory
+lives until its last owner/read finishes. A nil initial count disables count
+retention; an enabled count must be positive. Existing stores retain their
+persisted configuration.
 
-    public static func open(
-        configuration: HistoryConfiguration
-    ) async throws -> SwiftDataHistory
-}
-
-public enum HistoryPersistence: Sendable, Hashable {
-    case persistent(storeURL: URL)
-    case memory
-}
-
-public struct HistoryConfiguration: Sendable, Hashable {
-    public let persistence: HistoryPersistence
-    public let initialMaximumUnpinnedItems: Int
-
-    public init(
-        persistence: HistoryPersistence,
-        initialMaximumUnpinnedItems: Int = 200
-    ) {
-        self.persistence = persistence
-        self.initialMaximumUnpinnedItems = initialMaximumUnpinnedItems
-    }
-}
-```
-
-`HistoryConfiguration` selects persistent or in-memory storage and the initial retention value for a new store. An existing current-schema store uses its durable singleton value; the public retention action changes it. `open` validates the initial value against Part VI's fixed range and always uses the fixed `HistoryLimits.standard` safety profile. It throws `HistoryFailure`: `.invalidInput(.invalidRetentionPolicy)` for an out-of-range `initialMaximumUnpinnedItems`, or `.persistence(.openStore)` / `.persistence(.corruptStoredValue)` / `.persistence(.invariantViolation)` for store-open or startup-corruption failures (Part V §13). A durable-commit failure is `.persistence(.transaction)` under §16's uniform transaction boundary. `.memory` changes durability medium only; it uses the same Authority, planners, codecs, and transaction path.
-
-Internal isolation:
+The facade holds six actor references, the immutable store location and
+App Intents connection identity, and the persistent-store ownership lifetime.
+Its Sendable conformance is derived. Exact declarations live in
+[SQLiteHistory.swift](../Sources/HistoryStorage/SQLiteHistory.swift) and
+[Configuration.swift](../Sources/HistoryStorage/Configuration.swift).
 
 ```text
-SwiftDataHistory facade
+SQLiteHistory facade
 ├── IngestPreparationActor
 ├── RevisionPreparationActor
-├── SearchWorker
+├── SearchWorker → request-owned SQLite read connections
 ├── ThumbnailService / ThumbnailWorker
-├── ExternalGateway
+├── ExternalGateway → durable work delegated to HistoryAuthority
 └── HistoryAuthority
-    ├── ModelContainer
-    ├── SignatureIndex value
-    ├── validated settings
+    ├── SQLiteDatabase (sole writable connection)
+    ├── ImmutableBlobStore
+    ├── configuration and scalar accounting
     └── observation continuations
 ```
 
-`HistoryAuthority` is the sole writer. It is also the serialization point for source snapshot capture and observer registration. It stores no `@Model` instance or `ModelContext` across operations.
-`ExternalGateway` owns only process-local admission state and delegates every
-durable check/audit to `HistoryAuthority`; it never creates a `ModelContext`.
-X.5 stores this internal denial module only after startup succeeds. The public
-connection-bound facade remains absent until X.6 completes granted dispatch.
+Database/statement handles never cross actors. The public connection-bound
+`ExternalHistoryFacade` uses this same Authority through ExternalGateway.
 
-### 3. SwiftData schema
+### 3. SQLite schema and immutable content
 
-All model types are internal to `HistoryStorage`.
+[SQLiteHistorySchema.swift](../Sources/HistoryStorage/SQLiteHistorySchema.swift)
+owns the current SQL schema. There are no SwiftData models, ModelContainer,
+ModelContext, or ten-model schema.
 
-The current schema contains exactly ten models:
-
-```swift
-Schema([
-    HistoryItemRow.self,
-    LastChangePositionRow.self,
-    RetentionExpansionConfigRow.self,
-    RetainedBytesRow.self,
-    ConnectionRow.self,
-    GrantRow.self,
-    OperationRecordRow.self,
-    GatewayConfigRow.self,
-    HistoryChangeRecordRow.self,
-    JournalConfigRow.self,
-])
-```
-
-This new project maintains only the current model set. There are no frozen
-historical item models, `VersionedSchema` declarations, migration stages,
-legacy String projection columns, or projection-recipe tags. Capture and
-revision writes persist the prepared title/body as exact UTF-8 `Data` in the
-same History transaction as the content they describe. Startup does not
-backfill or rebuild these projections (§13/§17).
-
-#### 3.1 History Item row
-
-The current item shape is:
-
-```swift
-@Model
-internal final class HistoryItemRow {
-    #Index<HistoryItemRow>([\.pinOrdinal, \.lastCopiedAt, \.idOrder])
-
-    @Attribute(.unique)
-    var id: UUID
-    var idOrder: String   // id.uuidString, lexical ordering only
-
-    var contentVersionRaw: UInt64
-
-    @Attribute(.externalStorage)
-    var canonicalBlob: Data
-
-    @Attribute(.externalStorage)
-    var revisionStateBlob: Data
-
-    var canonicalSignatureBlob: Data
-
-    var titleUTF8: Data
-    var searchBodyUTF8: Data
-    var effectiveTypeIdentifiersBlob: Data
-
-    var firstCopiedAt: Date
-    var lastCopiedAt: Date
-    var copyCount: UInt64
-    var firstSource: String?
-    var lastSource: String?
-
-    var pinOrdinal: Int?
-}
-```
-
-Semantic mapping:
-
-| Column | Meaning |
+| Durable values | Storage |
 |---|---|
-| `id` | Stable business ID. Never expose `PersistentIdentifier`. |
-| `contentVersionRaw` | Current Effective Content version, always at least 1. |
-| `canonicalBlob` | Immutable Canonical representations including per-representation fingerprint evidence. |
-| `revisionStateBlob` | Full revision list plus active Revision ID. The active revision's bytes are present whenever `activeRevisionID` is non-nil; for a Canonical-state item (`activeRevisionID == nil`) the revision list is empty and there are no revision bytes — Effective Content equals Canonical Content. |
-| `canonicalSignatureBlob` | Durable signature metadata used with authoritative Canonical bytes to rebuild the complete Signature Index in the current hard-capped profile. |
-| projection fields | Durable bounded projection of current Effective Content for list/search, stored only as `titleUTF8` and `searchBodyUTF8`. |
-| occurrence fields | Full first/last time and source summary. |
-| `pinOrdinal` | Internal encoding of pinned order; `nil` is unpinned. |
+| ChangePosition, count policy, retained/pinned counts and logical byte totals | `history_state` singleton |
+| Item identity, ContentVersion, current content pointer, occurrence facts, pin order and exact UTF-8 projections | `history_items` |
+| Per-application copy occurrences | `copy_sources` |
+| Immutable Canonical/revision metadata | `contents` |
+| Ordered representations, type identifiers, byte counts and candidate fingerprints | `representations` |
+| Representation bytes | Exactly one of inline SQLite bytes or a UUID-named immutable blob reference |
+| Age/storage/revision policy | `retention_policies` singleton |
+| Search candidate postings | Contentless FTS5 `history_search`, maintained with item changes |
+| Connections, grants, request audit and History Change Record journal | Current Gateway/HCR tables in the same database |
 
-Current projection reads check each UTF-8 byte bound before strictly decoding,
-preserving every scalar including a leading U+FEFF. Invalid UTF-8
-fails as `.persistence(.corruptStoredValue)` through the existing codec mapping.
-Empty title/body bytes remain valid. Scalar list reads fetch title bytes only;
-search also fetches body bytes, not the full Canonical/revision blobs. Neither
-reconstructs or repairs stored projections per read.
+Titles/search bodies remain exact UTF-8 Data stored as SQLite BLOBs. Indexes
+filter candidates; byte-exact confirmation decides equality. Item IDs and
+blob UUIDs are independent identities, never content hashes.
 
-`@Attribute(.externalStorage)` is an implementation hint. Correctness, byte limits, and read isolation do not depend on whether SwiftData stores a blob inline or externally.
-
-The item has no `pinned: Bool`, inactive-only revision list, single `application` column, enrichment field, tombstone, cache payload, or SwiftData identity map. Current Gateway and History journal facts live in their separate models listed above.
-
-#### 3.2 Change Position singleton
-
-```swift
-@Model
-internal final class LastChangePositionRow {
-    @Attribute(.unique)
-    var key: String        // always "retained-history"
-    var rawValue: UInt64   // 0 before the first History Commit
-    var maximumUnpinnedItems: Int
-}
-```
-
-Every non-empty History Commit updates this row in the same transaction as its item mutations. The first commit moves `0 → 1`. Empty stores therefore still support an authoritative `HistoryPage(position: 0, rows: [])`. The same singleton owns the current count-retention policy so capture and policy changes read one authoritative value.
-
-The singleton is not a journal. It only identifies the latest durable History Commit.
-
-#### 3.3 Explicitly absent schema
-
-- No historical model variants, migration plan, or compatibility columns.
-- No thumbnail/list/search cache table.
-- No version-map/checkpoint row.
-- No separate pin table or denormalized occupancy map.
-- No enrichment table.
-- No migration bridge from the current Maccy models.
+Files are published and synchronized before SQL references commit. Removal
+commits reference changes first, then bounded cleanup checks current references
+before unlinking. Schema shape, content placement and startup are specified in
+[V2-09 §§3–6](v2/V2-09-multilevel-storage.md); no dual writing, migration,
+legacy-store reading or automatic deletion of an unreadable store is added.
 
 ### 4. Versioned storage codecs
 
-Domain values do not gain synthesized `Codable` conformance merely for SwiftData. `HistoryStorage` owns explicit versioned wire values:
+Domain values do not gain synthesized `Codable` conformance merely for persistence. The existing explicit codecs below retain their validation contracts; aggregate Canonical/revision/signature blobs are not the current SQLite content layout (§3). Effective type identifiers and other purpose-specific encoded values still use their owning codecs:
 
 ```swift
 internal struct CanonicalBlobV1: Codable {
@@ -256,7 +143,7 @@ Decode is not a blind memberwise conversion. It reconstructs Domain values throu
 - known blob version (exactly 1 for each V1 blob);
 - bounded byte/count values before any large allocation;
 - normalized, unique, non-empty type identifiers, with no empty-bytes representation;
-- fingerprint/signature coverage is checked **bidirectionally** against Canonical representations — every Canonical representation has a signature entry and every signature entry corresponds to a Canonical representation (no orphan entries). Ordinary blob decode checks the two stored copies structurally; the current hard-capped startup/unready-index paths additionally recompute xxh3 from Canonical bytes before the index may use absence as negative evidence. D7 still requires byte-exact confirmation for every positive candidate;
+- fingerprint/signature coverage is checked **bidirectionally** against Canonical representations — every Canonical representation has a signature entry and every signature entry corresponds to a Canonical representation (no orphan entries). Aggregate codec decode checks the two encoded copies structurally; current SQLite candidate reads use normalized representation rows and confirm matching content bytes. D7 still requires byte-exact confirmation for every positive candidate;
 - unique revision IDs and bounded full revision history within the per-item revision-count/byte bounds;
 - active ID: when non-nil it is unique and names exactly one stored revision; `nil` is valid only when the revision list is empty (D3); a non-nil active ID with no matching revision, or a non-empty list with a nil active ID, is corruption;
 - normalized, non-empty revision content containing only Canonical representation types;
@@ -276,43 +163,21 @@ Any violation is `.persistence(.corruptStoredValue)` or `.persistence(.invariant
 
 Encode starts from validated Domain/stamped values and is deterministic. Round-trip equivalence is a Part VI gate.
 
-### 5. Context confinement
+### 5. Connection confinement
 
-The single-writer rule is:
+Only `HistoryAuthority` owns the writable `SQLiteDatabase` and
+`ImmutableBlobStore`. Its connection persists across operations; statements
+are finalized within their owning interval. No database, statement or file
+handle crosses an actor boundary.
 
-> Only `HistoryAuthority` may create a writable `ModelContext`, and at most one Authority operation uses one at a time.
+Reads that combine position and rows use one SQLite read transaction.
+Commit fact loading, final position validation and SQL commit run under the
+Authority's isolation. Any preparation that yields must validate its captured
+position before applying a plan; there is no suspension inside a SQL
+transaction. Business-ID lookup uses indexed SQL predicates.
 
-For each read or commit:
-
-1. create a context from the Authority-owned `ModelContainer`;
-2. configure autosave off if applicable to the chosen API surface;
-3. synchronously fetch, decode, plan, transact, and/or extract value snapshots;
-4. retain no row or context after returning from the isolated helper.
-
-There is no context crossing an actor boundary and no `await` while a commit context, fetched row, complete facts, or commit plan is live.
-
-This replaces the earlier permanent-context plus manual-refresh design. It does not use nonexistent `refresh(_:mergeChanges:)`/`refreshAllObjects()` APIs and does not misuse `registeredModel(for:)` with a business ID.
-
-All production business-ID lookup uses a bounded fetch predicate on
-`HistoryItemRow.id`. Exactly zero or one row is valid; duplicates are
-persistence corruption even though the schema also declares uniqueness.
-
-The package-only manual-performance fixture seam is constrained by the same
-boundary. It is not reachable through `ClipboardHistory`, and it does not add
-a fake or second writer. `IngestPreparationActor` prepares each raw capture;
-`HistoryAuthority` encodes and commits at most 64 prepared items in one fresh
-context and one `ModelContext.transaction`, applies the real Signature Index
-delta, publishes invalidation, and advances `ChangePosition` once for that
-non-empty batch. The disposable store is proved empty first. Within each batch,
-a `Set` proves candidate IDs unique; between batches, expected position and the
-complete ready Signature Index prove both non-interleaving and ID absence. That
-fixture-only proof avoids a full count and one business-ID query per row while
-the schema uniqueness constraint remains a transaction backstop. Inputs are
-trusted to have nil lineage hints and pairwise distinct,
-containment-disjoint Canonical values; an incomplete setup is discarded rather
-than resumed. This setup-only path trades bounded transient space for fewer
-queries and transactions; production actions continue to use the one-action
-planner, durable ID lookup, and stamped commit path described below.
+The package-only performance fixture also uses this Authority and its real
+SQL transaction path. It is not a second writer or caller-facing operation.
 
 ### 6. Preparation outside the commit interval
 
@@ -391,34 +256,17 @@ Each public action selects one loader. There is no generic partial map.
 
 #### 7.1 Capture
 
-1. Count retained and unpinned items without materializing their rows. Require
-   Signature Index state `.ready`; startup establishes complete membership and
-   each isolated commit maintains it through its delta. An unavailable count
-   or count above the hard bound returns
-   `.temporarilyUnavailable(.dedupIndexRebuild)` (WS5). If the index is
-   unready or its retained count differs, attempt one complete rebuild
-   from every retained row's Canonical and signature blobs within the hard
-   item bound, recomputing xxh3 before absence becomes negative evidence.
-2. Intersect posting sets for all incoming signature entries.
-3. Fetch and fully decode every candidate ID.
-4. Resolve a lineage hint from the already decoded candidates, or fetch it by
-   ID when absent from that intersection.
-5. Point-read the prepared candidate ID's occupancy. Fetch only the oldest
-   unpinned prefix needed by the largest possible count-retention effect,
-   plus one row for excluding a coalescing primary. A current `idOrder` UUID
-   text scalar and native compound index on `(pinOrdinal,lastCopiedAt,idOrder)`
-   make this prefix bounded even for equal timestamps; the UUID remains the
-   business identity. No new model or migration is involved.
-6. Construct `IngestFacts` from complete candidates, exact counts, and the
-   bounded `CaptureRetentionFacts` prefix. R1/R2 expansion separately loads
-   the complete scalar inventory only when those policies are enabled.
+Read scalar accounting and query the persistent representation indexes for
+the incoming signature entries. Stream candidate confirmation against exact
+Canonical bytes; retain the current candidate and confirmed winner, not a
+history-sized array of content. Resolve any lineage hint by indexed item ID
+and confirm its current Effective Content bytes.
 
-Steps 1–6 and the subsequent plan→transaction→index-apply sequence execute in
-one non-suspending `HistoryAuthority` interval. Actor isolation is therefore
-the interleaving proof: a generation counter would carry no independent
-correctness information and is deliberately absent.
-
-If any step cannot prove completeness, reject capture. There is no “scan the first N and insert if absent” path.
+Check the prepared item's ID for occupancy and load the oldest eligible
+unpinned prefix required by count retention. Enabled age/storage policies
+load their purpose-specific facts. The complete result feeds the pure
+planner; incomplete or corrupt facts reject capture without insertion.
+There is no resident SignatureIndex readiness state or startup rebuild.
 
 #### 7.2 Pin and unpin
 
@@ -440,7 +288,7 @@ All collection-wide loads are bounded by the hard retained-item maximum. A loade
 
 ### 8. Closed action dispatch
 
-`SwiftDataHistory.perform` uses one exhaustive switch:
+`SQLiteHistory.perform` uses one exhaustive switch:
 
 ```swift
 switch action {
@@ -477,16 +325,14 @@ There is no generic existential, family string/tag, registry, visitor, or `as? I
 The relevant Authority method performs:
 
 ```text
-create operation-local context
+enter isolated Authority interval
 → load exact facts
 → call the action-specific pure planner
-→ if unchanged: release context and return .unchanged
+→ if unchanged: return .unchanged
 → derive/stamp a StampedCommitPlan
-→ prevalidate its index delta and receipt
+→ validate the stamped values and receipt
 → execute one transaction
-→ apply nonthrowing Signature Index delta
 → synchronously yield one HistoryInvalidation
-→ release context
 → return .committed
 ```
 
@@ -566,174 +412,70 @@ The Authority never decides after planning that `.recordCopy` means “increment
 
 ### 10. Atomic transaction
 
-The only durable History Commit primitive is `ModelContext.transaction`:
+`SQLiteDatabase.writeTransaction` is the durable commit primitive, using
+SQLite BEGIN/COMMIT and ROLLBACK on failure. The Authority publishes new
+immutable files before the transaction, validates the expected previous
+position and any external authorization, applies typed mutations, validates
+required final pin order, and commits accounting, HCR, Gateway audit and the
+new ChangePosition together.
 
-```swift
-internal enum StorageInvariant: Error {
-    case positionChanged
-}
-
-try context.transaction {
-    let meta = try fetchExactlyOnePositionRow(context)
-    guard meta.rawValue == expectedPreviousPosition.rawValue else {
-        throw StorageInvariant.positionChanged
-    }
-
-    for mutation in plan.mutations {
-        try apply(mutation, in: context)
-    }
-
-    try validateFinalPinOrder(in: context)
-    meta.rawValue = plan.position.rawValue
-}
-```
-
-Rules:
-
-- No `await` occurs in the closure or between fact load and closure completion.
-- The executor fetches rows by `HistoryItemID`; it never passes a business ID to `registeredModel(for:)`.
-- Delete fetches the actual row and calls `context.delete(row)`; it does not depend on a predicate delete seeing pending state.
-- Every referenced row must exist exactly once unless the stamped case is create.
-- Create IDs and revision IDs are checked for uniqueness.
-- Final pin order is revalidated before closure success.
-- Revision state, Content Version, and effective projections are written together.
-- The singleton position is written last inside the same transaction.
-- Closure failure commits nothing. There is no receipt, index delta, or invalidation.
-- Closure success is the save boundary. The kernel does **not** call `save()`, `processPendingChanges()`, or a compensating `rollback()` afterward.
-
-Apple's documented transaction behavior is a platform dependency; the scaffold gate in Part VI must confirm the exact supported-runtime behavior used by this design.
+No `await` occurs inside the transaction. A failed transaction leaves the
+previous History and referenced content intact, returns no committed receipt
+and publishes no invalidation. Newly written unreferenced files are eligible
+for bounded cleanup; old payload files are not deleted during rollback.
+See [HistoryAuthority+TransactionExecution.swift](../Sources/HistoryStorage/HistoryAuthority+TransactionExecution.swift).
 
 ### 11. Post-commit order
 
-After transaction success, while still isolated in `HistoryAuthority` and without suspension:
+After SQLite commit succeeds, the Authority synchronously publishes the
+process-local invalidation and returns the committed receipt. Persistent
+candidate postings already belong to that transaction; there is no second,
+post-commit in-memory index update. Cleanup of unreferenced files is derived
+work and cannot change a successful receipt.
 
-1. apply the already validated nonthrowing Signature Index delta;
-2. synchronously yield `HistoryInvalidation(latestPosition:)` to registered continuations;
-3. construct and return `HistoryReceipt.committed`.
+### 12. Persistent candidate lookup
 
-Index deltas exist only for create and delete because Canonical Content never changes. Copy Coalescing and revision leave Canonical signatures untouched.
-
-The delta is precomputed and checked before the transaction so ordinary dictionary application cannot fail after durable commit. If an internal assertion nevertheless detects index divergence, the index is marked unready; the committed state remains authoritative, observers are still invalidated, and the next capture must complete a full rebuild before deciding insert/coalesce.
-
-A process crash after the transaction but before in-memory update loses only derived process state. Startup reconstructs the index and current position from durable rows.
-
-### 12. Signature Index lifecycle
-
-```swift
-internal struct SignatureIndex {
-    enum State {
-        case unready
-        case ready
-    }
-
-    // ContentSignatureEntry → retained HistoryItemID posting set
-}
-```
-
-Correctness requirements:
-
-- Ready means every retained row contributes every Canonical signature entry exactly once.
-- In the current hard-capped profile, startup reads each retained row's
-  Canonical bytes together with `canonicalSignatureBlob`, recomputes the
-  Canonical signature entries, requires bidirectional byte-count/fingerprint
-  coverage, and only then constructs postings and declares the index ready.
-- An empty ready index is valid only for an empty retained store.
-- Create adds all entries; delete removes all entries and empty postings.
-- Every fact-load checks that candidate IDs remain retained in its serialized Authority interval.
-- Fingerprints may collide; full content confirmation remains mandatory.
-- Index readiness may affect capture availability, never browse/detail/paste correctness.
-
-The index is actor-owned value state, not a second persistence authority.
-Its complete value is rebuilt or mutated only inside the non-suspending
-Authority interval. Startup establishes retained-ID coverage and commit
-deltas maintain it; ordinary captures compare the count and point-read
-candidates without rescanning every retained ID.
+Candidate postings live in indexed SQLite representation rows. Capture queries
+those rows and confirms candidates with exact bytes. Positive fingerprints
+alone never establish identity, and failure to read or validate candidates
+never establishes absence. No full-store resident signature/ID index,
+readiness state or Canonical startup scan is constructed.
 
 ### 13. Startup
 
-`SwiftDataHistory.open` performs:
+`SQLiteHistory.open` validates configuration, establishes the persistent
+store's existing ownership lifetime when applicable, and opens its SQLite/blob
+location. One Authority transaction creates or validates the current schema,
+the History singleton and retention configuration, Gateway state and the
+retained HCR suffix. The facade is published only after those owners are ready.
 
-1. validate configuration and hard limits;
-2. open/create a `ModelContainer` with the single current ten-model schema, without a migration plan;
-3. enter `HistoryAuthority` and create the singleton at position 0 if this is a new store;
-4. validate exactly one singleton;
-5. bootstrap/validate the retention-expansion config singleton;
-6. bootstrap/validate the current Gateway configuration and connection state, then validate and compact the retained History journal suffix;
-7. validate retained row count does not exceed the hard bound and fetch each row's business ID, nonzero Content Version, pin ordinal, Canonical bytes, and signature metadata;
-8. decode Canonical and signature metadata, recompute Canonical signature
-   entries, require bidirectional coverage, and build the complete index;
-9. validate the full pinned ordinal set from scalar fields;
-10. enforce the `RetainedBytesRow` 1:1 correspondence and current scalar relation/version checks; missing or orphan rows fail rather than triggering a backfill;
-11. publish the constructed `SwiftDataHistory` facade.
-
-The Canonical coverage pass is a correctness-first rule for the current
-hard-capped profile: a structurally valid but incomplete signature blob could
-otherwise create false-negative dedup candidates. It does not decode revision
-blobs to rebuild projections. Current title/body reads validate their stored
-UTF-8 bytes at the consuming boundaries described in §4.
-This full Canonical pass is not an admissible U-scale design. Before the global
-hard item bound can be removed, `DEC-U-SCALE-STARTUP-INDEX` must replace it with
-the approved durable candidate-query/lazy-shard authority and an equally strong
-negative-evidence contract; it may not retain this O(N) hydration path or add a
-second truth index.
-
-Corrupt durable signature or pin metadata prevents open rather than enabling
-writes from an unproved state. Startup has no legacy projection reconstruction
-or missing-row repair path.
+Startup does not hydrate all Canonical payloads, build a resident ID/signature
+index or load a search corpus. Reads validate the metadata and content they
+consume. Existing unreadable or unsupported stores fail without migration,
+backfill, repair or automatic deletion. Temporary stores exercise the same
+startup and independent read-connection path.
 
 ### 14. Read implementation
 
 #### 14.1 Recent browse
 
-Within one Authority interval:
-
-- validate cursor/limit;
-- read current position;
-- fetch only scalar row projection fields;
-- order pinned rows by ordinal and unpinned rows by `(lastCopiedAt DESC, id ASC)`;
-- fetch pinned rows first. A first page materializes at most `limit + 1`
-  scalar rows across both lanes. A pinned continuation uses
-  `fetchOffset = anchorOrdinal`, fetches the anchor plus page and lookahead
-  (at most `limit + 2`), verifies the complete anchor, then drops it; this
-  preserves O(`limit`) work without accepting a malformed cursor;
-- for an unpinned continuation, fetch at most `limit + 2` using the inclusive
-  `(lastCopiedAt DESC, idOrder lexical ASC)` keyset predicate. The persisted
-  UUID text column preserves the business-ID byte order even at equal dates.
-  Verify that the first result matches the full anchor, then drop it. No
-  tie-group expansion, complete-lane fetch, or Swift-side heap is needed;
-- return a value `HistoryPage` and opaque cursor.
-
-No Canonical/revision blob is decoded.
+One Authority read transaction joins ChangePosition, cursor validation and
+bounded scalar page queries. Pinned items sort by ordinal; recent items sort
+by last-copy date and stable UUID text. SQL keyset predicates retain complete
+tie ordering without fetching a full tie group. Forward and backward cursors
+remain bound to query, process and position. No Canonical/revision payload is
+decoded for a page.
 
 #### 14.2 Search browse
 
-The Authority captures a bounded `SearchCorpusSnapshot` containing position and scalar projection rows:
-
-```swift
-internal struct SearchCorpusSnapshot: Sendable {
-    let position: ChangePosition
-    let rows: [SearchCorpusRow]
-}
-
-internal struct SearchCorpusRow: Sendable {
-    let id: HistoryItemID
-    let contentVersion: ContentVersion
-    let title: String
-    let searchBody: String
-    let typeIdentifiers: [String]
-    let lastCopiedAt: Date
-    let copyCount: UInt64
-    let lastSource: String?
-    let pinOrdinal: PinOrdinal?
-}
-```
-
-`SearchWorker` evaluates exact/fuzzy/regexp over this `Sendable` snapshot and returns bounded row values. It never reads SwiftData and never uses dedup Candidate Rank.
-Exact/regexp scans retain only the continuation anchor and at most `limit + 1`
-subsequent matches. Fuzzy still scores the complete corpus, but retains only
-the best `limit + 1` post-anchor matches and the matching anchor, sorting only
-those candidates. This bounds evaluated-result storage; it does not replace
-the full corpus snapshot or change the frozen score/date/ID ordering.
+SearchWorker opens a request-owned SQLite read connection and transaction.
+Position, candidate batches and final excerpts come from this one snapshot.
+FTS5 narrows eligible exact-search candidates; fuzzy/regexp evaluation uses
+bounded scalar batches and bounded result retention. Request cancellation
+and deadlines release the reader. There is no full-store SearchCorpusSnapshot
+or search-content cache. See
+[SearchWorker+SQLite.swift](../Sources/HistoryStorage/SearchWorker+SQLite.swift)
+and Part IV §1.
 
 #### 14.3 Detail and paste
 
@@ -747,11 +489,11 @@ a partial total. Content blobs are not decoded, and the read writes no state.
 
 #### 14.4 Observation registration
 
-`HistoryAuthority` stores `AsyncThrowingStream` continuations keyed by an internal subscription token. Registration and invalidation yield are synchronous actor operations. Cancellation removes the token. `SwiftDataHistory.observe` implements the Part IV subscribe-before-query algorithm and owns any SearchWorker task.
+`HistoryAuthority` stores `AsyncThrowingStream` continuations keyed by an internal subscription token. Registration and invalidation yield are synchronous actor operations. Cancellation removes the token. `SQLiteHistory.observe` implements the Part IV subscribe-before-query algorithm and owns any SearchWorker task.
 
 #### 14.5 Thumbnail source
 
-`ThumbnailService` installs an exact-key source-to-decode task before its first suspension. The creator asks the Authority to verify the requested Content Version from scalar fields before accessing content blobs, then fully hydrate the current item, derive Effective Content, and return immutable source image bytes. An existing-flight caller uses the same scalar dimension/existence/version check before awaiting that task. Current source reads retain complete codec validation. ImageIO decode occurs only after all SwiftData objects and context have been released; no joiner rehydrates the content blob.
+`ThumbnailService` installs an exact-key source-to-decode task before its first suspension. The creator asks the Authority to verify the requested Content Version from scalar fields, select the effective image representation and return its validated immutable bytes. An existing-flight caller uses the same scalar dimension/existence/version check before awaiting that task. ImageIO decode occurs after the Authority source-read interval; no joiner rereads the content.
 
 Distinct creators wait for the preceding source-to-decode operation to finish
 before loading their own source. Waiting tasks retain request identity and the
@@ -844,7 +586,7 @@ changes do not authorize rewriting Canonical/revision bytes or fabricating
 
 ### 16. Failure translation
 
-At the `SwiftDataHistory` boundary:
+At the `SQLiteHistory` boundary:
 
 - missing rows → `.notFound`;
 - OCC mismatch → `.staleContent`;
@@ -852,15 +594,14 @@ At the `SwiftDataHistory` boundary:
 - invalid requested anchor → `.invalidPinnedPlacement`;
 - revision target absence → `.revisionNotFound`;
 - cursor shape, generation, or position mismatch → `.snapshotExpired`;
-- inability to rebuild the Signature Index to a proved-complete state → `.temporarilyUnavailable(.dedupIndexRebuild)` (Part V §7.1 step 1, §12);
 - inability to load or prove any other action-specific complete fact → `.temporarilyUnavailable(.factProof)`;
 - a durable transaction error whose Cocoa code is `fileWriteOutOfSpace` or whose POSIX code is `ENOSPC` (directly or in the single observed `NSUnderlyingErrorKey` wrapper) → `.temporarilyUnavailable(.insufficientDiskSpace)`; classification uses domains/codes, never localized strings;
-- stamped-plan capacity admission → `.temporarilyUnavailable(.insufficientDiskSpace)`: before executing any stamped plan, the single writer refuses it — typed, with no receipt, durable commit, or invalidation — when the store volume's readable raw available-capacity fact (`volumeAvailableCapacity`) is below the plan's new external-storage payload total plus a fixed 1 MiB margin. The raw fact, not the important-usage variant, is authoritative here: the OS maintains purgeable-space accounting only on the boot volume, and the important-usage fact was observed returning zero on a dedicated mounted volume (dispatch run 32634051113, 254 MiB free, every capture refused); the raw fact matches the filesystem's own accounting on every volume and errs conservative on the boot volume, where ignoring purgeable space yields a typed, retryable refusal. The payload total counts the encoded `CanonicalBlobV1`/`RevisionStateBlobV1` bytes carried by `.create`, `.appendRevision`, and `.pruneRevisions` mutations (the wire-format byte counts Core Data externalizes, not raw clipboard bytes); plans writing no new external bytes — byte-exact copy coalescing, pin/occurrence/policy/delete-only commits — are never refused, and an unreadable capacity fact (in-memory store or unavailable resource value) leaves the path unrefused. Admission exists because the external-storage save path returns no out-of-space error at all: creating the `_EXTERNAL_DATA` interim file on a full volume raises an uncaught `NSInternalInconsistencyException` that terminates the process before this section's translation runs (Card 6B physical-ENOSPC runner evidence, 2026-08-23). An exhaustion that begins after admission passes remains that framework crash ceiling, not a typed failure;
-- hard retained/revision/copy-count limits → `.capacityExceeded` with the matching `CapacityKind`; valid encoded thumbnail output over the Part VI byte envelope → `.capacityExceeded(.thumbnailBytes)`; a `ContentVersion`/`ChangePosition` successor overflow → `.capacityExceeded(.coherenceToken)`;
+- SQLite `SQLITE_FULL`, or filesystem out-of-space errors during immutable-file publication, map to `.temporarilyUnavailable(.insufficientDiskSpace)`; corrupt SQLite pages map to `.persistence(.corruptStoredValue)`. The retired Core Data external-storage exception is not a current storage failure path;
+- revision/copy-count resource limits → `.capacityExceeded` with the matching `CapacityKind`; valid encoded thumbnail output over the Part VI byte envelope → `.capacityExceeded(.thumbnailBytes)`; a `ContentVersion`/`ChangePosition` successor overflow → `.capacityExceeded(.coherenceToken)`;
 - an image representation that ImageIO cannot interpret or render as a thumbnail → `.thumbnailUnavailable`; this is not evidence of persisted-value corruption and does not affect byte-exact capture, detail, or paste. The selected candidate still fails without falling back to another representation;
 - decode/schema invariant failures or corrupt persisted values → `.persistence(.corruptStoredValue)` or `.persistence(.invariantViolation)`;
 - a PNG destination/finalization failure after source decode → `.persistence(.invariantViolation)` (encode-side invariant, never stored-value corruption);
-- any other `ModelContext.transaction` closure failure (including the `StorageInvariant.positionChanged` guard) or framework-level failure to durably commit the transaction → `.persistence(.transaction)`.
+- any other SQLite transaction failure (including the `StorageInvariant.positionChanged` guard) or framework-level failure to durably commit the transaction → `.persistence(.transaction)`.
 
 Platform error strings may be logged internally with privacy controls but are not used as public semantic discriminators.
 
@@ -879,10 +620,8 @@ removing schema history does not remove their checks. Retired migration/recipe
 sections elsewhere in the historical design archive are not instructions to
 reintroduce compatibility infrastructure.
 
-### 18. Platform reference anchors
+### 18. Platform assumptions
 
-Implementation must verify assumptions against the supported SDK rather than copy pseudocode blindly:
-
-- [ModelContext transaction](https://developer.apple.com/documentation/swiftdata/modelcontext/transaction(block:)) — closure-success transaction boundary.
-- [FetchDescriptor propertiesToFetch](https://developer.apple.com/documentation/swiftdata/fetchdescriptor/propertiestofetch) — candidate scalar-projection mechanism; Part VI still requires a no-blob-decode proof.
-- [ModelContext registeredModel(for:)](https://developer.apple.com/documentation/swiftdata/modelcontext/registeredmodel(for:)) — accepts `PersistentIdentifier`, which is why business-ID lookup uses a fetch.
+The supported macOS SDK and direct storage tests verify SQLite transaction,
+snapshot, corruption and immutable-file publication behavior. The historical
+SwiftData fetch/refresh API discussion does not constrain this implementation.

@@ -31,21 +31,57 @@ final class LocalAutomationDeadlineTests: XCTestCase {
 
     func testExpiredWriteDoesNotSendBytes() async throws {
         try await withSocketPair { sender, receiver in
+            var bytesSent = 0
             do {
                 try await LocalAutomationSocket.send(
                     Data([0x41]), to: sender,
-                    deadline: ContinuousClock.now.advanced(by: .seconds(-1))
+                    deadline: ContinuousClock.now.advanced(by: .seconds(-1)),
+                    bytesSent: &bytesSent
                 )
                 XCTFail("an expired deadline must not send a request")
             } catch let failure as LocalAutomationSocket.Failure {
                 XCTAssertEqual(failure, .timeout)
             }
+            XCTAssertEqual(bytesSent, 0)
 
             var byte: UInt8 = 0
             let received = Darwin.recv(receiver, &byte, 1, 0)
             let receiveError = errno
             XCTAssertEqual(received, -1)
             XCTAssertEqual(receiveError, EAGAIN)
+        }
+    }
+
+    func testCancelledPartialWriteKeepsItsTransmittedByteCount() async throws {
+        try await withSocketPair { sender, receiver in
+            var bufferSize: Int32 = 1_024
+            XCTAssertEqual(Darwin.setsockopt(
+                sender, SOL_SOCKET, SO_SNDBUF, &bufferSize,
+                socklen_t(MemoryLayout<Int32>.size)
+            ), 0)
+            let payload = Data(repeating: 0x41, count: 1_048_576)
+            let sending = Task {
+                var bytesSent = 0
+                do {
+                    try await LocalAutomationSocket.send(
+                        payload, to: sender,
+                        deadline: .now.advanced(by: .seconds(2)), bytesSent: &bytesSent
+                    )
+                    XCTFail("the peer did not drain enough bytes to complete this send")
+                } catch is CancellationError {
+                    // The peer's first byte establishes transmission before cancel.
+                } catch {
+                    XCTFail("expected cancellation, got \(error)")
+                }
+                return bytesSent
+            }
+            _ = try await LocalAutomationSocket.receive(
+                1, from: receiver, deadline: .now.advanced(by: .seconds(2))
+            )
+            sending.cancel()
+            let bytesSent = await sending.value
+            XCTAssertGreaterThan(bytesSent, 0)
+            XCTAssertLessThan(bytesSent, payload.count)
         }
     }
 

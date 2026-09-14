@@ -105,6 +105,8 @@ public enum PreviewUnavailability: Equatable, Sendable {
 public enum PreviewFailure: Equatable, Sendable {
     case malformedRepresentation
     case resourceLimit
+    /// Native rendering resources are unavailable, including an occupied
+    /// raster slot whose bounded wait expired. The caller may offer Retry.
     case renderer
     case cancelled
 }
@@ -140,7 +142,8 @@ public actor ContentPreview {
     private var rasterizationActive = false
     private struct RasterizationWaiter {
         let id: UUID
-        let continuation: CheckedContinuation<Bool, Never>
+        let deadline: ContinuousClock.Instant
+        let continuation: CheckedContinuation<PreviewFailure?, Never>
     }
     private var rasterizationWaiters: [RasterizationWaiter] = []
 
@@ -307,7 +310,9 @@ public actor ContentPreview {
         _ representation: PreviewRepresentation,
         profile: ResourceProfile, pdfPage: Int
     ) async -> PreviewOutcome {
-        guard await acquireRasterizationSlot() else { return .failed(.cancelled) }
+        if let failure = await acquireRasterizationSlot() {
+            return .failed(Task.isCancelled ? .cancelled : failure)
+        }
         defer { releaseRasterizationSlot() }
         guard !Task.isCancelled else { return .failed(.cancelled) }
 
@@ -342,45 +347,62 @@ public actor ContentPreview {
         )
     }
 
-    private func acquireRasterizationSlot() async -> Bool {
-        guard !Task.isCancelled else { return false }
+    private func acquireRasterizationSlot() async -> PreviewFailure? {
+        guard !Task.isCancelled else { return .cancelled }
         guard rasterizationActive else {
             rasterizationActive = true
-            return true
+            return nil
         }
         let id = UUID()
+        // A pathological PDF can keep Quartz busy after cancellation. Keep
+        // the native concurrency ceiling, but let subsequent requests reach
+        // the existing retryable renderer failure (01 §6; review PRV-1).
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        let timeout = Task {
+            do { try await Task.sleep(until: deadline, clock: .continuous) }
+            catch { return }
+            finishRasterizationWaiter(id, failure: .renderer)
+        }
+        defer { timeout.cancel() }
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 // Cancellation may precede registration. The actor cannot
                 // interleave waiter removal between this check and append.
                 guard !Task.isCancelled else {
-                    continuation.resume(returning: false)
+                    continuation.resume(returning: .cancelled)
                     return
                 }
                 rasterizationWaiters.append(RasterizationWaiter(
-                    id: id, continuation: continuation
+                    id: id, deadline: deadline, continuation: continuation
                 ))
             }
         } onCancel: {
-            Task { await self.cancelRasterizationWaiter(id) }
+            Task { await self.finishRasterizationWaiter(id, failure: .cancelled) }
         }
     }
 
-    private func cancelRasterizationWaiter(_ id: UUID) {
+    private func finishRasterizationWaiter(_ id: UUID, failure: PreviewFailure) {
         guard let index = rasterizationWaiters.firstIndex(where: { $0.id == id }) else {
             // A waiter already handed the slot owns it and releases it via
             // renderRasterOffActor's defer, even if it was just cancelled.
             return
         }
-        rasterizationWaiters.remove(at: index).continuation.resume(returning: false)
+        rasterizationWaiters.remove(at: index).continuation.resume(returning: failure)
     }
 
     private func releaseRasterizationSlot() {
-        guard !rasterizationWaiters.isEmpty else {
-            rasterizationActive = false
+        while !rasterizationWaiters.isEmpty {
+            let waiter = rasterizationWaiters.removeFirst()
+            // Recheck at handoff: actor scheduling must not let a delayed
+            // timeout admit native work after its acquisition deadline.
+            guard ContinuousClock.now < waiter.deadline else {
+                waiter.continuation.resume(returning: .renderer)
+                continue
+            }
+            waiter.continuation.resume(returning: nil)
             return
         }
-        rasterizationWaiters.removeFirst().continuation.resume(returning: true)
+        rasterizationActive = false
     }
 
     private static func renderRaster(

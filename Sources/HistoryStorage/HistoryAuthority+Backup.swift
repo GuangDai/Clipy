@@ -8,7 +8,9 @@ extension HistoryAuthority {
     /// metadata read through the final file copy. Capture, Gateway commits
     /// and blob cleanup all use this same actor, preserving one snapshot.
     internal func backup(
-        to directory: URL, didCopyBlob: @Sendable () -> Void = {}
+        to directory: URL,
+        synchronize: @Sendable (URL, Bool) throws -> Void = HistoryAuthority.synchronizeBackupItem,
+        didCopyBlob: @Sendable () -> Void = {}
     ) throws -> HistoryBackupReceipt {
         try Task.checkCancellation()
         guard directory.isFileURL, !directory.path.utf8.contains(0) else {
@@ -22,15 +24,24 @@ extension HistoryAuthority {
         guard !destinationPath.starts(with: ownedPath) else {
             throw HistoryBackupFailure.invalidDestination
         }
-        // mkdir is exclusive even for an existing empty directory or symlink.
-        // Only a successful creation gives this invocation cleanup ownership.
-        guard Darwin.mkdir(directory.path, mode_t(0o700)) == 0 else {
-            if errno == EEXIST { throw HistoryBackupFailure.destinationAlreadyExists }
+        var destinationStatus = stat()
+        guard Darwin.lstat(directory.path, &destinationStatus) != 0 else {
+            throw HistoryBackupFailure.destinationAlreadyExists
+        }
+        guard errno == ENOENT else { throw HistoryBackupFailure.destinationUnavailable }
+        let parent = directory.deletingLastPathComponent()
+        // V2-09 §6: the chosen name is published only after the complete
+        // tree is durable. A process interruption can leave only an explicitly
+        // incomplete sibling, never an apparently successful export.
+        let partial = parent.appendingPathComponent("Clipy Backup-\(UUID().uuidString).incomplete", isDirectory: true)
+        guard Darwin.mkdir(partial.path, mode_t(0o700)) == 0 else {
             throw HistoryBackupFailure.destinationUnavailable
         }
         let files = FileManager()
-        var complete = false
-        defer { if !complete { try? files.removeItem(at: directory) } }
+        var published = false
+        // This exact directory was exclusively created by this invocation.
+        // After publication, release cleanup ownership of the old path too.
+        defer { if !published { try? files.removeItem(at: partial) } }
         do {
             let state = try database.prepare("""
                 SELECT changePosition, retainedItemCount FROM history_state WHERE key = ?
@@ -44,8 +55,9 @@ extension HistoryAuthority {
                 retainedItemCount: count
             )
             state.finalize()
-            try database.backup(to: directory.appendingPathComponent("history.sqlite"))
-            let content = directory.appendingPathComponent("history.sqlite-content", isDirectory: true)
+            let metadata = partial.appendingPathComponent("history.sqlite")
+            try database.backup(to: metadata)
+            let content = partial.appendingPathComponent("history.sqlite-content", isDirectory: true)
             try files.createDirectory(at: content.appendingPathComponent("blobs"), withIntermediateDirectories: true)
             try files.createDirectory(at: content.appendingPathComponent("staging"), withIntermediateDirectories: false)
             var after: String?
@@ -83,6 +95,8 @@ extension HistoryAuthority {
                     }
                     try files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try files.copyItem(at: source, to: target)
+                    try synchronize(target, false)
+                    try synchronize(target.deletingLastPathComponent(), true)
                     // A synchronous test hook exercises cancellation after
                     // real files exist without introducing actor reentrancy.
                     didCopyBlob()
@@ -93,16 +107,50 @@ extension HistoryAuthority {
                 if visited < 64 { break }
             }
             try Task.checkCancellation()
-            complete = true
+            try synchronize(content.appendingPathComponent("blobs"), true)
+            try synchronize(content.appendingPathComponent("staging"), true)
+            try synchronize(content, true)
+            try synchronize(partial, true)
+            try synchronize(metadata, false)
+            try Task.checkCancellation()
+            // RENAME_EXCL atomically refuses any destination created while
+            // copying, including an empty directory or a dangling symlink.
+            guard Darwin.renamex_np(partial.path, directory.path, UInt32(RENAME_EXCL)) == 0 else {
+                if errno == EEXIST { throw HistoryBackupFailure.destinationAlreadyExists }
+                throw HistoryBackupFailure.writeFailed
+            }
+            published = true
+            try synchronize(parent, true)
+            // Flush the volume's buffered writes after persisting the rename.
+            // If this fails the complete destination remains available, but
+            // no durable-success receipt is returned. Cancellation after the
+            // publication point likewise cannot turn a complete copy partial.
+            try synchronize(directory.appendingPathComponent("history.sqlite"), false)
             return receipt
         } catch is CancellationError {
             throw CancellationError()
         } catch let failure as HistoryFailure {
             throw failure
+        } catch let failure as HistoryBackupFailure {
+            throw failure
         } catch let failure as SQLiteFailure where failure.primaryCode == SQLITE_CORRUPT || failure.primaryCode == SQLITE_NOTADB {
             throw HistoryFailure.persistence(.corruptStoredValue)
         } catch {
             throw HistoryBackupFailure.writeFailed
+        }
+    }
+
+    /// Mirror immutable source publication: fsync directories and files, then
+    /// F_FULLFSYNC files. Unsupported destinations fail before success is
+    /// acknowledged. Tests inject failures while still copying real files.
+    nonisolated internal static func synchronizeBackupItem(_ url: URL, _ isDirectory: Bool) throws {
+        let flags = O_CLOEXEC | (isDirectory ? O_RDONLY | O_DIRECTORY : O_RDWR)
+        let descriptor = Darwin.open(url.path, flags)
+        guard descriptor >= 0 else { throw HistoryBackupFailure.writeFailed }
+        defer { _ = Darwin.close(descriptor) }
+        guard Darwin.fsync(descriptor) == 0 else { throw HistoryBackupFailure.writeFailed }
+        if !isDirectory {
+            guard Darwin.fcntl(descriptor, F_FULLFSYNC) == 0 else { throw HistoryBackupFailure.writeFailed }
         }
     }
 

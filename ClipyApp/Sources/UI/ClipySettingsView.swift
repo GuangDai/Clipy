@@ -25,6 +25,7 @@ struct ClipySettingsView: View {
     private let popupPosition: Binding<PopupPositionMode>?
     private let storageLocation: StorageLocationSettings?
     private let localAutomation: LocalAutomationSettings?
+    private let interactionDefaults: UserDefaults
 
     /// One panel-owned configured snapshot and edit generation shared by the
     /// v1 count control and all V2 dimensions (DEC-RET-READ / Card 10A).
@@ -55,7 +56,8 @@ struct ClipySettingsView: View {
         summonShortcut: SummonShortcutSettings? = nil,
         popupPosition: Binding<PopupPositionMode>? = nil,
         storageLocation: StorageLocationSettings? = nil,
-        localAutomation: LocalAutomationSettings? = nil
+        localAutomation: LocalAutomationSettings? = nil,
+        interactionDefaults: UserDefaults = .standard
     ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
@@ -63,6 +65,7 @@ struct ClipySettingsView: View {
         self.popupPosition = popupPosition
         self.storageLocation = storageLocation
         self.localAutomation = localAutomation
+        self.interactionDefaults = interactionDefaults
     }
 
     @AppStorage("clipy.settings.selectedCategory")
@@ -70,7 +73,6 @@ struct ClipySettingsView: View {
 
     private var category: SettingsCategory {
         let saved = SettingsCategory(rawValue: savedCategory) ?? .general
-        if saved == .automation, localAutomation == nil { return .general }
         if saved == .maintenance, storageLocation == nil { return .general }
         return saved
     }
@@ -88,7 +90,8 @@ struct ClipySettingsView: View {
                 categoryRow(.general)
                 categoryRow(.appearance)
                 categoryRow(.retention)
-                if localAutomation != nil { categoryRow(.automation) }
+                categoryRow(.automation)
+                categoryRow(.interaction)
                 if storageLocation != nil { categoryRow(.maintenance) }
             }
             .listStyle(.sidebar)
@@ -147,7 +150,14 @@ struct ClipySettingsView: View {
                 retryRetentionConfiguration: { retentionConfigurationRefreshGeneration += 1 }
             )
         case .automation:
-            if let localAutomation { LocalAutomationSettingsView(settings: localAutomation) }
+            if let localAutomation {
+                LocalAutomationSettingsView(settings: localAutomation)
+            } else {
+                Form { Section { BuiltInAutomationSettingsView() } }
+                    .formStyle(.grouped)
+            }
+        case .interaction:
+            AdvancedInteractionSettingsView(defaults: interactionDefaults)
         case .maintenance:
             if let storageLocation {
                 MaintenanceSettingsView(history: viewState.history, location: storageLocation)
@@ -182,7 +192,7 @@ struct ClipySettingsView: View {
 
 
 private enum SettingsCategory: String, Hashable {
-    case general, appearance, retention, automation, maintenance
+    case general, appearance, retention, automation, interaction, maintenance
 
     var title: String {
         switch self {
@@ -190,6 +200,7 @@ private enum SettingsCategory: String, Hashable {
         case .appearance: SettingsCopy.text("Appearance")
         case .retention: RetentionSettingsCopy.tabTitle
         case .automation: LocalAutomationSettingsCopy.text("Automation")
+        case .interaction: AdvancedInteractionSettingsCopy.text("Interaction")
         case .maintenance: MaintenanceSettingsCopy.text("Maintenance")
         }
     }
@@ -199,7 +210,8 @@ private enum SettingsCategory: String, Hashable {
         case .general: "gearshape"
         case .appearance: "paintpalette"
         case .retention: "clock.arrow.circlepath"
-        case .automation: "terminal"
+        case .automation: "wand.and.stars"
+        case .interaction: "slider.horizontal.3"
         case .maintenance: "internaldrive"
         }
     }

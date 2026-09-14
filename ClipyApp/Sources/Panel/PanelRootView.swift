@@ -94,7 +94,7 @@ struct PanelRootView: View {
         // The panel window is transparent; the content carries the
         // material so the rounded corners (FloatingPanel's content layer)
         // show material, not the desktop behind it.
-        .background(.regularMaterial)
+        .background { NativePanelBackground() }
         .onAppear {
             // Republish the documented public OpenSettingsAction to the
             // delegate so the pure-AppKit status-item menu can open the

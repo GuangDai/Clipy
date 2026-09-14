@@ -1,4 +1,5 @@
-/// HistoryListView.swift — the panel's two-section list (Pinned, Recent)
+/// HistoryListView.swift — pinned items followed by recent history, separated
+/// by one unobtrusive rule when both groups are present.
 /// with single selection, last-row pagination prefetch, the panel keyboard
 /// surface, and the empty states. Rows render the view state's DISPLAYED
 /// lanes: History applies type/pinned filters before pagination. Row content
@@ -114,28 +115,27 @@ struct HistoryListView: View {
 
     private func list(now: Date) -> some View {
         List(selection: selection) {
-            if !viewState.displayedPinnedRows.isEmpty {
-                Section {
-                    ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
-                        rowContent(
-                            row,
-                            now: now,
-                            pinnedOrdinal: (row.pinnedPosition ?? 0) + 1
-                        )
-                    }
-                } header: {
-                    if showsSectionHeaders { Text(HistoryListCopy.text("Pinned")) }
-                }
+            ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
+                rowContent(
+                    row,
+                    now: now,
+                    pinnedOrdinal: (row.pinnedPosition ?? 0) + 1
+                )
+            }
+            if showsGroupSeparator {
+                Divider()
+                    .frame(height: PanelContentFit.groupSeparatorHeight)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .selectionDisabled()
+                    .disabled(true)
+                    .accessibilityHidden(true)
             }
             if !viewState.displayedUnpinnedRows.isEmpty || viewState.hasNextPage || viewState.isLoadingPage {
-                Section {
-                    ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
-                        rowContent(row, now: now, pinnedOrdinal: nil)
-                    }
-                    paginationControl
-                } header: {
-                    if showsSectionHeaders { Text(HistoryListCopy.text("Recent")) }
+                ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
+                    rowContent(row, now: now, pinnedOrdinal: nil)
                 }
+                paginationControl
             }
         }
         // macOS inset lists retain extra internal margins even when scroll
@@ -166,7 +166,7 @@ struct HistoryListView: View {
         .onPanelMouseMovement(onPointerMovement)
     }
 
-    private var showsSectionHeaders: Bool {
+    private var showsGroupSeparator: Bool {
         !viewState.displayedPinnedRows.isEmpty
             && (!viewState.displayedUnpinnedRows.isEmpty || viewState.hasNextPage || viewState.isLoadingPage)
     }

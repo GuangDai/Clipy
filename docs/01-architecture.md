@@ -364,7 +364,12 @@ real multi-display matrix.
   raster slot preserves bounded decode concurrency; the actor awaits that
   off-actor work, so a newer exact-text render can complete while an older
   native rasterization is pending. Cancellation remains a publication fence
-  and does not promise immediate native preemption.
+  and does not promise immediate native preemption. Waiting for an occupied
+  native slot has a two-second deadline; expiration returns the retryable
+  `PreviewFailure.renderer` and releases that waiter's retained source. A
+  timed-out or cancelled waiter never releases the active native slot. The
+  active draw must finish before another rasterization starts, so a slow PDF
+  cannot turn retries into unbounded native concurrency.
   History-pane priority is image, valid exact plain text, derived offline
   RTF/HTML text, exact `com.adobe.pdf`, then an inert copied reference.
   The concrete rich-text parsers consume only copied bytes and produce

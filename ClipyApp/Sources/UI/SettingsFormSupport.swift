@@ -101,6 +101,7 @@ struct SettingsFieldLayout: Layout {
 internal enum SettingStatus: Equatable {
     case success(String)
     case failure(String)
+    case cancelled(String)
 }
 
 /// Status text wraps to its full height in narrow settings panes; the icon
@@ -120,6 +121,11 @@ struct SettingStatusView: View {
             Label(message, systemImage: "exclamationmark.triangle")
                 .font(.callout)
                 .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+        case .cancelled(let message):
+            Label(message, systemImage: "stop.circle")
+                .font(.callout)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }

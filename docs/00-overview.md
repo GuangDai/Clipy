@@ -5,10 +5,13 @@
 > It replaces the SwiftData layout and full-store in-memory indexes described
 > in this historical v1 specification. There is no dual writer or migration.
 > History actions, immutable content revisions and coherence semantics remain;
-> SQLite read transactions now own search snapshots. Implementation and CI
-> validation of this replacement are in progress, not completed scale evidence.
+> SQLite read transactions now own search snapshots. The replacement is the
+> current implementation; this is not a claim of completed scale evidence.
 
-> **Status (2026-08-09):** consolidated design candidate; **executable-specification acceptance in progress** (Part VI §11). M1 (pure compile) is complete. M2 implementation through thumbnail is present; WS1–WS21 and the correctness jobs are green, while the dedicated D1–D19 suite and corrected WL8 performance proof remain open. Step 9 product wiring has not started. The current Maccy repository is product-behavior reference material only; it is not the implementation described here. This specification becomes implementation-authoritative ("executable v1 specification") only after all of Part VI §6–§9 and WS1–WS21 pass on the supported runner.
+> **Scope:** the original v1 semantics are extended by the owning V2 documents,
+> including retention, the durable HCR journal, Gateway/App Intents, local
+> automation and SQLite storage. Historical implementation/CI records describe
+> their cited revisions, not the current worktree's verification status.
 
 ## 1. Purpose
 
@@ -29,19 +32,23 @@ The repository outside `docs/` may inform product behavior, terminology, and kno
   source selection, fixed resource profiles, and bounded inert text/raster or
   copied-address metadata; it never reads History or owns UI lifecycle/thumbnail semantics.
 - `PasteboardAdapter`: AppKit pasteboard values to and from `HistoryCore` values. It never constructs Domain state or fingerprints.
-- `PresentationUI`: SwiftUI state built from `HistoryCore` DTOs plus bounded
-  inert artifacts from ContentPreview; it owns caller lifecycle, not decoding.
-- `ClipyApp`: the sole composition root and the only place that coordinates History with outbound pasteboard writes.
+- `ClipboardFormats`: exact format identifiers and declared text-codec facts.
+- `ClipyCLIContract`: package-only Foundation wire values and codecs.
+- `LocalAutomation`: in-process service and local client transport using the
+  existing authenticated History/Gateway operations.
+- `ClipyApp`: the sole composition root, native AppKit/SwiftUI UI under
+  `ClipyApp/Sources/UI`, and outbound paste orchestration. UI state uses
+  History DTOs and bounded preview artifacts; there is no PresentationUI target.
+- Configurable count, age, storage and revision retention, the durable HCR
+  journal, and connection-bound Gateway/App Intents operations, as specified
+  in the owning V2 documents and [local automation guide](local-automation.md).
 - One persistent source of truth, no semantic read cache, and one transient thumbnail single-flight coordinator.
 
 ### Excluded
 
 - Enrichment and OCR.
-- ExternalGateway, external connections, grants, App Intents, and request audit records.
-- Durable History Change Record journal and reconnect cursor.
+- A public reconnect/replay cursor API.
 - Shared or disk materialization caches, collection caches, generic purpose/source-stamp systems, and five-store materialization frameworks.
-- Automatic revision retention.
-- Age- or byte-policy history retention. v1 uses an item-count policy plus hard safety bounds.
 - Migration from the current Maccy schema. This is a greenfield schema.
 
 Part VI records possible future grafts and the evidence required before introducing them. Excluded concepts do not reserve public protocols, schema columns, or placeholder types in v1.
@@ -49,9 +56,9 @@ Part VI records possible future grafts and the evidence required before introduc
 ## 3. Load-bearing decisions
 
 1. **Caller-first deep interface.** Callers express a History Action or request a purpose-specific value. They do not submit Domain transitions, construct Working Sets, or observe storage events.
-2. **Stable History Item identity.** `HistoryItemID` is independent of SwiftData identity and content hashes. Copy Coalescing updates the winning item in place.
-3. **Single write authority.** One actor serializes every mutation and is the only component allowed to create and use writable SwiftData contexts. A context and every `@Model` instance stay inside one actor-isolated operation.
-4. **No model leakage.** Only immutable `Sendable` values cross module or actor boundaries. `@Model`, `ModelContext`, and `PersistentIdentifier` remain internal to `HistoryStorage`.
+2. **Stable History Item identity.** `HistoryItemID` is independent of storage row identity and content hashes. Copy Coalescing updates the winning item in place.
+3. **Single write authority.** HistoryAuthority owns the writable SQLite connection and immutable blob publication. History, accounting, HCR, Gateway audit and ChangePosition commit atomically.
+4. **No model leakage.** Only immutable `Sendable` values cross module or actor boundaries. SQLite connections, statements and mutable file handles stay with their owner.
 5. **Immutable content lineage.** Canonical Content is never overwritten. A meaningful replace or revert appends a complete new Content Revision; earlier revisions remain unchanged.
 6. **Precise coherence tokens.** `ContentVersion` advances only when Effective Content bytes change. `ChangePosition` advances exactly once for every non-empty History Commit.
 7. **Two-stage deduplication.** xxh3 signature entries generate a complete candidate set; byte-exact comparison makes the decision. A fingerprint is evidence, never identity.
@@ -59,7 +66,7 @@ Part VI records possible future grafts and the evidence required before introduc
 9. **Strong mutation plan.** Domain planners return ordered, typed mutations carrying their semantic payload. Storage never infers Copy Coalescing, pin shifts, revision effects, or retirement from an underspecified change tag.
 10. **Observation returns state, not events.** The public observation API produces authoritative snapshots. A process-local invalidation signal is hidden inside `HistoryStorage`, may coalesce, and is not a durable History Change Record.
 11. **No cache-dependent semantics.** A read result is derived from durable state. Thumbnail single-flight only shares concurrent work; it does not retain a completed semantic cache.
-12. **Claims require proof.** This design does not claim to compile, pass CI, or exhibit a particular SwiftData faulting behavior until the Part VI scaffold demonstrates it.
+12. **Claims require proof.** Build, runtime and performance claims require evidence covering the implementation and workload being claimed; historical CI does not verify a later worktree.
 
 ## 4. Parts and ownership
 
@@ -67,7 +74,7 @@ Part VI records possible future grafts and the evidence required before introduc
 2. [Domain Model](02-domain.md): content lineage, state, action-specific complete facts, pure planning, deduplication, retention, pin order, and invariants.
 3. Caller Interface (Part III, split for size): [A — identity, protocol, actions, receipts, requests](03a-instruction-set.md) + [B — read DTOs, detail/paste/thumbnail DTOs, typed failures, guarantees, caller examples](03b-instruction-set.md).
 4. [Read and Observation Coherence](04-coherence.md): snapshot semantics, read-after-commit, race-free observation, pagination, search, and thumbnail single-flight.
-5. [Authority Commit Kernel](05-authority-kernel.md): SwiftData schema, codecs, context ownership, preparation, fact loading, transaction flow, index lifecycle, and read projection.
+5. [Authority Commit Kernel](05-authority-kernel.md): SQLite/blob storage, validation, connection ownership, preparation, fact loading, transaction flow, indexed queries, and read projection.
 6. [Cross-cutting Gates and Deferred Grafts](06-cross-cutting.md): hard limits, deferred work, scaffold proofs, walking skeleton, and the definition of design completion.
 
 The **implementation roadmap** lives at [`roadmap/`](roadmap/README.md): a traceable map covering all 8 Part I §2 design modules, ordered by Part VI §5. It restates the spec for navigation only and owns no new semantics (except explicitly-marked build-ordering decisions).
@@ -77,5 +84,5 @@ The **implementation roadmap** lives at [`roadmap/`](roadmap/README.md): a trace
 - These files (Parts I–VI, with Part III split across `03a` and `03b` for size) are one specification; no Part may silently redefine a type owned by another Part.
 - Part III owns the public surface. Part II owns package-only semantic planning. Part V owns persistence and version minting.
 - When a platform behavior is not guaranteed by documented API, the specification states the required outcome and assigns an implementation-time proof instead of inventing an API.
-- Any broader project glossary that exists outside this specification may contain post-v1 terms. A glossary entry does not place that feature in v1. In particular, v1 has no durable History Change Record (an explicitly excluded post-v1 concept).
+- The owning V2 documents extend the original v1 scope. HCR is implemented by V2-03; its presence does not imply a public reconnect/replay API.
 - There are no intentionally unresolved semantic choices in v1. Items that require platform or performance evidence are explicit Part VI proof gates, not alternate designs.

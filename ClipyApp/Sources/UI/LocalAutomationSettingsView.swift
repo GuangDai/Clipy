@@ -69,26 +69,29 @@ struct LocalAutomationSettingsView: View {
 
     var body: some View {
         Form {
-            accessSection
-            commandLineSection
-            if model.state?.enabled == true {
-                readingPermissionsSection
-                writingPermissionsSection
-            }
-            if model.failed {
-                Section {
-                    Label(LocalAutomationSettingsCopy.text("Could not update Local Automation. Retry or revoke access."),
-                          systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.secondary)
-                    Button(LocalAutomationSettingsCopy.text("Retry")) {
-                        Task { await model.load() }
+            Section { BuiltInAutomationSettingsView() }
+            Group {
+                accessSection
+                commandLineSection
+                if model.state?.enabled == true {
+                    readingPermissionsSection
+                    writingPermissionsSection
+                }
+                if model.failed {
+                    Section {
+                        Label(LocalAutomationSettingsCopy.text("Could not update Local Automation. Retry or revoke access."),
+                              systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.secondary)
+                        Button(LocalAutomationSettingsCopy.text("Retry")) {
+                            Task { await model.load() }
+                        }
+                        .accessibilityIdentifier("clipy.settings.automation.retry")
                     }
-                    .accessibilityIdentifier("clipy.settings.automation.retry")
                 }
             }
+            .disabled(model.isWorking)
         }
         .formStyle(.grouped)
-        .disabled(model.isWorking)
         .task { await model.load() }
     }
 

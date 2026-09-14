@@ -160,6 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let accessibilityAnnouncement: AccessibilityAnnouncement
     private let summonShortcutDefaults: UserDefaults
+    let interactionDefaults: UserDefaults
     private let summonShortcutRegistrationFactory:
         SummonShortcutController.RegistrationFactory?
     /// Exact persistent locator this app process attempts to open. Production
@@ -181,12 +182,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             operations: .live
         )
         summonShortcutDefaults = .standard
+        interactionDefaults = .standard
         summonShortcutRegistrationFactory = nil
         storeURL = AppComposition.defaultStoreURL
         revealStoreLocationOperation = { directory in
             NSWorkspace.shared.activateFileViewerSelecting([directory])
         }
         super.init()
+        reloadNativeAppearance()
+        reloadInteractionSettings()
         installPanelAppearanceObservation()
         previewState.onFloatingPreviewTransition = { [weak self] transition in
             self?.handleFloatingPreviewTransition(transition)
@@ -200,6 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         accessibilityAnnouncementOperations:
             AccessibilityAnnouncementOperations,
         summonShortcutDefaults: UserDefaults = .standard,
+        interactionDefaults: UserDefaults = .standard,
         summonShortcutRegistrationFactory:
             SummonShortcutController.RegistrationFactory? = nil,
         storeURL: URL = AppComposition.defaultStoreURL,
@@ -212,11 +217,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             operations: accessibilityAnnouncementOperations
         )
         self.summonShortcutDefaults = summonShortcutDefaults
+        self.interactionDefaults = interactionDefaults
         self.summonShortcutRegistrationFactory =
             summonShortcutRegistrationFactory
         self.storeURL = storeURL
         self.revealStoreLocationOperation = revealStoreLocationOperation
         super.init()
+        reloadNativeAppearance()
+        reloadInteractionSettings()
         installPanelAppearanceObservation()
         previewState.onFloatingPreviewTransition = { [weak self] transition in
             self?.handleFloatingPreviewTransition(transition)
@@ -317,6 +325,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var panelAppearance = PanelAppearanceSettings.load(
         from: .standard
     )
+
+    private(set) var interactionSettings = AdvancedInteractionSettings()
+    private var appliedNativeAppearance: NativeAppearance?
 
     /// The footer keep-open pin. Session state, not a persisted preference:
     /// while active, FloatingPanel skips ONLY its focus-loss close; every
@@ -430,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !Self.isRunningTests || isRunningUITest else { return }
+        reloadNativeAppearance()
 
         // App Intents can be invoked immediately after process launch. Install
         // its framework-owned dependency provider before the did-finish store,
@@ -698,6 +710,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// panel's close deactivates it — browsing state is fresh per summon).
     private func openPanel(at mode: PopupPositionMode) {
         guard workspaceActivity.permitsProductActivity else { return }
+        reloadInteractionSettings()
+        if !interactionSettings.remembersSearch {
+            composition?.viewState.clearSearch()
+        }
         if panel == nil {
             panel = FloatingPanel(
                 rootView: PanelRootView(appDelegate: self),
@@ -1118,6 +1134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         opened.installPanelSurface(panelSurfaceState)
         self.panelSurfaceState = panelSurfaceState
+        panelSurfaceState.selectsOnHover = interactionSettings.selectsOnHover
         panelSurfaceState.respondToMemoryPressure(displayMemoryPressure)
         // Paste ⇒ close the panel (Maccy's paste-dismiss); the panel never
         // activates the app, so the paste target keeps focus.
@@ -1391,6 +1408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.reloadPanelAppearance()
+                self?.reloadInteractionSettings()
             }
         }
     }
@@ -1400,6 +1418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// unrelated writes (panel size, position, retention) from
     /// invalidating the panel content.
     private func reloadPanelAppearance() {
+        reloadNativeAppearance()
         let gap = PanelGeometry.persistedFloatingPreviewGap(from: .standard)
         if configuredPreviewGap != gap {
             configuredPreviewGap = gap
@@ -1408,6 +1427,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let loaded = PanelAppearanceSettings.load(from: .standard)
         guard loaded != panelAppearance else { return }
         panelAppearance = loaded
+    }
+
+    private func reloadNativeAppearance() {
+        let loaded = NativeAppearance.load(from: .standard)
+        guard let application = NSApp, loaded != appliedNativeAppearance else { return }
+        appliedNativeAppearance = loaded
+        application.appearance = loaded.appKitAppearance
+    }
+
+    private func reloadInteractionSettings() {
+        let loaded = AdvancedInteractionSettings.load(from: interactionDefaults)
+        if interactionSettings != loaded { interactionSettings = loaded }
+        previewState.applyInteractionSettings(loaded)
+        panelSurfaceState?.selectsOnHover = loaded.selectsOnHover
     }
 
     /// Production launch and hosted integration tests enter the same app-owned

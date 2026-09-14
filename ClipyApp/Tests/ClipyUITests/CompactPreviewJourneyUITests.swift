@@ -86,10 +86,21 @@ final class CompactPreviewJourneyUITests: XCTestCase {
                 && preview.frame.height > shortHeight + 100
                 && preview.frame.height <= 423 && panel.frame.height < 140
         }, app.debugDescription)
+        // Pinning in a mixed list adds only one 9pt divider. Neither group
+        // consumes a heading row or clips the other history item.
+        let twoRowHeight = panel.frame.height
+        pin.click()
+        XCTAssertTrue(waitUntil {
+            pin.label == "Unpin" && abs(panel.frame.height - twoRowHeight - 9) < 3
+        }, app.debugDescription)
+        XCTAssertFalse(panel.staticTexts["Pinned"].exists)
+        XCTAssertFalse(panel.staticTexts["Recent"].exists)
         let longImage = XCTAttachment(screenshot: app.screenshot())
         longImage.name = "Compact history with scrolling preview"
         longImage.lifetime = .keepAlways
         add(longImage)
+        pin.click()
+        XCTAssertTrue(waitUntil { pin.label == "Pin" })
 
         let shortRow = panel.buttons.matching(NSPredicate(
             format: "identifier BEGINSWITH %@ AND label CONTAINS %@",

@@ -227,8 +227,41 @@ internal final class SQLiteDatabase {
 
     /// V2-09 §6: item/revision/reference/aggregate/Gateway writes and the one
     /// ChangePosition advance commit together before a receipt is published.
-    internal func writeTransaction<T>(_ body: () throws -> T) throws -> T {
-        try transaction(begin: "BEGIN IMMEDIATE", body)
+    internal func writeTransaction<T>(
+        checkingCancellation: Bool = false, _ body: () throws -> T
+    ) throws -> T {
+        // Gateway failure/cancellation audit still has to commit after its
+        // caller is cancelled. Only the History mutation interval opts in.
+        guard checkingCancellation else { return try transaction(begin: "BEGIN IMMEDIATE", body) }
+        try Task.checkCancellation()
+        let handle = try openHandle()
+        // V2-02 §4.4: a cascading retirement can spend a long interval in
+        // one sqlite3_step. Check the owning task from SQLite itself, with
+        // no cross-thread connection access or second cancellation writer.
+        sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
+        defer {
+            if let handle = self.handle { sqlite3_progress_handler(handle, 0, nil, nil) }
+        }
+        do {
+            return try transaction(begin: "BEGIN IMMEDIATE") {
+                do {
+                    let result = try body()
+                    try Task.checkCancellation()
+                    // COMMIT is the point of no return. Cancellation after
+                    // this boundary must not disguise a committed success.
+                    sqlite3_progress_handler(handle, 0, nil, nil)
+                    return result
+                } catch {
+                    // In particular, cancellation must never interrupt the
+                    // rollback that makes this connection safe to reuse.
+                    sqlite3_progress_handler(handle, 0, nil, nil)
+                    throw error
+                }
+            }
+        } catch let failure as SQLiteFailure where failure.primaryCode == SQLITE_INTERRUPT {
+            try Task.checkCancellation()
+            throw failure
+        }
     }
 
     private func transaction<T>(begin: String, _ body: () throws -> T) throws -> T {

@@ -264,17 +264,17 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(retentionTab.waitForExistence(timeout: 5))
         retentionTab.click()
 
-        let ageLimit = app.switches[
+        let ageLimit = app.checkBoxes[
             "clipy.settings.retention.age-enabled"
         ]
         XCTAssertTrue(ageLimit.waitForExistence(timeout: 5))
         let settingsWindow = app.windows.containing(
-            .switch,
+            .checkBox,
             identifier: "clipy.settings.retention.age-enabled"
         ).firstMatch
         XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
         let retentionScrollView = settingsWindow.scrollViews.containing(
-            .switch, identifier: "clipy.settings.retention.age-enabled"
+            .checkBox, identifier: "clipy.settings.retention.age-enabled"
         ).firstMatch
         XCTAssertTrue(retentionScrollView.waitForExistence(timeout: 5))
         guard scrollUntilFullyVisible(

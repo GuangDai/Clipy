@@ -177,6 +177,27 @@ internal enum RetentionSettingsCopy {
 
     // MARK: Range hint and failures
 
+    internal static let noLimit = plain("settings.retention.no-limit", "No limit")
+    internal static let applying = plain("settings.retention.applying", "Applying limits…")
+    internal static let cancelling = plain("settings.retention.cancelling", "Cancelling…")
+    internal static let countApplyCancelled = plain(
+        "settings.retention.count-cancelled",
+        "Cancelled. The item limit was not changed and no items were removed by this apply."
+    )
+    internal static let policyApplyCancelled = plain(
+        "settings.retention.policies-cancelled",
+        "Cancelled. These cleanup limits were not changed and no items or revisions were removed by this apply."
+    )
+    internal static let historyChanged = plain(
+        "settings.retention.history-changed",
+        "History changed while preparing cleanup. Nothing was applied. Try applying again."
+    )
+
+    internal static func countFailureMessage(for failure: HistoryFailure) -> String {
+        if case .snapshotExpired = failure { return historyChanged }
+        return FailurePresentation.message(for: failure)
+    }
+
     /// V2-07 §10.3: ranges use the same locale-aware digits and grouping
     /// as counts in receipt feedback.
     internal static func rangeHint(
@@ -237,6 +258,8 @@ internal enum RetentionSettingsCopy {
         policies: HistoryRetentionPolicies
     ) -> String {
         switch failure {
+        case .snapshotExpired:
+            return historyChanged
         case .invalidInput(.invalidRetentionPolicy):
             switch (policies.storage != nil, policies.revisions?.maxRevisionBytesPerItem != nil) {
             case (true, true): return combinedBudgetUnsatisfiable

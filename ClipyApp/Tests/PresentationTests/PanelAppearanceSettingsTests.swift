@@ -112,7 +112,7 @@ struct PanelAppearanceSettingsTests {
         #expect(size.height == PanelGeometry.height)
     }
 
-    @Test("persistSize stores clamped values that persistedSize reads back")
+    @Test("persistSize preserves the previous usable ceiling after a collapsed resize")
     func persistSizeRoundTripsClamped() throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -125,7 +125,7 @@ struct PanelAppearanceSettingsTests {
         PanelGeometry.persistSize(contentWidth: 10_000, height: 10, to: defaults)
         size = PanelGeometry.persistedSize(from: defaults)
         #expect(size.contentWidth == 10_000)
-        #expect(size.height == 10)
+        #expect(size.height == 700)
     }
 
     @Test("out-of-bounds or invalid persisted values clamp or default on load")
@@ -137,12 +137,38 @@ struct PanelAppearanceSettingsTests {
         defaults.set(10.0, forKey: PanelGeometry.panelHeightDefaultsKey)
         var size = PanelGeometry.persistedSize(from: defaults)
         #expect(size.contentWidth == 10_000)
-        #expect(size.height == 10)
+        #expect(size.height == PanelGeometry.height)
 
         defaults.set("wide", forKey: PanelGeometry.panelContentWidthDefaultsKey)
         size = PanelGeometry.persistedSize(from: defaults)
         #expect(size.contentWidth == PanelGeometry.contentWidth)
-        #expect(size.height == 10)
+        #expect(size.height == PanelGeometry.height)
+    }
+
+    @Test("collapsed stored dimensions recover without imposing a content-fit floor",
+          arguments: [0.0, 0.001, 1.0, 10.0, -1.0])
+    func collapsedStoredDimensionsRecover(value: Double) throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(value, forKey: PanelGeometry.panelContentWidthDefaultsKey)
+        defaults.set(value, forKey: PanelGeometry.panelHeightDefaultsKey)
+
+        let size = PanelGeometry.persistedSize(from: defaults)
+        #expect(size.contentWidth == PanelGeometry.contentWidth)
+        #expect(size.height == PanelGeometry.height)
+        #expect(PanelContentFit.clampedHeight(1, ceiling: size.height) == 1)
+        #expect(PanelContentFit.clampedHeight(200, ceiling: size.height) == 200)
+    }
+
+    @Test("a collapsed width preserves its preference while a valid height saves")
+    func collapsedWidthDoesNotDiscardValidHeight() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        PanelGeometry.persistSize(contentWidth: 500, height: 700, to: defaults)
+        PanelGeometry.persistSize(contentWidth: 0.001, height: 40, to: defaults)
+        let size = PanelGeometry.persistedSize(from: defaults)
+        #expect(size.contentWidth == 500)
+        #expect(size.height == 40)
     }
 
     /// One fresh, empty UserDefaults suite per test — the same isolation
