@@ -41,6 +41,22 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 20), "The real multi-item row must be captured before dragging")
         XCTAssertTrue(row.isHittable)
 
+        // The receiver is an ordinary application that activates its window
+        // once before accepting a drag. Keep Clipy's source visible across
+        // that real focus transfer using the same public control as a user.
+        let moreActions = app.descendants(matching: .any)["clipy.panel.more-actions"]
+        XCTAssertTrue(moreActions.waitForExistence(timeout: 5))
+        moreActions.click()
+        let keepOpen = app.menuItems["Keep Panel Open"]
+        XCTAssertTrue(keepOpen.waitForExistence(timeout: 5), app.debugDescription)
+        keepOpen.click()
+        let sourcePinned = NSPredicate { _, _ in
+            moreActions.value as? String == "Keep Panel Open: On"
+        }
+        XCTAssertEqual(XCTWaiter.wait(for: [
+            XCTNSPredicateExpectation(predicate: sourcePinned, object: nil)
+        ], timeout: 5), .completed, app.debugDescription)
+
         // Establish the source's active/hovered layout before creating the
         // cooperating receiver. A fixed corner can lie under Clipy's persisted
         // status-bar-level panel, and orderFrontRegardless only orders within
@@ -103,8 +119,10 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         XCTAssertEqual(readiness, .completed, "Receiver ready handshake missing; running=\(receiver.isRunning); \(readyLog)")
         XCTAssertTrue(receiver.isRunning)
         let ready = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: readyURL)) as? [String: Any])
-        XCTAssertEqual((ready["activationPolicy"] as? NSNumber)?.intValue, NSApplication.ActivationPolicy.accessory.rawValue)
+        XCTAssertEqual((ready["activationPolicy"] as? NSNumber)?.intValue, NSApplication.ActivationPolicy.regular.rawValue)
         XCTAssertEqual(ready["isRunning"] as? Bool, true)
+        XCTAssertEqual(ready["isActive"] as? Bool, true)
+        XCTAssertEqual(ready["isKeyWindow"] as? Bool, true)
         let receiverWindowNumber = try XCTUnwrap((ready["windowNumber"] as? NSNumber)?.intValue)
         // AppKit's window query requires an initialized WindowServer connection.
         // The independent receiver owns it; XCTRunner does not initialize NSApp.

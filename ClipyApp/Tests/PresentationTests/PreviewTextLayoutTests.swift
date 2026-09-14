@@ -1,10 +1,12 @@
 import AppKit
 import ContentPreview
+import Darwin
 import SwiftUI
 @testable import ClipyApp
 import Testing
 
 @MainActor
+@Suite(.serialized)
 struct PreviewTextLayoutTests {
     @Test func nativeSegmentKeepsSelectableBytesAndRemeasuresWrapping() throws {
         let source = String(repeating: "Café e\u{301} selectable words 中文。 ", count: 12)
@@ -126,6 +128,7 @@ struct PreviewTextLayoutTests {
             #else
             let preview = PreviewTextBody(segments: text.displaySegments, maximumHeight: 480)
             #endif
+            let cpuStart = try threadCPUTime()
             let start = ContinuousClock.now
             // The actual floating pane replaces its view identity on item
             // changes. Include that construction and retirement work here.
@@ -133,7 +136,8 @@ struct PreviewTextLayoutTests {
             host.layoutSubtreeIfNeeded()
             host.displayIfNeeded()
             let elapsed = start.duration(to: .now)
-            print("Preview initial layout: \(elapsed), UTF-16 units: \(source.utf16.count)")
+            let cpuElapsed = try threadCPUTime() - cpuStart
+            print("Preview initial layout: wall: \(elapsed), main-thread CPU: \(cpuElapsed), UTF-16 units: \(source.utf16.count)")
             #if DEBUG
             print("[DEBUG-preview-layout] materialized=\(materialized.count) total=\(text.displaySegments.count) calls=\(materializationCalls)")
             #endif
@@ -143,5 +147,11 @@ struct PreviewTextLayoutTests {
             let memory = try await ProcessMemoryReader().read()
             print("Preview process memory: resident \(memory.residentBytes), peak \(memory.peakResidentBytes), footprint \(memory.footprintBytes)")
         }
+    }
+
+    private func threadCPUTime() throws -> Duration {
+        var value = timespec()
+        try #require(clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value) == 0)
+        return .seconds(value.tv_sec) + .nanoseconds(value.tv_nsec)
     }
 }

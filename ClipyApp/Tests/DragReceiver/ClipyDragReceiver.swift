@@ -17,8 +17,8 @@ struct ClipyDragReceiver {
             exit(2)
         }
         let application = NSApplication.shared
-        guard application.setActivationPolicy(.accessory) else {
-            FileHandle.standardError.write(Data("receiver: accessory activation policy refused\n".utf8))
+        guard application.setActivationPolicy(.regular) else {
+            FileHandle.standardError.write(Data("receiver: regular activation policy refused\n".utf8))
             exit(3)
         }
         let delegate = DragReceiverDelegate(
@@ -34,7 +34,7 @@ struct ClipyDragReceiver {
 private final class DragReceiverDelegate: NSObject, NSApplicationDelegate {
     private let frame: NSRect
     private let outputDirectory: URL
-    private var window: NSPanel?
+    private var window: NSWindow?
     private var readinessTimer: Timer?
     private var didPublishWindowReadiness = false
     private var lastTargetHit: Int?
@@ -51,18 +51,25 @@ private final class DragReceiverDelegate: NSObject, NSApplicationDelegate {
             resultURL: outputDirectory.appendingPathComponent("received.json"),
             pointerReadinessURL: outputDirectory.appendingPathComponent("hovered.json")
         )
-        let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
+        let panel = NSWindow(contentRect: frame, styleMask: [.titled, .closable],
                             backing: .buffered, defer: false)
+        panel.title = "Clipy native drag receiver"
+        // `frame` is the free outer rectangle chosen by the source journey.
+        // Keep the title bar inside it and publish the content's actual drop
+        // rectangle below; a titled window has different frame/content sizes.
+        panel.setFrame(frame, display: false)
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
-        panel.level = .statusBar
         panel.isOpaque = true
         panel.backgroundColor = .windowBackgroundColor
         panel.contentView = receiver
+        receiver.autoresizingMask = [.width, .height]
         panel.acceptsMouseMovedEvents = true
         receiver.registerForDraggedTypes([.string, .init("com.clipy.tests.drag-opaque")])
         window = panel
-        panel.orderFrontRegardless()
+        panel.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate()
+        FileHandle.standardError.write(Data("receiver: requested regular application activation\n".utf8))
         // Readiness is a WindowServer fact after the event loop processes its
         // display work, not merely an isVisible flag from orderFront.
         let timer = Timer(timeInterval: 0.02, target: self, selector: #selector(publishReadiness),
@@ -71,13 +78,18 @@ private final class DragReceiverDelegate: NSObject, NSApplicationDelegate {
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        FileHandle.standardError.write(Data("receiver: application became active\n".utf8))
+    }
+
     @objc private func publishReadiness() {
         guard let window, NSApplication.shared.isRunning,
-              NSApplication.shared.activationPolicy() == .accessory,
+              NSApplication.shared.activationPolicy() == .regular,
               window.isVisible,
               let receiver = window.contentView as? NativeClipboardDropView,
               receiver.isTrackingPointer else { return }
-        let center = NSPoint(x: window.frame.midX, y: window.frame.midY)
+        let contentFrame = window.convertToScreen(receiver.convert(receiver.bounds, to: nil))
+        let center = NSPoint(x: contentFrame.midX, y: contentFrame.midY)
         let hitWindowNumber = NSWindow.windowNumber(at: center, belowWindowWithWindowNumber: 0)
         if lastTargetHit != hitWindowNumber {
             lastTargetHit = hitWindowNumber
@@ -86,13 +98,19 @@ private final class DragReceiverDelegate: NSObject, NSApplicationDelegate {
             ))
         }
         guard hitWindowNumber == window.windowNumber, !didPublishWindowReadiness else { return }
+        // Exercise an ordinary destination application's real activation and
+        // key-window lifecycle once. `activate()` is a request, so the ready
+        // receipt joins the resulting public state rather than assuming it.
+        guard NSApplication.shared.isActive, window.isKeyWindow else { return }
         let ready = ReceiverReadiness(
             windowNumber: window.windowNumber,
             hitWindowNumber: hitWindowNumber,
-            frame: ReceiverFrame(x: Double(window.frame.minX), y: Double(window.frame.minY),
-                                 width: Double(window.frame.width), height: Double(window.frame.height)),
+            frame: ReceiverFrame(x: Double(contentFrame.minX), y: Double(contentFrame.minY),
+                                 width: Double(contentFrame.width), height: Double(contentFrame.height)),
             activationPolicy: NSApplication.shared.activationPolicy().rawValue,
-            isRunning: NSApplication.shared.isRunning
+            isRunning: NSApplication.shared.isRunning,
+            isActive: NSApplication.shared.isActive,
+            isKeyWindow: window.isKeyWindow
         )
         do {
             try JSONEncoder().encode(ready).write(
@@ -225,6 +243,8 @@ private struct ReceiverReadiness: Codable, Sendable {
     let frame: ReceiverFrame
     let activationPolicy: Int
     let isRunning: Bool
+    let isActive: Bool
+    let isKeyWindow: Bool
 }
 
 private struct ReceiverPointerReadiness: Codable, Sendable {
