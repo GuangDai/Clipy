@@ -121,11 +121,13 @@ struct ClipySettingsView: View {
         Button {
             savedCategory = item.rawValue
         } label: {
-            Label(item.title, systemImage: item.symbol)
+            Label(item == .keyboard ? KeyboardShortcutsCopy.text("Shortcuts") : item.title,
+                  systemImage: item.symbol)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(item.title)
         .tag(item)
         .accessibilityIdentifier("clipy.settings.category." + item.rawValue)
         .accessibilityAddTraits(category == item ? [.isSelected] : [])

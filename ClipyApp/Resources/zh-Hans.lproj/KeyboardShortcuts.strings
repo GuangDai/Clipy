@@ -1,4 +1,5 @@
 "Keyboard Shortcuts" = "快捷键";
+"Shortcuts" = "快捷键";
 "Already assigned to Show or hide history. Choose another shortcut, or change the global shortcut first." = "该快捷键已分配给「显示或隐藏历史面板」。请换一个快捷键，或先修改全局快捷键。";
 "Restore defaults" = "恢复默认";
 "Restore the default shortcuts in this group" = "恢复本组快捷键的默认值";
