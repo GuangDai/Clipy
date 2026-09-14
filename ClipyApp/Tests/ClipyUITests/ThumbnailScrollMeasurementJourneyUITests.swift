@@ -95,12 +95,15 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         )
         XCTAssertEqual(rows.count, 0, diagnostic(app, context: "empty capture baseline"))
 
-        // —— Seeding: 60 mutually distinct real PNG captures. The unpinned
-        //    lane is newest-first (lastCopiedAt descending), so every capture
-        //    surfaces as exactly one NEW row identifier in the first page —
-        //    the uniform completion signal both below and above the 50-row
-        //    page boundary, where `rows.count` saturates at the page limit.
-        let seededIdentifiers = try seedThumbnailItems(Self.itemCount, app: app, rows: rows)
+        // A left-side preview can also contain a scroll view. This query
+        // identifies History specifically, once the first PNG creates its List.
+        let scrollView = panel.scrollViews.containing(.outline, identifier: nil).firstMatch
+        // —— Seeding: maintain the real History viewport at the newest end
+        //    while waiting for each distinct capture. Native List may preserve
+        //    an old scroll anchor when a new row is prepended.
+        let seededIdentifiers = try seedThumbnailItems(
+            Self.itemCount, app: app, rows: rows, scrollView: scrollView
+        )
         let oldestIdentifier = try XCTUnwrap(seededIdentifiers.first)
         let newestIdentifier = try XCTUnwrap(seededIdentifiers.last)
         let expectedRefs = Set(seededIdentifiers.map {
@@ -110,9 +113,6 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
 
         // —— Scrolling: use the native History scrollbar for real endpoint
         //    navigation, including after the second page extends the list.
-        // A left-side text preview also has a scroll view. Select the one
-        // containing the History outline, independent of preview placement.
-        let scrollView = panel.scrollViews.containing(.outline, identifier: nil).firstMatch
         XCTAssertTrue(
             scrollView.waitForExistence(timeout: 10),
             diagnostic(app, context: "history list scroll view")
@@ -266,22 +266,22 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
     // MARK: - Seeding
 
     /// Writes one distinct PNG per index to the general pasteboard and waits
-    /// for its capture to surface as a new first-page row. The unpinned lane
-    /// is newest-first (lastCopiedAt descending), so every capture replaces
-    /// the FIRST row's identifier — one bounded-element read per poll. The
-    /// previous poll snapshotted every materialized row
-    /// (`allElementsBoundByIndex` over 50+ rows) per evaluation: an O(n) AX
-    /// round-trip each, slow enough on a loaded CI runner that a mid-seeding
-    /// capture outlasted its timeout (observed: capture 46/60 stall).
+    /// for a never-before-seen row at the actual top of the History viewport.
+    /// AX's first materialized row is not a capture acknowledgement while
+    /// native List retains an old scroll anchor (observed at capture 59/60).
+    /// Navigation within the same 20-second wait repairs that precondition;
+    /// it never rewrites the PNG or retries capture. Every poll reads only a
+    /// fixed number of elements, rather than snapshotting all materialized rows.
     @MainActor
     private func seedThumbnailItems(
         _ count: Int,
         app: XCUIApplication,
-        rows: XCUIElementQuery
+        rows: XCUIElementQuery,
+        scrollView: XCUIElement
     ) throws -> [String] {
         // The caller joined the authoritative empty-state presentation.
         // There is no row to query until the first PNG capture arrives.
-        var lastFirstRowIdentifier = ""
+        var seenIdentifiers: Set<String> = []
         var identifiers: [String] = []
         for index in 0..<count {
             let png = try encodedPNG(index: index, totalCount: count)
@@ -301,9 +301,18 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
                 waitUntil(timeout: 20) {
                     let firstRow = rows.element(boundBy: 0)
                     guard firstRow.exists else { return false }
+                    guard self.historyViewportIsAtTop(
+                        scrollView, firstRow: firstRow
+                    ) else {
+                        // A prepend can move the viewport after an earlier
+                        // navigation. Re-establish the top inside this same
+                        // wait and read a fresh AX row on its next evaluation.
+                        _ = self.dragHistoryScrollbar(in: scrollView, towardEnd: false)
+                        return false
+                    }
                     let identifier = firstRow.identifier
                     guard !identifier.isEmpty,
-                          identifier != lastFirstRowIdentifier else { return false }
+                          !seenIdentifiers.contains(identifier) else { return false }
                     capturedIdentifier = identifier
                     return true
                 },
@@ -314,8 +323,9 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             )
             // Reuse the exact row that acknowledged this capture. A second
             // AX query repeats the expensive row lookup after every PNG.
-            lastFirstRowIdentifier = try XCTUnwrap(capturedIdentifier)
-            identifiers.append(lastFirstRowIdentifier)
+            let identifier = try XCTUnwrap(capturedIdentifier)
+            XCTAssertTrue(seenIdentifiers.insert(identifier).inserted)
+            identifiers.append(identifier)
         }
         return identifiers
     }
@@ -370,6 +380,41 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
 
     // MARK: - Scrolling
 
+    @MainActor
+    private func historyViewportIsAtTop(
+        _ scrollView: XCUIElement, firstRow: XCUIElement
+    ) -> Bool {
+        let frame = firstRow.frame
+        guard !frame.isEmpty, scrollView.frame.contains(frame) else { return false }
+        let scrollbar = scrollView.scrollBars.firstMatch
+        guard scrollbar.exists else { return true }
+        let rawValue = scrollbar.value
+        let position = (rawValue as? NSNumber)?.doubleValue
+            ?? (rawValue as? String).flatMap(Double.init)
+        // A visible AX row can still be in the middle of a virtualized List.
+        // The native scroller establishes the actual start of the document.
+        return position.map { $0 <= 0.001 } ?? false
+    }
+
+    /// One native navigation action, without an inner wait or capture retry.
+    /// Callers own their existing overall completion deadline.
+    @MainActor
+    private func dragHistoryScrollbar(
+        in scrollView: XCUIElement, towardEnd: Bool
+    ) -> Bool {
+        scrollView.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)
+        ).hover()
+        let scrollbar = scrollView.scrollBars.firstMatch
+        let thumb = scrollbar.descendants(matching: .valueIndicator).firstMatch
+        guard scrollbar.exists, thumb.exists else { return false }
+        thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .click(forDuration: 0.1, thenDragTo: scrollbar.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.5, dy: towardEnd ? 0.99 : 0.01)
+            ))
+        return true
+    }
+
     /// Drag the real scrollbar to each end. Wheel deltas plus lazy List row
     /// estimates did not reliably reach the last row on the runner. Another
     /// drag can be needed after pagination extends the content.
@@ -387,21 +432,12 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         // Rows can cover the entire container. Move to its scrollbar edge
         // explicitly so XCTest does not search for an unoccluded blank
         // region in the ScrollView before revealing the native scroller.
-        scrollView.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)
-        ).hover()
-        let scrollbar = scrollView.scrollBars.firstMatch
-        let thumb = scrollbar.descendants(matching: .valueIndicator).firstMatch
         for _ in 0..<6 {
             if endpointIsVisible() { return true }
-            guard scrollbar.exists, thumb.exists else {
+            guard dragHistoryScrollbar(in: scrollView, towardEnd: towardEnd) else {
                 XCTFail("The History scrollbar thumb is unavailable.")
                 return false
             }
-            thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                .click(forDuration: 0.1, thenDragTo: scrollbar.coordinate(
-                    withNormalizedOffset: CGVector(dx: 0.5, dy: towardEnd ? 0.99 : 0.01)
-                ))
             if waitUntil(timeout: 2, condition: endpointIsVisible) { return true }
         }
         guard row.exists else { return false }

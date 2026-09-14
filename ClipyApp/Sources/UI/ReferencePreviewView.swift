@@ -11,14 +11,6 @@ struct ReferencePreviewView: View {
     var requestFileLoad: (() -> Void)? = nil
     var maximumHeight: CGFloat? = nil
 
-    private var name: String {
-        if let path = reference.filePath {
-            let filename = URL(fileURLWithPath: path).lastPathComponent
-            return filename.isEmpty ? path : filename
-        }
-        return URL(string: reference.address, encodingInvalidCharacters: false)?.host ?? reference.address
-    }
-
     var body: some View {
         let title = PreviewCopy.text(reference.kind == .file ? "File Reference" : "URL Reference")
         ContentFittingScrollView(maximumHeight: maximumHeight) {
@@ -30,7 +22,7 @@ struct ReferencePreviewView: View {
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
                         ReferencePreviewText(
-                            value: name, identifier: "clipy.preview.reference.name",
+                            value: reference.displayName, identifier: "clipy.preview.reference.name",
                             maximumNumberOfLines: 2, usesTitleStyle: true
                         )
                         Text(title)

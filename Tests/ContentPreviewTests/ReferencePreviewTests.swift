@@ -19,6 +19,28 @@ struct ReferencePreviewTests {
         #expect(reference.kind == .url)
         #expect(Data(reference.address.utf8) == Data(address.utf8))
         #expect(reference.filePath == nil)
+        #expect(reference.displayName == "example.invalid")
+    }
+
+    @Test("display names are prepared without changing reference spelling")
+    func preparedDisplayNames() async throws {
+        let fixtures = [
+            ("file:///clipy-nonexistent-reference/cafe%CC%81.txt", "cafe\u{301}.txt"),
+            ("file:///clipy-nonexistent-reference/folder/", "folder"),
+            ("file:///%CC%81name.txt", "\u{301}name.txt"),
+            ("mailto:clipboard@example.invalid", "mailto:clipboard@example.invalid"),
+        ]
+        for (address, name) in fixtures {
+            let outcome = await ContentPreview().renderHistoryPane([
+                PreviewRepresentation(typeIdentifier: "public.url", bytes: Data(address.utf8)),
+            ])
+            guard case .content(.reference(let reference)) = outcome else {
+                Issue.record("expected inert reference")
+                continue
+            }
+            #expect(reference.displayName.utf8.elementsEqual(name.utf8))
+            #expect(reference.address.utf8.elementsEqual(address.utf8))
+        }
     }
 
     @Test("file references expose a decoded path without resolving the target")
