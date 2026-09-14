@@ -28,6 +28,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         app.launchArguments += [
             "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
             "-clipy.appearance.previewAutoOpen", "YES",
+            "-panelPosition", "center",
         ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_DRAG_TRACE_PATH"] = traceURL.path
@@ -41,21 +42,17 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 20), "The real multi-item row must be captured before dragging")
         XCTAssertTrue(row.isHittable)
 
-        // The receiver is an ordinary application that activates its window
-        // once before accepting a drag. Keep Clipy's source visible across
-        // that real focus transfer using the same public control as a user.
-        let moreActions = app.descendants(matching: .any)["clipy.panel.more-actions"]
-        XCTAssertTrue(moreActions.waitForExistence(timeout: 5))
-        moreActions.click()
-        let keepOpen = app.menuItems["Keep Panel Open"]
-        XCTAssertTrue(keepOpen.waitForExistence(timeout: 5), app.debugDescription)
-        keepOpen.click()
-        let sourcePinned = NSPredicate { _, _ in
-            moreActions.value as? String == "Keep Panel Open: On"
-        }
+        // The first launch fits content after opening its default ceiling.
+        // Reopen once after the captured row is visible so center placement
+        // uses that retained fitted size, just like the summon after the
+        // receiver's activation below. This is setup, not a retrying drag.
+        app.typeKey(.escape, modifierFlags: [])
+        let initiallyClosed = NSPredicate { _, _ in !row.exists }
         XCTAssertEqual(XCTWaiter.wait(for: [
-            XCTNSPredicateExpectation(predicate: sourcePinned, object: nil)
-        ], timeout: 5), .completed, app.debugDescription)
+            XCTNSPredicateExpectation(predicate: initiallyClosed, object: nil)
+        ], timeout: 5), .completed)
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
 
         // Establish the source's active/hovered layout before creating the
         // cooperating receiver. A fixed corner can lie under Clipy's persisted
@@ -131,6 +128,25 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         )
         let destination = NSPoint(x: actualTargetFrame.midX, y: actualTargetFrame.midY)
         XCTAssertFalse(actualTargetFrame.intersects(occupiedFrame))
+        // Real receiver activation closes Clipy at its app-deactivation
+        // boundary, even when its window keep-open pin is set. Re-summon
+        // through the actual global shortcut, then read fresh source geometry.
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+        row.hover()
+        XCTAssertTrue(preview.waitForExistence(timeout: 5), app.debugDescription)
+        let reopenedSourceAXFrame = sourceWindow.frame
+        let reopenedSourceFrame = NSRect(
+            x: reopenedSourceAXFrame.minX, y: desktopTop - reopenedSourceAXFrame.maxY,
+            width: reopenedSourceAXFrame.width, height: reopenedSourceAXFrame.height
+        )
+        let reopenedPreviewAXFrame = preview.frame
+        let reopenedPreviewFrame = NSRect(
+            x: reopenedPreviewAXFrame.minX, y: desktopTop - reopenedPreviewAXFrame.maxY,
+            width: reopenedPreviewAXFrame.width, height: reopenedPreviewAXFrame.height
+        )
+        XCTAssertFalse(actualTargetFrame.intersects(reopenedSourceFrame.union(reopenedPreviewFrame)),
+            "Reopened source or preview covers the actual receiver: \(reopenedSourceFrame), \(reopenedPreviewFrame), \(actualTargetFrame)")
         let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = start.withOffset(CGVector(
             dx: destination.x - row.frame.midX,
@@ -174,6 +190,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
             row before hover: \(beforeHover), after hover: \(afterHover), source window: \(sourceFrame)
             row immediately before drag: \(beforeDrag), receiver view handshake: \(pointerFacts)
             preview window: \(previewFrame), occupied source area: \(occupiedFrame)
+            reopened source: \(reopenedSourceFrame), reopened preview: \(reopenedPreviewFrame)
             receiver state: \(receiver.state), frame: \(actualTargetFrame), destination: \(destination)
             \(receiverLogText)
             \(trace)
