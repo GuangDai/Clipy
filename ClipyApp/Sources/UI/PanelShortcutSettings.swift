@@ -3,7 +3,7 @@ import Carbon.HIToolbox
 import Foundation
 import SwiftUI
 
-enum PanelShortcutAction: String, CaseIterable, Sendable, Codable {
+enum PanelShortcutAction: String, CaseIterable, Sendable, Codable, CodingKey {
     case focusSearch, exactSearch, fuzzySearch, regexpSearch, clearSearch, clearFilters
     case remove, togglePin, pinToTop, pinToBottom, showDetails
     case quickLook, togglePreview, retryPreview, previousPDFPage, nextPDFPage
@@ -206,6 +206,22 @@ enum PanelShortcutFailure: Error, Equatable {
 
 struct PanelShortcutSettings: Equatable, Sendable {
     static let defaultsKey = "clipy.keyboard.panelShortcuts"
+    private struct StoredBindings: Decodable {
+        let values: [PanelShortcutAction: PanelShortcutChord?]
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: PanelShortcutAction.self)
+            var values: [PanelShortcutAction: PanelShortcutChord?] = [:]
+            // Unknown action names are not keys of this container. Null and
+            // malformed known values disable only that action, preserving
+            // unrelated preferences instead of resetting the entire map.
+            for action in container.allKeys {
+                let chord = try? container.decode(PanelShortcutChord.self, forKey: action)
+                values.updateValue(chord, forKey: action)
+            }
+            self.values = values
+        }
+    }
     private var bindings: [PanelShortcutAction: PanelShortcutChord] = Dictionary(uniqueKeysWithValues:
         PanelShortcutAction.allCases.compactMap { action in action.defaultChord.map { (action, $0) } }
     )
@@ -224,11 +240,11 @@ struct PanelShortcutSettings: Equatable, Sendable {
 
     static func load(data: Data) -> Self {
         guard !data.isEmpty, data.count <= 32_768,
-              let saved = try? JSONDecoder().decode([String: PanelShortcutChord?].self, from: data)
+              let saved = try? JSONDecoder().decode(StoredBindings.self, from: data)
         else { return Self() }
         var result = Self()
         for action in PanelShortcutAction.allCases {
-            guard let entry = saved[action.rawValue] else { continue }
+            guard let entry = saved.values[action] else { continue }
             if let chord = entry {
                 let normalized = PanelShortcutChord(key: chord.key, modifiers: chord.modifiers)
                 guard (try? normalized.validate()) != nil else {

@@ -123,6 +123,20 @@ struct PanelShortcutSettingsTests {
         #expect(loaded.binding(for: .showDetails) == PanelShortcutAction.showDetails.defaultChord)
     }
 
+    @Test func oneMalformedBindingDoesNotResetOtherChoicesOrExplicitUnassignment() throws {
+        let chosen = PanelShortcutChord(key: "k", modifiers: [.command, .option])
+        let encoded = try JSONEncoder().encode(["focusSearch": chosen])
+        var saved = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        saved["remove"] = true
+        saved["togglePin"] = NSNull()
+        saved["futureAction"] = ["unrecognizedField": 7]
+        let loaded = PanelShortcutSettings.load(data: try JSONSerialization.data(withJSONObject: saved))
+        #expect(loaded.binding(for: .focusSearch) == chosen)
+        #expect(loaded.binding(for: .remove) == nil)
+        #expect(loaded.binding(for: .togglePin) == nil)
+        #expect(loaded.binding(for: .showDetails) == PanelShortcutAction.showDetails.defaultChord)
+    }
+
     @Test func recordingNormalizesLettersAndPreservesNavigationAndFunctionKeys() throws {
         let commandShift: NSEvent.ModifierFlags = [.command, .shift]
         let letter = try #require(PanelShortcutChord(keyCode: 40,
