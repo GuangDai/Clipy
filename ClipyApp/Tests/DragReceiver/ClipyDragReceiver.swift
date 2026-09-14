@@ -16,6 +16,19 @@ struct ClipyDragReceiver {
               let height = Double(arguments[3]), height.isFinite, height > 0 else {
             exit(2)
         }
+        // XCTest owns launch and process lifetime; retain the same test-local
+        // stderr evidence without an alternate launcher or logging service.
+        let outputDirectory = URL(fileURLWithPath: arguments[4], isDirectory: true)
+        let logDescriptor = Darwin.open(
+            outputDirectory.appendingPathComponent("receiver.log").path,
+            O_WRONLY | O_CREAT | O_APPEND, mode_t(0o600)
+        )
+        guard logDescriptor >= 0 else { exit(4) }
+        guard Darwin.dup2(logDescriptor, STDERR_FILENO) >= 0 else {
+            _ = Darwin.close(logDescriptor)
+            exit(4)
+        }
+        if logDescriptor != STDERR_FILENO { _ = Darwin.close(logDescriptor) }
         let application = NSApplication.shared
         let previousPolicy = application.activationPolicy()
         let switchResult: Bool? = previousPolicy == .regular
@@ -30,7 +43,7 @@ struct ClipyDragReceiver {
         }
         let delegate = DragReceiverDelegate(
             frame: NSRect(x: x, y: y, width: width, height: height),
-            outputDirectory: URL(fileURLWithPath: arguments[4], isDirectory: true)
+            outputDirectory: outputDirectory
         )
         application.delegate = delegate
         withExtendedLifetime(delegate) { application.run() }

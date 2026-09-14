@@ -92,36 +92,27 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         let receivedURL = directory.appendingPathComponent("received.json")
         let receiverLogURL = directory.appendingPathComponent("receiver.log")
         try Data().write(to: receiverLogURL)
-        let receiverLog = try FileHandle(forWritingTo: receiverLogURL)
-        addTeardownBlock { try? receiverLog.close() }
-        let receiver = Process()
         let receiverBundleURL = try XCTUnwrap(
             Bundle(for: Self.self).url(forResource: "ClipyDragReceiver", withExtension: "app"),
             "The native receiver application must be embedded in the UI test bundle's resources"
         )
-        receiver.executableURL = receiverBundleURL
-            .appendingPathComponent("Contents/MacOS/ClipyDragReceiver")
-        receiver.arguments = [targetFrame.minX, targetFrame.minY, targetFrame.width, targetFrame.height]
+        let receiver = XCUIApplication(url: receiverBundleURL)
+        receiver.launchArguments = [targetFrame.minX, targetFrame.minY, targetFrame.width, targetFrame.height]
             .map { String(Double($0)) } + [directory.path]
-        receiver.standardOutput = receiverLog
-        receiver.standardError = receiverLog
-        try receiver.run()
-        // XCTest teardown also runs after continueAfterFailure=false aborts
-        // the method. Register only after launch so an unstarted Process can
-        // never reach waitUntilExit.
+        // XCTest launches the exact test application through the standard
+        // macOS application lifecycle, including activation. Launching its
+        // executable with Process leaves activation requests unfulfilled.
         addTeardownBlock { @MainActor () async in
-            if receiver.isRunning {
-                receiver.terminate()
-                receiver.waitUntilExit()
-            }
+            if receiver.state != .notRunning { receiver.terminate() }
         }
+        receiver.launch()
         let receiverReady = NSPredicate { _, _ in FileManager.default.fileExists(atPath: readyURL.path) }
         let readiness = XCTWaiter.wait(for: [
             XCTNSPredicateExpectation(predicate: receiverReady, object: nil)
         ], timeout: 5)
         let readyLog = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
-        XCTAssertEqual(readiness, .completed, "Receiver ready handshake missing; running=\(receiver.isRunning); \(readyLog)")
-        XCTAssertTrue(receiver.isRunning)
+        XCTAssertEqual(readiness, .completed, "Receiver ready handshake missing; state=\(receiver.state); \(readyLog)")
+        XCTAssertNotEqual(receiver.state, .notRunning)
         let ready = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: readyURL)) as? [String: Any])
         XCTAssertEqual((ready["activationPolicy"] as? NSNumber)?.intValue, NSApplication.ActivationPolicy.regular.rawValue)
         XCTAssertEqual(ready["isRunning"] as? Bool, true)
@@ -158,7 +149,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         ], timeout: 5)
         let pointerLog = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
         XCTAssertEqual(pointerReadiness, .completed,
-            "Receiver view did not receive the pointer; running=\(receiver.isRunning); \(pointerLog)")
+            "Receiver view did not receive the pointer; state=\(receiver.state); \(pointerLog)")
         let pointerFacts = try XCTUnwrap(JSONSerialization.jsonObject(
             with: Data(contentsOf: pointerReadyURL)
         ) as? [String: NSNumber])
@@ -183,7 +174,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
             row before hover: \(beforeHover), after hover: \(afterHover), source window: \(sourceFrame)
             row immediately before drag: \(beforeDrag), receiver view handshake: \(pointerFacts)
             preview window: \(previewFrame), occupied source area: \(occupiedFrame)
-            receiver running: \(receiver.isRunning), frame: \(actualTargetFrame), destination: \(destination)
+            receiver state: \(receiver.state), frame: \(actualTargetFrame), destination: \(destination)
             \(receiverLogText)
             \(trace)
             """
