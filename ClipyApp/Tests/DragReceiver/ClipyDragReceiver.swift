@@ -17,8 +17,15 @@ struct ClipyDragReceiver {
             exit(2)
         }
         let application = NSApplication.shared
-        guard application.setActivationPolicy(.regular) else {
-            FileHandle.standardError.write(Data("receiver: regular activation policy refused\n".utf8))
+        let previousPolicy = application.activationPolicy()
+        let switchResult: Bool? = previousPolicy == .regular
+            ? nil : application.setActivationPolicy(.regular)
+        let actualPolicy = application.activationPolicy()
+        guard actualPolicy == .regular else {
+            let resultDescription = switchResult.map { String($0) } ?? "not requested"
+            FileHandle.standardError.write(Data(
+                "receiver: regular activation policy unavailable; before=\(previousPolicy.rawValue) after=\(actualPolicy.rawValue) switchResult=\(resultDescription)\n".utf8
+            ))
             exit(3)
         }
         let delegate = DragReceiverDelegate(

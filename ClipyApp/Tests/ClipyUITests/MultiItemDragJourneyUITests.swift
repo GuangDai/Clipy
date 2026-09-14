@@ -95,7 +95,11 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         let receiverLog = try FileHandle(forWritingTo: receiverLogURL)
         addTeardownBlock { try? receiverLog.close() }
         let receiver = Process()
-        receiver.executableURL = Bundle(for: Self.self).bundleURL
+        let receiverBundleURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "ClipyDragReceiver", withExtension: "app"),
+            "The native receiver application must be embedded in the UI test bundle's resources"
+        )
+        receiver.executableURL = receiverBundleURL
             .appendingPathComponent("Contents/MacOS/ClipyDragReceiver")
         receiver.arguments = [targetFrame.minX, targetFrame.minY, targetFrame.width, targetFrame.height]
             .map { String(Double($0)) } + [directory.path]

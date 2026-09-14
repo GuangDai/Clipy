@@ -133,12 +133,13 @@ targets:
   # An actual AppKit process for the cross-process drag journey. The helper
   # belongs only to the UI test bundle and is never embedded in Clipy.app.
   ClipyDragReceiver:
-    type: tool
+    type: application
     platform: macOS
     sources:
       - Tests/DragReceiver
     settings:
       PRODUCT_NAME: ClipyDragReceiver
+      PRODUCT_BUNDLE_IDENTIFIER: com.clipy.tests.DragReceiver
       SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
       GCC_TREAT_WARNINGS_AS_ERRORS: YES
   ClipyUITests:
@@ -156,7 +157,7 @@ targets:
         embed: true
         codeSign: false
         copy:
-          destination: executables
+          destination: resources
 schemes:
   ClipyApp:
     build:
