@@ -89,6 +89,7 @@ struct ClipySettingsView: View {
             List(selection: selection) {
                 categoryRow(.general)
                 categoryRow(.appearance)
+                categoryRow(.keyboard)
                 categoryRow(.retention)
                 categoryRow(.automation)
                 categoryRow(.interaction)
@@ -136,11 +137,12 @@ struct ClipySettingsView: View {
         case .general:
             GeneralSettingsTab(
                 viewState: viewState,
-                launchAtLogin: launchAtLogin,
-                summonShortcut: summonShortcut
+                launchAtLogin: launchAtLogin
             )
         case .appearance:
             AppearanceSettingsTab(popupPosition: popupPosition)
+        case .keyboard:
+            KeyboardShortcutsSettingsView(summonShortcut: summonShortcut)
         case .retention:
             RetentionSettingsTab(
                 viewState: viewState,
@@ -192,12 +194,13 @@ struct ClipySettingsView: View {
 
 
 private enum SettingsCategory: String, Hashable {
-    case general, appearance, retention, automation, interaction, maintenance
+    case general, appearance, keyboard, retention, automation, interaction, maintenance
 
     var title: String {
         switch self {
         case .general: SettingsCopy.text("General")
         case .appearance: SettingsCopy.text("Appearance")
+        case .keyboard: KeyboardShortcutsCopy.text("Keyboard Shortcuts")
         case .retention: RetentionSettingsCopy.tabTitle
         case .automation: LocalAutomationSettingsCopy.text("Automation")
         case .interaction: AdvancedInteractionSettingsCopy.text("Interaction")
@@ -209,6 +212,7 @@ private enum SettingsCategory: String, Hashable {
         switch self {
         case .general: "gearshape"
         case .appearance: "paintpalette"
+        case .keyboard: "keyboard"
         case .retention: "clock.arrow.circlepath"
         case .automation: "wand.and.stars"
         case .interaction: "slider.horizontal.3"

@@ -85,10 +85,17 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         let source = app.textViews["Test text"]
         XCTAssertTrue(source.waitForExistence(timeout: 5), app.debugDescription)
         source.click()
-        source.typeText("  playground result  ")
+        // This raw-text playground must preserve literal input: macOS can
+        // otherwise replace the trailing spaces with a period before Preview.
+        // Check input separately so substitutions cannot masquerade as a
+        // workflow or preview-rendering failure.
+        let testText = "  playground result  "
+        source.typeText(testText)
+        XCTAssertTrue(waitUntil { source.value as? String == testText }, app.debugDescription)
         app.buttons["clipy.workflow.preview"].click()
+        let result = app.scrollViews["After"].staticTexts.firstMatch
         XCTAssertTrue(waitUntil {
-            app.staticTexts["playground result"].exists
+            result.exists && result.value as? String == "playground result"
         }, app.debugDescription)
         XCTAssertFalse(app.buttons["clipy.workflow.apply"].exists, app.debugDescription)
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), original)

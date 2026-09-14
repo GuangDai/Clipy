@@ -8,6 +8,24 @@ private final class SummonShortcutChangeIntentRecorder {
 
 @MainActor
 struct SummonShortcutSettingsTests {
+    @Test func disabledBindingCanBeChangedOrResetButCannotBeClearedAgain() {
+        let recorder = SummonShortcutChangeIntentRecorder()
+        let settings = SummonShortcutSettings(
+            status: .disabled,
+            beginChange: { recorder.callCount += 1 },
+            reset: { recorder.callCount += 1 },
+            clear: { recorder.callCount += 10 }
+        )
+        #expect(settings.canChange)
+        #expect(settings.canReset)
+        #expect(!settings.canClear)
+        #expect(!settings.canRetry)
+        settings.beginChange()
+        settings.reset()
+        settings.clear()
+        #expect(recorder.callCount == 2)
+    }
+
     @Test func stoppedSnapshotDoesNotBeginChange() {
         let recorder = SummonShortcutChangeIntentRecorder()
         let settings = SummonShortcutSettings(

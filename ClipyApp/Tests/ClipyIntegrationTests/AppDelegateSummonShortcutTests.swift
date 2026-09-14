@@ -178,28 +178,89 @@ struct AppDelegateSummonShortcutTests {
         )
     }
 
-    @Test func activeCarbonChordCompletesTheAppOwnedRecordingOnce() throws {
+    @Test func appOwnedRecordingPausesTheGlobalChordAndRestoresOnCancel() throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let probe = AppDelegateShortcutProbe()
         let appDelegate = makeAppDelegate(defaults: defaults, probe: probe)
-        var recorded: [HotKeyChord] = []
 
         #expect(appDelegate.startSummonShortcut())
-        appDelegate.beginSummonShortcutRecording { recorded.append($0) }
-        #expect(probe.fire(.defaultSummon))
-        #expect(recorded == [.defaultSummon])
+        appDelegate.summonShortcutBinding().beginRecording()
+        #expect(!probe.fire(.defaultSummon))
         #expect(probe.attemptChords == [.defaultSummon])
         #expect(
             appDelegate.summonShortcutPresentation.status
                 == .current(HotKeyChord.defaultSummon.settingsDisplayName)
         )
 
+        appDelegate.summonShortcutBinding().endRecording()
         appDelegate.endSummonShortcutRecording()
-        appDelegate.endSummonShortcutRecording()
+        #expect(probe.attemptChords == [.defaultSummon, .defaultSummon])
         appDelegate.applicationWillTerminate(
             Notification(name: NSApplication.willTerminateNotification)
         )
+    }
+
+    @Test func clearIntentPublishesDisabledWithoutLockingOutChangeOrReset() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = AppDelegateShortcutProbe()
+        let appDelegate = makeAppDelegate(defaults: defaults, probe: probe)
+        #expect(appDelegate.startSummonShortcut())
+        appDelegate.summonShortcutBinding().clear()
+        #expect(appDelegate.summonShortcutPresentation.status == .disabled)
+        #expect(appDelegate.summonShortcutPresentation.warning == nil)
+        #expect(appDelegate.summonShortcutBinding().canChange)
+        #expect(appDelegate.summonShortcutBinding().canReset)
+        #expect(!appDelegate.summonShortcutBinding().canClear)
+        #expect(!probe.fire(.defaultSummon))
+        appDelegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+
+        let reopened = makeAppDelegate(defaults: defaults, probe: probe)
+        #expect(!reopened.startSummonShortcut())
+        #expect(reopened.summonShortcutPresentation.status == .disabled)
+        reopened.summonShortcutBinding().reset()
+        #expect(reopened.summonShortcutPresentation.status == .current("⇧⌘C"))
+        reopened.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+    }
+
+    @Test func globalChangeRejectsAPanelBindingBeforeRegisteringOrSaving() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = AppDelegateShortcutProbe()
+        let appDelegate = makeAppDelegate(defaults: defaults, probe: probe)
+        #expect(appDelegate.startSummonShortcut())
+        let candidate = HotKeyChord(
+            keyCode: UInt32(kVK_LeftArrow), modifiers: UInt32(optionKey | cmdKey)
+        )
+        #expect(appDelegate.changeSummonShortcut(to: candidate) == .previousPDFPage)
+        #expect(probe.attemptChords == [.defaultSummon])
+        #expect(appDelegate.summonShortcutBinding().conflictingPanelAction == .previousPDFPage)
+        #expect(appDelegate.summonShortcutPresentation.status == .current(HotKeyChord.defaultSummon.settingsDisplayName))
+        #expect(defaults.object(forKey: SummonShortcutController.defaultsKey) == nil)
+        appDelegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
+    }
+
+    @Test func retryRechecksPanelPreferencesBeforeCompletingAGlobalChange() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = AppDelegateShortcutProbe()
+        let appDelegate = makeAppDelegate(defaults: defaults, probe: probe)
+        #expect(appDelegate.startSummonShortcut())
+        probe.failNext(alternate)
+        appDelegate.changeSummonShortcut(to: alternate)
+        let logicalChord = try #require(alternate.panelShortcutChord)
+        try PanelShortcutSettings.update(.clearFilters, to: logicalChord, in: defaults)
+        appDelegate.summonShortcutBinding().retry()
+        #expect(appDelegate.summonShortcutBinding().conflictingPanelAction == .clearFilters)
+        #expect(probe.attemptChords == [.defaultSummon, alternate])
+        #expect(defaults.object(forKey: SummonShortcutController.defaultsKey) == nil)
+
+        try PanelShortcutSettings.update(.clearFilters, to: nil, in: defaults)
+        appDelegate.summonShortcutBinding().retry()
+        #expect(appDelegate.summonShortcutBinding().conflictingPanelAction == nil)
+        #expect(appDelegate.summonShortcutPresentation.status == .current(alternate.settingsDisplayName))
+        appDelegate.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
     }
 
     private func makeAppDelegate(
@@ -209,6 +270,7 @@ struct AppDelegateSummonShortcutTests {
         AppDelegate(
             accessibilityAnnouncementOperations: .live,
             summonShortcutDefaults: defaults,
+            interactionDefaults: defaults,
             summonShortcutRegistrationFactory: { chord, id, action in
                 probe.register(chord: chord, id: id, action: action)
             }

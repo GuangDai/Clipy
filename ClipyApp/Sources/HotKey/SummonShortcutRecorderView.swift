@@ -73,8 +73,18 @@ enum SummonShortcutRecordingDecision: Equatable {
 struct SummonShortcutRecorderView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var rejectedInput = false
+    @State private var conflictingAction: PanelShortcutAction?
 
     let onCandidate: @MainActor (HotKeyChord) -> Void
+    let conflictingPanelAction: @MainActor (HotKeyChord) -> PanelShortcutAction?
+
+    init(
+        conflictingPanelAction: @escaping @MainActor (HotKeyChord) -> PanelShortcutAction? = { _ in nil },
+        onCandidate: @escaping @MainActor (HotKeyChord) -> Void
+    ) {
+        self.onCandidate = onCandidate
+        self.conflictingPanelAction = conflictingPanelAction
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -96,7 +106,13 @@ struct SummonShortcutRecorderView: View {
                         dismiss()
                     case .reject:
                         rejectedInput = true
+                        conflictingAction = nil
                     case .candidate(let chord):
+                        if let conflict = conflictingPanelAction(chord) {
+                            conflictingAction = conflict
+                            rejectedInput = false
+                            return
+                        }
                         onCandidate(chord)
                         dismiss()
                     }
@@ -111,6 +127,14 @@ struct SummonShortcutRecorderView: View {
                 ))
                     .font(.caption)
                     .foregroundStyle(.red)
+                    .accessibilityIdentifier("clipy.settings.shortcut.recording-error")
+            }
+
+            if let conflictingAction {
+                Text(KeyboardShortcutsCopy.conflict(conflictingAction))
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("clipy.settings.shortcut.recording-error")
             }
 
@@ -152,6 +176,9 @@ private struct SummonShortcutRecorderInput: NSViewRepresentable {
 @MainActor
 final class SummonShortcutRecorderInputView: NSView {
     var onDecision: @MainActor (SummonShortcutRecordingDecision) -> Void
+    /// Panel-local shortcuts can admit bare keys. Both recorders still share
+    /// this exact sheet-scoped event monitor and its single teardown owner.
+    var onRawKey: (@MainActor (UInt16, UInt, String?) -> Void)?
     private var keyEventMonitor: Any?
 
     init(
@@ -162,6 +189,13 @@ final class SummonShortcutRecorderInputView: NSView {
         setAccessibilityElement(true)
         setAccessibilityRole(.textField)
         setAccessibilityLabel(ShortcutRecorderCopy.text("Record summon shortcut"))
+    }
+
+    convenience init(
+        onRawKey: @escaping @MainActor (UInt16, UInt, String?) -> Void
+    ) {
+        self.init(onDecision: { _ in })
+        self.onRawKey = onRawKey
     }
 
     @available(*, unavailable)
@@ -197,6 +231,7 @@ final class SummonShortcutRecorderInputView: NSView {
         record(
             keyCode: event.keyCode,
             modifierFlagsRawValue: event.modifierFlags.rawValue,
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers,
             isARepeat: event.isARepeat
         )
     }
@@ -213,6 +248,7 @@ final class SummonShortcutRecorderInputView: NSView {
             let eventWindowNumber = event.windowNumber
             let keyCode = event.keyCode
             let modifierFlagsRawValue = event.modifierFlags.rawValue
+            let charactersIgnoringModifiers = event.charactersIgnoringModifiers
             let isARepeat = event.isARepeat
             let consumed = MainActor.assumeIsolated {
                 guard let self,
@@ -221,6 +257,7 @@ final class SummonShortcutRecorderInputView: NSView {
                 self.record(
                     keyCode: keyCode,
                     modifierFlagsRawValue: modifierFlagsRawValue,
+                    charactersIgnoringModifiers: charactersIgnoringModifiers,
                     isARepeat: isARepeat
                 )
                 return true
@@ -243,9 +280,14 @@ final class SummonShortcutRecorderInputView: NSView {
     private func record(
         keyCode: UInt16,
         modifierFlagsRawValue: UInt,
+        charactersIgnoringModifiers: String?,
         isARepeat: Bool
     ) {
         guard !isARepeat else { return }
+        if let onRawKey {
+            onRawKey(keyCode, modifierFlagsRawValue, charactersIgnoringModifiers)
+            return
+        }
         onDecision(.decide(
             keyCode: keyCode,
             modifierFlags: NSEvent.ModifierFlags(

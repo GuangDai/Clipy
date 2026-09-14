@@ -109,8 +109,9 @@ struct RetentionSettingsTab: View {
                         if draft.countEnabled {
                             HStack(spacing: 8) {
                                 Text(RetentionSettingsCopy.itemsKeepAtMost)
-                                TextField("200", text: maximumUnpinnedText)
+                                TextField("", text: maximumUnpinnedText)
                                     .textFieldStyle(.roundedBorder)
+                                    .labelsHidden()
                                     .frame(width: 88)
                                     .multilineTextAlignment(.trailing)
                                     .accessibilityLabel(RetentionSettingsCopy.maximumUnpinnedAccessibilityLabel)
@@ -647,6 +648,7 @@ private struct RetentionLimitField: View {
                     HStack(spacing: 8) {
                         TextField("", text: $text)
                             .textFieldStyle(.roundedBorder)
+                            .labelsHidden()
                             .frame(width: 88)
                             .multilineTextAlignment(.trailing)
                             .accessibilityLabel(label)

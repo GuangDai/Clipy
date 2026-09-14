@@ -199,6 +199,7 @@ struct BuiltInAutomationView: View {
                 if apply == nil {
                     TextEditor(text: $source)
                         .font(.system(.body, design: .monospaced))
+                        .autocorrectionDisabled(true)
                         .accessibilityLabel(text("Test text"))
                 } else { previewText(source, label: text("Before")) }
             }

@@ -1459,38 +1459,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func retrySummonShortcut() {
+        if case .unavailable(let requested, _) = summonShortcutController.state,
+           let conflict = requested.conflictingPanelAction(in: PanelShortcutSettings.load(from: interactionDefaults)) {
+            refreshSummonShortcutPresentation(conflictingPanelAction: conflict)
+            return
+        }
         summonShortcutController.retry()
         refreshSummonShortcutPresentation()
     }
 
-    func beginSummonShortcutRecording(
-        onActiveChord: @escaping @MainActor (HotKeyChord) -> Void
-    ) {
-        summonShortcutController.beginRecordingActiveChord(onActiveChord)
+    func beginSummonShortcutRecording() {
+        summonShortcutController.beginRecording()
     }
 
     func endSummonShortcutRecording() {
-        summonShortcutController.endRecordingActiveChord()
-    }
-
-    /// Applies one recorder-produced candidate through the existing Card 14B
-    /// transaction: registration succeeds before persistence and teardown, so
-    /// a conflict leaves the old binding live and makes the candidate visible.
-    func changeSummonShortcut(to chord: HotKeyChord) {
-        summonShortcutController.change(to: chord)
+        summonShortcutController.endRecording()
         refreshSummonShortcutPresentation()
     }
 
+    /// Applies one recorder-produced candidate through the existing Card 14B
+    /// transaction: registration succeeds before persistence; a rejected
+    /// candidate restores the paused old binding and exposes Retry.
+    @discardableResult
+    func changeSummonShortcut(to chord: HotKeyChord) -> PanelShortcutAction? {
+        if let conflict = chord.conflictingPanelAction(in: PanelShortcutSettings.load(from: interactionDefaults)) {
+            refreshSummonShortcutPresentation(conflictingPanelAction: conflict)
+            return conflict
+        }
+        summonShortcutController.change(to: chord)
+        refreshSummonShortcutPresentation()
+        return nil
+    }
+
     private func resetSummonShortcut() {
+        if let conflict = HotKeyChord.defaultSummon.conflictingPanelAction(in: PanelShortcutSettings.load(from: interactionDefaults)) {
+            refreshSummonShortcutPresentation(conflictingPanelAction: conflict)
+            return
+        }
         summonShortcutController.reset()
         refreshSummonShortcutPresentation()
     }
 
-    private func refreshSummonShortcutPresentation() {
+    private func clearSummonShortcut() {
+        summonShortcutController.clear()
+        refreshSummonShortcutPresentation()
+    }
+
+    private func refreshSummonShortcutPresentation(conflictingPanelAction: PanelShortcutAction? = nil) {
         let status: SummonShortcutStatus
         switch summonShortcutController.state {
         case .stopped:
             status = .stopped
+        case .disabled:
+            status = .disabled
         case .active(let chord):
             status = .current(chord.settingsDisplayName)
         case .unavailable(let requested, let retainedActive):
@@ -1508,7 +1529,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         summonShortcutPresentation = SummonShortcutSettings(
             status: status,
-            warning: warning
+            warning: warning,
+            conflictingPanelAction: conflictingPanelAction
         )
     }
 
@@ -1518,12 +1540,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func summonShortcutBinding(
         beginChange: @escaping @MainActor @Sendable () -> Void = {}
     ) -> SummonShortcutSettings {
-        SummonShortcutSettings(
+        let currentChord: HotKeyChord?
+        switch summonShortcutController.state {
+        case .active(let chord): currentChord = chord
+        case .unavailable(_, let retainedActive): currentChord = retainedActive
+        case .stopped, .disabled: currentChord = nil
+        }
+        return SummonShortcutSettings(
             status: summonShortcutPresentation.status,
             warning: summonShortcutPresentation.warning,
+            currentPanelChord: currentChord?.panelShortcutChord,
+            conflictingPanelAction: summonShortcutPresentation.conflictingPanelAction,
             beginChange: beginChange,
             retry: { [weak self] in self?.retrySummonShortcut() },
-            reset: { [weak self] in self?.resetSummonShortcut() }
+            reset: { [weak self] in self?.resetSummonShortcut() },
+            clear: { [weak self] in self?.clearSummonShortcut() },
+            beginRecording: { [weak self] in self?.beginSummonShortcutRecording() },
+            endRecording: { [weak self] in self?.endSummonShortcutRecording() }
         )
     }
 

@@ -41,6 +41,8 @@ enum HistoryRowAccessibilityAction {
 /// source icon already cached for it; mutations are expressed only through
 /// the injected callbacks so the row never talks to storage itself (01 §6).
 struct HistoryRowView: View {
+    private let shortcuts: PanelShortcutSettings
+    private let areShortcutsEnabled: Bool
     private let row: HistoryRow
     private let now: Date
     private let pinnedOrdinal: Int?
@@ -70,6 +72,8 @@ struct HistoryRowView: View {
         snippetLineCount: HistorySnippetLineCount = .automatic,
         fontSize: HistoryRowFontSize = .medium,
         isSelected: Bool = false,
+        shortcuts: PanelShortcutSettings = PanelShortcutSettings(),
+        areShortcutsEnabled: Bool = true,
         thumbnails: ThumbnailStore,
         dragSource: HistoryListDraggingView? = nil,
         onCopy: @escaping (HistoryItemReference) -> Void,
@@ -85,6 +89,8 @@ struct HistoryRowView: View {
         self.snippetLineCount = snippetLineCount
         self.fontSize = fontSize
         self.isSelected = isSelected
+        self.shortcuts = shortcuts
+        self.areShortcutsEnabled = areShortcutsEnabled
         self.thumbnails = thumbnails
         self.dragSource = dragSource
         self.onCopy = onCopy
@@ -489,7 +495,7 @@ struct HistoryRowView: View {
         } label: {
             Label(PanelActionsCopy.text("Show Details", bundle: copyBundle), systemImage: "info.circle")
         }
-        .keyboardShortcut("i", modifiers: .command)
+        .keyboardShortcut(areShortcutsEnabled ? shortcuts.keyboardShortcut(for: .showDetails) : nil)
 
         Divider()
 
@@ -498,7 +504,7 @@ struct HistoryRowView: View {
         } label: {
             Label(PanelActionsCopy.text("Remove", bundle: copyBundle), systemImage: "trash")
         }
-        .keyboardShortcut(.delete, modifiers: [])
+        .keyboardShortcut(areShortcutsEnabled ? shortcuts.keyboardShortcut(for: .remove) : nil)
     }
 }
 

@@ -34,6 +34,8 @@ struct HistoryListView: View {
     private let snippetLineCount: HistorySnippetLineCount
     private let fontSize: HistoryRowFontSize
     private let isSearchFieldFocused: Bool
+    private let shortcuts: PanelShortcutSettings
+    private let areShortcutsEnabled: Bool
     private let selection: Binding<HistoryItemID?>
     private let onFocusHistory: () -> Void
     private let onHoverRow: (HistoryItemID) -> Void
@@ -48,6 +50,8 @@ struct HistoryListView: View {
         snippetLineCount: HistorySnippetLineCount = .automatic,
         fontSize: HistoryRowFontSize = .medium,
         isSearchFieldFocused: Bool,
+        shortcuts: PanelShortcutSettings = PanelShortcutSettings(),
+        areShortcutsEnabled: Bool = true,
         selection: Binding<HistoryItemID?>,
         onFocusHistory: @escaping () -> Void = {},
         onHoverRow: @escaping (HistoryItemID) -> Void = { _ in },
@@ -61,6 +65,8 @@ struct HistoryListView: View {
         self.snippetLineCount = snippetLineCount
         self.fontSize = fontSize
         self.isSearchFieldFocused = isSearchFieldFocused
+        self.shortcuts = shortcuts
+        self.areShortcutsEnabled = areShortcutsEnabled
         self.selection = selection
         self.onFocusHistory = onFocusHistory
         self.onHoverRow = onHoverRow
@@ -184,6 +190,8 @@ struct HistoryListView: View {
             snippetLineCount: snippetLineCount,
             fontSize: fontSize,
             isSelected: selection.wrappedValue == row.item.id,
+            shortcuts: shortcuts,
+            areShortcutsEnabled: areShortcutsEnabled,
             thumbnails: thumbnails,
             dragSource: dragSource,
             onCopy: { viewState.requestPasteFromDisplayedRow($0) },
@@ -328,8 +336,8 @@ struct HistoryListView: View {
                     viewState.remove(row.item.id)
                 }
             }
-            .keyboardShortcut(.delete, modifiers: [])
-            .disabled(selectedRow == nil || isSearchFieldFocused)
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .remove, whileEditingText: isSearchFieldFocused))
+            .disabled(selectedRow == nil)
 
             Button(HistoryListCopy.text("Toggle Pin")) {
                 if let row = selectedRow {
@@ -340,7 +348,7 @@ struct HistoryListView: View {
                     }
                 }
             }
-            .keyboardShortcut("p", modifiers: .command)
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .togglePin, whileEditingText: isSearchFieldFocused))
             .disabled(selectedRow == nil)
 
             // Context-menu semantics: placePinned reorders an already-pinned item.
@@ -349,7 +357,7 @@ struct HistoryListView: View {
                     viewState.pin(row.item.id, at: .first)
                 }
             }
-            .keyboardShortcut(.upArrow, modifiers: [.option, .command])
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .pinToTop, whileEditingText: isSearchFieldFocused))
             .disabled(selectedRow == nil)
 
             Button(PanelActionsCopy.text("Pin to Bottom")) {
@@ -357,7 +365,7 @@ struct HistoryListView: View {
                     viewState.pin(row.item.id, at: .last)
                 }
             }
-            .keyboardShortcut(.downArrow, modifiers: [.option, .command])
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .pinToBottom, whileEditingText: isSearchFieldFocused))
             .disabled(selectedRow == nil)
 
             Button(PanelActionsCopy.text("Show Details")) {
@@ -365,9 +373,10 @@ struct HistoryListView: View {
                     onShowDetails(row.item)
                 }
             }
-            .keyboardShortcut("i", modifiers: .command)
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .showDetails, whileEditingText: isSearchFieldFocused))
             .disabled(selectedRow == nil)
         }
+        .disabled(!areShortcutsEnabled)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)

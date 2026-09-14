@@ -70,14 +70,12 @@ final class RetentionUsageJourneyUITests: XCTestCase {
         assertUsage(itemCount: "2", contentSize: "56 bytes", in: app)
 
         app.buttons["clipy.settings.category.general"].click()
-        // The Settings window on the General tab is anchored by the
-        // Keyboard Shortcut section's Change button — the retention fields
-        // are off-tab, and the runtime AX tree flattens the privacy
-        // section's children under the section identifier, so only the
-        // shortcut control survives as a stable interactive anchor here.
+        // The sidebar remains present in every category. Keyboard shortcuts
+        // now have their own page, so General's window uses its navigation
+        // button as the stable native anchor.
         let settingsWindow = app.windows.containing(
             .any,
-            identifier: "clipy.settings.shortcut.change"
+            identifier: "clipy.settings.category.general"
         ).firstMatch
         assertExists(
             settingsWindow,

@@ -212,10 +212,11 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertFalse(approvalRequired.exists)
         XCTAssertFalse(openLoginItemsSettings.exists)
 
-        // Card 14B: the real General scene receives the AppDelegate-owned
+        // Card 14B: the dedicated Keyboard Shortcuts category receives the AppDelegate-owned
         // neutral shortcut state. The default's advisory remains visible; the
         // real recorder opens and Escape cancels without changing the binding.
         // This does not claim signed Carbon delivery or layout behavior.
+        app.buttons["clipy.settings.category.keyboard"].click()
         let shortcutStatus = app.descendants(matching: .any)[
             "clipy.settings.shortcut.status"
         ]

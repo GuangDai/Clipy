@@ -24,6 +24,7 @@ import SwiftUI
 /// lightweight toolbar keeps Close clear of the document; Close, Esc, and
 /// Space dismiss through `onDismiss`. The preview fills the current window.
 struct HistoryQuickLookOverlay: View {
+    @AppStorage(PanelShortcutSettings.defaultsKey) private var shortcutData = Data()
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
     private let item: HistoryItemReference
@@ -109,7 +110,7 @@ struct HistoryQuickLookOverlay: View {
             // open. Own its second Space here, beside the active Escape
             // control, so closing never depends on a disabled list shortcut.
             Button(PreviewCopy.text("Close"), action: onDismiss)
-                .keyboardShortcut(.space, modifiers: [])
+                .keyboardShortcut(PanelShortcutSettings.load(data: shortcutData).keyboardShortcut(for: .quickLook))
                 .opacity(0)
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)

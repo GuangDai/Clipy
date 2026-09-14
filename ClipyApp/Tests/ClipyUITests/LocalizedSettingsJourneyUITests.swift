@@ -83,6 +83,10 @@ final class LocalizedSettingsJourneyUITests: XCTestCase {
         maximum.click()
         maximum.typeKey("a", modifierFlags: .command)
         maximum.typeText("241")
+        // A TextField title is a visible label inside a grouped Form. The
+        // numeric control must not retain a second, misleading "200" label
+        // after the user has changed its value.
+        XCTAssertFalse(settings.staticTexts["200"].exists, app.debugDescription)
         resize(settings, to: 600)
         XCTAssertTrue(waitUntil(timeout: 5) {
             abs(settings.frame.width - 600) <= 3 && maximum.value as? String == "241"
@@ -113,8 +117,11 @@ final class LocalizedSettingsJourneyUITests: XCTestCase {
 
     @MainActor
     private func resize(_ window: XCUIElement, to width: CGFloat) {
+        // Grab the inside of the native resize border. A window that has
+        // expanded to x=1022 on the runner's 1024-point display puts a +2
+        // outside-edge coordinate offscreen, so the next drag never starts.
         let edge = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.65))
-            .withOffset(CGVector(dx: 2, dy: 0))
+            .withOffset(CGVector(dx: -2, dy: 0))
         edge.press(forDuration: 0.1, thenDragTo: edge.withOffset(
             CGVector(dx: width - window.frame.width, dy: 0)
         ))

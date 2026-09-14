@@ -68,15 +68,13 @@ private struct SettingsRootView: View {
                 interactionDefaults: appDelegate.interactionDefaults
             )
             .sheet(isPresented: $isRecordingSummonShortcut) {
-                SummonShortcutRecorderView { chord in
-                    appDelegate.endSummonShortcutRecording()
+                SummonShortcutRecorderView(conflictingPanelAction: { chord in
+                    chord.conflictingPanelAction(in: PanelShortcutSettings.load(from: appDelegate.interactionDefaults))
+                }) { chord in
                     appDelegate.changeSummonShortcut(to: chord)
                 }
                 .onAppear {
-                    appDelegate.beginSummonShortcutRecording { chord in
-                        appDelegate.changeSummonShortcut(to: chord)
-                        isRecordingSummonShortcut = false
-                    }
+                    appDelegate.beginSummonShortcutRecording()
                 }
                 .onDisappear {
                     appDelegate.endSummonShortcutRecording()
