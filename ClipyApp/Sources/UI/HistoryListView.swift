@@ -1,4 +1,5 @@
-/// HistoryListView.swift — the panel's two-section list (Pinned, Recent)
+/// HistoryListView.swift — pinned items followed by recent history, separated
+/// by one unobtrusive rule when both groups are present.
 /// with single selection, last-row pagination prefetch, the panel keyboard
 /// surface, and the empty states. Rows render the view state's DISPLAYED
 /// lanes: History applies type/pinned filters before pagination. Row content
@@ -33,6 +34,8 @@ struct HistoryListView: View {
     private let snippetLineCount: HistorySnippetLineCount
     private let fontSize: HistoryRowFontSize
     private let isSearchFieldFocused: Bool
+    private let shortcuts: PanelShortcutSettings
+    private let areShortcutsEnabled: Bool
     private let selection: Binding<HistoryItemID?>
     private let onFocusHistory: () -> Void
     private let onHoverRow: (HistoryItemID) -> Void
@@ -47,6 +50,8 @@ struct HistoryListView: View {
         snippetLineCount: HistorySnippetLineCount = .automatic,
         fontSize: HistoryRowFontSize = .medium,
         isSearchFieldFocused: Bool,
+        shortcuts: PanelShortcutSettings = PanelShortcutSettings(),
+        areShortcutsEnabled: Bool = true,
         selection: Binding<HistoryItemID?>,
         onFocusHistory: @escaping () -> Void = {},
         onHoverRow: @escaping (HistoryItemID) -> Void = { _ in },
@@ -60,6 +65,8 @@ struct HistoryListView: View {
         self.snippetLineCount = snippetLineCount
         self.fontSize = fontSize
         self.isSearchFieldFocused = isSearchFieldFocused
+        self.shortcuts = shortcuts
+        self.areShortcutsEnabled = areShortcutsEnabled
         self.selection = selection
         self.onFocusHistory = onFocusHistory
         self.onHoverRow = onHoverRow
@@ -114,28 +121,27 @@ struct HistoryListView: View {
 
     private func list(now: Date) -> some View {
         List(selection: selection) {
-            if !viewState.displayedPinnedRows.isEmpty {
-                Section {
-                    ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
-                        rowContent(
-                            row,
-                            now: now,
-                            pinnedOrdinal: (row.pinnedPosition ?? 0) + 1
-                        )
-                    }
-                } header: {
-                    if showsSectionHeaders { Text(HistoryListCopy.text("Pinned")) }
-                }
+            ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
+                rowContent(
+                    row,
+                    now: now,
+                    pinnedOrdinal: (row.pinnedPosition ?? 0) + 1
+                )
+            }
+            if showsGroupSeparator {
+                Divider()
+                    .frame(height: PanelContentFit.groupSeparatorHeight)
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .selectionDisabled()
+                    .disabled(true)
+                    .accessibilityHidden(true)
             }
             if !viewState.displayedUnpinnedRows.isEmpty || viewState.hasNextPage || viewState.isLoadingPage {
-                Section {
-                    ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
-                        rowContent(row, now: now, pinnedOrdinal: nil)
-                    }
-                    paginationControl
-                } header: {
-                    if showsSectionHeaders { Text(HistoryListCopy.text("Recent")) }
+                ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
+                    rowContent(row, now: now, pinnedOrdinal: nil)
                 }
+                paginationControl
             }
         }
         // macOS inset lists retain extra internal margins even when scroll
@@ -166,7 +172,7 @@ struct HistoryListView: View {
         .onPanelMouseMovement(onPointerMovement)
     }
 
-    private var showsSectionHeaders: Bool {
+    private var showsGroupSeparator: Bool {
         !viewState.displayedPinnedRows.isEmpty
             && (!viewState.displayedUnpinnedRows.isEmpty || viewState.hasNextPage || viewState.isLoadingPage)
     }
@@ -184,6 +190,8 @@ struct HistoryListView: View {
             snippetLineCount: snippetLineCount,
             fontSize: fontSize,
             isSelected: selection.wrappedValue == row.item.id,
+            shortcuts: shortcuts,
+            areShortcutsEnabled: areShortcutsEnabled,
             thumbnails: thumbnails,
             dragSource: dragSource,
             onCopy: { viewState.requestPasteFromDisplayedRow($0) },
@@ -328,8 +336,8 @@ struct HistoryListView: View {
                     viewState.remove(row.item.id)
                 }
             }
-            .keyboardShortcut(.delete, modifiers: [])
-            .disabled(selectedRow == nil || isSearchFieldFocused)
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .remove, whileEditingText: isSearchFieldFocused))
+            .disabled(selectedRow == nil)
 
             Button(HistoryListCopy.text("Toggle Pin")) {
                 if let row = selectedRow {
@@ -340,7 +348,7 @@ struct HistoryListView: View {
                     }
                 }
             }
-            .keyboardShortcut("p", modifiers: .command)
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .togglePin, whileEditingText: isSearchFieldFocused))
             .disabled(selectedRow == nil)
 
             // Context-menu semantics: placePinned reorders an already-pinned item.
@@ -349,7 +357,7 @@ struct HistoryListView: View {
                     viewState.pin(row.item.id, at: .first)
                 }
             }
-            .keyboardShortcut(.upArrow, modifiers: [.option, .command])
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .pinToTop, whileEditingText: isSearchFieldFocused))
             .disabled(selectedRow == nil)
 
             Button(PanelActionsCopy.text("Pin to Bottom")) {
@@ -357,7 +365,7 @@ struct HistoryListView: View {
                     viewState.pin(row.item.id, at: .last)
                 }
             }
-            .keyboardShortcut(.downArrow, modifiers: [.option, .command])
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .pinToBottom, whileEditingText: isSearchFieldFocused))
             .disabled(selectedRow == nil)
 
             Button(PanelActionsCopy.text("Show Details")) {
@@ -365,9 +373,10 @@ struct HistoryListView: View {
                     onShowDetails(row.item)
                 }
             }
-            .keyboardShortcut("i", modifiers: .command)
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .showDetails, whileEditingText: isSearchFieldFocused))
             .disabled(selectedRow == nil)
         }
+        .disabled(!areShortcutsEnabled)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)

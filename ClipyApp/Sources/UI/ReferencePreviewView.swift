@@ -11,14 +11,6 @@ struct ReferencePreviewView: View {
     var requestFileLoad: (() -> Void)? = nil
     var maximumHeight: CGFloat? = nil
 
-    private var name: String {
-        if let path = reference.filePath {
-            let filename = URL(fileURLWithPath: path).lastPathComponent
-            return filename.isEmpty ? path : filename
-        }
-        return URL(string: reference.address, encodingInvalidCharacters: false)?.host ?? reference.address
-    }
-
     var body: some View {
         let title = PreviewCopy.text(reference.kind == .file ? "File Reference" : "URL Reference")
         ContentFittingScrollView(maximumHeight: maximumHeight) {
@@ -29,12 +21,10 @@ struct ReferencePreviewView: View {
                         .foregroundStyle(.tertiary)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(verbatim: name)
-                            .font(.body.weight(.medium))
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("clipy.preview.reference.name")
+                        ReferencePreviewText(
+                            value: reference.displayName, identifier: "clipy.preview.reference.name",
+                            maximumNumberOfLines: 2, usesTitleStyle: true
+                        )
                         Text(title)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -90,15 +80,11 @@ struct ReferencePreviewView: View {
             Text(label)
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-            Text(verbatim: value)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
+            ReferencePreviewText(
+                value: value, identifier: identifier, maximumNumberOfLines: 2
+            )
                 .help(value)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .accessibilityIdentifier(identifier)
         }
     }
 }
@@ -111,11 +97,11 @@ struct FullReferencePreviewContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let path = reference.filePath {
-                FullReferenceText(
+                ReferencePreviewText(
                     value: path, identifier: "clipy.preview.reference.full.path"
                 )
             }
-            FullReferenceText(
+            ReferencePreviewText(
                 value: reference.address, identifier: "clipy.preview.reference.full.address"
             )
         }
@@ -124,12 +110,15 @@ struct FullReferencePreviewContent: View {
     }
 }
 
-/// References contain long uninterrupted components. Character wrapping avoids
-/// expensive word-boundary layout while keeping the entire original value in
-/// one native selectable label, including selections across visual line breaks.
-private struct FullReferenceText: NSViewRepresentable {
+/// Both collapsed and expanded references keep the entire original value in
+/// one native selectable label. AppKit owns middle truncation for the two-line
+/// summary and character wrapping for the full value; SwiftUI never shapes a
+/// separate 16 KiB Text while negotiating the summary's intrinsic dimensions.
+private struct ReferencePreviewText: NSViewRepresentable {
     let value: String
     let identifier: String
+    var maximumNumberOfLines = 0
+    var usesTitleStyle = false
 
     @MainActor
     final class Coordinator {
@@ -140,16 +129,24 @@ private struct FullReferenceText: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSTextField {
         let field = NSTextField(wrappingLabelWithString: value)
-        field.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
-        field.textColor = .secondaryLabelColor
-        field.lineBreakMode = .byCharWrapping
+        field.font = font
+        field.textColor = usesTitleStyle ? .labelColor : .secondaryLabelColor
+        field.lineBreakMode = maximumNumberOfLines == 0 ? .byCharWrapping : .byTruncatingMiddle
         field.lineBreakStrategy = []
-        field.maximumNumberOfLines = 0
+        field.maximumNumberOfLines = maximumNumberOfLines
         field.setAccessibilityIdentifier(identifier)
         return field
     }
 
     func updateNSView(_ field: NSTextField, context: Context) {
+        if field.font != font || field.maximumNumberOfLines != maximumNumberOfLines {
+            field.font = font
+            field.maximumNumberOfLines = maximumNumberOfLines
+            field.lineBreakMode = maximumNumberOfLines == 0 ? .byCharWrapping : .byTruncatingMiddle
+            context.coordinator.measuredSize = nil
+        }
+        field.textColor = usesTitleStyle ? .labelColor : .secondaryLabelColor
+        field.setAccessibilityIdentifier(identifier)
         if !field.stringValue.utf8.elementsEqual(value.utf8) {
             field.stringValue = value
             context.coordinator.measuredSize = nil
@@ -171,5 +168,11 @@ private struct FullReferenceText: NSViewRepresentable {
         let measuredSize = CGSize(width: width, height: ceil(size.height))
         context.coordinator.measuredSize = measuredSize
         return measuredSize
+    }
+
+    private var font: NSFont {
+        usesTitleStyle
+            ? .systemFont(ofSize: NSFont.systemFontSize, weight: .medium)
+            : .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
     }
 }

@@ -28,6 +28,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         app.launchArguments += [
             "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
             "-clipy.appearance.previewAutoOpen", "YES",
+            "-panelPosition", "center",
         ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_DRAG_TRACE_PATH"] = traceURL.path
@@ -70,41 +71,46 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         // then become covered when the source and its child come forward.
         let occupiedFrame = sourceFrame.union(previewFrame)
         let screen = try XCTUnwrap(NSScreen.screens.first { $0.frame.intersects(sourceFrame) })
-        let targetFrame = try XCTUnwrap(Self.receiverFrame(outside: occupiedFrame, on: screen.visibleFrame),
-            "No separate receiver area around the source and preview windows: \(occupiedFrame)")
+        // Center placement preserves horizontal position while first-open
+        // content fitting and a later summon can differ vertically. Reserve
+        // the source/preview columns for the full screen height, so the
+        // receiver occupies a side area that stays free after re-summoning.
+        let occupiedColumns = CGRect(
+            x: occupiedFrame.minX, y: screen.visibleFrame.minY,
+            width: occupiedFrame.width, height: screen.visibleFrame.height
+        )
+        let targetFrame = try XCTUnwrap(Self.receiverFrame(outside: occupiedColumns, on: screen.visibleFrame),
+            "No separate receiver area beside the source and preview columns: \(occupiedColumns)")
         let readyURL = directory.appendingPathComponent("ready.json")
         let receivedURL = directory.appendingPathComponent("received.json")
         let receiverLogURL = directory.appendingPathComponent("receiver.log")
         try Data().write(to: receiverLogURL)
-        let receiverLog = try FileHandle(forWritingTo: receiverLogURL)
-        addTeardownBlock { try? receiverLog.close() }
-        let receiver = Process()
-        receiver.executableURL = Bundle(for: Self.self).bundleURL
-            .appendingPathComponent("Contents/MacOS/ClipyDragReceiver")
-        receiver.arguments = [targetFrame.minX, targetFrame.minY, targetFrame.width, targetFrame.height]
+        let receiverBundleURL = try XCTUnwrap(
+            Bundle(for: Self.self).url(forResource: "ClipyDragReceiver", withExtension: "app"),
+            "The native receiver application must be embedded in the UI test bundle's resources"
+        )
+        let receiver = XCUIApplication(url: receiverBundleURL)
+        receiver.launchArguments = [targetFrame.minX, targetFrame.minY, targetFrame.width, targetFrame.height]
             .map { String(Double($0)) } + [directory.path]
-        receiver.standardOutput = receiverLog
-        receiver.standardError = receiverLog
-        try receiver.run()
-        // XCTest teardown also runs after continueAfterFailure=false aborts
-        // the method. Register only after launch so an unstarted Process can
-        // never reach waitUntilExit.
+        // XCTest launches the exact test application through the standard
+        // macOS application lifecycle, including activation. Launching its
+        // executable with Process leaves activation requests unfulfilled.
         addTeardownBlock { @MainActor () async in
-            if receiver.isRunning {
-                receiver.terminate()
-                receiver.waitUntilExit()
-            }
+            if receiver.state != .notRunning { receiver.terminate() }
         }
+        receiver.launch()
         let receiverReady = NSPredicate { _, _ in FileManager.default.fileExists(atPath: readyURL.path) }
         let readiness = XCTWaiter.wait(for: [
             XCTNSPredicateExpectation(predicate: receiverReady, object: nil)
         ], timeout: 5)
         let readyLog = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
-        XCTAssertEqual(readiness, .completed, "Receiver ready handshake missing; running=\(receiver.isRunning); \(readyLog)")
-        XCTAssertTrue(receiver.isRunning)
+        XCTAssertEqual(readiness, .completed, "Receiver ready handshake missing; state=\(receiver.state); \(readyLog)")
+        XCTAssertNotEqual(receiver.state, .notRunning)
         let ready = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: readyURL)) as? [String: Any])
-        XCTAssertEqual((ready["activationPolicy"] as? NSNumber)?.intValue, NSApplication.ActivationPolicy.accessory.rawValue)
+        XCTAssertEqual((ready["activationPolicy"] as? NSNumber)?.intValue, NSApplication.ActivationPolicy.regular.rawValue)
         XCTAssertEqual(ready["isRunning"] as? Bool, true)
+        XCTAssertEqual(ready["isActive"] as? Bool, true)
+        XCTAssertEqual(ready["isKeyWindow"] as? Bool, true)
         let receiverWindowNumber = try XCTUnwrap((ready["windowNumber"] as? NSNumber)?.intValue)
         // AppKit's window query requires an initialized WindowServer connection.
         // The independent receiver owns it; XCTRunner does not initialize NSApp.
@@ -118,20 +124,70 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         )
         let destination = NSPoint(x: actualTargetFrame.midX, y: actualTargetFrame.midY)
         XCTAssertFalse(actualTargetFrame.intersects(occupiedFrame))
+        // Real receiver activation closes Clipy at its app-deactivation
+        // boundary, even when its window keep-open pin is set. Re-summon
+        // through the actual global shortcut, then read fresh source geometry.
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+        row.hover()
+        XCTAssertTrue(preview.waitForExistence(timeout: 5), app.debugDescription)
+        let reopenedSourceAXFrame = sourceWindow.frame
+        let reopenedSourceFrame = NSRect(
+            x: reopenedSourceAXFrame.minX, y: desktopTop - reopenedSourceAXFrame.maxY,
+            width: reopenedSourceAXFrame.width, height: reopenedSourceAXFrame.height
+        )
+        let reopenedPreviewAXFrame = preview.frame
+        let reopenedPreviewFrame = NSRect(
+            x: reopenedPreviewAXFrame.minX, y: desktopTop - reopenedPreviewAXFrame.maxY,
+            width: reopenedPreviewAXFrame.width, height: reopenedPreviewAXFrame.height
+        )
+        XCTAssertFalse(actualTargetFrame.intersects(reopenedSourceFrame.union(reopenedPreviewFrame)),
+            "Reopened source or preview covers the actual receiver: \(reopenedSourceFrame), \(reopenedPreviewFrame), \(actualTargetFrame)")
         let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         let end = start.withOffset(CGVector(
             dx: destination.x - row.frame.midX,
             dy: desktopTop - destination.y - row.frame.midY
         ))
-        start.press(forDuration: 0.3, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.5)
+        // Join the actual receiver view's event loop before starting the one
+        // native drag. The window-only handshake above cannot establish that
+        // the content view has received events or installed its tracking area.
+        let pointerReadyURL = directory.appendingPathComponent("hovered.json")
+        end.hover()
+        let pointerReady = NSPredicate { _, _ in
+            FileManager.default.fileExists(atPath: pointerReadyURL.path)
+        }
+        let pointerReadiness = XCTWaiter.wait(for: [
+            XCTNSPredicateExpectation(predicate: pointerReady, object: nil)
+        ], timeout: 5)
+        let pointerLog = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
+        XCTAssertEqual(pointerReadiness, .completed,
+            "Receiver view did not receive the pointer; state=\(receiver.state); \(pointerLog)")
+        let pointerFacts = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: Data(contentsOf: pointerReadyURL)
+        ) as? [String: NSNumber])
+        XCTAssertEqual(pointerFacts["windowNumber"]?.intValue, receiverWindowNumber)
+        XCTAssertEqual(pointerFacts["hitWindowNumber"]?.intValue, receiverWindowNumber)
+        // Returning to the source restores the row-owned native drag candidate.
+        // Hovering the receiver neither clicks it nor activates another app.
+        row.hover()
+        XCTAssertTrue(row.isHittable)
+        let beforeDrag = row.frame
+        let dragStart = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let dragEnd = dragStart.withOffset(CGVector(
+            dx: destination.x - beforeDrag.midX,
+            dy: desktopTop - destination.y - beforeDrag.midY
+        ))
+        dragStart.press(forDuration: 0.3, thenDragTo: dragEnd, withVelocity: .slow, thenHoldForDuration: 0.5)
         let delivered = NSPredicate { _, _ in FileManager.default.fileExists(atPath: receivedURL.path) }
         let delivery = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: delivered, object: nil)], timeout: 10)
         let trace = (try? String(contentsOf: traceURL, encoding: .utf8)) ?? "no source trace"
         let receiverLogText = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
         let diagnostics = """
             row before hover: \(beforeHover), after hover: \(afterHover), source window: \(sourceFrame)
+            row immediately before drag: \(beforeDrag), receiver view handshake: \(pointerFacts)
             preview window: \(previewFrame), occupied source area: \(occupiedFrame)
-            receiver running: \(receiver.isRunning), frame: \(actualTargetFrame), destination: \(destination)
+            reopened source: \(reopenedSourceFrame), reopened preview: \(reopenedPreviewFrame)
+            receiver state: \(receiver.state), frame: \(actualTargetFrame), destination: \(destination)
             \(receiverLogText)
             \(trace)
             """

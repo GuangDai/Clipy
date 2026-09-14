@@ -191,6 +191,11 @@ final class HistoryPanelSurfaceState {
     /// moves (Maccy's `hoverSelectionWhileKeyboardNavigating` deferral).
     private(set) var inputMode: PanelInputMode = .keyboard
     private(set) var deferredHoverSelection: HistoryItemID?
+    var selectsOnHover = true {
+        didSet {
+            if !selectsOnHover { deferredHoverSelection = nil }
+        }
+    }
 
     init(
         history: any ClipboardHistory,
@@ -393,6 +398,7 @@ final class HistoryPanelSurfaceState {
     func notePointerMovement() {
         guard inputMode == .keyboard else { return }
         inputMode = .mouse
+        guard selectsOnHover else { return }
         guard let hovered = deferredHoverSelection else { return }
         deferredHoverSelection = nil
         selection = hovered
@@ -403,7 +409,7 @@ final class HistoryPanelSurfaceState {
     /// mode only remembers the row, so arrows and the pointer never fight;
     /// the deferral applies on the next real mouse movement.
     func handleRowHover(_ id: HistoryItemID) {
-        guard isSessionActive, selection != id else { return }
+        guard isSessionActive, selectsOnHover, selection != id else { return }
         switch inputMode {
         case .mouse:
             selection = id
@@ -482,6 +488,8 @@ final class HistoryPanelSurfaceState {
 /// store from it, and only in-package callers inject a store directly.
 struct HistoryPanelView: View {
     @Environment(\.locale) private var locale
+    @AppStorage(PanelShortcutSettings.defaultsKey) private var shortcutData = Data()
+    private var shortcuts: PanelShortcutSettings { PanelShortcutSettings.load(data: shortcutData) }
 
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
@@ -755,6 +763,8 @@ struct HistoryPanelView: View {
             SearchHeaderView(
                 viewState: viewState,
                 searchFieldFocused: $isSearchFieldFocused,
+                shortcuts: shortcuts,
+                areShortcutsEnabled: surfaceState.isAtListRoot,
                 onMoveSelection: { offset in
                     surfaceState.moveSelection(
                         in: displayedSelectionRows,
@@ -828,6 +838,8 @@ struct HistoryPanelView: View {
                 snippetLineCount: appearance.snippetLineCount,
                 fontSize: appearance.rowFontSize,
                 isSearchFieldFocused: isSearchFieldFocused,
+                shortcuts: shortcuts,
+                areShortcutsEnabled: surfaceState.isAtListRoot,
                 selection: $surfaceState.selection,
                 onFocusHistory: {
                     isSearchFieldFocused = false
@@ -1005,7 +1017,12 @@ struct HistoryPanelView: View {
                     Text(PanelChromeCopy.text("Compact")).tag(HistoryRowDensity.compact)
                 }
                 Menu(PanelChromeCopy.text("Keyboard Shortcuts")) {
-                    Text(PanelFooterShortcutHints.text(isSearchActive: viewState.isSearchActive))
+                    ForEach(PanelShortcutAction.allCases, id: \.self) { action in
+                        if let chord = shortcuts.binding(for: action) {
+                            Text(chord.displayName + "  " + KeyboardShortcutsCopy.text(action.title,
+                                bundle: PanelActionsCopy.bundle(for: locale)))
+                        }
+                    }
                 }
                 Divider()
                 // Opt-in keep-open affordance: the composition root admits it
@@ -1020,6 +1037,8 @@ struct HistoryPanelView: View {
                         )
                     )
                     .accessibilityIdentifier("clipy.panel.keep-open")
+                    .keyboardShortcut(surfaceState.isAtListRoot
+                        ? shortcuts.keyboardShortcut(for: .keepOpen, whileEditingText: isSearchFieldFocused) : nil)
                     Divider()
                 }
                 if let onPauseCapture {
@@ -1032,6 +1051,8 @@ struct HistoryPanelView: View {
                         )
                     }
                     .accessibilityIdentifier("clipy.capture.pause")
+                    .keyboardShortcut(surfaceState.isAtListRoot
+                        ? shortcuts.keyboardShortcut(for: .pauseCapture, whileEditingText: isSearchFieldFocused) : nil)
                     Divider()
                 }
                 Button {
@@ -1169,6 +1190,31 @@ struct HistoryPanelView: View {
     /// chord closes it.
     private var hiddenShortcuts: some View {
         Group {
+            if surfaceState.isAtListRoot {
+                Button(PanelActionsCopy.text("Search Clipboard History")) {
+                    isSearchFieldFocused = true
+                }
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .focusSearch, whileEditingText: isSearchFieldFocused))
+
+                Button(PanelActionsCopy.text("Clear search")) {
+                    viewState.clearSearch()
+                    isSearchFieldFocused = true
+                }
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .clearSearch, whileEditingText: isSearchFieldFocused))
+
+                Button(PanelChromeCopy.text("Clear filters")) {
+                    viewState.typeFilter = .all
+                    viewState.showsPinnedOnly = false
+                    isSearchFieldFocused = true
+                }
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .clearFilters, whileEditingText: isSearchFieldFocused))
+
+                Button(PanelFooterCopy.text("Show Preview")) {
+                    previewState.togglePreview(for: previewSelection.reference)
+                }
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .togglePreview, whileEditingText: isSearchFieldFocused))
+                .disabled(previewSelection.reference == nil)
+            }
             if surfaceState.detailsPath.isEmpty {
                 Button(PanelFooterCopy.text("Clear Search or Close")) {
                     if previewState.isInformationPresented {
@@ -1194,10 +1240,9 @@ struct HistoryPanelView: View {
                     surfaceState.quickLookReference = previewSelection.reference
                 }
             }
-            .keyboardShortcut(.space, modifiers: [])
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .quickLook, whileEditingText: isSearchFieldFocused))
             .disabled(
-                isSearchFieldFocused
-                    || (surfaceState.quickLookReference == nil
+                (surfaceState.quickLookReference == nil
                         && (!surfaceState.detailsPath.isEmpty
                             || previewSelection.reference == nil))
             )
@@ -1210,7 +1255,7 @@ struct HistoryPanelView: View {
             Button(PanelActionsCopy.text("Retry")) {
                 previewState.requestPreviewRetry()
             }
-            .keyboardShortcut("r", modifiers: .command)
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .retryPreview, whileEditingText: isSearchFieldFocused))
             .disabled(
                 !previewState.isOpen
                     || !surfaceState.detailsPath.isEmpty
@@ -1224,7 +1269,7 @@ struct HistoryPanelView: View {
             Button(PreviewCopy.text("Previous PDF Page")) {
                 previewState.requestPreviewPage(.previous)
             }
-            .keyboardShortcut(.leftArrow, modifiers: [.option, .command])
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .previousPDFPage, whileEditingText: isSearchFieldFocused))
             .disabled(
                 !previewState.isOpen
                     || !surfaceState.detailsPath.isEmpty
@@ -1234,7 +1279,7 @@ struct HistoryPanelView: View {
             Button(PreviewCopy.text("Next PDF Page")) {
                 previewState.requestPreviewPage(.next)
             }
-            .keyboardShortcut(.rightArrow, modifiers: [.option, .command])
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .nextPDFPage, whileEditingText: isSearchFieldFocused))
             .disabled(
                 !previewState.isOpen
                     || !surfaceState.detailsPath.isEmpty

@@ -156,57 +156,178 @@ struct SummonShortcutControllerTests {
         controller.stop()
     }
 
-    @Test func activeChordIsRecordedOnceInsteadOfSummoning() throws {
+    @Test func recordingSuspendsTheGlobalChordAndCancellationRestoresIt() throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let probe = ShortcutRegistrationProbe()
         var summoned = 0
-        var recorded: [HotKeyChord] = []
         let controller = makeController(defaults: defaults, probe: probe) {
             summoned += 1
         }
 
         #expect(controller.start())
-        controller.beginRecordingActiveChord { recorded.append($0) }
-        #expect(probe.fire(.defaultSummon))
-        #expect(recorded == [.defaultSummon])
+        let retiredCallback = try #require(probe.action(for: .defaultSummon))
+        controller.beginRecording()
+        controller.beginRecording()
+        #expect(!probe.fire(.defaultSummon))
+        retiredCallback()
         #expect(summoned == 0)
-
+        #expect(probe.cleanupChords == [.defaultSummon])
+        controller.endRecording()
+        controller.endRecording()
+        retiredCallback()
+        #expect(summoned == 0, "queued callbacks from the paused token stay retired")
         #expect(probe.fire(.defaultSummon))
-        #expect(recorded == [.defaultSummon])
-        #expect(summoned == 1, "recording interception is one-shot")
+        #expect(summoned == 1)
+        #expect(probe.attemptChords == [.defaultSummon, .defaultSummon])
         controller.stop()
     }
 
-    @Test func changeAndStopCannotRetainARecordingHandler() throws {
+    @Test func changeAndStopDoNotRestoreAPausedOldBinding() throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let probe = ShortcutRegistrationProbe()
         var summoned = 0
-        var recorded: [HotKeyChord] = []
         let controller = makeController(defaults: defaults, probe: probe) {
             summoned += 1
         }
 
         #expect(controller.start())
-        controller.beginRecordingActiveChord { recorded.append($0) }
+        controller.beginRecording()
         #expect(controller.change(to: alternate))
+        controller.endRecording()
         #expect(probe.fire(alternate))
-        #expect(recorded.isEmpty)
         #expect(summoned == 1)
+        #expect(probe.attemptChords == [.defaultSummon, alternate])
 
-        controller.beginRecordingActiveChord { recorded.append($0) }
+        controller.beginRecording()
         controller.stop()
         #expect(controller.start())
         #expect(probe.fire(alternate))
-        #expect(recorded.isEmpty)
         #expect(summoned == 2)
+        controller.stop()
+    }
+
+    @Test func clearedBindingSurvivesRestartAndCanBeResetOrChanged() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = ShortcutRegistrationProbe()
+        var summoned = 0
+        let controller = makeController(defaults: defaults, probe: probe) { summoned += 1 }
+        #expect(controller.start())
+        let retiredCallback = try #require(probe.action(for: .defaultSummon))
+        controller.clear()
+        #expect(controller.state == .disabled)
+        #expect(!probe.fire(.defaultSummon))
+        retiredCallback()
+        #expect(summoned == 0)
+        controller.stop()
+        let reopened = makeController(defaults: defaults, probe: probe)
+        #expect(!reopened.start())
+        #expect(reopened.state == .disabled)
+        #expect(probe.attemptChords == [.defaultSummon])
+        #expect(reopened.change(to: alternate))
+        #expect(reopened.state == .active(alternate))
+        reopened.clear()
+        #expect(reopened.reset())
+        #expect(reopened.state == .active(.defaultSummon))
+        #expect(defaults.object(forKey: SummonShortcutController.defaultsKey) == nil)
+        reopened.stop()
+    }
+
+    @Test func failedChangeFromDisabledDoesNotReenableOnRestart() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = ShortcutRegistrationProbe()
+        let controller = makeController(defaults: defaults, probe: probe)
+        controller.clear()
+        controller.beginRecording()
+        probe.failNext(alternate)
+        #expect(!controller.change(to: alternate))
+        controller.endRecording()
+        #expect(controller.state == .unavailable(requested: alternate, retainedActive: nil))
+        controller.stop()
+        #expect(!controller.start())
+        #expect(controller.state == .disabled)
+        #expect(probe.attemptChords == [alternate])
+        controller.stop()
+    }
+
+    @Test func recordedConflictRestoresPreviousBindingWithoutSavingCandidate() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = ShortcutRegistrationProbe()
+        let controller = makeController(defaults: defaults, probe: probe)
+        #expect(controller.start())
+        controller.beginRecording()
+        probe.failNext(alternate)
+        #expect(!controller.change(to: alternate))
+        controller.endRecording()
+        #expect(controller.state == .unavailable(requested: alternate, retainedActive: .defaultSummon))
+        #expect(probe.fire(.defaultSummon))
+        #expect(defaults.object(forKey: SummonShortcutController.defaultsKey) == nil)
+        #expect(probe.attemptChords == [.defaultSummon, alternate, .defaultSummon])
+        #expect(controller.retry())
+        #expect(persistedChord(in: defaults) == alternate)
+        controller.stop()
+    }
+
+    @Test func cancelledRecordingMakesARestoreConflictVisibleAndRetryable() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let probe = ShortcutRegistrationProbe()
+        let controller = makeController(defaults: defaults, probe: probe)
+        #expect(controller.start())
+        controller.beginRecording()
+        probe.failNext(.defaultSummon)
+        controller.endRecording()
+        #expect(controller.state == .unavailable(requested: .defaultSummon, retainedActive: nil))
+        #expect(!probe.fire(.defaultSummon))
+        #expect(controller.retry())
+        #expect(probe.fire(.defaultSummon))
         controller.stop()
     }
 
     @Test func documentedDefaultColorsShortcutWarnsButIsNotRejected() {
         #expect(HotKeyChord.defaultSummon.warning == .knownColorsShortcut)
         #expect(alternate.warning == nil)
+    }
+
+    @Test func shortcutLabelsUseNativeModifierAndSpecialKeySymbols() {
+        #expect(HotKeyChord(
+            keyCode: UInt32(kVK_LeftArrow),
+            modifiers: UInt32(controlKey | optionKey | shiftKey | cmdKey)
+        ).settingsDisplayName == "⌃⌥⇧⌘←")
+        #expect(HotKeyChord(
+            keyCode: UInt32(kVK_F5), modifiers: UInt32(cmdKey)
+        ).settingsDisplayName == "⌘F5")
+        #expect(HotKeyChord(
+            keyCode: UInt32(kVK_Delete), modifiers: UInt32(optionKey)
+        ).settingsDisplayName == "⌥⌫")
+    }
+
+    @Test func globalConflictMatchingAgreesWithAppKitForShiftedPunctuation() throws {
+        let event = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, characters: "1",
+            charactersIgnoringModifiers: "1", isARepeat: false,
+            keyCode: UInt16(kVK_ANSI_1)
+        ))
+        // AppKit supplies the shifted character in the current keyboard
+        // layout (for example ! on US), independently of our Carbon read.
+        let shiftedCharacters = try #require(event.characters(byApplyingModifiers: .shift))
+        let localChord = try #require(PanelShortcutChord(
+            keyCode: UInt16(kVK_ANSI_1),
+            modifierFlagsRawValue: NSEvent.ModifierFlags([.command, .shift]).rawValue,
+            charactersIgnoringModifiers: shiftedCharacters
+        ))
+        let globalChord = HotKeyChord(
+            keyCode: UInt32(kVK_ANSI_1), modifiers: UInt32(cmdKey | shiftKey)
+        )
+        #expect(globalChord.panelShortcutChord == localChord)
+        #expect(HotKeyChord(
+            keyCode: UInt32(kVK_F5), modifiers: UInt32(cmdKey)
+        ).panelShortcutChord == PanelShortcutChord(key: "f5", modifiers: .command))
     }
 
     @Test func recorderCancelsEscapeAndRejectsBareOrModifierOnlyKeys() {
@@ -276,6 +397,29 @@ struct SummonShortcutControllerTests {
             keyCode: UInt32(kVK_ANSI_K),
             modifiers: UInt32(controlKey | shiftKey)
         ))])
+    }
+
+    @Test func sharedRecorderCanDeliverBareKeysWithoutGlobalShortcutValidation() throws {
+        var recordedKeys: [UInt16] = []
+        var recordedModifiers: [UInt] = []
+        var recordedCharacters: [String?] = []
+        let input = SummonShortcutRecorderInputView(onRawKey: { keyCode, modifiers, characters in
+            recordedKeys.append(keyCode)
+            recordedModifiers.append(modifiers)
+            recordedCharacters.append(characters)
+        })
+        for repeated in [false, true] {
+            let event = try #require(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                windowNumber: 0, context: nil, characters: "k",
+                charactersIgnoringModifiers: "k", isARepeat: repeated,
+                keyCode: UInt16(kVK_ANSI_K)
+            ))
+            input.keyDown(with: event)
+        }
+        #expect(recordedKeys == [UInt16(kVK_ANSI_K)])
+        #expect(recordedModifiers == [0])
+        #expect(recordedCharacters == ["k"])
     }
 
     @Test func mountedRecorderMonitorsAppKeyDownExactlyOnce() throws {
@@ -430,5 +574,9 @@ private final class ShortcutRegistrationProbe {
         }
         registration.action()
         return true
+    }
+
+    func action(for chord: HotKeyChord) -> (() -> Void)? {
+        registrations.values.first(where: { $0.chord == chord })?.action
     }
 }

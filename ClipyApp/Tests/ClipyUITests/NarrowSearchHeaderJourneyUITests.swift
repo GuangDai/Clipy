@@ -37,6 +37,9 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         app.launchArguments += [
             "-AppleLanguages", "(\(language))", "-AppleLocale", locale,
             "-clipy.appearance.previewAutoOpen", "YES",
+            // Keep the native resize edge away from the screen boundary,
+            // independent of where a preceding GUI journey left the pointer.
+            "-panelPosition", "center",
         ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"

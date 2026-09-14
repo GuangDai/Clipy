@@ -68,6 +68,7 @@ internal enum MutationFactLoaders {
         var previousOrdinal = 0
         var totalBytes = 0
         while try rows.step() {
+            try Task.checkCancellation()
             let ordinal = try HistoryItemRowHydration.integer(rows, 1)
             let bytes = try HistoryItemRowHydration.integer(rows, 2)
             guard ordinal > previousOrdinal, bytes > 0, bytes <= limits.maximumProposedRevisionBytes,

@@ -25,15 +25,21 @@ struct SearchHeaderView: View {
     private let searchFieldFocused: Binding<Bool>
     private let onMoveSelection: (Int) -> Void
     private let onSubmitSelection: () -> Void
+    private let shortcuts: PanelShortcutSettings
+    private let areShortcutsEnabled: Bool
 
     init(
         viewState: HistoryViewState,
         searchFieldFocused: Binding<Bool>,
+        shortcuts: PanelShortcutSettings = PanelShortcutSettings(),
+        areShortcutsEnabled: Bool = true,
         onMoveSelection: @escaping (Int) -> Void = { _ in },
         onSubmitSelection: @escaping () -> Void = {}
     ) {
         self.viewState = viewState
         self.searchFieldFocused = searchFieldFocused
+        self.shortcuts = shortcuts
+        self.areShortcutsEnabled = areShortcutsEnabled
         self.onMoveSelection = onMoveSelection
         self.onSubmitSelection = onSubmitSelection
     }
@@ -280,12 +286,13 @@ struct SearchHeaderView: View {
     private var modeShortcuts: some View {
         Group {
             Button(PanelActionsCopy.text("Exact", bundle: copyBundle)) { viewState.searchMode = .exact }
-                .keyboardShortcut("1", modifiers: .command)
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .exactSearch, whileEditingText: searchFieldFocused.wrappedValue))
             Button(PanelActionsCopy.text("Fuzzy", bundle: copyBundle)) { viewState.searchMode = .fuzzy }
-                .keyboardShortcut("2", modifiers: .command)
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .fuzzySearch, whileEditingText: searchFieldFocused.wrappedValue))
             Button(PanelActionsCopy.text("Regular Expression", bundle: copyBundle)) { viewState.searchMode = .regexp }
-                .keyboardShortcut("3", modifiers: .command)
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .regexpSearch, whileEditingText: searchFieldFocused.wrappedValue))
         }
+        .disabled(!areShortcutsEnabled)
         .opacity(0)
         .frame(width: 0, height: 0)
         .accessibilityHidden(true)

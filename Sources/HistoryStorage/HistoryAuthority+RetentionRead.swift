@@ -30,6 +30,8 @@ extension HistoryAuthority {
             }
         } catch let failure as HistoryFailure {
             throw failure
+        } catch let failure as SQLiteFailure {
+            throw failure.historyFailure
         } catch {
             throw HistoryFailure.temporarilyUnavailable(.factProof)
         }

@@ -48,6 +48,17 @@ enum PanelGeometry {
     /// the user's saved size is only a ceiling (V2-11).
     static let minimumHeight: CGFloat = 0
 
+    /// A saved browsing width must retain space for the search field and
+    /// its two adjacent controls. A saved ceiling must show the toolbar.
+    /// These validate preferences only: content-fit measurements retain the
+    /// zero floor above, including short transient content (V2-11, PAN-1).
+    static var minimumPersistedContentWidth: CGFloat {
+        3 * PanelContentFit.searchFieldHeight
+            + 2 * PanelTheme.spacingXSmall
+            + 2 * PanelTheme.headerHorizontalPadding
+    }
+    static var minimumPersistedHeight: CGFloat { PanelContentFit.headerHeight }
+
     /// The UserDefaults key for the persisted browsing-column width.
     static let panelContentWidthDefaultsKey = "clipy.panelContentWidth"
 
@@ -64,6 +75,14 @@ enum PanelGeometry {
         height.isFinite ? max(height, minimumHeight) : Self.height
     }
 
+    static func usableContentWidth(_ width: CGFloat, fallback: CGFloat) -> CGFloat {
+        width.isFinite && width >= minimumPersistedContentWidth ? width : fallback
+    }
+
+    static func usableHeightCeiling(_ height: CGFloat, fallback: CGFloat) -> CGFloat {
+        height.isFinite && height >= minimumPersistedHeight ? height : fallback
+    }
+
     /// The persisted panel size, clamped into the resizable bounds. An
     /// absent or invalid (non-numeric or non-finite) key falls back to that
     /// dimension's default, so a damaged defaults entry can never produce a
@@ -72,34 +91,36 @@ enum PanelGeometry {
         from defaults: UserDefaults
     ) -> (contentWidth: CGFloat, height: CGFloat) {
         (
-            contentWidth: persistedDimension(
+            contentWidth: usableContentWidth(persistedDimension(
                 forKey: panelContentWidthDefaultsKey,
                 in: defaults,
                 fallback: contentWidth,
                 minimum: minimumContentWidth
-            ),
-            height: persistedDimension(
+            ), fallback: contentWidth),
+            height: usableHeightCeiling(persistedDimension(
                 forKey: panelHeightDefaultsKey,
                 in: defaults,
                 fallback: height,
                 minimum: minimumHeight
-            )
+            ), fallback: height)
         )
     }
 
-    /// Persists the panel size already clamped, so the stored value is
-    /// always one `persistedSize(from:)` would return unchanged.
+    /// A collapsed resize never replaces a usable preference. Existing
+    /// collapsed defaults recover on read; each valid dimension still saves
+    /// independently when its companion dimension is unusable (PAN-1).
     static func persistSize(
         contentWidth: CGFloat,
         height: CGFloat,
         to defaults: UserDefaults
     ) {
+        let saved = persistedSize(from: defaults)
         defaults.set(
-            Double(clampedContentWidth(contentWidth)),
+            Double(usableContentWidth(contentWidth, fallback: saved.contentWidth)),
             forKey: panelContentWidthDefaultsKey
         )
         defaults.set(
-            Double(clampedHeight(height)),
+            Double(usableHeightCeiling(height, fallback: saved.height)),
             forKey: panelHeightDefaultsKey
         )
     }

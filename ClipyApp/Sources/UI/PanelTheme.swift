@@ -1,11 +1,19 @@
 /// Shared typography and spacing for the app's compact clipboard surfaces.
 /// System text styles preserve platform sizing and appearance; actual content
 /// and the window proposal determine layout, without width-based mode switches.
+import AppKit
 import CoreGraphics
 import Foundation
 import SwiftUI
 
 enum PanelTheme {
+    // Native paired selection colors stay readable for every macOS accent
+    // color and appearance. Secondary row details use the same foreground
+    // while selected instead of placing gray or accent text on the highlight.
+    static let selectedBackground = Color(nsColor: .selectedContentBackgroundColor)
+    static let selectedForeground = Color(nsColor: .alternateSelectedControlTextColor)
+    static let separator = Color(nsColor: .separatorColor)
+
     // MARK: Spacing scale
 
     static let spacingXXXSmall: CGFloat = 2

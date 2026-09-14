@@ -19,12 +19,20 @@ extension HistoryAuthority {
             if publishedNewFiles && !committed { requestBlobCleanup() }
         }
         do {
-            let published = try publishHistoryContent(for: plan) { publishedNewFiles = true }
-            try database.writeTransaction {
+            try database.writeTransaction(checkingCancellation: true) {
                 let auditConfig = try validateHistoryCommit(
                     expectedPreviousPosition: expectedPreviousPosition,
                     auditAppend: plan.auditAppend, in: database
                 )
+                // BEGIN IMMEDIATE also excludes the last cleanup batch of a
+                // released owner. It cannot unlink a newly published file
+                // while that file is awaiting its first SQL reference.
+                let published = try publishHistoryContent(for: plan) { publishedNewFiles = true }
+#if DEBUG
+                if publishedNewFiles {
+                    storageLifecycleDebugProbe.record(phase: .contentPublishedBeforeReferences)
+                }
+#endif
                 for (index, mutation) in plan.mutations.enumerated() {
                     try apply(mutation, published: published[index], in: database)
                 }
@@ -47,6 +55,8 @@ extension HistoryAuthority {
                 )
             }
             committed = true
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let rejection as ExternalWriteGateRejection {
             throw rejection
         } catch let failure as ExternalFailure {
@@ -246,7 +256,8 @@ extension HistoryAuthority {
 
         case .delete(let itemID, _):
             let old = try requireMutationRow(itemID, in: database)
-            // FK cascades delete content/representation references, never files.
+            // The item is the live owner. Removing it hides every revision
+            // immediately; bounded cleanup later reclaims detached content.
             try database.execute("DELETE FROM history_items WHERE id = ?", bindings: [.text(itemID.rawValue.uuidString)])
             try database.execute("""
                 UPDATE history_state SET retainedItemCount = retainedItemCount - 1,
@@ -339,7 +350,8 @@ extension HistoryAuthority {
     }
 
     /// SQL writes consume only published locators and small inline values.
-    /// File reads, writes and fsync have completed before this transaction.
+    /// File reads, writes and fsync complete before references are inserted,
+    /// while this same transaction excludes competing physical reclamation.
     private func insertContent(
         _ published: PublishedHistoryContent,
         itemID: HistoryItemID, ordinal: Int64, createdAt: Date, title: String,
@@ -374,7 +386,7 @@ extension HistoryAuthority {
     ) throws {
         for id in ids {
             try database.execute("""
-                DELETE FROM contents WHERE id = ? AND itemID = ? AND revisionOrdinal > 0
+                UPDATE contents SET itemID = NULL WHERE id = ? AND itemID = ? AND revisionOrdinal > 0
                     AND id != (SELECT currentContentID FROM history_items WHERE id = ?)
                 """, bindings: [
                     .text(id.rawValue.uuidString), .text(itemID.rawValue.uuidString),

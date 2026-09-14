@@ -60,7 +60,7 @@ final class AdaptiveSettingsJourneyUITests: XCTestCase {
         app.typeKey(",", modifierFlags: .command)
         XCTAssertTrue(density.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(appearance.isSelected, app.debugDescription)
-        XCTAssertFalse(app.switches["clipy.settings.retention.age-enabled"].exists)
+        XCTAssertFalse(app.checkBoxes["clipy.settings.retention.age-enabled"].exists)
         app.buttons["clipy.settings.category.general"].click()
         let clearActions = app.descendants(matching: .any)["clipy.settings.general.clear-history"]
         XCTAssertTrue(clearActions.waitForExistence(timeout: 10), app.debugDescription)

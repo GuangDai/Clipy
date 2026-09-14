@@ -65,6 +65,38 @@ final class LocalizedSettingsJourneyUITests: XCTestCase {
         let keepAtMost = app.staticTexts["最多保留"]
         XCTAssertTrue(keepAtMost.waitForExistence(timeout: 10), app.debugDescription)
 
+        // The checkbox and number share a compact native row when there is
+        // room. This catches the former grouped-Form padding between every
+        // child, including the apparently empty rows in the Chinese pane.
+        let maximum = app.textFields["clipy.settings.retention.maximum-unpinned"]
+        let countToggle = app.descendants(matching: .any)["clipy.settings.retention.count-enabled"]
+        let settings = app.windows.containing(
+            .textField, identifier: "clipy.settings.retention.maximum-unpinned"
+        ).firstMatch
+        XCTAssertTrue(maximum.waitForExistence(timeout: 5), app.debugDescription)
+        resize(settings, to: 900)
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            abs(settings.frame.width - 900) <= 3
+                && abs(countToggle.frame.midY - maximum.frame.midY) <= 12
+        }, app.debugDescription)
+
+        maximum.click()
+        maximum.typeKey("a", modifierFlags: .command)
+        maximum.typeText("241")
+        // A TextField title is a visible label inside a grouped Form. The
+        // numeric control must not retain a second, misleading "200" label
+        // after the user has changed its value.
+        XCTAssertFalse(settings.staticTexts["200"].exists, app.debugDescription)
+        resize(settings, to: 600)
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            abs(settings.frame.width - 600) <= 3 && maximum.value as? String == "241"
+        }, app.debugDescription)
+        XCTAssertTrue(settings.frame.contains(maximum.frame), app.debugDescription)
+        resize(settings, to: 900)
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            abs(settings.frame.width - 900) <= 3 && maximum.value as? String == "241"
+        }, app.debugDescription)
+
         // The retained-usage row loads on opening (HistoryUsageView
         // identifiers, queried the RetentionPolicyJourneyUITests way).
         let items = app.staticTexts["clipy.settings.usage.item-count"]
@@ -81,6 +113,18 @@ final class LocalizedSettingsJourneyUITests: XCTestCase {
         )
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
+    }
+
+    @MainActor
+    private func resize(_ window: XCUIElement, to width: CGFloat) {
+        // Grab the inside of the native resize border. A window that has
+        // expanded to x=1022 on the runner's 1024-point display puts a +2
+        // outside-edge coordinate offscreen, so the next drag never starts.
+        let edge = window.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.65))
+            .withOffset(CGVector(dx: -2, dy: 0))
+        edge.press(forDuration: 0.1, thenDragTo: edge.withOffset(
+            CGVector(dx: width - window.frame.width, dy: 0)
+        ))
     }
 
     @MainActor

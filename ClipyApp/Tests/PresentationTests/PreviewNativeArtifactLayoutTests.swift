@@ -1,6 +1,7 @@
 import AppKit
 import ContentPreview
 import CoreGraphics
+import Darwin
 import Foundation
 import ImageIO
 import SwiftUI
@@ -43,6 +44,7 @@ struct PreviewNativeArtifactLayoutTests {
         #expect(raster.rowBytes == 640 * 4)
         #expect(raster.pixels.count == 640 * 640 * 4)
 
+        let cpuStart = try threadCPUTime()
         let start = ContinuousClock.now
         // Use the actual display edge shared by the pane, Details and rows;
         // include its provider/CGImage construction in first display timing.
@@ -56,7 +58,8 @@ struct PreviewNativeArtifactLayoutTests {
         host.layoutSubtreeIfNeeded()
         host.displayIfNeeded()
         let elapsed = start.duration(to: .now)
-        print("Raster preview initial layout/draw: \(elapsed), pixels: 640 × 640")
+        let cpuElapsed = try threadCPUTime() - cpuStart
+        print("Raster preview initial layout/draw: wall: \(elapsed), main-thread CPU: \(cpuElapsed), pixels: 640 × 640")
         #expect(elapsed < .milliseconds(34))
     }
 
@@ -109,6 +112,7 @@ struct PreviewNativeArtifactLayoutTests {
                 #expect(reference.filePath?.unicodeScalars.contains(where: { $0.value == 0x301 }) == true)
             }
 
+            let cpuStart = try threadCPUTime()
             let start = ContinuousClock.now
             // Replacing identity matches selecting another item. Exercise the
             // actual product view, including filename, fields and disclosure.
@@ -116,19 +120,22 @@ struct PreviewNativeArtifactLayoutTests {
             host.layoutSubtreeIfNeeded()
             host.displayIfNeeded()
             let elapsed = start.duration(to: .now)
-            print("Collapsed reference initial layout/draw: \(elapsed), fixture: \(fixture.name)")
+            let cpuElapsed = try threadCPUTime() - cpuStart
+            print("Collapsed reference initial layout/draw: wall: \(elapsed), main-thread CPU: \(cpuElapsed), fixture: \(fixture.name)")
             #expect(elapsed < .milliseconds(34))
 
             // Mount the actual disclosure content in a standard viewport.
             // SwiftUI's hosted in-process AX tree does not expose its toggle;
             // the file-reference XCUI journey separately proves the real
             // DisclosureGroup mounts these exact path/address elements.
+            let expansionCPUStart = try threadCPUTime()
             let expansionStart = ContinuousClock.now
             fullHost.rootView = fullReferenceViewport(reference).id(index)
             fullHost.layoutSubtreeIfNeeded()
             fullHost.displayIfNeeded()
             let expansionElapsed = expansionStart.duration(to: .now)
-            print("Full reference content initial layout/draw: \(expansionElapsed), fixture: \(fixture.name)")
+            let expansionCPUElapsed = try threadCPUTime() - expansionCPUStart
+            print("Full reference content initial layout/draw: wall: \(expansionElapsed), main-thread CPU: \(expansionCPUElapsed), fixture: \(fixture.name)")
             #expect(expansionElapsed < .milliseconds(34))
         }
     }
@@ -224,6 +231,72 @@ struct PreviewNativeArtifactLayoutTests {
         #expect(Data(replacementAddress.stringValue.utf8) == Data(shortAddress.utf8))
         #expect(replacementAddress.frame.height > 0)
         #expect(replacementAddress.frame.height < 480)
+    }
+
+    @Test func collapsedReferencesKeepCompleteSelectableValuesWithinTwoNativeLines() async throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
+            styleMask: [.titled], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let pasteboard = NSPasteboard.withUniqueName()
+        defer { pasteboard.releaseGlobally() }
+        for fixture in [referenceFixtures[0], referenceFixtures[2], referenceFixtures[3]] {
+            let outcome = await ContentPreview().renderHistoryPane([
+                PreviewRepresentation(typeIdentifier: fixture.type, bytes: Data(fixture.address.utf8))
+            ])
+            guard case .content(.reference(let reference)) = outcome else {
+                Issue.record("Expected the bounded \(fixture.name) reference")
+                return
+            }
+            let host = NSHostingView(rootView: ReferencePreviewView(reference: reference, maximumHeight: 480))
+            host.sizingOptions = []
+            window.contentView = host
+            window.makeKeyAndOrderFront(nil)
+            var values = [("clipy.preview.reference.address", reference.address)]
+            if let path = reference.filePath {
+                values.append(("clipy.preview.reference.path", path))
+                values.append(("clipy.preview.reference.name", URL(fileURLWithPath: path).lastPathComponent))
+            } else {
+                values.append(("clipy.preview.reference.name", "example.invalid"))
+            }
+            for width in [CGFloat(340), CGFloat(180)] {
+                window.setContentSize(NSSize(width: width, height: 480))
+                host.layoutSubtreeIfNeeded()
+                host.displayIfNeeded()
+                let fields = nativeReferenceFields(in: host)
+                #expect(fields.count == values.count)
+                for (identifier, value) in values {
+                    let field = try #require(fields.first { $0.accessibilityIdentifier() == identifier })
+                    #expect(field.stringValue.utf8.elementsEqual(value.utf8))
+                    #expect(field.maximumNumberOfLines == 2)
+                    #expect(field.lineBreakMode == .byTruncatingMiddle)
+                    #expect(field.frame.width > 0 && field.frame.width <= width)
+                    #expect(field.frame.height > 0 && field.frame.height <= 40)
+                    #expect(field.isSelectable && !field.isEditable)
+                    field.selectText(nil)
+                    let editor = try #require(field.currentEditor() as? NSTextView)
+                    #expect(editor.selectedRange() == NSRange(location: 0, length: (value as NSString).length))
+                    pasteboard.clearContents()
+                    #expect(editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
+                    #expect(pasteboard.string(forType: .string).map { Data($0.utf8) } == Data(value.utf8))
+                    window.endEditing(for: nil)
+                }
+            }
+        }
+    }
+
+    /// Adjacent samples around the unchanged synchronous wall-time interval.
+    /// This suite runs that interval on the main thread without an await.
+    /// Darwin's thread clock includes only this thread's user/kernel CPU;
+    /// it excludes both scheduling delays and actual blocking waits. CPU is
+    /// diagnostic only: the 34ms wall assertion still owns the frame budget.
+    private func threadCPUTime() throws -> Duration {
+        var value = timespec()
+        let result = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value)
+        try #require(result == 0, "The native thread CPU clock must be available")
+        return .seconds(value.tv_sec) + .nanoseconds(value.tv_nsec)
     }
 
     private func nativeReferenceFields(in view: NSView) -> [NSTextField] {

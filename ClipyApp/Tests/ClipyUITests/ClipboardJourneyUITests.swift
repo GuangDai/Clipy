@@ -212,10 +212,11 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertFalse(approvalRequired.exists)
         XCTAssertFalse(openLoginItemsSettings.exists)
 
-        // Card 14B: the real General scene receives the AppDelegate-owned
+        // Card 14B: the dedicated Keyboard Shortcuts category receives the AppDelegate-owned
         // neutral shortcut state. The default's advisory remains visible; the
         // real recorder opens and Escape cancels without changing the binding.
         // This does not claim signed Carbon delivery or layout behavior.
+        app.buttons["clipy.settings.category.keyboard"].click()
         let shortcutStatus = app.descendants(matching: .any)[
             "clipy.settings.shortcut.status"
         ]
@@ -264,17 +265,17 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(retentionTab.waitForExistence(timeout: 5))
         retentionTab.click()
 
-        let ageLimit = app.switches[
+        let ageLimit = app.checkBoxes[
             "clipy.settings.retention.age-enabled"
         ]
         XCTAssertTrue(ageLimit.waitForExistence(timeout: 5))
         let settingsWindow = app.windows.containing(
-            .switch,
+            .checkBox,
             identifier: "clipy.settings.retention.age-enabled"
         ).firstMatch
         XCTAssertTrue(settingsWindow.waitForExistence(timeout: 5))
         let retentionScrollView = settingsWindow.scrollViews.containing(
-            .switch, identifier: "clipy.settings.retention.age-enabled"
+            .checkBox, identifier: "clipy.settings.retention.age-enabled"
         ).firstMatch
         XCTAssertTrue(retentionScrollView.waitForExistence(timeout: 5))
         guard scrollUntilFullyVisible(

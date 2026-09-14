@@ -1,0 +1,10 @@
+"Interaction" = "Interaction";
+"Browsing" = "Browsing";
+"Remember search between opens" = "Remember search between opens";
+"Select rows when the pointer moves over them" = "Select rows when the pointer moves over them";
+"Search is remembered only while Clipy is running. With pointer selection off, click a row or use the arrow keys." = "Search is remembered only while Clipy is running. With pointer selection off, click a row or use the arrow keys.";
+"Preview timing" = "Preview timing";
+"Preview delay" = "Preview delay";
+"Hide preview after leaving" = "Hide preview after leaving";
+"A longer delay keeps previews steady while browsing. A longer hide delay gives you more time to move into the preview." = "A longer delay keeps previews steady while browsing. A longer hide delay gives you more time to move into the preview.";
+"Restore interaction defaults" = "Restore interaction defaults";

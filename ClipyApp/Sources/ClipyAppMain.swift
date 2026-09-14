@@ -21,6 +21,15 @@ import SwiftUI
 struct ClipyAppMain: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
+    init() {
+        // AppKit's double-space period substitution is independent of the
+        // NSTextView correction flags and has no public per-view setter.
+        // Apply its compatibility preference only to Clipy's application
+        // domain, before creating text input contexts. Never change the
+        // user's system-wide keyboard preferences or reinterpret IME input.
+        UserDefaults.standard.set(false, forKey: "NSAutomaticPeriodSubstitutionEnabled")
+    }
+
     var body: some Scene {
         // Hidden scene filler (Maccy's MaccyApp pattern): the REAL
         // status-bar icon is the delegate's `NSStatusItem`, because only an
@@ -64,18 +73,17 @@ private struct SettingsRootView: View {
                 },
                 popupPosition: $panelPosition,
                 storageLocation: appDelegate.storageLocationSettings(),
-                localAutomation: composition.localAutomation?.settings
+                localAutomation: composition.localAutomation?.settings,
+                interactionDefaults: appDelegate.interactionDefaults
             )
             .sheet(isPresented: $isRecordingSummonShortcut) {
-                SummonShortcutRecorderView { chord in
-                    appDelegate.endSummonShortcutRecording()
+                SummonShortcutRecorderView(conflictingPanelAction: { chord in
+                    chord.conflictingPanelAction(in: PanelShortcutSettings.load(from: appDelegate.interactionDefaults))
+                }) { chord in
                     appDelegate.changeSummonShortcut(to: chord)
                 }
                 .onAppear {
-                    appDelegate.beginSummonShortcutRecording { chord in
-                        appDelegate.changeSummonShortcut(to: chord)
-                        isRecordingSummonShortcut = false
-                    }
+                    appDelegate.beginSummonShortcutRecording()
                 }
                 .onDisappear {
                     appDelegate.endSummonShortcutRecording()

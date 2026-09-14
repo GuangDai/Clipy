@@ -1,9 +1,12 @@
-# V2 Implementation Progress Ledger (living)
+# V2 Historical Implementation Progress
 
-> **What this is:** the living record mandated by `V2-roadmap` §15. One section
-> per roadmap slice as it starts; every completed work item is recorded here
-> **at completion time**, with its commit, evidence, and follow-ups. The v1
-> `docs/PROGRESS.md` stays frozen for v1. Status terms mirror `V2-roadmap` §1.
+> **What this is:** historical V2 work and evidence, including entries through
+> Batch 40. Dated scope decisions, paths and open-item statements below apply
+> to their recorded revisions, not current head. `docs/PROGRESS.md` is also
+> historical. Current contracts live in the owning V2 documents, including
+> [SQLite storage](V2-09-multilevel-storage.md), and [architecture](../01-architecture.md);
+> source, tests and the relevant run establish current implementation and
+> verification. This file does not require new bookkeeping for product changes.
 >
 > **Ground truth at ledger creation (2026-08-15):** branch `codex/v2-implementation`
 > off `master` `dfb08f2` (v1 steps 0–8 landed and verification-audited;
@@ -13,7 +16,7 @@
 > recorded from local execution. The former static-source/SwiftLint and public-
 > symbol workflows were retired by user direction on 2026-08-24.
 >
-> **Working method (per work item):** 阅读 doc → 实现 (subagent where useful) →
+> **Historical working method:** 阅读 doc → 实现 (subagent where useful) →
 > 审查 → 测试 → 审查 → 提交 → 记录. Each item's entry below names: what the
 > docs required, what was implemented, who reviewed and what they found, what
 > verification ran (with run links), and what remains open. Deviations are

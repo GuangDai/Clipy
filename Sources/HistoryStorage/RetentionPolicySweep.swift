@@ -1,5 +1,5 @@
 /// V2-02 §4.4 / V2-09 §4/§6: R3 projection, R1/R2 selection and surviving
-/// R3 writes use bounded passes inside one real SQLite transaction. No
+/// R3 writes use bounded preparation followed by one SQLite transaction. No
 /// complete victim-ID array, prune map or content lineage is retained.
 import Foundation
 import HistoryCore
@@ -11,54 +11,17 @@ extension HistoryAuthority {
         let now = storageClock.now()
         let commit: HistoryCommit?
         do {
-            commit = try database.writeTransaction {
+            let preparation = try await prepareRetentionSweep(newPolicies, now: now)
+            commit = try database.writeTransaction(checkingCancellation: true) {
                 let positionRow = try Self.fetchExactlyOnePositionRow(in: database)
                 let (position, _) = try Self.decodePositionRow(positionRow, limits: limits)
+                guard position == preparation.position else {
+                    throw HistoryFailure.snapshotExpired(current: position)
+                }
                 let currentPolicies = try RetentionConfigLoading.loadValidatedPolicies(in: database)
-                var projectedTotal = try RetentionConfigLoading.totalRetainedBytes(in: database)
-                var projectedPrunedCount = 0
-                var hasUnsatisfiableRevision = false
-
-                // Pass 1: R3's post-prune total, retaining one item's bounded
-                // revision summaries. No write has occurred yet.
-                if let policy = newPolicies.revisions {
-                    var after = ""
-                    while true {
-                        let batch = try sweepRevisionCandidates(after: after, policy: policy)
-                        guard !batch.isEmpty else { break }
-                        for itemID in batch {
-                            let projection = try sweepRevisionProjection(itemID, policies: newPolicies)
-                            projectedTotal = try RetentionConfigLoading.checkedSubtract(
-                                projectedTotal, projection.originalBytes - projection.scalars.bytes
-                            )
-                            projectedPrunedCount = try RetentionConfigLoading.checkedAdd(
-                                projectedPrunedCount, projection.removed.count
-                            )
-                            hasUnsatisfiableRevision = hasUnsatisfiableRevision || projection.unsatisfiable
-                        }
-                        after = batch[batch.count - 1].rawValue.uuidString
-                    }
-                }
-
-                // Pass 2: re-evaluate only each candidate's small R3 summary
-                // while folding the eligible lane. Accounting in the prefix
-                // remains pre-prune: retirement subsumes all of that content.
-                let prefix: RetentionRetirementPrefix?
-                do {
-                    prefix = try RetentionConfigLoading.retirementPrefix(
-                        in: database, policies: newPolicies, now: now,
-                        protectedItemID: nil, projectedTotalBytes: projectedTotal,
-                        projectRevisionBytes: { candidate in
-                            guard let policy = newPolicies.revisions,
-                                  Self.requiresRevisionPrune(
-                                    count: candidate.revisionCount, bytes: candidate.revisionBytes, policy: policy
-                                  ) else { return candidate.revisionBytes }
-                            return try self.sweepRevisionProjection(candidate.id, policies: newPolicies).scalars.bytes
-                        }
-                    )
-                } catch HistoryFailure.capacityExceeded(.storageBytes) {
-                    throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
-                }
+                let prefix = preparation.prefix
+                let projectedPrunedCount = preparation.prunedCount
+                let hasUnsatisfiableRevision = preparation.hasUnsatisfiableRevision
                 if prefix == nil, hasUnsatisfiableRevision {
                     throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
                 }
@@ -85,6 +48,7 @@ extension HistoryAuthority {
                         let batch = try sweepRevisionCandidates(after: after, policy: policy)
                         guard !batch.isEmpty else { break }
                         for itemID in batch {
+                            try Task.checkCancellation()
                             let projection = try sweepRevisionProjection(itemID, policies: newPolicies)
                             guard !projection.unsatisfiable else {
                                 throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
@@ -119,11 +83,116 @@ extension HistoryAuthority {
                     hasDestructiveRetentionEffects: retiredCount > 0 || prunedCount > 0
                 )
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw PersistenceErrorClassification.transactionFailure(for: error)
         }
         guard let commit else { return .unchanged }
         return publishCommittedHistory(commit)
+    }
+
+    /// V2-02 §4.4: projection does not need a write transaction. Release all
+    /// statements before yielding, then reject stale facts before another
+    /// batch can use them. Capture, paste and page requests can run meanwhile.
+    private func prepareRetentionSweep(
+        _ policies: HistoryRetentionPolicies, now: Date
+    ) async throws -> RetentionSweepPreparation {
+        try Task.checkCancellation()
+        let position = try Self.decodePositionRow(
+            Self.fetchExactlyOnePositionRow(in: database), limits: limits
+        ).position
+        var total = try RetentionConfigLoading.totalRetainedBytes(in: database)
+        var prunedCount = 0
+        var unsatisfiable = false
+        if let policy = policies.revisions {
+            var after = ""
+            while true {
+                let batch = try sweepRevisionCandidates(after: after, policy: policy)
+                guard !batch.isEmpty else { break }
+                for itemID in batch {
+                    try Task.checkCancellation()
+                    let projection = try sweepRevisionProjection(itemID, policies: policies)
+                    total = try RetentionConfigLoading.checkedSubtract(
+                        total, projection.originalBytes - projection.scalars.bytes
+                    )
+                    prunedCount = try RetentionConfigLoading.checkedAdd(prunedCount, projection.removed.count)
+                    unsatisfiable = unsatisfiable || projection.unsatisfiable
+                }
+                after = batch[batch.count - 1].rawValue.uuidString
+                try await yieldRetentionPreparation(at: position)
+            }
+        }
+        var selection = OrderedRetentionSelection(
+            policies: policies, now: now, protectedItemID: nil, projectedTotalBytes: total
+        )
+        if policies.age != nil || policies.storage.map({ total > $0.maxTotalBytes }) == true {
+            var after: RetentionEvictionKey?
+            var complete = false
+            while !complete {
+                let batch = try retentionSweepCandidates(after: after)
+                guard !batch.isEmpty else { break }
+                for candidate in batch {
+                    try Task.checkCancellation()
+                    let revisions: Int
+                    if let policy = policies.revisions, Self.requiresRevisionPrune(
+                        count: candidate.revisionCount, bytes: candidate.revisionBytes, policy: policy
+                    ) {
+                        revisions = try sweepRevisionProjection(candidate.id, policies: policies).scalars.bytes
+                    } else { revisions = candidate.revisionBytes }
+                    do {
+                        if try !selection.consider(candidate, projectedRevisionBytes: revisions) {
+                            complete = true
+                            break
+                        }
+                    } catch let rejection as DomainRejection { throw rejection.historyFailure }
+                    after = RetentionEvictionKey(lastCopiedAt: candidate.lastCopiedAt, itemID: candidate.id)
+                }
+                if !complete { try await yieldRetentionPreparation(at: position) }
+            }
+        }
+        if let budget = policies.storage?.maxTotalBytes, selection.remainingBytes > budget {
+            throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
+        }
+        return RetentionSweepPreparation(
+            position: position, prefix: selection.prefix,
+            prunedCount: prunedCount, hasUnsatisfiableRevision: unsatisfiable
+        )
+    }
+
+    private func yieldRetentionPreparation(at expected: ChangePosition) async throws {
+        await suspendIfRequested(.retentionPlanningBatch)
+        await Task.yield()
+        try Task.checkCancellation()
+        let current = try Self.decodePositionRow(
+            Self.fetchExactlyOnePositionRow(in: database), limits: limits
+        ).position
+        guard current == expected else { throw HistoryFailure.snapshotExpired(current: current) }
+    }
+
+    private func retentionSweepCandidates(after: RetentionEvictionKey?) throws -> [RetentionExpansionItemSummary] {
+        let predicate = after == nil ? "" : " AND (lastCopiedAt, id) > (?, ?)"
+        let bindings: [SQLiteValue] = after.map {
+            [.real($0.lastCopiedAt.timeIntervalSinceReferenceDate), .text($0.itemID.rawValue.uuidString)]
+        } ?? []
+        let rows = try database.prepare("""
+            SELECT id,lastCopiedAt,canonicalBytes,revisionCount,revisionBytes
+            FROM history_items WHERE pinOrdinal IS NULL\(predicate)
+            ORDER BY lastCopiedAt,id LIMIT 32
+            """, bindings: bindings)
+        defer { rows.finalize() }
+        var result: [RetentionExpansionItemSummary] = []
+        while try rows.step() {
+            try Task.checkCancellation()
+            result.append(try RetentionExpansionItemSummary(
+                id: HistoryItemID(rawValue: HistoryItemRowHydration.uuid(rows.text(at: 0))),
+                lastCopiedAt: Date(timeIntervalSinceReferenceDate: rows.real(at: 1)), pinOrdinal: nil,
+                canonicalBytes: HistoryItemRowHydration.integer(rows, 2),
+                revisionCount: HistoryItemRowHydration.integer(rows, 3),
+                revisionBytes: HistoryItemRowHydration.integer(rows, 4)
+            ))
+        }
+        return result
     }
 
     private static func requiresRevisionPrune(count: Int, bytes: Int, policy: RevisionRetention) -> Bool {
@@ -151,6 +220,7 @@ extension HistoryAuthority {
         defer { rows.finalize() }
         var result: [HistoryItemID] = []
         while try rows.step() {
+            try Task.checkCancellation()
             result.append(HistoryItemID(rawValue: try HistoryItemRowHydration.uuid(rows.text(at: 0))))
         }
         return result
@@ -182,4 +252,11 @@ extension HistoryAuthority {
         let unsatisfiable = policies.revisions?.maxRevisionBytesPerItem.map { after.bytes > $0 } ?? false
         return (removed, after, before.bytes, unsatisfiable)
     }
+}
+
+private struct RetentionSweepPreparation {
+    let position: ChangePosition
+    let prefix: RetentionRetirementPrefix?
+    let prunedCount: Int
+    let hasUnsatisfiableRevision: Bool
 }

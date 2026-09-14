@@ -227,6 +227,7 @@ internal enum IngestFactLoader {
         if match == nil {
             var sql = """
                 SELECT c.itemID FROM representations r JOIN contents c ON c.id=r.contentID
+                JOIN history_items h ON h.id=c.itemID
                 WHERE c.revisionOrdinal=0 AND r.pasteboardItemIndex=? AND r.typeKey=? AND r.byteCount=? AND r.fingerprint=?
                 """
             var bindings: [SQLiteValue] = []
@@ -266,7 +267,10 @@ internal enum IngestFactLoader {
         }
         let unpinned = retained - pinned
         let occupancy = try database.prepare(
-            "SELECT 1 FROM history_items WHERE id=?", bindings: [.text(prepared.candidateID.rawValue.uuidString)]
+            """
+            SELECT 1 WHERE EXISTS(SELECT 1 FROM history_items WHERE id=?)
+                OR EXISTS(SELECT 1 FROM contents WHERE itemID=?)
+            """, bindings: [.text(prepared.candidateID.rawValue.uuidString), .text(prepared.candidateID.rawValue.uuidString)]
         )
         let candidateIDExists = try occupancy.step()
         occupancy.finalize()

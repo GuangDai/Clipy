@@ -95,12 +95,16 @@ struct PanelContentFitTests {
         )
     }
 
-    @Test func pinnedAndRecentSectionsEachCarryAHeader() {
+    @Test func pinnedAndRecentGroupsShareOneCompactSeparator() {
         var input = PanelContentFit.Input()
         input.pinnedRows = [textRow()]
         input.unpinnedRows = [imageRow]
-        // 34pt toolbar + 2×28pt section headers + 24pt text + 52pt image + 6pt slack.
-        #expect(PanelContentFit.idealHeight(input) == 172)
+        // 34pt toolbar + 9pt separator + 24pt text + 52pt image + 6pt slack.
+        #expect(PanelContentFit.idealHeight(input) == 125)
+        input.unpinnedRows = []
+        #expect(PanelContentFit.idealHeight(input) == 64)
+        input.showsPaginationControl = true
+        #expect(PanelContentFit.idealHeight(input) == 101)
     }
 
     @Test func chromeDeltasAddTheirOwnHeights() {

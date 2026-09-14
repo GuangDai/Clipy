@@ -22,7 +22,8 @@ enum MatchHighlighting {
     ///     ignored.
     static func highlighted(
         _ text: String,
-        ranges: [UTF16TextRange]
+        ranges: [UTF16TextRange],
+        foreground: Color = .accentColor
     ) -> AttributedString {
         // UTF-16 offsets → String index ranges. Range.init?(NSRange, in:)
         // returns nil for anything not fully inside `text`, but it CLAMPS a
@@ -66,7 +67,7 @@ enum MatchHighlighting {
             }
             var segment = AttributedString(String(text[range]))
             segment.inlinePresentationIntent = .stronglyEmphasized
-            segment.foregroundColor = .accentColor
+            segment.foregroundColor = foreground
             result.append(segment)
             cursor = range.upperBound
         }

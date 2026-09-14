@@ -75,10 +75,14 @@ internal final class SQLiteDatabase {
         handle = opened
         do {
             try check(sqlite3_extended_result_codes(opened, 1))
-            // A released owner's final GC batch can close its last connection
-            // while this connection configures WAL. SQLite briefly excludes
-            // new readers during that close/checkpoint (WAL documentation §9).
-            // Let SQLite wait only during construction, with a finite limit.
+            // A released owner's final physical cleanup transaction can
+            // overlap a newly opened owner, including AFTER this initializer
+            // returns. Keep SQLite's finite busy wait for the connection's
+            // whole lifetime; replaying a History operation is unnecessary.
+            // WAL last-close/checkpoint contention uses the same mechanism.
+            // Lock waits can delay cancellation by this 1-second budget;
+            // cancellable writes recheck before mutation and before COMMIT.
+            // https://www.sqlite.org/c3ref/busy_timeout.html
             try check(sqlite3_busy_timeout(opened, 1_000))
             try execute("PRAGMA foreign_keys = ON")
             try execute("PRAGMA cache_size = -4096")
@@ -92,9 +96,6 @@ internal final class SQLiteDatabase {
                 try execute("PRAGMA synchronous = FULL")
                 try execute("PRAGMA wal_autocheckpoint = 256")
             }
-            // Ordinary reads/transactions still report BUSY immediately; this
-            // is not a second writer coordinator or an application retry loop.
-            try check(sqlite3_busy_timeout(opened, 0))
         } catch {
             sqlite3_close_v2(opened)
             handle = nil
@@ -227,8 +228,45 @@ internal final class SQLiteDatabase {
 
     /// V2-09 §6: item/revision/reference/aggregate/Gateway writes and the one
     /// ChangePosition advance commit together before a receipt is published.
-    internal func writeTransaction<T>(_ body: () throws -> T) throws -> T {
-        try transaction(begin: "BEGIN IMMEDIATE", body)
+    internal func writeTransaction<T>(
+        checkingCancellation: Bool = false, _ body: () throws -> T
+    ) throws -> T {
+        // Gateway failure/cancellation audit still has to commit after its
+        // caller is cancelled. Only the History mutation interval opts in.
+        guard checkingCancellation else { return try transaction(begin: "BEGIN IMMEDIATE", body) }
+        try Task.checkCancellation()
+        let handle = try openHandle()
+        // V2-02 §4.4: a cascading retirement can spend a long interval in
+        // one sqlite3_step. Check the owning task from SQLite itself, with
+        // no cross-thread connection access or second cancellation writer.
+        sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
+        defer {
+            if let handle = self.handle { sqlite3_progress_handler(handle, 0, nil, nil) }
+        }
+        do {
+            return try transaction(begin: "BEGIN IMMEDIATE") {
+                do {
+                    try Task.checkCancellation()
+                    let result = try body()
+                    try Task.checkCancellation()
+                    // COMMIT is the point of no return. Cancellation after
+                    // this boundary must not disguise a committed success.
+                    sqlite3_progress_handler(handle, 0, nil, nil)
+                    return result
+                } catch {
+                    // In particular, cancellation must never interrupt the
+                    // rollback that makes this connection safe to reuse.
+                    sqlite3_progress_handler(handle, 0, nil, nil)
+                    throw error
+                }
+            }
+        } catch let failure as SQLiteFailure
+            where failure.primaryCode == SQLITE_INTERRUPT || failure.primaryCode == SQLITE_BUSY {
+            // A cancelled task can finish SQLite's bounded lock wait with
+            // BUSY before BEGIN succeeds. No mutation has committed there.
+            try Task.checkCancellation()
+            throw failure
+        }
     }
 
     private func transaction<T>(begin: String, _ body: () throws -> T) throws -> T {

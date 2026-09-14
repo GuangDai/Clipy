@@ -98,13 +98,13 @@ final class PreviewPaneState {
     /// (Maccy's `previewDelay` default: 200 ms). The property is
     /// package (GOV-3): only this module schedules the dwell; the public
     /// `init(autoOpenDelay:)` parameter remains the seam.
-    let autoOpenDelay: Duration
+    private(set) var autoOpenDelay: Duration
 
     /// The grace between the pointer leaving BOTH surfaces and the
     /// lightweight pointer-exit hide (150 ms). Distinct from
     /// `autoOpenDelay`: this hide never engages the manual-close
     /// suppression, so pointer re-entry re-dwells the current selection.
-    let pointerExitGrace: Duration
+    private(set) var pointerExitGrace: Duration
 
     /// Whether dwell auto-open is armed. The panel's key status drives this
     /// (`panelBecameKey`/`panelResignedKey`) so a background panel never
@@ -219,6 +219,23 @@ final class PreviewPaneState {
     ) {
         self.autoOpenDelay = autoOpenDelay
         self.pointerExitGrace = pointerExitGrace
+    }
+
+    /// V2-07 §6: a live preference edit replaces only timers that are still
+    /// pending. It cannot reopen a manually dismissed preview or resurrect
+    /// work retired by panel close, a purge, or critical memory pressure.
+    func applyInteractionSettings(_ settings: AdvancedInteractionSettings) {
+        let delayChanged = autoOpenDelay != settings.previewDelay
+        let graceChanged = pointerExitGrace != settings.pointerGrace
+        autoOpenDelay = settings.previewDelay
+        pointerExitGrace = settings.pointerGrace
+        if delayChanged, let pendingAutoOpenItem {
+            cancelPendingAutoOpen(retainingPreparationFor: pendingAutoOpenItem)
+            scheduleAutoOpen(for: pendingAutoOpenItem)
+        }
+        if graceChanged, pointerExitTask != nil {
+            schedulePointerExit()
+        }
     }
 
     // MARK: - Selection dwell (Maccy `scheduleRetarget(lead:)`)
@@ -422,6 +439,10 @@ final class PreviewPaneState {
         guard pointerPresence.isEmpty else { return }
         cancelPendingAutoOpen()
         guard isOpen, !isInformationPresented else { return }
+        schedulePointerExit()
+    }
+
+    private func schedulePointerExit() {
         cancelPendingPointerExit()
         let grace = pointerExitGrace
         // Same MainActor/weak-self discipline as the dwell task.

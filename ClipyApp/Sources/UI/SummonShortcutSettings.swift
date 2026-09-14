@@ -8,6 +8,7 @@
 /// failed change must never make the retained binding look lost.
 enum SummonShortcutStatus: Sendable, Equatable {
     case stopped
+    case disabled
     case current(String)
     case unavailable(requested: String, retainedCurrent: String?)
 }
@@ -24,23 +25,38 @@ enum SummonShortcutWarning: Sendable, Equatable {
 struct SummonShortcutSettings: Sendable {
     let status: SummonShortcutStatus
     let warning: SummonShortcutWarning?
+    let currentPanelChord: PanelShortcutChord?
+    let conflictingPanelAction: PanelShortcutAction?
 
     private let beginChangeAction: @MainActor @Sendable () -> Void
     private let retryAction: @MainActor @Sendable () -> Void
     private let resetAction: @MainActor @Sendable () -> Void
+    private let clearAction: @MainActor @Sendable () -> Void
+    private let beginRecordingAction: @MainActor @Sendable () -> Void
+    private let endRecordingAction: @MainActor @Sendable () -> Void
 
     init(
         status: SummonShortcutStatus,
         warning: SummonShortcutWarning? = nil,
+        currentPanelChord: PanelShortcutChord? = nil,
+        conflictingPanelAction: PanelShortcutAction? = nil,
         beginChange: @escaping @MainActor @Sendable () -> Void = {},
         retry: @escaping @MainActor @Sendable () -> Void = {},
-        reset: @escaping @MainActor @Sendable () -> Void = {}
+        reset: @escaping @MainActor @Sendable () -> Void = {},
+        clear: @escaping @MainActor @Sendable () -> Void = {},
+        beginRecording: @escaping @MainActor @Sendable () -> Void = {},
+        endRecording: @escaping @MainActor @Sendable () -> Void = {}
     ) {
         self.status = status
         self.warning = warning
+        self.currentPanelChord = currentPanelChord
+        self.conflictingPanelAction = conflictingPanelAction
         beginChangeAction = beginChange
         retryAction = retry
         resetAction = reset
+        clearAction = clear
+        beginRecordingAction = beginRecording
+        endRecordingAction = endRecording
     }
 
     var canChange: Bool {
@@ -50,6 +66,10 @@ struct SummonShortcutSettings: Sendable {
     var canRetry: Bool {
         if case .unavailable = status { return true }
         return false
+    }
+
+    var canClear: Bool {
+        status != .stopped && status != .disabled
     }
 
     /// Package (GOV-3): the Reset button is this module's Settings view;
@@ -74,5 +94,24 @@ struct SummonShortcutSettings: Sendable {
     func reset() {
         guard canReset else { return }
         resetAction()
+    }
+
+    @MainActor
+    func clear() {
+        guard canClear else { return }
+        clearAction()
+    }
+
+    /// Every Settings recorder suspends the global binding, including a
+    /// panel-action recorder that may receive the same physical combination.
+    @MainActor
+    func beginRecording() {
+        guard canChange else { return }
+        beginRecordingAction()
+    }
+
+    @MainActor
+    func endRecording() {
+        endRecordingAction()
     }
 }

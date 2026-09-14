@@ -102,8 +102,9 @@ struct TransactionConfigSnapshot: Equatable, Sendable {
 
 /// Small test-store rollback oracle: actual metadata columns, representation
 /// references/inline bytes and referenced immutable files, compared directly.
-/// Orphan files from pre-commit publication are intentionally outside the
-/// committed state; the blob store's cleanup tests cover their lifetime.
+/// Detached content/representations and orphan files are outside committed
+/// logical History; reclamation tests inspect their physical lifetime with
+/// GC parked. This oracle remains stable while cleanup advances independently.
 struct TransactionStoreSnapshot: Equatable, Sendable {
     let items: [WSSupport.StoredItem]
     let contents: [[SQLiteValue]]
@@ -116,7 +117,10 @@ struct TransactionStoreSnapshot: Equatable, Sendable {
         let database = try SQLiteDatabase(url: url, readOnly: true)
         return try database.readTransaction {
             let items = try WSSupport.fetchRows(database)
-            let contentQuery = try database.prepare("SELECT id, itemID, revisionOrdinal, createdAt, titleUTF8, contentByteCount, representationCount FROM contents ORDER BY id")
+            let contentQuery = try database.prepare("""
+                SELECT c.id,c.itemID,c.revisionOrdinal,c.createdAt,c.titleUTF8,c.contentByteCount,c.representationCount
+                FROM contents c JOIN history_items h ON h.id=c.itemID ORDER BY c.id
+                """)
             defer { contentQuery.finalize() }
             var contents: [[SQLiteValue]] = []
             while try contentQuery.step() {
@@ -124,7 +128,11 @@ struct TransactionStoreSnapshot: Equatable, Sendable {
                     .integer(contentQuery.integer(at: 2)), .real(contentQuery.real(at: 3)), .blob(contentQuery.blob(at: 4)),
                     .integer(contentQuery.integer(at: 5)), .integer(contentQuery.integer(at: 6))])
             }
-            let representationQuery = try database.prepare("SELECT contentID, ordinal, exactType, typeKey, byteCount, fingerprint, inlineBytes, blobID FROM representations ORDER BY contentID, ordinal")
+            let representationQuery = try database.prepare("""
+                SELECT r.contentID,r.ordinal,r.exactType,r.typeKey,r.byteCount,r.fingerprint,r.inlineBytes,r.blobID
+                FROM representations r JOIN contents c ON c.id=r.contentID JOIN history_items h ON h.id=c.itemID
+                ORDER BY r.contentID,r.ordinal
+                """)
             defer { representationQuery.finalize() }
             var representations: [[SQLiteValue]] = []
             var blobs: [UUID: Data] = [:]

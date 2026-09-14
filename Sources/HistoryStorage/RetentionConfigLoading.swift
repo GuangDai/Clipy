@@ -57,6 +57,7 @@ internal enum RetentionConfigLoading {
         projectRevisionBytes: ((RetentionExpansionItemSummary) throws -> Int)? = nil
     ) throws -> RetentionRetirementPrefix? {
         guard projectedTotalBytes >= 0, minimumRetiredItems >= 0 else { throw corrupt }
+        try Task.checkCancellation()
         let overBudget = policies.storage.map { projectedTotalBytes > $0.maxTotalBytes } ?? false
         guard policies.age != nil || overBudget || minimumRetiredItems > 0 else { return nil }
         let rows = try database.prepare("""
@@ -71,6 +72,7 @@ internal enum RetentionConfigLoading {
         )
         do {
             while try rows.step() {
+                try Task.checkCancellation()
                 let candidate = try RetentionExpansionItemSummary(
                     id: HistoryItemID(rawValue: HistoryItemRowHydration.uuid(rows.text(at: 0))),
                     lastCopiedAt: Date(timeIntervalSinceReferenceDate: rows.real(at: 1)),

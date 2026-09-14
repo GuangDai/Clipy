@@ -2,7 +2,7 @@ import Foundation
 import HistoryCore
 import HistoryDomain
 
-/// Operation-local values after file publication and before SQL BEGIN
+/// Operation-local values after file publication and before SQL references
 /// (V2-09 §6). Large payloads are represented only by their immutable BlobID.
 internal struct PublishedHistoryContent {
     internal let id: UUID
@@ -24,7 +24,7 @@ internal struct PublishedHistoryRepresentation {
 extension HistoryAuthority {
     /// Only content-creating mutations occupy this operation-local map.
     /// Authority does not suspend between reuse lookup, file publication and
-    /// the reference transaction, so current/Canonical sources cannot change.
+    /// reference insertion, all inside the same SQLite write transaction.
     internal func publishHistoryContent(
         for plan: StampedCommitPlan, didPublish: () -> Void = {}
     ) throws -> [Int: PublishedHistoryContent] {

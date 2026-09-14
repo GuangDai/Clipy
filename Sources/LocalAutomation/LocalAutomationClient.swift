@@ -124,22 +124,33 @@ public actor LocalAutomationClient {
         defer { _ = Darwin.close(connection) }
         guard timeout.isFinite, timeout > 0 else { return Self.failure(.timeout, request: json) }
         let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
+        var bytesSent = 0
         do {
             try Task.checkCancellation()
             try await LocalAutomationSocket.send(
                 LocalAutomationFrames.requestHeader(credential: credential, jsonCount: json.count),
-                to: connection, deadline: deadline
+                to: connection, deadline: deadline, bytesSent: &bytesSent
             )
-            try await LocalAutomationSocket.send(json, to: connection, deadline: deadline)
+            try await LocalAutomationSocket.send(
+                json, to: connection, deadline: deadline, bytesSent: &bytesSent
+            )
             let header = try await LocalAutomationSocket.receive(12, from: connection, deadline: deadline)
             let shape = try LocalAutomationFrames.decodeResponseHeader(header)
             let stdout = try await LocalAutomationSocket.receive(shape.stdout, from: connection, deadline: deadline)
             let stderr = try await LocalAutomationSocket.receive(shape.stderr, from: connection, deadline: deadline)
             return LocalAutomationOutput(exitCode: shape.exitCode, stdout: stdout, stderr: stderr)
         } catch {
-            if request.isMutation { return Self.failure(.outcomeUnknown, request: json) }
+            // A cancelled/failed zero-byte send cannot have applied a mutation.
+            // Once any request bytes leave, preserve uncertainty even on cancel;
+            // changing the catch order alone could falsely promise no commit (07 §8.3).
+            if request.isMutation, bytesSent > 0 {
+                return Self.failure(.outcomeUnknown, request: json)
+            }
             if error is CancellationError { return Self.failure(.cancelled, request: json) }
-            return Self.failure(.timeout, request: json)
+            if case LocalAutomationSocket.Failure.timeout = error {
+                return Self.failure(.timeout, request: json)
+            }
+            return Self.failure(.notReady, request: json)
         }
     }
 

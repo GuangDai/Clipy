@@ -25,6 +25,7 @@ internal enum AuthoritySuspensionPoint: String, Sendable {
     case positionRecheckEntry = "HistoryAuthority.currentPosition.entry"
     case gatewayAuditCompactionEntry = "HistoryAuthority.compactExternalAudit.entry"
     case blobCleanupBatchEntry = "HistoryAuthority.blobCleanup.batch"
+    case retentionPlanningBatch = "HistoryAuthority.retention.planningBatch"
 }
 
 /// Existing one-shot probes now exercise actual SQLite transaction rollback.
@@ -58,6 +59,8 @@ internal actor HistoryAuthority {
     internal var injectedTransactionFailure: InjectedTransactionFailure?
     internal var blobCleanupTask: Task<Void, Never>?
     internal var blobCleanupNeedsAnotherPass = false
+    internal var contentCleanupAfterID = ""
+    internal var contentCleanupFinished = false
 
 #if DEBUG
     internal var searchDebugProbe = SearchDebugProbe.environmentConfigured()

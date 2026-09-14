@@ -91,7 +91,7 @@ struct BulkRetentionTransactionTests {
         // Inspect the DELETE itself: SQLite must use an indexed lookup for
         // its incoming current-content FK, including for inactive revisions
         // where there is no matching history item. A full scan here repeats
-        // once per deleted content during both prune and cascading retirement.
+        // once per detached content during later physical reclamation.
         let foreignKeyLookups = try await history.authority.withTestDatabase { authority in
             let query = try authority.database.prepare(
                 "EXPLAIN QUERY PLAN DELETE FROM contents WHERE id = ?",

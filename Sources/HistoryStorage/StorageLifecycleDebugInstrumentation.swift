@@ -1,7 +1,7 @@
 #if DEBUG
-/// Opt-in, Debug-only SwiftData lifecycle checkpoints for diagnosing
-/// operation-local `ModelContext` and fetched `@Model` ownership at the
-/// supported-platform hard bound. Events contain fixed phase names, elapsed
+/// Opt-in, Debug-only SQLite lifecycle checkpoints for diagnosing
+/// operation-local statements, file publication and fetched-row ownership.
+/// Events contain fixed phase names, elapsed
 /// time, and aggregate row counts only; clipboard content, item identifiers,
 /// source applications, and store paths cannot enter this vocabulary.
 import Foundation
@@ -15,6 +15,7 @@ internal enum StorageLifecycleDebugPhase: String, Codable, Hashable, Sendable {
     case captureFactLoadBegin = "capture.fact-load.begin"
     case captureFactLoadComplete = "capture.fact-load.complete"
     case captureTransactionBegin = "capture.transaction.begin"
+    case contentPublishedBeforeReferences = "content.published.before-references"
     case captureTransactionComplete = "capture.transaction.complete"
     case captureAutoreleasePoolDrained = "capture.autoreleasepool.drained"
     case recentFetchBegin = "recent.fetch.begin"
@@ -54,7 +55,7 @@ internal struct StorageLifecycleDebugEvent: Codable, Equatable, Sendable {
 }
 
 /// A value probe with a synchronous `@Sendable` sink. Synchronous emission
-/// preserves the Authority rule that no suspension occurs while a context or
+/// preserves the Authority rule that no suspension occurs while a transaction or
 /// fetched row is live. Release builds compile out this type and every call.
 internal struct StorageLifecycleDebugProbe: Sendable {
     internal static let logPrefix = "[CLIPY_STORAGE_TRACE]"
@@ -76,7 +77,7 @@ internal struct StorageLifecycleDebugProbe: Sendable {
     }
 
     /// Debug builds remain quiet by default. The environment is read once
-    /// when an Authority is created, before any operation-local context.
+    /// when an Authority is created, before any operation-local transaction.
     internal static func environmentConfigured() -> StorageLifecycleDebugProbe {
         StorageLifecycleDebugProbe(
             isEnabled: ProcessInfo.processInfo.environment["CLIPY_STORAGE_TRACE"] == "1"

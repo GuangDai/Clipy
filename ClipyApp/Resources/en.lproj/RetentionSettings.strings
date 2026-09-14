@@ -1,4 +1,10 @@
 // Retention Settings copy (V2-07 §10).
+"settings.retention.no-limit" = "No limit";
+"settings.retention.applying" = "Applying limits…";
+"settings.retention.cancelling" = "Cancelling…";
+"settings.retention.count-cancelled" = "Cancelled. The item limit was not changed and no items were removed by this apply.";
+"settings.retention.policies-cancelled" = "Cancelled. These cleanup limits were not changed and no items or revisions were removed by this apply.";
+"settings.retention.history-changed" = "History changed while preparing cleanup. Nothing was applied. Try applying again.";
 "settings.retention.age.enforcement-note" = "Age limits are checked when Clipy captures a clipboard change or you apply retention settings. Time passing alone doesn't remove items.";
 "settings.retention.age.field-label" = "Maximum item age";
 "settings.retention.age.section" = "Item age";

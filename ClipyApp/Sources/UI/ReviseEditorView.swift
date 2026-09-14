@@ -98,6 +98,14 @@ struct ReviseEditorView: View {
     /// "Keep Current" into HistoryCore actions itself.
     @State private var draft: ReviseEditorDraft
 
+    private struct WorkflowTarget: Identifiable {
+        let id = UUID()
+        let item: HistoryItemReference
+        let representation: RepresentationIdentity
+        let source: String
+    }
+    @State private var workflowTarget: WorkflowTarget?
+
     @State private var singleFormatHeaderHeight: CGFloat = 0
     @State private var isSaving = false
     @State private var isReloading = false
@@ -207,6 +215,21 @@ struct ReviseEditorView: View {
             maxHeight: .infinity
         )
         .interactiveDismissDisabled(draft.isDirty || isSaving)
+        .sheet(item: $workflowTarget) { target in
+            BuiltInAutomationView(source: target.source) { result in
+                // The workflow edits one loaded representation only. A late
+                // result never overwrites a rebased or independently edited
+                // draft; Save Revision retains its original version check.
+                let identity = target.representation
+                guard !isSaving, !isReloading, replacementTask == nil,
+                      draft.itemReference == target.item,
+                      draft.replacementText(for: identity.typeIdentifier,
+                          pasteboardItemIndex: identity.pasteboardItemIndex)
+                        .utf8.elementsEqual(target.source.utf8) else { return }
+                draft.setReplacementText(result, for: identity.typeIdentifier,
+                    pasteboardItemIndex: identity.pasteboardItemIndex)
+            }
+        }
         .onAppear { prepareDirectEditing() }
         .onDisappear {
             cancelReplacementLoad()
@@ -535,6 +558,22 @@ struct ReviseEditorView: View {
                     accessibilityLabel: DetailsPresentationCopy.text("Format Details", bundle: copyBundle) + ": " + identity.accessibilityLabel
                 ))
                 .font(.caption)
+                if choice == .replace || draft.directEditingIdentity == identity {
+                    Button {
+                        workflowTarget = WorkflowTarget(
+                            item: draft.itemReference,
+                            representation: identity,
+                            source: draft.replacementText(for: typeIdentifier,
+                                pasteboardItemIndex: pasteboardItemIndex)
+                        )
+                    } label: {
+                        Label(BuiltInAutomationCopy.text("Text workflows", bundle: copyBundle),
+                            systemImage: "wand.and.stars")
+                    }
+                    .controlSize(.small)
+                    .disabled(isSaving || isReloading || replacementTask != nil)
+                    .accessibilityIdentifier("clipy.editor.workflow." + identity.accessibilitySuffix)
+                }
             }
             .onGeometryChange(for: CGFloat.self) { geometry in
                 geometry.size.height

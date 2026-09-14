@@ -62,6 +62,17 @@ final class AppearanceJourneyUITests: XCTestCase {
         chooseOption("Compact", in: density, app: app, context: "compact sample")
         let compactHeight = sample.frame.height
         attachAppearance(in: app, named: "Appearance — compact list sample")
+        let appearance = app.popUpButtons["clipy.settings.appearance.color-scheme"]
+        assertExists(appearance, timeout: 5, in: app, context: "native appearance choices")
+        for mode in ["Dark", "Light"] {
+            chooseOption(mode, in: appearance, app: app, context: "native appearance")
+            XCTAssertTrue(waitUntil(timeout: 5) { appearance.value as? String == mode },
+                          diagnostic(app, context: "appearance choice applies"))
+            attachAppearance(in: app, named: "Appearance — native \(mode.lowercased())")
+            XCTAssertEqual(sample.frame.height, compactHeight, accuracy: 1,
+                           "Changing appearance must preserve row layout.")
+        }
+        chooseOption("Follow macOS", in: appearance, app: app, context: "restore system appearance")
         chooseOption("Comfortable", in: density, app: app, context: "row density")
         XCTAssertTrue(waitUntil(timeout: 5) { sample.frame.height > compactHeight },
                       diagnostic(app, context: "density changes the visible sample spacing"))

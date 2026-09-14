@@ -114,10 +114,9 @@ enum PanelContentFit {
 
     // MARK: List chrome
 
-    /// One `.inset` section header (Pinned / Recent): the small-caps label
-    /// plus the list's own header padding, owned by the platform and
-    /// pinned here.
-    static let sectionHeaderHeight: CGFloat = 28
+    /// A single native divider with 4pt breathing room on either side.
+    /// No headings or empty group space, including a pinned-only result.
+    static let groupSeparatorHeight: CGFloat = 9
 
     /// The Newer/Latest windowed-navigation bar: the buttons plus their
     /// 6pt vertical padding (HistoryListView).
@@ -195,9 +194,8 @@ enum PanelContentFit {
 
     /// The ideal content height for the displayed rows and chrome: header
     /// (+ filter chip when visible), the windowed-navigation bar when
-    /// paging, one section header per rendered section (Pinned only when
-    /// pinned rows display; Recent when unpinned rows or the pagination
-    /// control display — the list's exact conditions), the rows, the
+    /// paging, one separator when pinned and recent groups both display,
+    /// the rows, the
     /// trailing pagination control, the failure banner, and bottom slack.
     /// `prefersFullHeight` short-circuits all of it: a pushed
     /// Details/editor destination or the quick-look overlay demands the
@@ -215,16 +213,15 @@ enum PanelContentFit {
         if input.hasWindowedPages {
             height += windowedNavigationHeight
         }
-        let showsSectionHeaders = !input.pinnedRows.isEmpty
+        let showsGroupSeparator = !input.pinnedRows.isEmpty
             && (!input.unpinnedRows.isEmpty || input.showsPaginationControl)
+        if showsGroupSeparator { height += groupSeparatorHeight }
         if !input.pinnedRows.isEmpty {
-            if showsSectionHeaders { height += sectionHeaderHeight }
             height += input.pinnedRows.reduce(0) {
                 $0 + rowHeight($1, density: input.density, fontSize: input.fontSize)
             }
         }
         if !input.unpinnedRows.isEmpty || input.showsPaginationControl {
-            if showsSectionHeaders { height += sectionHeaderHeight }
             height += input.unpinnedRows.reduce(0) {
                 $0 + rowHeight($1, density: input.density, fontSize: input.fontSize)
             }

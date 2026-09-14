@@ -84,6 +84,7 @@ struct SQLiteHistorySchemaTests {
         let candidates = try database.prepare("""
             SELECT c.itemID, r.exactType FROM representations r
             JOIN contents c ON c.id = r.contentID
+            JOIN history_items i ON i.id = c.itemID
             WHERE c.revisionOrdinal = 0 AND r.typeKey = ? AND r.byteCount = 1 AND r.fingerprint = ?
             ORDER BY c.itemID
             """, bindings: [.text("com.example.é"), .blob(sqliteUInt64(7))])
@@ -108,8 +109,20 @@ struct SQLiteHistorySchemaTests {
         try database.writeTransaction {
             try database.execute("DELETE FROM history_items WHERE id = ?", bindings: [.text(firstItem)])
         }
-        #expect(try integer("SELECT count(*) FROM contents", in: database) == 2)
-        #expect(try integer("SELECT count(*) FROM representations", in: database) == 2)
+        // Retirement detaches visibility immediately without rewriting the
+        // payload tables. Authority maintenance reclaims these rows later.
+        #expect(try integer("SELECT count(*) FROM contents", in: database) == 4)
+        #expect(try integer("SELECT count(*) FROM representations", in: database) == 4)
+        #expect(try integer("""
+            SELECT count(*) FROM contents c JOIN history_items i ON i.id = c.itemID
+            """, in: database) == 2)
+        let retiredCandidates = try database.prepare("""
+            SELECT count(*) FROM representations r JOIN contents c ON c.id = r.contentID
+            JOIN history_items i ON i.id = c.itemID WHERE r.fingerprint = ?
+            """, bindings: [.blob(sqliteUInt64(7))])
+        defer { retiredCandidates.finalize() }
+        #expect(try retiredCandidates.step())
+        #expect(try retiredCandidates.integer(at: 0) == 0)
     }
 
     @Test func payloadLocationAndNormalizedTypeUniquenessRejectAmbiguousRepresentations() throws {
@@ -169,5 +182,23 @@ struct SQLiteHistorySchemaTests {
         }
         #expect(try integer("SELECT value FROM unrelated", in: database) == 42)
         #expect(try integer("SELECT count(*) FROM sqlite_master WHERE name = 'history_state'", in: database) == 0)
+    }
+
+    @Test func oldCascadingOwnershipIsRejectedWithoutRewritingTheStore() throws {
+        let database = try makeDatabase()
+        // Reconstruct only the incompatible ownership shape in this empty
+        // fixture. Production never performs this DDL on an existing store.
+        try database.execute("DROP TABLE contents")
+        try database.execute("""
+            CREATE TABLE contents (
+                id TEXT PRIMARY KEY NOT NULL,
+                itemID TEXT NOT NULL REFERENCES history_items(id) ON DELETE CASCADE
+            )
+            """)
+        #expect(throws: HistoryFailure.persistence(.openStore)) {
+            try database.writeTransaction { try SQLiteHistorySchema.create(in: database) }
+        }
+        #expect(try integer("SELECT \"notnull\" FROM pragma_table_info('contents') WHERE name='itemID'", in: database) == 1)
+        #expect(try integer("SELECT count(*) FROM pragma_foreign_key_list('contents') WHERE \"from\"='itemID' AND on_delete='CASCADE'", in: database) == 1)
     }
 }

@@ -1,4 +1,10 @@
 // Retention Settings copy (V2-07 §10).
+"settings.retention.no-limit" = "不限制";
+"settings.retention.applying" = "正在应用限制…";
+"settings.retention.cancelling" = "正在取消…";
+"settings.retention.count-cancelled" = "已取消。本次应用未更改条数限制，也未移除任何项目。";
+"settings.retention.policies-cancelled" = "已取消。本次应用未更改这些清理限制，也未移除任何项目或修订版本。";
+"settings.retention.history-changed" = "准备清理时历史记录已变化，本次设置未应用。请再次点击应用。";
 "settings.retention.age.enforcement-note" = "Clipy 捕获剪贴板变化或您应用保留设置时会检查时限。仅经过一段时间不会移除项目。";
 "settings.retention.age.field-label" = "最长保留时间";
 "settings.retention.age.section" = "保留时间";

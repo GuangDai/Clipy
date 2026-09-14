@@ -192,23 +192,51 @@ Details 的显式表示预览也先按 renderer 元数据限额决定是否读�
 
 新增内容的顺序固定为：
 
-1. 在 staging 完成新文件，检查写入结果，完成所要求的文件同步。
-2. 将文件发布到最终不可变路径。
-3. 唯一 Authority 用一次 SQLite transaction 提交引用、计数、业务变化、审计和
+1. Authority 先进入 SQLite `BEGIN IMMEDIATE`，复核 position 与外部写授权。
+2. 在 staging 完成新文件，检查写入结果，完成所要求的文件同步。
+3. 将文件发布到最终不可变路径。
+4. 在同一次 SQLite transaction 提交引用、计数、业务变化、审计和
    ChangePosition。
-4. 返回真实 receipt，释放输入及临时内存。
+5. 返回真实 receipt，释放输入及临时内存。
+
+原生 write transaction 覆盖文件发布到引用提交的完整区间；GC 的目录引用检查到
+unlink 也使用短 `BEGIN IMMEDIATE` 区间。这样即使同进程旧 owner 最后一批维护
+暂时延续到新 owner 打开之后，也不能将新发布而尚未插入引用的文件误删。复用
+SQLite 的互斥，不引入额外锁、owner 注册表或重放 History 动作。连接整个寿命保留
+原生 1,000 ms busy timeout，给旧物理事务/连接关闭机会完成；锁等待可增加约一秒
+取消延迟，获取事务后和 COMMIT 前都重查取消，未成功提交的取消不能产生 receipt。
 
 数据库永远不先引用一个尚未发布的文件。文件已发布而 transaction 失败时，留下的是
 无引用文件，旧 History 不变；不得先删除旧历史为新写入腾位置。断电耐久性、目录同步
 和 APFS 行为仍需要真实平台验证，不能从 rename 的原子性外推全部耐久性。
 
-删除/prune 先提交数据库引用变化，再删除已无引用的文件。清理只查询当前真实引用，
-按固定批次枚举文件，不在启动时构建全仓 live-ID Set，不依赖额外持久账本。
+**2026-09-14 用户选择：先逻辑删除，再分批回收物理内容。** `history_items`
+是公开 History 的存活拥有者。删除/clear/retire 的一次原子提交移除该行及搜索索引，
+同时更新逻辑用量、策略、HCR/Gateway 审计和 ChangePosition；该 receipt 返回后，
+列表、搜索、详情、粘贴、预览、修订和去重均立即看不到已删除条目。
+`contents.itemID` 不再向 `history_items` 建级联外键，删除条目不触碰其 payload
+行；R3 prune 将指定非活动修订的 `contents.itemID` 置 NULL，使它立即脱离 lineage。
+不引入需要所有读通道重复过滤的 tombstone 标志，也不增加公开分批 Apply 语义。
+
+未回收的 content 要么没有 owner，要么其 owner 已不存在。GC 用 covering keyset
+每批最多访问 32 个 content ownership 行、删除 32 个 representation 行，最后删除
+已空的无 owner content；不会一次按 content 数级联删除无界 payload。每批 SQL
+完成后即在另一个短 write transaction 中对少量 blob UUID 复查剩余 representation
+引用，最后引用消失才 unlink。引用删除必须先 COMMIT，后续 unlink 失败/取消不能
+使 SQL 回滚恢复一个指向已删除文件的引用。
+共享 blob 的任何未回收引用仍保护其文件。批间让出 Authority，物理事务不改变逻辑
+计数、HCR、ChangePosition，也不发布额外 HistoryCommit。取消/退出留下的无 owner
+行本身足够让重启从有界遍历继续，无持久任务账本、常驻全仓集合或第二个 writer。
+
+为防止罕见 UUID 重用将旧 content 接回新条目，捕获候选 ID 的占用检查同时查询
+未回收 content 的旧 owner ID；去重候选必须 join 存活 `history_items`。旧级联
+schema 被原样拒绝为 openStore 失败，不迁移、不清空、不自动删除已有存储。
+此处承诺逻辑删除立即完成，物理空间随后回收，不承诺安全擦除或满盘时零写入开销。
 清理与同一 blob 引用的发布仍由 Authority 排序；staging 和最终文件分开处理。
 不复用一个已经删除的 BlobID 来写另一份内容。
 
 打开存储、实际删除/prune 或新文件发布后的事务失败会请求一次有限后台遍历。
-每批最多访问 64 个目录项，批次之间让出 Authority；遍历中新增请求合并为一次补跑，
+content 回收之后，每批最多访问 64 个目录项，批次之间让出 Authority；遍历中新增请求合并为一次补跑，
 完成即退出，不依赖后续复制来推进，也不保留永久轮询任务。普通复制/置顶不触发
 全目录遍历。清理失败不改写已提交的 receipt；下一次实际清理请求或重新打开时重试。
 
@@ -216,8 +244,13 @@ Details 的显式表示预览也先按 renderer 元数据限额决定是否读�
 SQLite backup API 复制 metadata，再按索引分页复制所有被引用的不可变 blob。
 该期间其他 History 写入和清理等待同一个 actor，保证数据库与文件属于同一状态；
 不另加 lease/lock，也不把运行中直接复制 sqlite 文件当作备份。共享 blob 只复制一次。
-目的地必须是新目录且不位于源存储的受管理目录内，失败或取消仅清理本次创建的
-部分备份。成功回执携带源 ChangePosition 和条目数；备份本身不推进 History 状态。
+目的地必须是新目录且不位于源存储的受管理目录内。先在同父目录创建名称以
+`.incomplete` 结尾的独占临时目录；同步所有 blob、SQLite 文件和目录之后，通过
+不覆盖已有目标的原子重命名发布用户选择的目录，再同步父目录和磁盘写入。
+目标目录的出现即表示内容复制完成；进程中断只可能留下明确标为未完成的临时
+目录，不把该目录视为可恢复备份。失败或取消仅清理本次创建的临时目录；发布后
+同步失败保留完整目标但不返回成功回执。成功回执携带源 ChangePosition 和条目数；
+备份本身不推进 History 状态。
 备份包含原始内容、修订和存储元数据，未加密。它可用当前存储实现重开；此功能不
 附带旧格式迁移或历史合并。导出单个表示与完整历史备份仍是不同操作。
 

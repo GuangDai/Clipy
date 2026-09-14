@@ -465,6 +465,80 @@ struct ContentPreviewTests {
         #expect(settled.activeJobs == 0)
         #expect(settled.retainedSourceBytes == 0)
     }
+
+    @Test("an occupied native slot expires queued previews without admitting overlapping work", arguments: [false, true])
+    @MainActor
+    func nativeSlotTimeoutReleasesQueuedInputAndAllowsRetry(cancelActiveRender: Bool) async {
+        let renderer = ContentPreview()
+        let gate = RenderStartGate()
+        let hook: @Sendable () async -> Void = { await gate.parkFirst() }
+        await ContentPreviewDebugInstrumentation.$renderDidStart.withValue(hook) {
+            let active = Task { await renderer.rasterizePNGForDisplay(Self.onePixelPNG) }
+            await gate.waitUntilParked()
+            // The parked native operation deliberately ignores cancellation,
+            // just like a synchronous drawPDFPage that has not returned yet.
+            if cancelActiveRender { active.cancel() }
+
+            var imageOutcome: PreviewOutcome?
+            var pdfOutcome: PreviewOutcome?
+            let image = Task {
+                imageOutcome = await renderer.renderHistoryPane([
+                    PreviewRepresentation(typeIdentifier: "public.png", bytes: Self.onePixelPNG),
+                    PreviewRepresentation(typeIdentifier: "com.example.opaque", bytes: Data(repeating: 0, count: 4_096)),
+                ])
+            }
+            let pdf = Task {
+                // No PDF decoding should occur while the slot is occupied;
+                // even malformed input must report renderer availability here.
+                pdfOutcome = await renderer.renderHistoryPane([
+                    PreviewRepresentation(typeIdentifier: "com.adobe.pdf", bytes: Data("%PDF-1.4".utf8)),
+                ])
+            }
+            let text = await renderer.renderHistoryPane([
+                PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("still available".utf8)),
+            ])
+            if case .content(.text(let artifact)) = text {
+                #expect(artifact.text == "still available")
+                #expect(!artifact.wasTruncated)
+            } else {
+                Issue.record("Text preview must remain available while rasterization is occupied.")
+            }
+
+            // Bound the observation separately from the product's two-second
+            // wait. A regression must fail and release the parked renderer,
+            // rather than leave the test suite suspended forever.
+            let observationDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+            while (imageOutcome == nil || pdfOutcome == nil), ContinuousClock.now < observationDeadline {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            let imageBeforeRelease = imageOutcome
+            let pdfBeforeRelease = pdfOutcome
+            let afterTimeout = await renderer.debugSnapshot()
+            let nativeEntriesBeforeRelease = await gate.entryCount
+            await gate.resume()
+            _ = await active.value
+            await image.value
+            await pdf.value
+
+            #expect(imageBeforeRelease == .failed(.renderer))
+            #expect(pdfBeforeRelease == .failed(.renderer))
+            #expect(afterTimeout.activeJobs == 1)
+            #expect(afterTimeout.queuedRasterJobs == 0)
+            #expect(afterTimeout.retainedSourceBytes == Self.onePixelPNG.count)
+            #expect(nativeEntriesBeforeRelease == 1)
+
+            let retry = await renderer.rasterizePNGForDisplay(Self.onePixelPNG)
+            guard case .content(.raster) = retry else {
+                Issue.record("Retry must render after the original native owner releases its slot")
+                return
+            }
+            #expect(await gate.entryCount == 2)
+        }
+        let settled = await renderer.debugSnapshot()
+        #expect(settled.activeJobs == 0)
+        #expect(settled.retainedSourceBytes == 0)
+        #expect(settled.queuedRasterJobs == 0)
+    }
     #endif
 
     private static let onePixelPNG = Data(base64Encoded:

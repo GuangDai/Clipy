@@ -6,6 +6,16 @@ import Testing
 
 @Suite("Retention settings failure recovery")
 struct RetentionSettingsFailureRecoveryTests {
+    @Test("expired cleanup planning asks to retry rather than claiming a refreshed page")
+    func changedHistoryRecoveryIsSpecificToAnUnappliedSetting() {
+        let failure = HistoryFailure.snapshotExpired(current: ChangePosition(rawValue: 42))
+        let policies = HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil)
+        #expect(RetentionSettingsCopy.countFailureMessage(for: failure)
+            == RetentionSettingsCopy.historyChanged)
+        #expect(RetentionSettingsCopy.failureMessage(for: failure, policies: policies)
+            == RetentionSettingsCopy.historyChanged)
+    }
+
     @Test("an unpinned active revision gets revision-specific recovery and the edited limit can retry")
     @MainActor
     func oversizedActiveRevisionPreservesTheDraftAndRecoversWithAHigherLimit() async throws {

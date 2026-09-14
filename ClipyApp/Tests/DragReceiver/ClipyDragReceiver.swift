@@ -16,14 +16,34 @@ struct ClipyDragReceiver {
               let height = Double(arguments[3]), height.isFinite, height > 0 else {
             exit(2)
         }
+        // XCTest owns launch and process lifetime; retain the same test-local
+        // stderr evidence without an alternate launcher or logging service.
+        let outputDirectory = URL(fileURLWithPath: arguments[4], isDirectory: true)
+        let logDescriptor = Darwin.open(
+            outputDirectory.appendingPathComponent("receiver.log").path,
+            O_WRONLY | O_CREAT | O_APPEND, mode_t(0o600)
+        )
+        guard logDescriptor >= 0 else { exit(4) }
+        guard Darwin.dup2(logDescriptor, STDERR_FILENO) >= 0 else {
+            _ = Darwin.close(logDescriptor)
+            exit(4)
+        }
+        if logDescriptor != STDERR_FILENO { _ = Darwin.close(logDescriptor) }
         let application = NSApplication.shared
-        guard application.setActivationPolicy(.accessory) else {
-            FileHandle.standardError.write(Data("receiver: accessory activation policy refused\n".utf8))
+        let previousPolicy = application.activationPolicy()
+        let switchResult: Bool? = previousPolicy == .regular
+            ? nil : application.setActivationPolicy(.regular)
+        let actualPolicy = application.activationPolicy()
+        guard actualPolicy == .regular else {
+            let resultDescription = switchResult.map { String($0) } ?? "not requested"
+            FileHandle.standardError.write(Data(
+                "receiver: regular activation policy unavailable; before=\(previousPolicy.rawValue) after=\(actualPolicy.rawValue) switchResult=\(resultDescription)\n".utf8
+            ))
             exit(3)
         }
         let delegate = DragReceiverDelegate(
             frame: NSRect(x: x, y: y, width: width, height: height),
-            outputDirectory: URL(fileURLWithPath: arguments[4], isDirectory: true)
+            outputDirectory: outputDirectory
         )
         application.delegate = delegate
         withExtendedLifetime(delegate) { application.run() }
@@ -34,8 +54,10 @@ struct ClipyDragReceiver {
 private final class DragReceiverDelegate: NSObject, NSApplicationDelegate {
     private let frame: NSRect
     private let outputDirectory: URL
-    private var window: NSPanel?
+    private var window: NSWindow?
     private var readinessTimer: Timer?
+    private var didPublishWindowReadiness = false
+    private var lastTargetHit: Int?
 
     init(frame: NSRect, outputDirectory: URL) {
         self.frame = frame
@@ -46,19 +68,28 @@ private final class DragReceiverDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let receiver = NativeClipboardDropView(
             frame: NSRect(origin: .zero, size: frame.size),
-            resultURL: outputDirectory.appendingPathComponent("received.json")
+            resultURL: outputDirectory.appendingPathComponent("received.json"),
+            pointerReadinessURL: outputDirectory.appendingPathComponent("hovered.json")
         )
-        let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel],
+        let panel = NSWindow(contentRect: frame, styleMask: [.titled, .closable],
                             backing: .buffered, defer: false)
+        panel.title = "Clipy native drag receiver"
+        // `frame` is the free outer rectangle chosen by the source journey.
+        // Keep the title bar inside it and publish the content's actual drop
+        // rectangle below; a titled window has different frame/content sizes.
+        panel.setFrame(frame, display: false)
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
-        panel.level = .statusBar
         panel.isOpaque = true
         panel.backgroundColor = .windowBackgroundColor
         panel.contentView = receiver
+        receiver.autoresizingMask = [.width, .height]
+        panel.acceptsMouseMovedEvents = true
         receiver.registerForDraggedTypes([.string, .init("com.clipy.tests.drag-opaque")])
         window = panel
-        panel.orderFrontRegardless()
+        panel.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate()
+        FileHandle.standardError.write(Data("receiver: requested regular application activation\n".utf8))
         // Readiness is a WindowServer fact after the event loop processes its
         // display work, not merely an isVisible flag from orderFront.
         let timer = Timer(timeInterval: 0.02, target: self, selector: #selector(publishReadiness),
@@ -67,27 +98,45 @@ private final class DragReceiverDelegate: NSObject, NSApplicationDelegate {
         RunLoop.main.add(timer, forMode: .common)
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        FileHandle.standardError.write(Data("receiver: application became active\n".utf8))
+    }
+
     @objc private func publishReadiness() {
         guard let window, NSApplication.shared.isRunning,
-              NSApplication.shared.activationPolicy() == .accessory,
-              window.isVisible else { return }
-        let center = NSPoint(x: window.frame.midX, y: window.frame.midY)
+              NSApplication.shared.activationPolicy() == .regular,
+              window.isVisible,
+              let receiver = window.contentView as? NativeClipboardDropView,
+              receiver.isTrackingPointer else { return }
+        let contentFrame = window.convertToScreen(receiver.convert(receiver.bounds, to: nil))
+        let center = NSPoint(x: contentFrame.midX, y: contentFrame.midY)
         let hitWindowNumber = NSWindow.windowNumber(at: center, belowWindowWithWindowNumber: 0)
-        guard hitWindowNumber == window.windowNumber else { return }
+        if lastTargetHit != hitWindowNumber {
+            lastTargetHit = hitWindowNumber
+            FileHandle.standardError.write(Data(
+                "receiver: target hit=\(hitWindowNumber) expected=\(window.windowNumber) center=\(center)\n".utf8
+            ))
+        }
+        guard hitWindowNumber == window.windowNumber, !didPublishWindowReadiness else { return }
+        // Exercise an ordinary destination application's real activation and
+        // key-window lifecycle once. `activate()` is a request, so the ready
+        // receipt joins the resulting public state rather than assuming it.
+        guard NSApplication.shared.isActive, window.isKeyWindow else { return }
         let ready = ReceiverReadiness(
             windowNumber: window.windowNumber,
             hitWindowNumber: hitWindowNumber,
-            frame: ReceiverFrame(x: Double(window.frame.minX), y: Double(window.frame.minY),
-                                 width: Double(window.frame.width), height: Double(window.frame.height)),
+            frame: ReceiverFrame(x: Double(contentFrame.minX), y: Double(contentFrame.minY),
+                                 width: Double(contentFrame.width), height: Double(contentFrame.height)),
             activationPolicy: NSApplication.shared.activationPolicy().rawValue,
-            isRunning: NSApplication.shared.isRunning
+            isRunning: NSApplication.shared.isRunning,
+            isActive: NSApplication.shared.isActive,
+            isKeyWindow: window.isKeyWindow
         )
         do {
             try JSONEncoder().encode(ready).write(
                 to: outputDirectory.appendingPathComponent("ready.json"), options: .atomic
             )
-            readinessTimer?.invalidate()
-            readinessTimer = nil
+            didPublishWindowReadiness = true
         } catch {
             FileHandle.standardError.write(Data("receiver: readiness write failed\n".utf8))
             NSApplication.shared.terminate(nil)
@@ -98,9 +147,14 @@ private final class DragReceiverDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 private final class NativeClipboardDropView: NSView {
     private let resultURL: URL
+    private let pointerReadinessURL: URL
+    private var didPublishPointerReadiness = false
+    private var pointerTrackingArea: NSTrackingArea?
+    var isTrackingPointer: Bool { pointerTrackingArea != nil }
 
-    init(frame: NSRect, resultURL: URL) {
+    init(frame: NSRect, resultURL: URL, pointerReadinessURL: URL) {
         self.resultURL = resultURL
+        self.pointerReadinessURL = pointerReadinessURL
         super.init(frame: frame)
     }
 
@@ -110,6 +164,56 @@ private final class NativeClipboardDropView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.windowBackgroundColor.setFill()
         bounds.fill()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let pointerTrackingArea { removeTrackingArea(pointerTrackingArea) }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect, .enabledDuringMouseDrag],
+            owner: self, userInfo: nil
+        )
+        pointerTrackingArea = area
+        addTrackingArea(area)
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        FileHandle.standardError.write(Data(
+            "receiver: pointer entered buttons=\(NSEvent.pressedMouseButtons)\n".utf8
+        ))
+        publishPointerReadiness(event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        publishPointerReadiness(event)
+    }
+
+    /// Readiness requires a real event delivered to the registered NSView,
+    /// before any drag. A visible WindowServer window alone does not establish
+    /// that its content participates in AppKit's event dispatch yet.
+    private func publishPointerReadiness(_ event: NSEvent) {
+        guard !didPublishPointerReadiness, NSEvent.pressedMouseButtons == 0,
+              let window, event.windowNumber == window.windowNumber,
+              registeredDraggedTypes.contains(.string) else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        let pointInSuperview = superview?.convert(event.locationInWindow, from: nil)
+            ?? event.locationInWindow
+        guard bounds.contains(point), hitTest(pointInSuperview) === self else { return }
+        let screenPoint = window.convertPoint(toScreen: event.locationInWindow)
+        let hitWindow = NSWindow.windowNumber(at: screenPoint, belowWindowWithWindowNumber: 0)
+        guard hitWindow == window.windowNumber else { return }
+        do {
+            let value = ReceiverPointerReadiness(
+                windowNumber: window.windowNumber, hitWindowNumber: hitWindow,
+                pointX: Double(screenPoint.x), pointY: Double(screenPoint.y)
+            )
+            try JSONEncoder().encode(value).write(to: pointerReadinessURL, options: .atomic)
+            didPublishPointerReadiness = true
+            FileHandle.standardError.write(Data("receiver: view event handshake complete\n".utf8))
+        } catch {
+            FileHandle.standardError.write(Data("receiver: pointer readiness write failed\n".utf8))
+        }
     }
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
@@ -159,6 +263,15 @@ private struct ReceiverReadiness: Codable, Sendable {
     let frame: ReceiverFrame
     let activationPolicy: Int
     let isRunning: Bool
+    let isActive: Bool
+    let isKeyWindow: Bool
+}
+
+private struct ReceiverPointerReadiness: Codable, Sendable {
+    let windowNumber: Int
+    let hitWindowNumber: Int
+    let pointX: Double
+    let pointY: Double
 }
 
 private struct ReceivedRepresentation: Codable, Sendable {

@@ -26,15 +26,15 @@ The Authority read interval is:
 
 ```text
 enter HistoryAuthority
-→ create operation-local ModelContext
-→ read LastChangePositionRow
-→ fetch the request's scalar projection using the same context
+→ enter SQLite read transaction
+→ read history_state.changePosition
+→ query the request's scalar projection in the same transaction
 → construct a Sendable source snapshot
-→ release all @Model values and the context
+→ finalize statements and finish the read transaction
 → leave HistoryAuthority
 ```
 
-There is no `await` inside the interval, so the sole writer cannot interleave a commit between the position read and scalar fetch. Reads and writes share the same actor ordering even though each operation uses a fresh context.
+There is no `await` inside this Authority interval, so the sole writer cannot interleave a commit between the position read and scalar query. SearchWorker instead owns an independent SQLite reader whose transaction preserves the same snapshot across its bounded batches.
 
 ### 3. Read-after-commit
 
@@ -46,9 +46,9 @@ case .committed(let commit)
 
 any `browse`, `details`, `pastePayload`, or version check that begins afterward must observe durable position `>= commit.position`.
 
-This guarantee does not depend on cross-context notifications or manual refresh. The transaction completed before the receipt, and the later serialized read creates a new context against the same `ModelContainer`.
+This guarantee does not depend on notifications or manual refresh. The write transaction completed before the receipt, and a later read starts a new snapshot against that committed database.
 
-The Part VI walking skeleton must demonstrate this on the supported SwiftData runtime before the design is called executable.
+The Part VI walking skeleton exercises this through the real SQLiteHistory on the supported macOS runtime.
 
 ### 4. Internal invalidation, not a public ChangeFeed
 
@@ -67,7 +67,7 @@ Semantics:
 - buffering may keep only the newest value because it is a wake-up signal, not a delta;
 - it has no replay after process restart;
 - it contains no content, before/after state, audit identity, or requirement that every position be delivered;
-- it is not public and is not a durable History Change Record (an explicitly excluded post-v1 concept).
+- it is not public and is independent of the durable History Change Record journal specified by V2-03.
 
 Consumers never apply an invalidation to local state. `ClipboardHistory.observe` consumes it internally and re-reads authoritative state.
 

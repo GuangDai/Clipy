@@ -9,11 +9,23 @@
 /// pair, zero-length, or overlapping after sorting — are dropped, never
 /// clamped into wrong pixels.
 import Foundation
+import SwiftUI
 @testable import HistoryCore
 @testable import ClipyApp
 import Testing
 
 struct MatchHighlightingTests {
+
+    @Test func selectedMatchesKeepTheirEmphasisWithAReadableForeground() {
+        let result = MatchHighlighting.highlighted("a match", ranges: [
+            UTF16TextRange(location: 2, length: 5)
+        ], foreground: PanelTheme.selectedForeground)
+        #expect(String(result.characters) == "a match")
+        #expect(segments(of: result, emphasized: true) == ["match"])
+        for run in result.runs where run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true {
+            #expect(run.foregroundColor == PanelTheme.selectedForeground)
+        }
+    }
 
     // MARK: - Run-inspection helper
 

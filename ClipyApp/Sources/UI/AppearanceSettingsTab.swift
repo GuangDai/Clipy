@@ -18,6 +18,8 @@ import SwiftUI
 struct AppearanceSettingsTab: View {
 
     private let popupPosition: Binding<PopupPositionMode>?
+    @AppStorage(NativeAppearance.defaultsKey)
+    private var nativeAppearance: NativeAppearance = .system
 
     /// `@AppStorage` reads and writes the persisted raw values; the enum
     /// conversion happens at the control's tag, keeping this view a pure
@@ -48,6 +50,16 @@ struct AppearanceSettingsTab: View {
 
     var body: some View {
         Form {
+            Section {
+                Picker(NativeAppearanceCopy.text("Appearance"), selection: $nativeAppearance) {
+                    ForEach(NativeAppearance.allCases, id: \.self) { appearance in
+                        Text(appearance.title).tag(appearance)
+                    }
+                }
+                .accessibilityIdentifier("clipy.settings.appearance.color-scheme")
+            } footer: {
+                Text(NativeAppearanceCopy.text("Uses the macOS accent color, contrast and transparency settings."))
+            }
             Section {
                 sampleRow
                     .frame(maxWidth: .infinity)
@@ -229,9 +241,10 @@ struct AppearanceSettingsTab: View {
         return HStack(spacing: PanelTheme.spacingSmall) {
             Image(systemName: symbol)
                 .font(.system(size: 15))
-                .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                .foregroundStyle(selected ? PanelTheme.selectedForeground : Color.secondary)
                 .frame(width: PanelTheme.thumbnailSize(for: rowDensity))
             Text(title)
+                .foregroundStyle(selected ? PanelTheme.selectedForeground : Color.primary)
                 .font(PanelTheme.titleFont(for: rowFontSize))
                 .lineLimit(lines)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -242,11 +255,7 @@ struct AppearanceSettingsTab: View {
         ) - 2 * PanelContentFit.listRowVerticalInset)
         .background {
             RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
-                .fill(selected ? Color.accentColor.opacity(0.12) : Color.clear)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
-                .strokeBorder(selected ? Color.accentColor.opacity(0.35) : .clear, lineWidth: 1)
+                .fill(selected ? PanelTheme.selectedBackground : Color.clear)
         }
         .padding(.vertical, PanelContentFit.listRowVerticalInset)
     }

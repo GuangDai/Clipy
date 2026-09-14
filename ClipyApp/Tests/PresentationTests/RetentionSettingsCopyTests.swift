@@ -51,6 +51,20 @@ struct RetentionSettingsCopyTests {
         ) == "关闭后，未置顶项目不受条数限制。已启用的时间、存储空间和修订版本限制仍然生效。条数限制不会移除已置顶项目。")
     }
 
+    @Test("cancellation names only the interrupted apply and preserves earlier successful limits")
+    func cancelledApplyCopyIsScopedToItsOwnTransaction() throws {
+        let chinese = try bundle("zh-Hans")
+        #expect(RetentionSettingsCopy.plain(
+            "settings.retention.count-cancelled", "missing", bundle: chinese
+        ) == "已取消。本次应用未更改条数限制，也未移除任何项目。")
+        #expect(RetentionSettingsCopy.plain(
+            "settings.retention.policies-cancelled", "missing", bundle: chinese
+        ) == "已取消。本次应用未更改这些清理限制，也未移除任何项目或修订版本。")
+        #expect(RetentionSettingsCopy.plain(
+            "settings.retention.history-changed", "missing", bundle: try bundle("en")
+        ) == "History changed while preparing cleanup. Nothing was applied. Try applying again.")
+    }
+
     @Test("revision-limit recovery does not blame pinned items in Chinese")
     func revisionBudgetRecoveryCopy() throws {
         let chinese = try bundle("zh-Hans")

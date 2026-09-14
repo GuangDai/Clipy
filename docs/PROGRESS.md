@@ -1,6 +1,14 @@
 # Implementation Progress
 
-> **Status:** living record; one section per landed roadmap step, newest last.
+> **Status:** historical implementation record, including entries through
+> Batch 40 / PR #44. Its dated status, paths and CI results apply to the cited
+> revisions and do not describe current head. Current product contracts live
+> in [the architecture](01-architecture.md), [SQLite storage](v2/V2-09-multilevel-storage.md)
+> and the other owning specifications; current behavior and verification must
+> be checked against source, tests and the relevant run. No other historical
+> progress document is designated as a substitute for those sources.
+>
+> One section per recorded roadmap step, newest last.
 > Maps each step of `roadmap/README.md` §3 to its commits and its CI evidence
 > on the `macOS 26 ARM CI` workflow (github.com/GuangDai/Clipy; macos-26 arm64
 > runners; jobs *SwiftPM build + test* and *XcodeGen generate + app
@@ -11,7 +19,7 @@
 > criteria live in the design modules (`00`–`06`) and the roadmap module docs;
 > they are cited here, never restated as new semantics.
 
-**Audit baseline:** `8f316c9` (2026-08-02). **Current landed baseline:**
+**Audit baseline:** `8f316c9` (2026-08-02). **Historical summary baseline:**
 `master` through [PR #40](https://github.com/GuangDai/Clipy/pull/40) / merge
 `c89f2ba` (2026-08-24). Steps 0–9 are
 implemented and CI-green;
@@ -24,7 +32,7 @@ cursor/status-item/center/last-position placement, dwell-driven preview pane)
 rather than a SwiftUI `MenuBarExtra`. M3/state 3 (packaging, accessibility,
 localization, product acceptance per Part VI §11) remains open.
 
-**Current CI provenance (2026-08-24):** the PR #40 merge head `c89f2ba` was
+**Historical CI provenance (2026-08-24):** the PR #40 merge head `c89f2ba` was
 green across the then-current source-gate, SwiftPM, and XcodeGen jobs at
 [run 32699272489](https://github.com/GuangDai/Clipy/actions/runs/32699272489).
 PR #34 restores the manual-only exact/scale evidence caller and scale-phase

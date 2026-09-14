@@ -4,6 +4,165 @@ import Testing
 @testable import HistoryStorage
 
 struct HistoryBackupTests {
+    @Test func backupExcludesDetachedContentBeforeCleanupAndPreservesSharedLiveBlob() async throws {
+        let history = try await WSSupport.makeHistory()
+        let removedMarker = "retired-canonical-payload-must-not-be-exported-34862"
+        let prunedMarker = "retired-revision-payload-must-not-be-exported-73941"
+        let removed = try inserted(try await history.perform(.capture(capture(byte: 91, text: removedMarker))))
+        let live = try inserted(try await history.perform(.capture(capture(byte: 90))))
+        var current = live
+        for text in [prunedMarker, "retained revision"] {
+            let receipt = try await history.perform(.revise(.init(
+                itemID: current.id, expected: current.contentVersion,
+                intent: .replace(.init(decisions: [
+                    .init(typeIdentifier: "com.example.large", action: .inheritCanonical),
+                    .init(typeIdentifier: "public.utf8-plain-text", action: .replace(bytes: Data(text.utf8))),
+                ]))
+            )))
+            guard case .committed(let commit) = receipt, case .revised(let revised) = commit.outcome else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            current = revised
+        }
+        let payload = try await history.pastePayload(for: live.id)
+        let root = WSSupport.tempStoreURL("backup-detached-content")
+        defer { WSSupport.removeStore(root) }
+        let destination = root.deletingLastPathComponent().appendingPathComponent("export")
+        await history.authority.waitForBlobCleanup()
+        let gate = SuspensionGate()
+        let point = AuthoritySuspensionPoint.blobCleanupBatchEntry.rawValue
+        await history.authority.setSuspensionHandler { suspended in
+            if suspended == .blobCleanupBatchEntry { await gate.park(at: suspended.rawValue) }
+        }
+        do {
+            _ = try await history.perform(.remove(removed.id))
+            await gate.waitForPark(point)
+            _ = try await history.perform(.setRetentionPolicies(.init(
+                age: nil, storage: nil,
+                revisions: .init(maxRevisionsPerItem: 1, maxRevisionBytesPerItem: nil)
+            )))
+            // Both deleted ownership forms remain physically in the source:
+            // removed item ID and NULL owner on the pruned revision.
+            #expect(try await history.authority.backupTestDetachedContentCount() == 2)
+            #expect(blobCount(in: await history.authority.backupTestOwnedDirectory()) == 2)
+            let before = try await history.usage()
+            #expect(try await history.backup(to: destination).retainedItemCount == 1)
+            #expect(try await history.usage() == before)
+            #expect(try await history.authority.backupTestDetachedContentCount() == 2)
+            #expect(blobCount(in: destination.appendingPathComponent("history.sqlite-content")) == 1)
+
+            // Inspect before reopening History could run cleanup and hide an
+            // invalid export. Both retained Canonical/current rows must remain.
+            let metadata = destination.appendingPathComponent("history.sqlite")
+            let exported = try SQLiteDatabase(url: metadata, readOnly: true)
+            let count = try exported.prepare("SELECT COUNT(*) FROM contents")
+            #expect(try count.step())
+            #expect(try count.integer(at: 0) == 2)
+            count.finalize()
+            try exported.close()
+            let bytes = try Data(contentsOf: metadata)
+            #expect(bytes.range(of: Data(removedMarker.utf8)) == nil)
+            #expect(bytes.range(of: Data(prunedMarker.utf8)) == nil)
+            let restored = try await WSSupport.openHistory(storeURL: metadata)
+            #expect(try await restored.usage() == before)
+            #expect(try await restored.pastePayload(for: live.id) == payload)
+            #expect(try await restored.details(for: live.id).revisions.count == 1)
+            // The removed first row leaves a rowid gap. Export compaction
+            // must preserve the live FTS posting's identity and exact search.
+            let matches = try await restored.browse(.init(
+                kind: .search(text: "retained revision", mode: .exact), limit: 10
+            ))
+            #expect(matches.rows.map(\.item.id) == [live.id])
+        } catch {
+            await history.authority.setSuspensionHandler(nil)
+            await gate.resume(point)
+            await history.authority.waitForBlobCleanup()
+            throw error
+        }
+        await history.authority.setSuspensionHandler(nil)
+        await gate.resume(point)
+        await history.authority.waitForBlobCleanup()
+    }
+
+    @Test func finalDestinationAppearsOnlyAfterTheCompleteCopy() async throws {
+        let history = try await WSSupport.makeHistory()
+        _ = try await history.perform(.capture(capture(byte: 81)))
+        let root = WSSupport.tempStoreURL("backup-publication")
+        defer { WSSupport.removeStore(root) }
+        let parent = root.deletingLastPathComponent()
+        let destination = parent.appendingPathComponent("export")
+        let receipt = try await history.authority.backup(to: destination, didCopyBlob: {
+            #expect(!FileManager.default.fileExists(atPath: destination.path))
+            let siblings = try? FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            #expect(siblings?.filter { $0.pathExtension == "incomplete" }.count == 1)
+        })
+        #expect(receipt.retainedItemCount == 1)
+        #expect(FileManager.default.fileExists(atPath: destination.appendingPathComponent("history.sqlite").path))
+        #expect(try FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            .allSatisfy { $0.pathExtension != "incomplete" })
+    }
+
+    @Test func concurrentDestinationCreationNeverOverwritesExistingFiles() async throws {
+        let history = try await WSSupport.makeHistory()
+        let root = WSSupport.tempStoreURL("backup-publication-race")
+        defer { WSSupport.removeStore(root) }
+        let destination = root.deletingLastPathComponent().appendingPathComponent("export")
+        let marker = destination.appendingPathComponent("keep.txt")
+        let bytes = Data("created while backup was running".utf8)
+        await #expect(throws: HistoryBackupFailure.destinationAlreadyExists) {
+            try await history.authority.backup(to: destination, synchronize: { url, isDirectory in
+                if isDirectory && url.pathExtension == "incomplete" {
+                    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: false)
+                    try bytes.write(to: marker)
+                }
+                try HistoryAuthority.synchronizeBackupItem(url, isDirectory)
+            })
+        }
+        #expect(try Data(contentsOf: marker) == bytes)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: destination.path) == ["keep.txt"])
+    }
+
+    enum SynchronizationFailure: CaseIterable, Sendable {
+        case blob, beforePublication, afterPublication
+    }
+
+    @Test(arguments: SynchronizationFailure.allCases)
+    func synchronizationFailureNeverAcknowledgesSuccess(_ failure: SynchronizationFailure) async throws {
+        let history = try await WSSupport.makeHistory()
+        _ = try await history.perform(.capture(capture(byte: 82)))
+        let before = try await history.usage()
+        let root = WSSupport.tempStoreURL("backup-sync-failure")
+        defer { WSSupport.removeStore(root) }
+        let parent = root.deletingLastPathComponent()
+        let destination = parent.appendingPathComponent("export")
+        await #expect(throws: HistoryBackupFailure.writeFailed) {
+            try await history.authority.backup(to: destination, synchronize: { url, isDirectory in
+                let shouldFail: Bool = switch failure {
+                case .blob: url.pathExtension == "blob"
+                case .beforePublication: isDirectory && url.pathExtension == "incomplete"
+                case .afterPublication: url == parent
+                }
+                if shouldFail { throw HistoryBackupFailure.writeFailed }
+                try HistoryAuthority.synchronizeBackupItem(url, isDirectory)
+            })
+        }
+        #expect(try await history.usage() == before)
+        #expect(try FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            .allSatisfy { $0.pathExtension != "incomplete" })
+        if failure == .afterPublication {
+            // Publication already made a complete copy visible. Keep it for
+            // recovery even though durable publication was not acknowledged.
+            let restored = try await WSSupport.openHistory(storeURL: destination.appendingPathComponent("history.sqlite"))
+            #expect(try await restored.usage() == before)
+            let row = try #require(try await restored.browse(.init(kind: .recent, limit: 1)).rows.first)
+            #expect(try await restored.pastePayload(for: row.item.id).representations.contains {
+                $0.bytes == Data(repeating: 82, count: 128 * 1_024)
+            })
+        } else {
+            #expect(!FileManager.default.fileExists(atPath: destination.path))
+        }
+    }
+
     @Test func backupCopiesReferencesBeyondTheFirstBoundedPage() async throws {
         let history = try await WSSupport.makeHistory()
         let root = WSSupport.tempStoreURL("backup-pages")
@@ -200,9 +359,9 @@ struct HistoryBackupTests {
         let destination = root.deletingLastPathComponent().appendingPathComponent("export")
         let before = try await history.usage()
         let task = Task {
-            try await history.authority.backup(to: destination) {
+            try await history.authority.backup(to: destination, didCopyBlob: {
                 withUnsafeCurrentTask { $0?.cancel() }
-            }
+            })
         }
         await #expect(throws: CancellationError.self) { try await task.value }
         #expect(!FileManager.default.fileExists(atPath: destination.path))
@@ -230,11 +389,11 @@ struct HistoryBackupTests {
         #expect(try await history.usage().itemCount == 2)
     }
 
-    private func capture(byte: UInt8) -> ClipboardCapture {
+    private func capture(byte: UInt8, text: String = "canonical") -> ClipboardCapture {
         ClipboardCapture(
             representations: [
                 CapturedRepresentation(typeIdentifier: "com.example.large", bytes: Data(repeating: byte, count: 128 * 1_024)),
-                CapturedRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("canonical".utf8)),
+                CapturedRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(text.utf8)),
             ], origin: .init(sourceApplication: nil, lineageHint: nil),
             observedAt: Date(timeIntervalSinceReferenceDate: 850_000_000)
         )
@@ -258,6 +417,16 @@ struct HistoryBackupTests {
 }
 
 private extension HistoryAuthority {
+    func backupTestDetachedContentCount() throws -> Int64 {
+        let statement = try database.prepare("""
+            SELECT COUNT(*) FROM contents c
+            WHERE NOT EXISTS (SELECT 1 FROM history_items h WHERE h.id = c.itemID)
+            """)
+        defer { statement.finalize() }
+        guard try statement.step() else { throw HistoryFailure.persistence(.invariantViolation) }
+        return try statement.integer(at: 0)
+    }
+
     func backupTestOwnedDirectory() -> URL { storeLocation.ownedDirectoryURL }
 
     func createUnreferencedBackupTestBlob() throws {

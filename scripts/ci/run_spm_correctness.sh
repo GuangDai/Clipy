@@ -9,7 +9,10 @@ mkdir -p "$log_dir" "$fixture_root"
 bash scripts/fetch_fixtures.sh "$fixture_root"
 export CLIPY_FIXTURES_DIR="$fixture_root/clipy-fixtures-v1"
 
-swift test --skip 'HistoryPerfTests\.' \
+# Isolate independent stores and real deadlines from unrelated test cases.
+# Ordering/concurrency tests still run their own actors and tasks concurrently;
+# the five macOS correctness jobs also remain parallel.
+swift test --no-parallel --skip 'HistoryPerfTests\.' \
   2>&1 | tee "$log_dir/spm-test.log"
 
 python3 scripts/diagnostic_scan.py --profile swiftdata \

@@ -1,0 +1,10 @@
+"Interaction" = "交互";
+"Browsing" = "浏览";
+"Remember search between opens" = "重新打开时保留搜索";
+"Select rows when the pointer moves over them" = "鼠标经过时选中条目";
+"Search is remembered only while Clipy is running. With pointer selection off, click a row or use the arrow keys." = "搜索仅在本次运行期间保留。关闭鼠标经过选择后，仍可点击条目或使用方向键。";
+"Preview timing" = "预览时机";
+"Preview delay" = "停留多久后显示预览";
+"Hide preview after leaving" = "移出多久后隐藏预览";
+"A longer delay keeps previews steady while browsing. A longer hide delay gives you more time to move into the preview." = "延长显示等待时间可减少浏览时的预览切换；延长隐藏等待时间，便于将鼠标移入预览操作。";
+"Restore interaction defaults" = "恢复默认交互设置";

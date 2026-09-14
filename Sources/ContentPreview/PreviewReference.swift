@@ -15,13 +15,17 @@ public struct PreviewReference: Equatable, Sendable {
     public let address: String
     /// A decoded path for a file reference, not a resolved filesystem path.
     public let filePath: String?
+    /// Prepared with the validated reference, not re-parsed during UI layout.
+    /// A filename/host is presentation only; address and filePath stay exact.
+    public let displayName: String
 
     private static let maximumSourceBytes = 16 * 1_024
 
-    private init(kind: Kind, address: String, filePath: String?) {
+    private init(kind: Kind, address: String, filePath: String?, displayName: String) {
         self.kind = kind
         self.address = address
         self.filePath = filePath
+        self.displayName = displayName
     }
 
     /// `nil` means this representation is not an exact reference candidate.
@@ -62,10 +66,20 @@ public struct PreviewReference: Equatable, Sendable {
         if let filePath, filePath.unicodeScalars.first?.value != 0x2F {
             return .failed(.malformedRepresentation)
         }
+        let displayName: String
+        if let filePath {
+            // Preserve the existing filename presentation, including trailing
+            // separators, without any filesystem lookup or symlink resolution.
+            let filename = URL(filePath: filePath, directoryHint: .inferFromPath).lastPathComponent
+            displayName = filename.isEmpty ? filePath : filename
+        } else {
+            displayName = url.host ?? address
+        }
         return .content(.reference(PreviewReference(
             kind: isFile ? .file : .url,
             address: address,
-            filePath: filePath
+            filePath: filePath,
+            displayName: displayName
         )))
     }
 }

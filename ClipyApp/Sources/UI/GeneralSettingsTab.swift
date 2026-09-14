@@ -4,17 +4,15 @@ import SwiftUI
 
 // MARK: General
 
-/// General tab (contract §4.4): the optional Launch-at-Login toggle
-/// ("Startup"), the summon-shortcut block with its Show-Colors advisory
-/// ("Keyboard Shortcut"), the capture ignore list ("Privacy"), and the
-/// Danger Zone clears. Panel placement lives
+/// General tab (contract §4.4): Launch at Login, the capture ignore list,
+/// and explicit history clearing. Keyboard shortcuts have their own Settings
+/// category. Panel placement lives
 /// on the Appearance tab; retention controls are grouped together in
 /// `RetentionSettingsTab` as required by `V2-07` §6.3.
 struct GeneralSettingsTab: View {
 
     private let viewState: HistoryViewState
     private let launchAtLogin: LaunchAtLoginSettings?
-    private let summonShortcut: SummonShortcutSettings?
 
     @State private var status: SettingStatus?
     @State private var isWorking = false
@@ -24,12 +22,10 @@ struct GeneralSettingsTab: View {
 
     init(
         viewState: HistoryViewState,
-        launchAtLogin: LaunchAtLoginSettings?,
-        summonShortcut: SummonShortcutSettings?
+        launchAtLogin: LaunchAtLoginSettings?
     ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
-        self.summonShortcut = summonShortcut
     }
 
     var body: some View {
@@ -37,11 +33,6 @@ struct GeneralSettingsTab: View {
             if let launchAtLogin {
                 Section(SettingsCopy.text("Startup")) {
                     launchAtLoginControl(launchAtLogin)
-                }
-            }
-            if let summonShortcut {
-                Section(SettingsCopy.text("Keyboard Shortcut")) {
-                    summonShortcutControl(summonShortcut)
                 }
             }
             CapturePrivacySettingsView()
@@ -105,63 +96,6 @@ struct GeneralSettingsTab: View {
         .onAppear {
             launchAtLogin?.refresh()
         }
-    }
-
-    @ViewBuilder
-    private func summonShortcutControl(
-        _ settings: SummonShortcutSettings
-    ) -> some View {
-        switch settings.status {
-        case .stopped:
-            LabeledContent(SettingsCopy.text("Summon shortcut"), value: SettingsCopy.text("Not registered"))
-                .accessibilityIdentifier("clipy.settings.shortcut.status")
-        case .current(let chord):
-            LabeledContent(SettingsCopy.text("Summon shortcut"), value: chord)
-                .accessibilityIdentifier("clipy.settings.shortcut.status")
-            HStack {
-                shortcutChangeButton(settings)
-                Button(SettingsCopy.text("Reset")) { settings.reset() }
-                    .disabled(!settings.canReset)
-                    .accessibilityIdentifier("clipy.settings.shortcut.reset")
-            }
-        case .unavailable(let requested, let retainedCurrent):
-            VStack(alignment: .leading, spacing: 6) {
-                Label(
-                    SettingsCopy.shortcutUnavailable(requested),
-                    systemImage: "exclamationmark.triangle"
-                )
-                .accessibilityIdentifier("clipy.settings.shortcut.status")
-                if let retainedCurrent {
-                    Text(SettingsCopy.retainedShortcut(retainedCurrent))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                HStack {
-                    shortcutChangeButton(settings)
-                    Button(SettingsCopy.text("Retry")) { settings.retry() }
-                        .disabled(!settings.canRetry)
-                        .accessibilityIdentifier("clipy.settings.shortcut.retry")
-                    Button(SettingsCopy.text("Reset")) { settings.reset() }
-                        .disabled(!settings.canReset)
-                        .accessibilityIdentifier("clipy.settings.shortcut.reset")
-                }
-            }
-        }
-
-        if settings.warning == .showColorsConflict {
-            Text(SettingsCopy.text("This shortcut is also the standard Show Colors shortcut."))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("clipy.settings.shortcut.warning")
-        }
-    }
-
-    private func shortcutChangeButton(
-        _ settings: SummonShortcutSettings
-    ) -> some View {
-        Button(SettingsCopy.text("Change…")) { settings.beginChange() }
-            .disabled(!settings.canChange)
-            .accessibilityIdentifier("clipy.settings.shortcut.change")
     }
 
     @ViewBuilder

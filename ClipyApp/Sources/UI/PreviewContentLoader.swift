@@ -110,6 +110,7 @@ final class PreviewContentLoader {
     private(set) var raster: PreviewRaster?
     /// Prepared by ContentPreview off the main actor, for lazy text layout.
     private(set) var textSegments: [Substring] = []
+    private(set) var textSegmentGroups: [Range<Int>] = []
 
     /// PDF uses the same bitmap surface, but its page count must not be
     /// mistaken for an image source's frame count. Other formats keep nil.
@@ -238,6 +239,7 @@ final class PreviewContentLoader {
         requestedPDFPage = 1
         raster = nil
         textSegments = []
+        textSegmentGroups = []
         pdfPageCount = nil
         pdfPageNumber = nil
         canRetryFailure = false
@@ -264,6 +266,7 @@ final class PreviewContentLoader {
         requestedPDFPage = pdfPage
         raster = nil
         textSegments = []
+        textSegmentGroups = []
         pdfPageCount = nil
         pdfPageNumber = nil
         canRetryFailure = false
@@ -325,6 +328,7 @@ final class PreviewContentLoader {
     private func apply(_ outcome: PreviewOutcome) {
         raster = nil
         textSegments = []
+        textSegmentGroups = []
         pdfPageCount = nil
         pdfPageNumber = nil
         canRetryFailure = false
@@ -339,6 +343,7 @@ final class PreviewContentLoader {
             phase = .content(.image)
         case .content(.text(let artifact)):
             textSegments = artifact.displaySegments
+            textSegmentGroups = artifact.displaySegmentGroups
             phase = .content(.text(artifact.text, wasTruncated: artifact.wasTruncated))
         case .content(.reference(let artifact)):
             phase = .content(.reference(artifact))

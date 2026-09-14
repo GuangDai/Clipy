@@ -50,6 +50,8 @@ struct HistoryPreviewView: View {
     private var maximumTextCharacters = PreviewTextSettings.defaultMaximumCharacters
     @AppStorage(PreviewTextSettings.isLengthLimitedKey)
     private var isTextLengthLimited = true
+    @AppStorage(PanelShortcutSettings.defaultsKey) private var shortcutData = Data()
+    private var shortcuts: PanelShortcutSettings { PanelShortcutSettings.load(data: shortcutData) }
 
     /// Page selection belongs to this exact content version, including when
     /// the observed target changes before SwiftUI invokes onChange.
@@ -371,7 +373,7 @@ struct HistoryPreviewView: View {
                     .contentShape(Rectangle())
             }
             .disabled(page <= 1)
-            .keyboardShortcut(.leftArrow, modifiers: [.option, .command])
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .previousPDFPage))
             .help(PreviewCopy.text("Previous PDF Page"))
             .accessibilityLabel(PreviewCopy.text("Previous PDF Page"))
             .accessibilityIdentifier("clipy.preview.pdf.previous")
@@ -399,7 +401,7 @@ struct HistoryPreviewView: View {
                     .contentShape(Rectangle())
             }
             .disabled(page >= count)
-            .keyboardShortcut(.rightArrow, modifiers: [.option, .command])
+            .keyboardShortcut(shortcuts.keyboardShortcut(for: .nextPDFPage))
             .help(PreviewCopy.text("Next PDF Page"))
             .accessibilityLabel(PreviewCopy.text("Next PDF Page"))
             .accessibilityIdentifier("clipy.preview.pdf.next")
@@ -477,7 +479,7 @@ struct HistoryPreviewView: View {
                 }
             case .content(.text(_, let wasTruncated)):
                 VStack(spacing: 0) {
-                    PreviewTextBody(segments: loader.textSegments,
+                    PreviewTextBody(segments: loader.textSegments, groups: loader.textSegmentGroups,
                         maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) })
                     .id(targetItem)
                     // The body scrolls independently; the disclosure stays
@@ -558,7 +560,7 @@ struct HistoryPreviewView: View {
                         retryGeneration += 1
                     }
                 }
-                .keyboardShortcut("r", modifiers: .command)
+                .keyboardShortcut(shortcuts.keyboardShortcut(for: .retryPreview))
                 .accessibilityIdentifier("clipy.preview.retry")
                 .controlSize(.small)
             }
@@ -642,8 +644,9 @@ struct HistoryPreviewView: View {
                     .foregroundStyle(row.pinnedPosition == nil ? Color.secondary : Color.accentColor)
                     // The floating pane is never key; Quick Look shares this
                     // button in the key window while the list is disabled.
-                    .keyboardShortcut("p", modifiers: .command)
-                    .help(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin") + "  ⌘P")
+                    .keyboardShortcut(shortcuts.keyboardShortcut(for: .togglePin))
+                    .help(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin")
+                        + (shortcuts.binding(for: .togglePin).map { "  " + $0.displayName } ?? ""))
                     .accessibilityLabel(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin"))
                     .accessibilityIdentifier("clipy.preview.pin")
                     .fixedSize()

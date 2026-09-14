@@ -8,11 +8,15 @@ This Part distinguishes three states:
 2. **Executable specification:** the public scaffold compiles and every proof/walking-skeleton gate below passes on the supported macOS runner.
 3. **Product implementation complete:** UI, pasteboard behavior, packaging, accessibility, localization, and non-skeleton product tests pass.
 
-The document set has reached states 1 and 2. The greenfield implementation
+The historical step-8 baseline reached states 1 and 2. At that revision, the implementation
 through roadmap step 8 is an **executable v1 specification**: public-symbol
 workflow 31448087991 and supported macOS run 31449682036 prove Sections 6–9,
 WS1–WS21, 314 tests in 41 suites, and all 13 release workloads green. Product
-wiring and state 3 remain outside that claim.
+wiring and state 3 were outside that claim. These historical runs do not prove
+the current SQLite implementation or current UI. Current persistence follows
+[V2-09](v2/V2-09-multilevel-storage.md); the functional SwiftPM suite and four
+generated-app test shards provide current correctness evidence. Retired source
+scanners, symbol locks and release-identity mechanisms are not requirements.
 
 ### 2. Fixed v1 safety bounds
 
@@ -26,7 +30,7 @@ public struct HistoryLimits: Sendable, Hashable {
 }
 ```
 
-`HistoryLimits` lives in `HistoryCore` (its Foundation-only home; the only production/value type defined in Part VI §2). `HistoryLimits.standard` is the only value production uses. Domain planner tests inject individual scalar bounds (for example `planCapture(... hardMaximumRetainedItems:)`); package-owned HistoryStorage/codec tests may construct a fully validated custom `HistoryLimits` through its package initializer when that is the narrowest way to prove a storage-bound rejection. That initializer receives each range's lower and upper endpoint separately, rejects invalid ordering, and only then constructs `ClosedRange` values, so malformed bounds return `nil` instead of trapping before validation. No caller-facing API accepts custom limits.
+`HistoryLimits` lives in `HistoryCore` (its Foundation-only home; the only production/value type defined in Part VI §2). `HistoryLimits.standard` is the only value production uses. Domain planner tests inject individual scalar resource bounds; package-owned HistoryStorage/codec tests may construct a fully validated custom `HistoryLimits` through its package initializer when that is the narrowest way to prove a storage-bound rejection. That initializer receives configurable range endpoints separately, rejects invalid ordering, and only then constructs `ClosedRange` values, so malformed bounds return `nil` instead of trapping before validation. No caller-facing API accepts custom limits.
 
 | Bound | v1 value |
 |---|---:|
@@ -37,8 +41,7 @@ public struct HistoryLimits: Sendable, Hashable {
 | Total bytes in one proposed revision | 64 MiB |
 | Revisions per History Item | 100 |
 | Total revision bytes per History Item | 256 MiB |
-| Hard retained History Item count | 5,000 |
-| User maximum-unpinned range | 1–5,000 |
+| User maximum-unpinned range, when enabled | 1–Int.max |
 | Default maximum unpinned items | 200 |
 | UTF-8 bytes in one source-application observation | 1,024 |
 | Stored title UTF-8 bytes | 1,024 |
@@ -58,7 +61,7 @@ Rules:
 - MiB/KiB use binary units.
 - Bounds are checked before expensive allocation or decode when the input length is knowable.
 - Truncating title/search projection is allowed at a deterministic Unicode boundary; truncating Canonical, revision, paste, or thumbnail source bytes is not.
-- Pinned items are exempt from the user maximum-unpinned policy but still count toward the hard retained-item maximum.
+- Pinned items are exempt from the user maximum-unpinned policy. There is no separate artificial retained-item cap; nil disables the count policy. Per-value byte and resource limits remain enforced.
 - When capacity cannot be restored atomically by eligible retention victims, the increasing action fails.
 - No arithmetic counter or byte-count calculation may wrap.
 - Changing these values is a reviewed specification/configuration change with boundary tests, not a runtime cache tuning knob.
@@ -76,7 +79,11 @@ materialization and transient overlap remain separate evidence work.
 
 ### 3. Deferred G1–G8 grafts
 
-None of these types, tables, protocols, or state machines belongs to v1. The trigger opens a new design review; it does not authorize inserting the feature directly.
+This table records the original v1 deferred-work rationale. It is not a current
+absence list or a prerequisite for rebuilding retired infrastructure. The HCR
+journal, Gateway/local automation and V2-09 persistent indexes have since been
+implemented under their owning specifications. Historical 5,000-row profiles
+below do not impose a current item-count cap.
 
 | ID | Deferred graft | Evidence required before design work starts |
 |---|---|---|
@@ -128,8 +135,7 @@ LocalAutomation
 HistoryDomain
 HistoryStorage
 PasteboardAdapter
-PresentationUI
-ClipyApp
+ClipyApp                    # native UI under ClipyApp/Sources/UI, XcodeGen-owned
 clipyctl                    # XcodeGen tool embedded in Clipy.app/Contents/MacOS
 xxh3
 HistoryPerfRunner
@@ -149,7 +155,7 @@ HistoryDomainTests
 HistoryStorageTests
 HistoryPerfTests
 PasteboardAdapterTests
-PresentationUITests
+ClipyPresentationTests      # app-hosted, XcodeGen-owned
 ClipyIntegrationTests
 ClipyUITests
 ```
@@ -247,10 +253,10 @@ embedded or installed by the normal app build.
 
 Recommended implementation order:
 
-1. Compile `HistoryCore` public values/interface and lock its symbol surface.
+1. Compile `HistoryCore` public values/interface and its direct tests.
 2. Compile pure `HistoryDomain` values, facts, planners, and focused invariant tests.
-3. Compile SwiftData schema/codecs and prove round trips.
-4. Implement Authority open, position singleton, Signature Index rebuild, and capture insert/coalesce.
+3. Compile SQLite schema/content reads and prove byte-exact round trips.
+4. Implement Authority open, position singleton, indexed candidate queries, and capture insert/coalesce.
 5. Add pin order, revision, remove/clear, and retention through the same plan/transaction path.
 6. Add purpose-specific reads and observation.
 7. Add thumbnail single-flight.
@@ -263,23 +269,22 @@ This sequence is a future implementation plan, not evidence that any step exists
 Before “executable specification”:
 
 - The exact Part I target graph builds in Swift 6 complete concurrency mode on macOS 26 deployment settings.
-- A deliberate forbidden edge fails to compile or fails the import gate.
+- Module access control and direct review preserve dependency direction; there is no import scanner or symbol-lock lane.
 - `HistoryCore` imports only Foundation.
 - `ClipboardFormats` imports only Foundation and owns no purpose policy.
 - `ContentPreview` imports only Foundation, ClipboardFormats, CoreGraphics,
   ImageIO, and CoreText; it owns no History/reference/lifecycle/cache state, and
-  PresentationUI cannot import ImageIO.
+  app UI consumes its inert artifacts rather than implementing decoders.
 - `ClipyCLIContract` imports only Foundation and owns no I/O or operation
   dispatch.
 - the F0 shared source imports only Foundation/Darwin and its diagnostic client
   only Foundation/AppKit/Darwin; neither imports the CLI contract or any
-  History/SwiftData/AppIntents module.
+  History/SQLite/AppIntents module.
 - `HistoryDomain` imports only Foundation and `HistoryCore`.
-- `import SwiftData` appears only in `HistoryStorage`; ImageIO appears only in
-  HistoryStorage and ContentPreview; Security supplies only the internal F1
-  secret generator in `HistoryStorage`; AppKit only in its
-  adapter; SwiftUI only in Presentation. Server and client credentials use
-  separate user-private files, not a Keychain access group.
+- SQLite3 is confined to HistoryStorage. AppKit/SwiftUI UI belongs to ClipyApp;
+  pasteboard access belongs to PasteboardAdapter. ContentPreview owns preview
+  decoding. Server and client credentials use separate user-private files,
+  not a Keychain access group.
 - No public symbol mentions Canonical Content, Domain facts/plans, SwiftData types, AppKit objects, fingerprints, or internal invalidations.
 - No `@unchecked Sendable`, `nonisolated(unsafe)`, mutable service locator, or second writer exists.
 - Every public struct shown with public construction has a real public initializer; every declared protocol conformance compiles rather than relying on prose synthesis.
@@ -289,17 +294,17 @@ Before “executable specification”:
 The macOS runner must prove:
 
 1. **Transaction boundary:** closure success durably commits item mutations and singleton position once; closure failure commits neither. No extra `save()` is required.
-2. **Fresh-context visibility:** after a committed receipt, a newly created serialized read context sees the commit immediately.
+2. **Fresh-snapshot visibility:** after a committed receipt, a new SQLite read transaction sees the commit immediately.
 3. **Codec round trip:** Canonical bytes/fingerprints, full revisions including the active revision, active ID, occurrence first/last source, pin ordinal, and projections survive restart.
 4. **Corruption rejection:** the Part V §4 decode checks are exhaustive and each fails closed as `.persistence(.corruptStoredValue)` or `.persistence(.invariantViolation)`: unknown blob version; unbounded or oversize byte/count values; duplicate or unnormalized type identifiers, or an empty-bytes representation; a Canonical representation lacking fingerprint/signature coverage; duplicate revision IDs or revision-history overflow; a non-nil active ID naming no stored revision, or a non-empty revision list with a nil active ID; revision content that is empty, non-normalized, or contains a non-Canonical type; a zero or invalid Content Version; zero copy count, over-bound source observations, invalid or non-finite occurrence/revision dates; a negative pin ordinal; an `effectiveTypeIdentifiersBlob` that is not a valid versioned sorted-unique list; an unknown projection schema version; an over-bound stored title; and an over-bound stored search body. Fixtures pin the consuming-path boundaries: startup rejects schema corruption; recent and search validate every occurrence/projection scalar they consume before sorting or cursor minting; full hydration validates the complete occurrence and all projection scalars.
-5. **Read isolation:** recent/search paths do not decode Canonical or revision blobs. Current hard-capped startup decodes Canonical only to recompute authoritative Signature Index coverage; it does not decode revision blobs. If SwiftData cannot prove no fault for a claimed scalar lane, the performance claim is removed and an alternative projection schema is designed; correctness tests must still pass.
-6. **Signature completeness:** under the current hard cap, startup recomputes xxh3 from every retained Canonical representation and postings cover every resulting signature entry; forced xxh3 collision still requires byte confirmation. U-scale must replace this O(N) hydration proof before removing the cap.
-7. **No invalid platform API:** business-ID lookup uses a fetch, not `registeredModel(for:)`; no undocumented refresh method appears.
+5. **Read isolation:** recent/search paths query bounded scalar projections without reading Canonical or revision payloads. Startup constructs no full-store resident signature/ID index or search corpus.
+6. **Candidate correctness:** normalized representation indexes participate in the same SQL transaction as content references. Forced xxh3 collision still requires byte-exact confirmation; unreadable candidates never become negative evidence.
+7. **Business-ID lookup:** indexed SQLite predicates resolve HistoryItemID without leaking storage identity or handles.
 8. **Deployment floor:** all APIs are available on macOS 26 or correctly availability-gated and tested.
 
 ### 8. Walking skeleton
 
-Each path crosses the public `ClipboardHistory` interface and real `SwiftDataHistory` implementation. Domain unit tests supplement these paths but do not replace them.
+Each path crosses the public `ClipboardHistory` interface and real `SQLiteHistory` implementation. Domain unit tests supplement these paths but do not replace them.
 
 #### WS1 — Raw capture insert
 
@@ -319,7 +324,7 @@ Revise an item, export its paste payload, and capture that payload with its hint
 
 #### WS5 — Candidate proof unavailable
 
-Force Signature Index state unready and rebuild failure. Capture must return `.temporarilyUnavailable(.dedupIndexRebuild)`; no row, position, receipt, or invalidation is produced.
+Make candidate proof unavailable or corrupt through the real SQLite candidate path. Capture must fail without inserting a row or publishing a position, committed receipt or invalidation. The historical unready-index/rebuild fixture is superseded by persistent candidate queries.
 
 #### WS6 — Revision OCC and append-only revert
 
@@ -335,7 +340,7 @@ Pin three items, move the last before the first, then unpin the item now occupyi
 
 #### WS9 — Retention in the primary commit
 
-Configure maximum unpinned count 2 and insert three unpinned items through `SwiftDataHistory`; expect the oldest eligible item retired in the third insert's same History Commit, leaving two unpinned items, and assert the retired ID is gone and `ChangePosition` advanced once. Exercise the hard-bound capacity failure at the planner seam: call `planCapture` with an injected `hardMaximumRetainedItems` equal to the current retained count where every item is pinned, and assert the plan is `capacityExceeded(.retainedItems)` rather than retiring a pinned item or the primary. (The fixed 5,000-item `HistoryLimits.standard` bound makes a full end-to-end all-pinned-at-hard-bound store impractical to construct, so the capacity-failure path is proved at the Domain planner seam, where the bound is a parameter.)
+Configure maximum unpinned count 2 and insert three unpinned items through `SQLiteHistory`; expect the oldest eligible item retired in the third insert's same History Commit, leaving two unpinned items, and assert the retired ID is gone and `ChangePosition` advanced once. Pinned items remain exempt. Disabling the count policy permits additional retained rows; the removed 5,000-item cap must not reappear as a planner restriction.
 
 #### WS10 — Clear atomicity
 
@@ -351,11 +356,11 @@ Pause an observer between registration and first query, commit a change, then re
 
 #### WS13 — Transaction failure
 
-Inject failure after row mutation but before singleton update inside the transaction. Expect unchanged durable rows and position, unchanged Signature Index, no invalidation, no receipt, and the caller observes `.persistence(.transaction)` — the documented producer for a `ModelContext.transaction` closure failure (Part V §16).
+Inject failure after row mutation but before singleton update inside the transaction. Expect unchanged durable rows, indexed candidate postings and position, no invalidation, no receipt, and the caller observes `.persistence(.transaction)` from the SQLite transaction boundary (Part V §16).
 
 #### WS14 — Restart reconstruction
 
-After insert, coalesce, pin reorder, and multiple revisions, reopen the store. Assert complete Signature Index, current position, Effective Content, projections, occurrences, and pin order match pre-restart public results.
+After insert, coalesce, pin reorder, and multiple revisions, reopen the store. Assert indexed candidate confirmation, current position, Effective Content, projections, occurrences, and pin order match pre-restart public results.
 
 #### WS15 — Thumbnail version fence
 
@@ -387,40 +392,31 @@ Set `maximumUnpinnedItems` to a value the current state already satisfies and as
 
 ### 9. Performance proofs
 
-The two correctness build/test jobs run before manual performance evidence.
+The SwiftPM and four app correctness jobs run before manual performance evidence.
 Performance claims are accepted only from a release-like runner workload with
 recorded fixtures and machine metadata.
 
 - Capture commit interval excludes pasteboard access, fingerprinting, rich-text projection, and image decode.
 - Healthy capture candidate generation is proportional to incoming bytes plus posting-set/candidate confirmation work, not all Canonical blobs.
-- Warm persistent-store open is measured at 200/500/1,000 retained-metadata
-  rows within the 5,000-item hard bound. The timed public
-  `SwiftDataHistory.open` construct includes `ModelContainer`/SQLite open,
-  singleton and startup validation, the capped Canonical coverage pass, scalar
-  metadata reads, and Signature Index rebuild. Population, warmup, and each of the five samples run in fresh child
-  processes; a child clocks only the public open, excluding process launch and
-  teardown. This is not an isolated index-rebuild timer, cold-start proof,
-  external-storage teardown proof, or G5 absolute-latency fixture.
+- Warm persistent-store open measures public `SQLiteHistory.open`, including
+  SQLite open and its scalar/schema/bootstrap checks, in independent child
+  processes. It excludes process launch and teardown. The current path has no
+  full Canonical scan or resident signature-index rebuild; historical
+  200/500/1,000- and 5,000-row samples do not impose a product count cap or
+  establish current scale performance.
 - Pin reorder is O(pinned count), bounded by retained count.
 - User retention and clear are bounded by retained scalar metadata plus its
   eviction-order sort — O(N log N) in retained count. The §9 envelope rejects
   quadratic scaling over the measured scales; it is not a linear proof.
-- Recent browse normally materializes at most `limit + 1` scalar rows across
-  both lanes for a first page. Pinned and unpinned continuations materialize at
-  most `limit + 2`: the former verifies and drops its complete offset anchor;
-  the latter receives its anchor through the inclusive date bound.
-  Ambiguous UUID ties use the Part V §14.1 correctness fallback, bounded by the
-  5,000-item hard limit. WS18 proves that path's complete, non-overlapping
-  traversal. A separate manual admission workload uses 5,000 same-timestamp
-  rows, validates one complete traversal, and records 101 individual public
-  page calls so its p95 unit matches G2's browse-page budget. The normal-case
-  per-PR runner envelope still neither includes nor proves fallback cost.
-- v1 exact, fuzzy, and regexp search may each scan all bounded scalar search
-  projections; no cache is added without G2 evidence. At each 100/400-row
-  measurement point the release runner reuses one populated corpus for all
-  three public modes, requires the planted row to match, and gates every 4×
-  row span at an 8× envelope. These are bounded-corpus complexity envelopes,
-  not absolute-latency or G2 admission evidence.
+- Recent browse uses bounded SQL keyset pages with stable UUID tie ordering.
+  WS18 proves complete, non-overlapping traversal. A 5,000-row same-timestamp
+  workload is a measurement fixture, not a retained-item limit or a need for
+  full tie-group materialization.
+- Current exact search uses persistent FTS5 candidate postings when applicable;
+  search evaluation retains bounded scalar batches and results, not a full
+  resident corpus. The historical v1 100/400-row scan measurements and their
+  8× envelope over a 4× row span describe that older workload only; they do not
+  establish current indexed-search latency or scale performance.
 - Exact body excerpting may traverse the full bounded projection but
   materializes only its at-most-320-Character retained window (plus at most two
   ellipses), never a full `[Character]` copy of the stored search body.
@@ -428,6 +424,14 @@ recorded fixtures and machine metadata.
   full joined corpus; revision summaries project only their bounded title.
 - Detail/paste decode one item's bounded lineage.
 - Thumbnail installs one exact-key source-to-decode task, so concurrent identical callers perform one bounded full Authority source fetch and one shared decode; joiners perform scalar dimension/existence/version fences and cannot receive stale bytes. Source-inclusive service tests cover shared success, `nil`, failure, and removal; WS15 proves version semantics and that a failed stale join does not cancel the creator. The release runner's direct-source convenience still prefetches once to isolate decode-sharing timing; it is not an RSS/copy measurement.
+
+#### Historical manual performance profile
+
+The following paragraphs preserve the pre-SQLite fixture design and measured
+failure context. Their CoreData/SignatureIndex implementation details are
+historical, not instructions for the current V2-09 storage or claims that its
+performance has been verified. Actual current execution is defined by the
+manual workflows and runner sources.
 
 The manual performance-admission lane is dispatch-only and never runs on a
 push or pull request. One dedicated manual caller first invokes the reusable

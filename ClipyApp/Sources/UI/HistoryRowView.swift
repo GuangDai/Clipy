@@ -41,6 +41,8 @@ enum HistoryRowAccessibilityAction {
 /// source icon already cached for it; mutations are expressed only through
 /// the injected callbacks so the row never talks to storage itself (01 §6).
 struct HistoryRowView: View {
+    private let shortcuts: PanelShortcutSettings
+    private let areShortcutsEnabled: Bool
     private let row: HistoryRow
     private let now: Date
     private let pinnedOrdinal: Int?
@@ -70,6 +72,8 @@ struct HistoryRowView: View {
         snippetLineCount: HistorySnippetLineCount = .automatic,
         fontSize: HistoryRowFontSize = .medium,
         isSelected: Bool = false,
+        shortcuts: PanelShortcutSettings = PanelShortcutSettings(),
+        areShortcutsEnabled: Bool = true,
         thumbnails: ThumbnailStore,
         dragSource: HistoryListDraggingView? = nil,
         onCopy: @escaping (HistoryItemReference) -> Void,
@@ -85,6 +89,8 @@ struct HistoryRowView: View {
         self.snippetLineCount = snippetLineCount
         self.fontSize = fontSize
         self.isSelected = isSelected
+        self.shortcuts = shortcuts
+        self.areShortcutsEnabled = areShortcutsEnabled
         self.thumbnails = thumbnails
         self.dragSource = dragSource
         self.onCopy = onCopy
@@ -104,16 +110,17 @@ struct HistoryRowView: View {
                     if row.sourceCount > 1 {
                         Image(systemName: "square.on.square")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(secondaryForeground)
                             .help(PreviewCopy.text("Multiple Applications"))
                             .accessibilityLabel(PreviewCopy.text("Multiple Applications"))
                     }
                     pinBadge
                 }
                 if let search = row.search, let snippet = search.snippet {
-                    Text(MatchHighlighting.highlighted(snippet, ranges: search.matchedRanges))
+                    Text(MatchHighlighting.highlighted(snippet, ranges: search.matchedRanges,
+                        foreground: isSelected ? PanelTheme.selectedForeground : .accentColor))
                         .font(PanelTheme.snippetFont(for: fontSize))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(secondaryForeground)
                         .lineLimit(rowDescriptor.snippetLineCount)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -122,6 +129,7 @@ struct HistoryRowView: View {
         }
         .padding(.vertical, PanelTheme.rowVerticalPadding(for: density))
         .padding(.horizontal, PanelTheme.spacingXSmall)
+        .foregroundStyle(isSelected ? PanelTheme.selectedForeground : Color.primary)
         // Like Maccy's ListItemView, the row's dimensions depend only on
         // content kind/typography, never on the asynchronous thumbnail.
         .frame(height: PanelContentFit.rowHeight(
@@ -130,14 +138,13 @@ struct HistoryRowView: View {
         ) - 2 * PanelContentFit.listRowVerticalInset)
         .background {
             RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
-                .fill(isSelected ? Color.accentColor.opacity(0.12)
+                .fill(isSelected ? PanelTheme.selectedBackground
                     : (isHovered ? Color.primary.opacity(0.045) : .clear))
         }
-        .overlay {
-            RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
-                .strokeBorder(isSelected ? Color.accentColor.opacity(0.35) : .clear, lineWidth: 1)
-                .allowsHitTesting(false)
-        }
+    }
+
+    private var secondaryForeground: Color {
+        isSelected ? PanelTheme.selectedForeground : .secondary
     }
 
     var body: some View {
@@ -322,7 +329,7 @@ struct HistoryRowView: View {
             // behind this symbol fallback.
             Image(systemName: Self.typeSymbol(for: row.typeIdentifiers))
                 .font(.system(size: 20, weight: .medium))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(secondaryForeground)
                 .frame(width: height * 1.5, height: height)
                 .background {
                     RoundedRectangle(
@@ -345,7 +352,7 @@ struct HistoryRowView: View {
             } else {
                 Image(systemName: Self.typeSymbol(for: row.typeIdentifiers))
                     .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryForeground)
             }
         }
         .frame(
@@ -361,7 +368,7 @@ struct HistoryRowView: View {
     /// both light and dark appearances exactly where a white image would
     /// otherwise dissolve into the background.
     private var thumbnailHairline: Color {
-        Color.primary.opacity(0.12)
+        PanelTheme.separator
     }
 
     /// Keep the pin position beside the title, outside the decorative icon,
@@ -376,7 +383,7 @@ struct HistoryRowView: View {
                     .monospacedDigit()
             }
             .font(PanelTheme.metadataFont(for: fontSize))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(secondaryForeground)
             .fixedSize()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(PanelActionsCopy.pinnedPosition(ordinal, bundle: copyBundle, locale: locale))
@@ -401,7 +408,8 @@ struct HistoryRowView: View {
         guard let search = row.search, search.snippet == nil else {
             return AttributedString(row.title)
         }
-        return MatchHighlighting.highlighted(row.title, ranges: search.matchedRanges)
+        return MatchHighlighting.highlighted(row.title, ranges: search.matchedRanges,
+            foreground: isSelected ? PanelTheme.selectedForeground : .accentColor)
     }
 
     /// The same count with translated plural-aware VoiceOver copy (§9/§10).
@@ -487,7 +495,7 @@ struct HistoryRowView: View {
         } label: {
             Label(PanelActionsCopy.text("Show Details", bundle: copyBundle), systemImage: "info.circle")
         }
-        .keyboardShortcut("i", modifiers: .command)
+        .keyboardShortcut(areShortcutsEnabled ? shortcuts.keyboardShortcut(for: .showDetails) : nil)
 
         Divider()
 
@@ -496,7 +504,7 @@ struct HistoryRowView: View {
         } label: {
             Label(PanelActionsCopy.text("Remove", bundle: copyBundle), systemImage: "trash")
         }
-        .keyboardShortcut(.delete, modifiers: [])
+        .keyboardShortcut(areShortcutsEnabled ? shortcuts.keyboardShortcut(for: .remove) : nil)
     }
 }
 
