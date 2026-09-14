@@ -82,7 +82,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
             .any, identifier: manage.identifier
         ).firstMatch, app: app)
         manage.click()
-        let source = app.textViews["Test text"]
+        let source = app.textViews["clipy.workflow.source"]
         XCTAssertTrue(source.waitForExistence(timeout: 5), app.debugDescription)
         source.click()
         // This raw-text playground must preserve literal input: macOS can
@@ -91,11 +91,24 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         // workflow or preview-rendering failure.
         let testText = "  playground result  "
         source.typeText(testText)
-        XCTAssertTrue(waitUntil { source.value as? String == testText }, app.debugDescription)
+        XCTAssertTrue(waitUntil { source.value as? String == testText },
+                      "Literal input changed: \(String(reflecting: source.value as? String)); expected \(String(reflecting: testText))\n\(app.debugDescription)")
         app.buttons["clipy.workflow.preview"].click()
         let result = app.scrollViews["After"].staticTexts.firstMatch
         XCTAssertTrue(waitUntil {
             result.exists && result.value as? String == "playground result"
+        }, app.debugDescription)
+        // Smart quotes, dashes and ellipses must likewise remain literal;
+        // the workflow, not the text system, owns any transformation.
+        let punctuation = "  \"playground\" -- result...  "
+        source.click()
+        source.typeKey("a", modifierFlags: .command)
+        source.typeText(punctuation)
+        XCTAssertTrue(waitUntil { source.value as? String == punctuation },
+                      "Literal punctuation changed: \(String(reflecting: source.value as? String)); expected \(String(reflecting: punctuation))\n\(app.debugDescription)")
+        app.buttons["clipy.workflow.preview"].click()
+        XCTAssertTrue(waitUntil {
+            result.exists && result.value as? String == "\"playground\" -- result..."
         }, app.debugDescription)
         XCTAssertFalse(app.buttons["clipy.workflow.apply"].exists, app.debugDescription)
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), original)

@@ -197,10 +197,7 @@ struct BuiltInAutomationView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(text(apply == nil ? "Test text" : "Before")).font(.headline)
                 if apply == nil {
-                    TextEditor(text: $source)
-                        .font(.system(.body, design: .monospaced))
-                        .autocorrectionDisabled(true)
-                        .accessibilityLabel(text("Test text"))
+                    BuiltInAutomationSourceEditor(text: $source, accessibilityLabel: text("Test text"))
                 } else { previewText(source, label: text("Before")) }
             }
             VStack(alignment: .leading, spacing: 6) {
