@@ -68,9 +68,9 @@ final class BuiltInAutomationSourceTextView: NSTextView, NSTextViewDelegate {
         isVerticallyResizable = true
         autoresizingMask = [.width]
         minSize = .zero
-        maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textContainer?.widthTracksTextView = true
-        textContainer?.containerSize = NSSize(width: 0, height: .greatestFiniteMagnitude)
+        textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         delegate = self
         setAccessibilityIdentifier("clipy.workflow.source")
         configureLiteralInput()
