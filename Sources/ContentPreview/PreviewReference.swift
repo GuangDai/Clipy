@@ -70,7 +70,7 @@ public struct PreviewReference: Equatable, Sendable {
         if let filePath {
             // Preserve the existing filename presentation, including trailing
             // separators, without any filesystem lookup or symlink resolution.
-            let filename = URL(fileURLWithPath: filePath).lastPathComponent
+            let filename = URL(filePath: filePath, directoryHint: .inferFromPath).lastPathComponent
             displayName = filename.isEmpty ? filePath : filename
         } else {
             displayName = url.host ?? address
