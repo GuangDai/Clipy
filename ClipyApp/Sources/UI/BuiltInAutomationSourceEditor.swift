@@ -52,8 +52,11 @@ final class BuiltInAutomationSourceScrollView: NSScrollView {
 final class BuiltInAutomationSourceTextView: NSTextView, NSTextViewDelegate {
     var onTextChange: (String) -> Void = { _ in }
 
-    init() {
-        super.init(frame: .zero)
+    // Keep AppKit's designated initializers inherited. Its frame-only
+    // initializer builds and owns the text system, then dynamically calls
+    // init(frame:textContainer:); a new Swift designated init would hide it.
+    convenience init() {
+        self.init(frame: .zero)
         isRichText = false
         importsGraphics = false
         isEditable = true
@@ -75,8 +78,6 @@ final class BuiltInAutomationSourceTextView: NSTextView, NSTextViewDelegate {
         setAccessibilityIdentifier("clipy.workflow.source")
         configureLiteralInput()
     }
-
-    required init?(coder: NSCoder) { nil }
 
     override func becomeFirstResponder() -> Bool {
         // A reused editor can inherit text-system preferences when it starts
