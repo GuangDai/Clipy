@@ -47,6 +47,10 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         // status-bar-level panel, and orderFrontRegardless only orders within
         // a level; it cannot raise a floating receiver above that panel.
         let beforeHover = row.frame
+        // The panel can open underneath the existing pointer. Move away
+        // first so this inspection contains real movement, not stationary hover.
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: -12)).hover()
         row.hover()
         let afterHover = row.frame
         let preview = app.descendants(matching: .any)["clipy.panel.floatingPreview"]
@@ -129,6 +133,10 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         // through the actual global shortcut, then read fresh source geometry.
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+        // The panel can open underneath the existing pointer. Move away
+        // first so this inspection contains real movement, not stationary hover.
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: -12)).hover()
         row.hover()
         XCTAssertTrue(preview.waitForExistence(timeout: 5), app.debugDescription)
         let reopenedSourceAXFrame = sourceWindow.frame
@@ -169,6 +177,10 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         XCTAssertEqual(pointerFacts["hitWindowNumber"]?.intValue, receiverWindowNumber)
         // Returning to the source restores the row-owned native drag candidate.
         // Hovering the receiver neither clicks it nor activates another app.
+        // The panel can open underneath the existing pointer. Move away
+        // first so this inspection contains real movement, not stationary hover.
+        row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0))
+            .withOffset(CGVector(dx: 0, dy: -12)).hover()
         row.hover()
         XCTAssertTrue(row.isHittable)
         let beforeDrag = row.frame
