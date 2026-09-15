@@ -16,6 +16,7 @@ struct BuiltInAutomationView: View {
     @State private var usesImageInput = false
     @State private var imageData: Data?
     @State private var choosesImage = false
+    @State private var choosesApplications = false
     @State private var inputFailure: BuiltInAutomationFailure?
     @State private var executionMessage: String?
     @State private var imageLoadTask: Task<Void, Never>?
@@ -201,6 +202,18 @@ struct BuiltInAutomationView: View {
             case .failure: inputFailure = .invalidImage
             }
         }
+        .fileImporter(isPresented: $choosesApplications, allowedContentTypes: [.application], allowsMultipleSelection: true) { result in
+            if case let .success(urls) = result {
+                var identifiers = workflow.scope.applicationIDs
+                for url in urls {
+                    let accessed = url.startAccessingSecurityScopedResource()
+                    defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                    guard let identifier = Bundle(url: url)?.bundleIdentifier?.lowercased() else { continue }
+                    if !identifiers.contains(identifier) { identifiers.append(identifier) }
+                }
+                workflow.scope.applications = identifiers.joined(separator: ", ")
+            }
+        }
         .confirmationDialog(text("Reset saved workflows?"), isPresented: $confirmsReset) {
             Button(text("Reset saved workflows"), role: .destructive) { library.reset() }
         } message: { Text(text("This removes saved workflow definitions. Clipboard history is unchanged.")) }
@@ -217,6 +230,12 @@ struct BuiltInAutomationView: View {
                     ForEach(BuiltInAutomationScope.Source.allCases, id: \.self) { Text(text($0.title)).tag($0) }
                 }
                 .accessibilityIdentifier("clipy.workflow.scope")
+                HStack {
+                    Text(text("Source applications"))
+                    Spacer()
+                    Button(text("Choose Applications…")) { choosesApplications = true }
+                        .accessibilityIdentifier("clipy.workflow.choose-applications")
+                }
                 TextField(text("Source apps (bundle IDs, comma separated; empty means all)"), text: $workflow.scope.applications)
                     .accessibilityIdentifier("clipy.workflow.source-apps")
                 Picker(text("Copy time"), selection: $workflow.scope.timeRange) {
@@ -458,6 +477,7 @@ struct BuiltInAutomationView: View {
 /// Embeddable in the Automation settings tab, with no nested grouped Form.
 struct BuiltInAutomationSettingsView: View {
     var history: (any ClipboardHistory)? = nil
+    var failure: BuiltInAutomationFailure? = nil
     @Environment(\.locale) private var locale
     @State private var showsWorkflows = false
 
@@ -471,6 +491,11 @@ struct BuiltInAutomationSettingsView: View {
             Text(text("Process text and images with conditions, regular expressions, Apple OCR and matching notifications."))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if let failure {
+                Label(text(failure.message), systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .accessibilityIdentifier("clipy.settings.workflows.failure")
+            }
             Button(text("Manage workflows…")) { showsWorkflows = true }
                 .accessibilityIdentifier("clipy.settings.workflows.manage")
         }

@@ -95,6 +95,28 @@ struct BuiltInAutomationConditionsTests {
         #expect(await notifications.count == 1)
     }
 
+    @MainActor @Test func automaticNotificationFailureIsPublishedAndNonmatchesDoNotEraseIt() async throws {
+        let suite = "WorkflowFailure.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let workflow = BuiltInAutomationWorkflow(name: "TODO", steps: [
+            .init(operation: .containsText, find: "TODO"), .init(operation: .notify)
+        ], trigger: .newCopies)
+        try BuiltInAutomationLibrary(defaults: defaults).save(workflow)
+        let runner = BuiltInAutomationAutomaticRunner(defaults: defaults) { _ in
+            throw BuiltInAutomationFailure.notificationDenied
+        }
+        defer { runner.stop() }
+        var visibleFailure: BuiltInAutomationFailure?
+        runner.onFailureChanged = { visibleFailure = $0 }
+        runner.submit(capture("TODO", app: "com.example.Editor"))
+        await runner.waitForPendingWorkForTesting()
+        #expect(visibleFailure == .notificationDenied)
+        runner.submit(capture("ordinary copy", app: "com.example.Editor"))
+        await runner.waitForPendingWorkForTesting()
+        #expect(visibleFailure == .notificationDenied)
+    }
+
     @Test func manualHistoryScopeUsesSourceAndTimeWithoutChangingHistory() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let now = Date()

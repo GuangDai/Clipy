@@ -155,9 +155,10 @@ struct ClipySettingsView: View {
             )
         case .automation:
             if let localAutomation {
-                LocalAutomationSettingsView(settings: localAutomation, history: viewState.history)
+                LocalAutomationSettingsView(settings: localAutomation, history: viewState.history,
+                                            workflowFailure: viewState.automaticWorkflowFailure)
             } else {
-                Form { Section { BuiltInAutomationSettingsView(history: viewState.history) } }
+                Form { Section { BuiltInAutomationSettingsView(history: viewState.history, failure: viewState.automaticWorkflowFailure) } }
                     .formStyle(.grouped)
             }
         case .interaction:

@@ -121,3 +121,6 @@
 "items matched. Showing the first result; Copy result copies only this result." = "项满足条件。当前显示第一个结果；“复制结果”仅复制此结果。";
 
 "The regular expression engine could not finish. Simplify the pattern or shorten the input." = "正则引擎无法完成处理，请简化表达式或缩短输入。";
+
+"Source applications" = "来源应用";
+"Choose Applications…" = "选择应用…";

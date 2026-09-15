@@ -62,9 +62,12 @@ struct LocalAutomationSettingsView: View {
     @State private var model: LocalAutomationSettingsModel
 
     private let history: (any ClipboardHistory)?
+    private let workflowFailure: BuiltInAutomationFailure?
 
-    init(settings: LocalAutomationSettings, history: (any ClipboardHistory)? = nil) {
+    init(settings: LocalAutomationSettings, history: (any ClipboardHistory)? = nil,
+         workflowFailure: BuiltInAutomationFailure? = nil) {
         self.history = history
+        self.workflowFailure = workflowFailure
         _model = State(initialValue: LocalAutomationSettingsModel(settings: settings))
     }
 
@@ -72,7 +75,7 @@ struct LocalAutomationSettingsView: View {
 
     var body: some View {
         Form {
-            Section { BuiltInAutomationSettingsView(history: history) }
+            Section { BuiltInAutomationSettingsView(history: history, failure: workflowFailure) }
             Group {
                 accessSection
                 commandLineSection

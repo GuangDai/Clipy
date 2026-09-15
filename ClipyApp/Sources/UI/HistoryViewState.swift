@@ -145,6 +145,10 @@ final class HistoryViewState {
     /// view state never touches the pasteboard; it hands the reference to the
     /// app, which resolves the payload and writes it. Default no-op so
     /// previews need no wiring.
+    /// Latest automatic-workflow failure, published by the app's capture-side
+    /// owner so notification denial and processing errors are visible in Settings.
+    var automaticWorkflowFailure: BuiltInAutomationFailure?
+
     var onPaste: @MainActor @Sendable (HistoryItemReference) -> Void = { _ in }
 
     /// Explicit Details Save As handoff. The immutable representation comes

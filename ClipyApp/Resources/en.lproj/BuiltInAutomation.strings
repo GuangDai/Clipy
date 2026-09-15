@@ -121,3 +121,6 @@
 "items matched. Showing the first result; Copy result copies only this result." = "items matched. Showing the first result; Copy result copies only this result.";
 
 "The regular expression engine could not finish. Simplify the pattern or shorten the input." = "The regular expression engine could not finish. Simplify the pattern or shorten the input.";
+
+"Source applications" = "Source applications";
+"Choose Applications…" = "Choose Applications…";

@@ -98,7 +98,12 @@ final class BuiltInAutomationAutomaticRunner {
     private var pending: ClipboardCapture?
     private let notify: @Sendable (String) async throws -> Void
     private let defaults: UserDefaults
-    private(set) var lastFailure: BuiltInAutomationFailure?
+    private(set) var lastFailure: BuiltInAutomationFailure? {
+        didSet { if oldValue != lastFailure { onFailureChanged?(lastFailure) } }
+    }
+    var onFailureChanged: (@MainActor (BuiltInAutomationFailure?) -> Void)? {
+        didSet { onFailureChanged?(lastFailure) }
+    }
 
     init(defaults: UserDefaults = .standard,
          notify: @escaping @Sendable (String) async throws -> Void = BuiltInAutomationNotifications.send) {
@@ -134,8 +139,10 @@ final class BuiltInAutomationAutomaticRunner {
                         } onCancel: { computation.cancel() }
                         try Task.checkCancellation()
                         guard BuiltInAutomationLibrary(defaults: defaults).workflows.contains(workflow) else { continue }
-                        if result.matchedConditions && result.requestsNotification { try await notify(workflow.name) }
-                        lastFailure = nil
+                        if result.matchedConditions && result.requestsNotification {
+                            try await notify(workflow.name)
+                            lastFailure = nil
+                        }
                     } catch is CancellationError { break }
                     catch { lastFailure = (error as? BuiltInAutomationFailure) ?? .notificationFailed }
                 }

@@ -576,6 +576,9 @@ final class AppComposition {
         // `@MainActor @Sendable` callback. Admit directly into the one owned
         // slot at this module boundary.
         // There is no mailbox, pending queue, or nested task.
+        workflowRunner.onFailureChanged = { [weak self] failure in
+            self?.viewState.automaticWorkflowFailure = failure
+        }
         viewState.onPaste = { [weak self] item in
             self?.requestPaste(item)
         }
