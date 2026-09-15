@@ -187,9 +187,9 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertFalse(openLoginItemsSettings.exists)
 
         // The injected true-external boundary next reports a failed
-        // unregister and a fresh notFound status. The real Toggle action must
-        // keep unavailable distinct from ordinary off and retain the separate
-        // operation-failure episode; neither may offer approval recovery.
+        // unregister and a fresh notFound status. Preserve the error, but
+        // keep registration reachable rather than permanently disabling it.
+        // Only requiresApproval offers the approval-recovery action.
         launchAtLogin.click()
         let unavailable = app.descendants(matching: .any)[
             "clipy.settings.launch-at-login.unavailable"
@@ -198,14 +198,11 @@ final class ClipboardJourneyUITests: XCTestCase {
             "clipy.settings.launch-at-login.operation-failed"
         ]
         XCTAssertTrue(waitUntil(timeout: 5) {
-            unavailable.exists
+            !unavailable.exists
                 && operationFailed.exists
-                && !launchAtLogin.isEnabled
+                && launchAtLogin.isEnabled
+                && launchAtLogin.value as? Int == 0
         })
-        XCTAssertEqual(
-            accessibilityText(of: unavailable),
-            "Launch at Login is unavailable for this app."
-        )
         XCTAssertEqual(
             accessibilityText(of: operationFailed),
             "The Launch at Login setting couldn't be changed."
