@@ -82,29 +82,24 @@ struct HistoryListView: View {
     @State private var viewportHeight: CGFloat = 0
 
     var body: some View {
-        // One list-owned timeline refreshes idle relative metadata each
-        // minute. Its scheduled date may predate newly captured rows, so
-        // sample the actual redraw time once for the whole list; otherwise
-        // a copy made during this minute can read "in 23s" until the next
-        // tick (01 §6). Individual rows still own no clocks or timers.
-        TimelineView(.everyMinute) { _ in
-            VStack(spacing: 0) {
-                if viewState.hasWindowedPages {
-                    HStack {
-                        Button(HistoryListCopy.text("Newer")) { viewState.loadPreviousPage() }
-                            .disabled(!viewState.hasPreviousPage || viewState.isLoadingPage)
-                            .accessibilityIdentifier("clipy.history.newer")
-                        Spacer()
-                        Button(HistoryListCopy.text("Latest")) { viewState.returnToLatest() }
-                            .accessibilityIdentifier("clipy.history.latest")
-                    }
-                    .padding(.horizontal)
-                    .padding(.vertical, 6)
+        // Observe row facts directly. A periodic TimelineView must not own
+        // publication of captures, pin changes or updated accessibility labels.
+        VStack(spacing: 0) {
+            if viewState.hasWindowedPages {
+                HStack {
+                    Button(HistoryListCopy.text("Newer")) { viewState.loadPreviousPage() }
+                        .disabled(!viewState.hasPreviousPage || viewState.isLoadingPage)
+                        .accessibilityIdentifier("clipy.history.newer")
+                    Spacer()
+                    Button(HistoryListCopy.text("Latest")) { viewState.returnToLatest() }
+                        .accessibilityIdentifier("clipy.history.latest")
                 }
-                content(now: Date())
+                .padding(.horizontal)
+                .padding(.vertical, 6)
             }
-            .background { selectionShortcuts }
+            content(now: Date())
         }
+        .background { selectionShortcuts }
     }
 
     @ViewBuilder
@@ -142,6 +137,11 @@ struct HistoryListView: View {
                             rowContent(row, now: now, pinnedOrdinal: row.pinnedPosition.map { $0 + 1 })
                         }
                         .id(row.item.id)
+                    }
+                    if showsGroupSeparator, separatorID == nil {
+                        Divider()
+                            .frame(height: PanelContentFit.groupSeparatorHeight)
+                            .accessibilityHidden(true)
                     }
                     paginationControl
                 }

@@ -1218,9 +1218,9 @@ struct HistoryPanelView: View {
                             || previewSelection.reference == nil))
             )
 
-            // The floating preview pane is never the key window, so its own
-            // Retry button's chord cannot fire there; the panel (the key
-            // window) captures ⌘R and republishes it through the pane state.
+            // While browsing keeps keyboard focus, the panel captures ⌘R
+            // and republishes it through the pane state. Clicking the floating
+            // preview gives its own Retry button keyboard focus instead.
             // While the quick-look overlay is open its in-hierarchy preview
             // owns the same chord, so this root copy stays disabled.
             Button(PanelActionsCopy.text("Retry")) {

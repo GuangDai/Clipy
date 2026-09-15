@@ -69,6 +69,42 @@ final class PreviewTextSelectionJourneyUITests: XCTestCase {
         }, "Copy must preserve the selected decomposed spelling, not copy the complete history item")
         XCTAssertTrue(preview.exists, app.debugDescription)
         XCTAssertEqual(text.frame.height, originalTextSize.height, accuracy: 1)
+
+        // Escape is still the panel command when the preview owns Copy.
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !panel.exists && !preview.exists }, app.debugDescription)
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
+        let search = panel.textFields["clipy.search.field"]
+        app.typeText("spelling")
+        XCTAssertTrue(waitUntil { search.value as? String == "spelling" }, app.debugDescription)
+        let originalRow = panel.buttons.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "clipy.history.row.", "spelling"
+        )).firstMatch
+        XCTAssertTrue(originalRow.waitForExistence(timeout: 10), app.debugDescription)
+        search.typeKey(.downArrow, modifierFlags: [])
+        XCTAssertTrue(waitUntil { text.exists && self.value(text) == source }, app.debugDescription)
+        // Dwell only orders the preview front: continued typing must still
+        // reach Search without another click or explicit focus request.
+        app.typeText(" when")
+        XCTAssertTrue(waitUntil { search.value as? String == "spelling when" }, app.debugDescription)
+
+        firstWord.doubleClick()
+        let information = preview.buttons["clipy.preview.information"]
+        information.click()
+        let informationContent = app.descendants(matching: .any)["clipy.preview.information.content"]
+        XCTAssertTrue(informationContent.waitForExistence(timeout: 5), app.debugDescription)
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !informationContent.exists && preview.exists && panel.exists },
+                      "Escape dismisses information before the browsing session")
+
+        // A pointer-exit hide returns key status to the retained parent;
+        // the child's resign callback must not close the whole session.
+        panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1))
+            .withOffset(CGVector(dx: 0, dy: 40)).hover()
+        XCTAssertTrue(waitUntil { !preview.exists && panel.exists }, app.debugDescription)
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !panel.exists }, app.debugDescription)
     }
 
     @MainActor

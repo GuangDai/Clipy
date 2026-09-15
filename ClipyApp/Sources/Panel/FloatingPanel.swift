@@ -330,21 +330,49 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// modal-alert ordering semantics above are untouched.
     override func resignKey() {
         super.resignKey()
+        scheduleFocusLossClose()
+    }
+
+    /// The preview can take keyboard focus for selectable SwiftUI text.
+    /// Both windows share this one deferred close decision, including sheets
+    /// and the keep-open preference; moving between them is not an exit.
+    func scheduleFocusLossClose() {
         deferredFocusLossCloseTask?.cancel()
         deferredFocusLossCloseTask = Task { @MainActor [weak self] in
             // `beginSheetModal` completes its public sheet attachment only
             // after the parent-window resign callback returns. Yielding keeps
             // outside-click behavior prompt while closing that ordering gap.
             await Task.yield()
-            guard !Task.isCancelled,
-                  let self,
-                  self.isPresented,
-                  !self.isKeyWindow,
-                  !NSApp.isModalAlertPresented,
-                  !self.isKeepOpenActive()
-            else { return }
+            guard !Task.isCancelled, let self, self.isPresented else { return }
+            if self.hasKeyWindowInFamily {
+                self.previewState.panelBecameKey()
+                return
+            }
+            guard !NSApp.isModalAlertPresented, !self.isKeepOpenActive() else { return }
             self.close()
         }
+    }
+
+    private var hasKeyWindowInFamily: Bool {
+        if isKeyWindow { return true }
+        guard let keyWindow = NSApp.keyWindow, keyWindow.isKeyWindow else { return false }
+        var owner: NSWindow? = keyWindow
+        while let window = owner {
+            if window === self { return true }
+            owner = window.parent
+        }
+        return false
+    }
+
+    func previewDidBecomeKey() {
+        deferredFocusLossCloseTask?.cancel()
+        deferredFocusLossCloseTask = nil
+        previewState.panelBecameKey()
+    }
+
+    func previewDidResignKey() {
+        previewState.panelResignedKey()
+        scheduleFocusLossClose()
     }
 
     // MARK: - Window delegate

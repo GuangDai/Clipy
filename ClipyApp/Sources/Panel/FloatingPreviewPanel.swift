@@ -11,8 +11,8 @@
 /// `setFrame`; the SwiftUI content's own opacity fade is the only motion.
 ///
 /// The pane is a CHILD window of the main panel, so it follows the parent's
-/// ordering and can never outlive it; it is not keyable, so it never steals
-/// key status from the browsing surface.
+/// ordering and can never outlive it. Showing it preserves the browsing
+/// surface's focus; an intentional click enables native text-copy commands.
 import AppKit
 import SwiftUI
 
@@ -44,8 +44,8 @@ final class FloatingPreviewPanel: NSPanel {
             defer: false
         )
 
-        // The main panel's floating traits, minus key-ability and resize:
-        // no activation theft, no hide-on-deactivate, transparent chrome
+        // The main panel's floating traits, without resizing: no application
+        // activation theft, no hide-on-deactivate, transparent chrome
         // under a rounded content layer (macOS 26's 12-point radius).
         animationBehavior = .none
         isFloatingPanel = true
@@ -84,9 +84,26 @@ final class FloatingPreviewPanel: NSPanel {
         }
     }
 
-    /// The pane is pure presentation: the browsing panel keeps key status.
-    override var canBecomeKey: Bool { false }
+    /// Automatic presentation never makes this window key. Clicking the
+    /// preview explicitly transfers keyboard focus so SwiftUI's selection
+    /// receives standard Copy commands instead of the main panel's responder.
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown, !isKeyWindow { makeKey() }
+        super.sendEvent(event)
+    }
+
+    override func becomeKey() {
+        super.becomeKey()
+        (parent as? FloatingPanel)?.previewDidBecomeKey()
+    }
+
+    override func resignKey() {
+        super.resignKey()
+        (parent as? FloatingPanel)?.previewDidResignKey()
+    }
 
     /// Shows the pane beside `mainPanel` (or re-positions an already
     /// visible pane), without animation. Recomputing the frame on every
@@ -110,6 +127,11 @@ final class FloatingPreviewPanel: NSPanel {
     /// Orders the pane out and detaches it from its parent; the instance is
     /// reused on the next `present(beside:)`.
     func dismiss() {
+        // A pointer-exit hide retires only the preview. Return its keyboard
+        // focus before detaching, unless the whole browsing session closed.
+        if isKeyWindow, let panel = parent as? FloatingPanel, panel.isPresented {
+            panel.makeKey()
+        }
         parent?.removeChildWindow(self)
         orderOut(nil)
         isPresented = false
@@ -163,9 +185,17 @@ struct FloatingPreviewRootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // The preview is an interactive extension of the key browsing panel.
-        // Its own never-key window must not wash out enabled native controls.
-        // Use the parent's existing focus-driven state, not a permanent tint.
+        .onExitCommand {
+            if appDelegate.previewState.isInformationPresented {
+                appDelegate.previewState.isInformationPresented = false
+            } else if appDelegate.panelSurfaceState?.quickLookReference != nil {
+                appDelegate.panelSurfaceState?.quickLookReference = nil
+            } else {
+                appDelegate.closePanel()
+            }
+        }
+        // The preview and browsing panel share an active interaction session,
+        // including keyboard focus transferred by a click inside the preview.
         .environment(\.workflowExecutionQueue, appDelegate.composition?.workflowRunner.executionQueue)
         .environment(\.appearsActive, appDelegate.previewState.isAutoOpenEnabled)
         .environment(\.displayMemoryPressure, appDelegate.panelSurfaceState?.memoryPressure ?? .normal)
@@ -208,8 +238,8 @@ struct FloatingPreviewRootView: View {
 /// layer so the presentation views stay AppKit-free (01 §8).
 struct PanelMouseMovementMonitor: NSViewRepresentable {
     let onMouseMoved: () -> Void
-    /// The floating preview cannot become key. Its native tracking area
-    /// must therefore keep delivering entry/exit events while non-key,
+    /// The floating preview opens without becoming key. Its tracking area
+    /// must keep delivering entry/exit events while non-key,
     /// including the real departure after an exit-grace containment rescue.
     var onHover: ((Bool) -> Void)? = nil
 
