@@ -2,26 +2,25 @@ import SwiftUI
 import UniformTypeIdentifiers
 import HistoryCore
 
-/// One explicit preview precedes applying to the editor's draft. The caller
-/// retains the item's expected ContentVersion and owns Save Revision (03a §5).
+/// Definitions and their transient test input stay separate. Selecting another
+/// workflow retains this window's drafts; only Save enables its automatic run.
 struct BuiltInAutomationView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.locale) private var locale
+    @Environment(\.workflowExecutionQueue) private var executionQueue
     @State private var source: String
     @State private var workflow = BuiltInAutomationWorkflow(name: "", steps: [.init(operation: .trim)])
+    @State private var drafts: [BuiltInAutomationWorkflow] = []
+    @State private var draftInputs: [UUID: String] = [:]
     @State private var library = BuiltInAutomationLibrary()
     @State private var model = BuiltInAutomationModel()
+    @State private var hasAppeared = false
+    @State private var editsScope = false
     @State private var saveMessage: String?
     @State private var confirmsReset = false
-    @State private var usesImageInput = false
-    @State private var imageData: Data?
-    @State private var choosesImage = false
     @State private var choosesApplications = false
     @State private var inputFailure: BuiltInAutomationFailure?
     @State private var executionMessage: String?
-    @State private var imageLoadTask: Task<Void, Never>?
-    @State private var imageLoadGeneration = UUID()
-    @State private var isLoadingImage = false
     private let history: (any ClipboardHistory)?
     private let apply: (@MainActor (String) -> Void)?
 
@@ -33,184 +32,63 @@ struct BuiltInAutomationView: View {
 
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
     private func text(_ key: String) -> String { BuiltInAutomationCopy.text(key, bundle: copyBundle) }
-    private var input: BuiltInAutomationInput {
-        usesImageInput ? .image(imageData ?? Data()) : .text(source)
-    }
-    private var hasConditions: Bool {
-        workflow.steps.contains { $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation) }
-    }
-    private var resultUnchanged: Bool { model.output?.value == input }
+    private var input: BuiltInAutomationInput { .text(source) }
     private var isCurrent: Bool { model.isCurrent(input: input, steps: workflow.steps) }
-    private var canRun: Bool {
-        !isLoadingImage && (apply == nil && workflow.scope.source != .input || !usesImageInput || imageData != nil)
-            && workflow.steps.contains(where: \.enabled)
-    }
+    private var isBusy: Bool { model.isRunning || model.isQueued }
+    private var isDirty: Bool { library.workflows.first { $0.id == workflow.id } != workflow }
+    private var canRun: Bool { workflow.steps.contains(where: \.enabled) }
     private var canApply: Bool {
-        model.output?.matchedConditions == true && model.result != nil && model.result?.isEmpty == false && !resultUnchanged
-            && !model.isRunning && isCurrent
+        model.output?.matchedConditions == true && model.result?.isEmpty == false
+            && model.output?.value != input && !isBusy && isCurrent
+    }
+    private var showsManualInput: Bool { apply != nil || workflow.scope.source == .input }
+    private var originalInput: BuiltInAutomationInput? {
+        showsManualInput ? input : model.output?.originalInput
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(spacing: 0) {
             HStack {
                 Text(text("Workflows")).font(.title2.weight(.semibold))
                 Spacer()
-                Menu(text("Load workflow")) {
-                    ForEach(BuiltInAutomationWorkflow.presets) { preset in
-                        Button(text(preset.name)) {
-                            load(preset)
-                            workflow.name = text(preset.name)
-                        }
-                    }
-                    if !library.workflows.isEmpty {
-                        Divider()
-                        ForEach(library.workflows) { saved in
-                            Button(saved.name) { load(saved) }
-                        }
-                    }
-                }
-                .accessibilityIdentifier("clipy.workflow.load")
+                Button(text("Close")) { dismiss() }.keyboardShortcut(.cancelAction)
             }
-            Text(text("Conditions decide whether the workflow continues. A notification is sent only when all enabled conditions match. Preview never sends notifications."))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if apply == nil {
-                        scopeControls
-                        if workflow.scope.source != .history { inputControls }
+            .padding(16)
+            Divider()
+            HSplitView {
+                sidebar.frame(minWidth: 190, idealWidth: 220, maxWidth: 280)
+                VStack(spacing: 0) {
+                    editorHeader
+                    Divider()
+                    VSplitView {
+                        definitionArea.frame(minHeight: 230, idealHeight: 330)
+                        comparisonArea.frame(minHeight: 190, idealHeight: 250)
                     }
-                    workflowEditor
-                    HStack {
-                        TextField(text("Workflow name"), text: $workflow.name)
-                            .accessibilityIdentifier("clipy.workflow.name")
-                        Button(text("Save workflow")) {
-                            do {
-                                try library.save(workflow)
-                                saveMessage = text("Workflow saved. Source and preview text are never saved with it.")
-                            } catch {
-                                saveMessage = text((error as? BuiltInAutomationFailure)?.message ?? BuiltInAutomationFailure.invalidWorkflow.message)
-                            }
-                        }
-                        .disabled(library.failure != nil)
-                        if library.workflows.contains(where: { $0.id == workflow.id }) {
-                            Button(text("Delete workflow"), role: .destructive) {
-                                do { try library.remove(workflow.id); saveMessage = text("Workflow deleted.") }
-                                catch { saveMessage = text(BuiltInAutomationFailure.unreadableWorkflows.message) }
-                            }
-                        }
-                    }
-                    if let failure = library.failure {
-                        HStack {
-                            Label(text(failure.message), systemImage: "exclamationmark.triangle")
-                            Button(text("Reset saved workflows"), role: .destructive) { confirmsReset = true }
-                        }
-                        .font(.callout)
-                    }
-                    if let saveMessage { Text(saveMessage).font(.caption).foregroundStyle(.secondary) }
-                    previewArea
-                    if let output = model.output, output.matchedItemCount > 1 {
-                        Text("\(output.matchedItemCount) " + text("items matched. Showing the first result; Copy result copies only this result."))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    if let executionMessage { Text(executionMessage).font(.callout).foregroundStyle(.secondary) }
-                    if let failure = inputFailure ?? model.failure {
-                        Label(text(failure.message), systemImage: "exclamationmark.triangle")
-                            .font(.callout)
-                            .accessibilityIdentifier("clipy.workflow.error")
-                    }
-                    if model.output?.matchedConditions == false {
-                        Text(text("Conditions did not match. No notification was sent."))
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    if hasConditions && model.output?.matchedConditions == true {
-                        Label(text("Conditions matched."), systemImage: "checkmark.circle")
-                            .font(.callout)
-                            .accessibilityIdentifier("clipy.workflow.conditions-matched")
-                    }
-                    if resultUnchanged && model.output?.matchedConditions == true && (apply != nil || !hasConditions) {
-                        Text(text("No changes. Try another step or adjust the workflow."))
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                    if apply != nil && model.result?.isEmpty == true {
-                        Text(text("The result is empty. Adjust the steps before applying to this format."))
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
+                    Divider()
+                    executionFooter
                 }
-                .padding(2)
-            }
-            HStack {
-                if model.isRunning {
-                    ProgressView().controlSize(.small)
-                    Button(text("Cancel preview")) { model.invalidate() }
-                } else {
-                    Button(text("Preview result")) {
-                        executionMessage = nil
-                        model.preview(input: input, steps: workflow.steps,
-                                      workflow: apply == nil ? workflow : nil, history: history, notificationName: workflow.name)
-                    }
-                        .disabled(!canRun)
-                        .accessibilityIdentifier("clipy.workflow.preview")
-                }
-                if !model.isRunning {
-                    Button(text("Run workflow")) {
-                        executionMessage = nil
-                        model.preview(input: input, steps: workflow.steps, runEffects: true,
-                                      workflow: apply == nil ? workflow : nil, history: history, notificationName: workflow.name)
-                    }
-                    .disabled(!canRun || !workflow.trigger.includesManual)
-                    .accessibilityIdentifier("clipy.workflow.run")
-                }
-                Spacer()
-                if apply == nil {
-                    Button(text("Copy result")) {
-                        guard isCurrent, let output = model.output else { return }
-                        do {
-                            try BuiltInAutomationClipboard.copy(output.value)
-                            executionMessage = text("Result copied.")
-                        } catch { inputFailure = error as? BuiltInAutomationFailure }
-                    }
-                    .disabled(model.output?.matchedConditions != true || model.isRunning || !isCurrent)
-                    .accessibilityIdentifier("clipy.workflow.copy")
-                }
-                Button(text("Close")) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                if let apply {
-                    Button(text("Apply to draft")) {
-                        guard canApply, let result = model.result else { return }
-                        apply(result)
-                        dismiss()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canApply)
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("clipy.workflow.apply")
-                }
-            }
-            if apply != nil {
-                Text(text("Apply changes the draft only. Save Revision in the editor to keep the result. Original content and earlier revisions remain available."))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                .frame(minWidth: 620)
             }
         }
-        .padding(20)
-        .frame(minWidth: 560, idealWidth: 720, minHeight: 480, idealHeight: 700)
-        .onChange(of: workflow.steps) { _, _ in invalidatePreview() }
-        .onChange(of: workflow.scope) { _, _ in invalidatePreview() }
-        .onChange(of: workflow.trigger) { _, _ in invalidatePreview() }
-        .onChange(of: source) { _, _ in invalidatePreview() }
-        .onChange(of: usesImageInput) { _, _ in
-            cancelImageLoad()
+        .font(.body)
+        .controlSize(.regular)
+        .frame(minWidth: 900, idealWidth: 1060, minHeight: 650, idealHeight: 780)
+        .onAppear {
+            guard !hasAppeared else { return }
+            hasAppeared = true
+            if let executionQueue { model = BuiltInAutomationModel(executionQueue: executionQueue) }
+            // An editor invocation starts with Trim for its current draft. The
+            // manager opens the first saved definition, retaining every other.
+            drafts = library.workflows
+            if apply == nil, let first = drafts.first { workflow = first }
+            else { drafts.append(workflow) }
+        }
+        .onChange(of: workflow) { _, _ in
+            retainDraft()
             invalidatePreview()
         }
-        .onChange(of: imageData) { _, _ in invalidatePreview() }
-        .onDisappear { model.invalidate(); cancelImageLoad() }
-        .fileImporter(isPresented: $choosesImage, allowedContentTypes: [.png, .jpeg, .tiff, .heic]) { result in
-            switch result {
-            case let .success(url): loadImage(url)
-            case .failure: inputFailure = .invalidImage
-            }
-        }
+        .onChange(of: source) { _, _ in invalidatePreview() }
+        .onDisappear { model.invalidate() }
         .fileImporter(isPresented: $choosesApplications, allowedContentTypes: [.application], allowsMultipleSelection: true) { result in
             if case let .success(urls) = result {
                 var identifiers = workflow.scope.applicationIDs
@@ -224,266 +102,370 @@ struct BuiltInAutomationView: View {
             }
         }
         .confirmationDialog(text("Reset saved workflows?"), isPresented: $confirmsReset) {
-            Button(text("Reset saved workflows"), role: .destructive) { library.reset() }
+            Button(text("Reset saved workflows"), role: .destructive) {
+                invalidatePreview()
+                library.reset()
+            }
         } message: { Text(text("This removes saved workflow definitions. Clipboard history is unchanged.")) }
     }
 
-    private var scopeControls: some View {
-        DisclosureGroup(text("Trigger and scope")) {
-            VStack(alignment: .leading, spacing: 10) {
-                Picker(text("Trigger"), selection: $workflow.trigger) {
-                    ForEach(BuiltInAutomationTrigger.allCases, id: \.self) { Text(text($0.title)).tag($0) }
-                }
-                .accessibilityIdentifier("clipy.workflow.trigger")
-                Picker(text("Manual input"), selection: $workflow.scope.source) {
-                    ForEach(BuiltInAutomationScope.Source.allCases, id: \.self) { Text(text($0.title)).tag($0) }
-                }
-                .accessibilityIdentifier("clipy.workflow.scope")
-                HStack {
-                    Text(text("Source applications"))
-                    Spacer()
-                    Button(text("Choose Applications…")) { choosesApplications = true }
-                        .accessibilityIdentifier("clipy.workflow.choose-applications")
-                }
-                TextField(text("Source apps (bundle IDs, comma separated; empty means all)"), text: $workflow.scope.applications)
-                    .accessibilityIdentifier("clipy.workflow.source-apps")
-                Picker(text("Copy time"), selection: $workflow.scope.timeRange) {
-                    ForEach(BuiltInAutomationScope.TimeRange.allCases, id: \.self) { Text(text($0.title)).tag($0) }
-                }
-                .accessibilityIdentifier("clipy.workflow.time-range")
-                if workflow.scope.timeRange == .custom {
-                    DatePicker(text("From"), selection: $workflow.scope.startDate)
-                    DatePicker(text("Through"), selection: $workflow.scope.endDate)
-                }
-                if workflow.scope.source == .history {
-                    Stepper(value: $workflow.scope.historyLimit, in: 1...1000) {
-                        Text(text("History items to check") + ": \(workflow.scope.historyLimit)")
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(text("Execution order")).font(.headline)
+                Spacer()
+                Menu {
+                    Button(text("New workflow")) {
+                        add(BuiltInAutomationWorkflow(name: "", steps: [.init(operation: .trim)]))
                     }
-                    .accessibilityIdentifier("clipy.workflow.history-limit")
-                }
-                Text(text("Automatic runs check new copies only, never existing history. Save the workflow to enable automatic runs. Source and time filters need a recorded copy; untracked manual input will not match these filters."))
-                    .font(.caption).foregroundStyle(.secondary)
+                    Divider()
+                    ForEach(BuiltInAutomationWorkflow.presets) { preset in
+                        Button(text(preset.name)) {
+                            var localized = preset
+                            localized.name = text(preset.name)
+                            add(localized)
+                        }
+                    }
+                } label: { Image(systemName: "plus") }
+                .menuIndicator(.hidden)
+                .help(text("New workflow"))
+                .accessibilityLabel(text("New workflow"))
+                .accessibilityIdentifier("clipy.workflow.load")
             }
-            .padding(.top, 8)
+            Text(text("Runs from top to bottom. Drag to change priority."))
+                .font(.caption).foregroundStyle(.secondary)
+            ScrollView {
+                LazyVStack(spacing: 4) {
+                    ForEach(Array(drafts.enumerated()), id: \.element.id) { index, draft in
+                        sidebarRow(draft, index: index)
+                    }
+                    Color.clear.frame(height: 20)
+                        .dropDestination(for: String.self) { values, _ in reorderWorkflow(values.first, before: nil) }
+                }
+            }
+            .accessibilityIdentifier("clipy.workflow.sidebar")
+            if let failure = library.failure {
+                Text(text(failure.message)).font(.caption).foregroundStyle(.secondary)
+                Button(text("Reset saved workflows"), role: .destructive) { confirmsReset = true }
+            }
         }
-        .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.workflow.scope-controls"))
+        .padding(12)
+        .background(.background.secondary)
     }
 
-    private var inputControls: some View {
-        HStack {
-            Picker(text("Input type"), selection: $usesImageInput) {
-                Text(text("Text")).tag(false)
-                Text(text("Image")).tag(true)
+    private func sidebarRow(_ draft: BuiltInAutomationWorkflow, index: Int) -> some View {
+        Button { select(draft.id) } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Text("\(index + 1)").monospacedDigit().foregroundStyle(.secondary)
+                    .frame(width: 20, alignment: .trailing)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(draft.name.isEmpty ? text("Untitled workflow") : draft.name)
+                            .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
+                        if library.workflows.first(where: { $0.id == draft.id }) != draft {
+                            Image(systemName: "circle.fill").font(.system(size: 5))
+                                .accessibilityLabel(text("Unsaved changes"))
+                        }
+                    }
+                    Text(text(draft.trigger.title)).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            .padding(9)
+            .contentShape(Rectangle())
+            .background(workflow.id == draft.id ? Color.accentColor.opacity(0.14) : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("clipy.workflow.row." + draft.id.uuidString)
+        .draggable("workflow:" + draft.id.uuidString)
+        .dropDestination(for: String.self) { values, _ in reorderWorkflow(values.first, before: draft.id) }
+        .contextMenu {
+            Button(text("Move workflow up")) { moveWorkflow(draft.id, by: -1) }.disabled(index == 0)
+            Button(text("Move workflow down")) { moveWorkflow(draft.id, by: 1) }.disabled(index == drafts.count - 1)
+            Divider()
+            Button(text("Delete workflow"), role: .destructive) { remove(draft.id) }
+        }
+    }
+
+    private var editorHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                TextField(text("Workflow name"), text: $workflow.name)
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityIdentifier("clipy.workflow.name")
+                Button(text("Save workflow")) { save() }
+                    .disabled(!isDirty || library.failure != nil)
+                    .keyboardShortcut("s", modifiers: .command)
+                    .accessibilityIdentifier("clipy.workflow.save")
+                Menu {
+                    Button(text("Move workflow up")) { moveWorkflow(workflow.id, by: -1) }
+                        .disabled(drafts.first?.id == workflow.id)
+                    Button(text("Move workflow down")) { moveWorkflow(workflow.id, by: 1) }
+                        .disabled(drafts.last?.id == workflow.id)
+                    Divider()
+                    Button(text("Delete workflow"), role: .destructive) { remove(workflow.id) }
+                } label: { Image(systemName: "ellipsis") }
+                .menuIndicator(.hidden)
+                .accessibilityLabel(text("Workflow actions"))
+                .accessibilityIdentifier("clipy.workflow.actions")
+            }
+            Text(saveMessage ?? text(isDirty ? "Unsaved changes" : "Saved"))
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("clipy.workflow.save-status")
+        }
+        .padding(14)
+    }
+
+    private var definitionArea: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker(text("Workflow configuration"), selection: $editsScope) {
+                Text(text("Steps")).tag(false)
+                Text(text("Trigger and scope")).tag(true)
+                    .accessibilityIdentifier("clipy.workflow.configuration.scope")
             }
             .pickerStyle(.segmented)
-            .frame(width: 180)
-            .accessibilityIdentifier("clipy.workflow.input-type")
-            Button(text("Read Clipboard")) {
-                cancelImageLoad()
-                do {
-                    let value = try BuiltInAutomationClipboard.read(image: usesImageInput)
-                    inputFailure = nil
-                    switch value {
-                    case let .text(text): source = text
-                    case let .image(data): imageData = data
+            .accessibilityIdentifier("clipy.workflow.configuration")
+            if editsScope {
+                ScrollView { scopeControls.padding(2) }
+            } else {
+                ScrollView {
+                    BuiltInAutomationStepsEditor(steps: $workflow.steps, bundle: copyBundle)
+                        .padding(2)
+                }
+                Text(text("Drag steps between branches. Conditions choose Then or Otherwise; steps run from top to bottom."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+    }
+
+    private var scopeControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Picker(text("Trigger"), selection: $workflow.trigger) {
+                ForEach(BuiltInAutomationTrigger.allCases, id: \.self) { Text(text($0.title)).tag($0) }
+            }
+            .accessibilityIdentifier("clipy.workflow.trigger")
+            Picker(text("Manual input"), selection: $workflow.scope.source) {
+                ForEach(BuiltInAutomationScope.Source.allCases, id: \.self) { Text(text($0.title)).tag($0) }
+            }
+            .disabled(apply != nil)
+            .accessibilityIdentifier("clipy.workflow.scope")
+            HStack {
+                Text(text("Source applications"))
+                Spacer()
+                Button(text("Choose Applications…")) { choosesApplications = true }
+                    .accessibilityIdentifier("clipy.workflow.choose-applications")
+            }
+            TextField(text("Source apps (bundle IDs, comma separated; empty means all)"), text: $workflow.scope.applications)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("clipy.workflow.source-apps")
+            Picker(text("Copy time"), selection: $workflow.scope.timeRange) {
+                ForEach(BuiltInAutomationScope.TimeRange.allCases, id: \.self) { Text(text($0.title)).tag($0) }
+            }
+            .accessibilityIdentifier("clipy.workflow.time-range")
+            if workflow.scope.timeRange == .custom {
+                DatePicker(text("From"), selection: $workflow.scope.startDate)
+                DatePicker(text("Through"), selection: $workflow.scope.endDate)
+            }
+            if workflow.scope.source == .history {
+                Stepper(value: $workflow.scope.historyLimit, in: 1...1000) {
+                    Text(text("History items to check") + ": \(workflow.scope.historyLimit)")
+                }
+                .accessibilityIdentifier("clipy.workflow.history-limit")
+            }
+            Text(text("Automatic runs check new copies only, never existing history. Save the workflow to enable automatic runs. Source and time filters need a recorded copy; untracked manual input will not match these filters."))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var comparisonArea: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                comparisonColumn(label: showsManualInput && apply == nil ? "Test text" : "Before", original: true)
+                comparisonColumn(label: "After", original: false)
+            }
+            if !showsManualInput {
+                Text(text("Preview reads the configured source. Before shows the exact input used for this result."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+    }
+
+    private func comparisonColumn(label: String, original: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(text(label)).font(.headline)
+            let value = original ? originalInput : model.output?.value
+            if case let .image(data) = value, let image = NSImage(data: data) {
+                Image(nsImage: image).resizable().scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .background(Color(nsColor: .textBackgroundColor))
+                    .accessibilityLabel(text(original ? "Image input" : "After"))
+            } else {
+                BuiltInAutomationSourceEditor(
+                    text: original && showsManualInput && apply == nil ? $source : .constant(value?.text ?? ""),
+                    accessibilityLabel: text(label),
+                    isEditable: original && showsManualInput && apply == nil,
+                    accessibilityIdentifier: original ? "clipy.workflow.source" : "clipy.workflow.result"
+                )
+            }
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var executionFooter: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            executionStatus
+            HStack {
+                if isBusy {
+                    ProgressView().controlSize(.small)
+                    Text(text(model.isQueued ? "Waiting to run…" : "Running…")).foregroundStyle(.secondary)
+                    Button(text("Cancel preview")) { model.invalidate() }
+                } else {
+                    Button(text("Preview result")) { run(effects: false) }
+                        .disabled(!canRun).accessibilityIdentifier("clipy.workflow.preview")
+                    Button(text("Run workflow")) { run(effects: true) }
+                        .disabled(!canRun || !workflow.trigger.includesManual)
+                        .accessibilityIdentifier("clipy.workflow.run")
+                }
+                Spacer()
+                if let apply {
+                    Button(text("Apply to draft")) {
+                        guard canApply, let result = model.result else { return }
+                        apply(result)
+                        dismiss()
                     }
-                } catch { inputFailure = error as? BuiltInAutomationFailure }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canApply)
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("clipy.workflow.apply")
+                } else {
+                    Button(text("Copy result")) {
+                        guard isCurrent, let output = model.output else { return }
+                        do {
+                            try BuiltInAutomationClipboard.copy(output.value)
+                            executionMessage = text("Result copied.")
+                        } catch { inputFailure = error as? BuiltInAutomationFailure }
+                    }
+                    .disabled(model.output?.matchedConditions != true || isBusy || !isCurrent)
+                    .accessibilityIdentifier("clipy.workflow.copy")
+                }
             }
-            .accessibilityIdentifier("clipy.workflow.read-clipboard")
-            if usesImageInput {
-                Button(text("Choose Image…")) { choosesImage = true }
-                if isLoadingImage { ProgressView().controlSize(.small) }
+            Text(text(apply != nil
+                      ? "Apply changes the draft only. Save Revision in the editor to keep the result. Original content and earlier revisions remain available."
+                      : "Preview never sends notifications. Run executes the selected branches and their notifications."))
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+    }
+
+    @ViewBuilder private var executionStatus: some View {
+        if let failure = inputFailure ?? model.failure {
+            Label(text(failure.message), systemImage: "exclamationmark.triangle")
+                .accessibilityIdentifier("clipy.workflow.error")
+        } else if let executionMessage {
+            Text(executionMessage).foregroundStyle(.secondary)
+        } else if model.output?.matchedConditions == false {
+            Text(text("Conditions did not match. No notification was sent.")).foregroundStyle(.secondary)
+        } else if let output = model.output {
+            if containsConditions(workflow.steps) {
+                Label(text("Workflow finished."), systemImage: "checkmark.circle")
+                    .accessibilityIdentifier("clipy.workflow.conditions-matched")
             }
-            Spacer()
+            if output.matchedItemCount > 1 {
+                Text("\(output.matchedItemCount) " + text("items matched. Showing the first result; Copy result copies only this result."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 
-    @ViewBuilder private func imagePreview(_ data: Data?) -> some View {
-        if let data, let image = NSImage(data: data) {
-            Image(nsImage: image).resizable().scaledToFit()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel(text("Image input"))
-        } else {
-            ContentUnavailableView(text("Choose an image"), systemImage: "photo")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
+    private func containsConditions(_ steps: [BuiltInAutomationStep]) -> Bool {
+        steps.contains { $0.enabled && [.conditional, .requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation) }
     }
 
-    private func load(_ saved: BuiltInAutomationWorkflow) {
-        workflow = saved
-        saveMessage = nil
-        if apply == nil {
-            usesImageInput = saved.steps.contains { $0.enabled && $0.operation == .requireImage }
-        }
+    private func run(effects: Bool) {
+        executionMessage = nil
+        model.preview(input: input, steps: workflow.steps, runEffects: effects,
+                      workflow: apply == nil ? workflow : nil, history: history, notificationName: workflow.name)
     }
 
     private func invalidatePreview() {
         model.invalidate()
         inputFailure = nil
         executionMessage = nil
+        saveMessage = nil
     }
 
-    private func cancelImageLoad() {
-        imageLoadGeneration = UUID()
-        imageLoadTask?.cancel()
-        imageLoadTask = nil
-        isLoadingImage = false
+    private func retainDraft() {
+        if let index = drafts.firstIndex(where: { $0.id == workflow.id }) { drafts[index] = workflow }
     }
 
-    private func loadImage(_ url: URL) {
-        cancelImageLoad()
+    private func select(_ id: UUID) {
+        guard id != workflow.id else { return }
         invalidatePreview()
-        let generation = imageLoadGeneration
-        isLoadingImage = true
-        let read = Task.detached(priority: .userInitiated) {
-            let accessed = url.startAccessingSecurityScopedResource()
-            defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-            let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size <= BuiltInAutomation.maximumImageBytes else { throw BuiltInAutomationFailure.imageTooLarge }
-            try Task.checkCancellation()
-            let data = try Data(contentsOf: url, options: .mappedIfSafe)
-            try BuiltInAutomation.validateImage(data)
-            try Task.checkCancellation()
-            return data
-        }
-        imageLoadTask = Task {
-            do {
-                let data = try await withTaskCancellationHandler {
-                    try await read.value
-                } onCancel: { read.cancel() }
-                guard !Task.isCancelled, imageLoadGeneration == generation else { return }
-                imageData = data
-            } catch {
-                guard !Task.isCancelled, imageLoadGeneration == generation else { return }
-                inputFailure = (error as? BuiltInAutomationFailure) ?? .invalidImage
-            }
-            isLoadingImage = false
-            imageLoadTask = nil
-        }
+        retainDraft()
+        draftInputs[workflow.id] = source
+        guard let next = drafts.first(where: { $0.id == id }) else { return }
+        workflow = next
+        if apply == nil { source = draftInputs[id] ?? "" }
     }
 
-    private var workflowEditor: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(workflow.steps) { step in
-                        let binding = stepBinding(step)
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Toggle(text("Enable step"), isOn: binding.enabled).labelsHidden()
-                                Picker(text("Operation"), selection: binding.operation) {
-                                    ForEach(BuiltInAutomationStep.Operation.allCases, id: \.self) { operation in
-                                        Text(text(operation.title)).tag(operation)
-                                    }
-                                }
-                                .labelsHidden()
-                                .frame(maxWidth: .infinity)
-                                Button { move(step.id, by: -1) } label: { Image(systemName: "arrow.up") }
-                                    .help(text("Move step up"))
-                                    .accessibilityLabel(text("Move step up"))
-                                    .disabled(workflow.steps.first?.id == step.id)
-                                Button { move(step.id, by: 1) } label: { Image(systemName: "arrow.down") }
-                                    .help(text("Move step down"))
-                                    .accessibilityLabel(text("Move step down"))
-                                    .disabled(workflow.steps.last?.id == step.id)
-                                Button { workflow.steps.removeAll { $0.id == step.id } } label: {
-                                    Image(systemName: "minus.circle")
-                                }
-                                .help(text("Remove step"))
-                                .accessibilityLabel(text("Remove step"))
-                            }
-                            if [.replace, .regexReplace, .regexExtract, .containsText, .matchesRegex].contains(step.operation) {
-                                HStack {
-                                    TextField(text([.replace, .containsText].contains(step.operation) ? "Find (literal text)" : "Regular expression"), text: binding.find)
-                                    if [.replace, .regexReplace].contains(step.operation) {
-                                        TextField(text("Replace with"), text: binding.replacement)
-                                    }
-                                }
-                                .disabled(!step.enabled)
-                                if [.regexReplace, .regexExtract, .matchesRegex].contains(step.operation) {
-                                    Text(text("ICU regular expressions. Replacement uses $0 for the full match and $1, $2 for groups. Extraction joins full matches with newlines."))
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            if step.operation == .notify {
-                                Text(text("Notifies only when all enabled conditions match. Clipboard content is never included."))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                .padding(2)
-            }
-            .frame(minHeight: 64, idealHeight: 130, maxHeight: 180)
-            HStack {
-                Button(text("Add step"), systemImage: "plus") { workflow.steps.append(.init(operation: .trim)) }
-                    .disabled(workflow.steps.count >= BuiltInAutomation.maximumSteps)
-                Spacer()
-                Text(text("Line steps use LF line endings; sorting uses exact UTF-8 order."))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
+    private func add(_ value: BuiltInAutomationWorkflow) {
+        invalidatePreview()
+        retainDraft()
+        drafts.append(value)
+        select(value.id)
+        editsScope = false
     }
 
-    private var previewArea: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(text(apply == nil ? "Test text" : "Before")).font(.headline)
-                if apply == nil && workflow.scope.source == .history {
-                    Text(text("Checks the selected range in history order. Source and time filters use each item's most recent copy."))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if usesImageInput {
-                    imagePreview(imageData)
-                } else if apply == nil {
-                    BuiltInAutomationSourceEditor(text: $source, accessibilityLabel: text("Test text"))
-                } else { previewText(source, label: text("Before")) }
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text(text("After")).font(.headline)
-                if case let .image(data) = model.output?.value {
-                    imagePreview(data)
-                } else {
-                    previewText(model.result ?? text("Run a preview to see the result here."), label: text("After"))
+    private func save() {
+        do {
+            try library.save(workflow)
+            let following = drafts.drop(while: { $0.id != workflow.id }).dropFirst()
+                .first { draft in library.workflows.contains { $0.id == draft.id } }
+            try library.move(id: workflow.id, before: following?.id)
+            if let saved = library.workflows.first(where: { $0.id == workflow.id }) { workflow = saved; retainDraft() }
+            saveMessage = text("Workflow saved. Source and preview text are never saved with it.")
+        } catch { saveMessage = text((error as? BuiltInAutomationFailure)?.message ?? BuiltInAutomationFailure.invalidWorkflow.message) }
+    }
+
+    private func remove(_ id: UUID) {
+        invalidatePreview()
+        do {
+            if library.workflows.contains(where: { $0.id == id }) { try library.remove(id) }
+            drafts.removeAll { $0.id == id }
+            draftInputs.removeValue(forKey: id)
+            if workflow.id == id {
+                if let next = drafts.first { workflow = next; if apply == nil { source = draftInputs[next.id] ?? "" } }
+                else {
+                    workflow = BuiltInAutomationWorkflow(name: "", steps: [.init(operation: .trim)])
+                    drafts.append(workflow)
+                    if apply == nil { source = "" }
                 }
             }
-        }
-        .frame(height: 220)
+        } catch { saveMessage = text(BuiltInAutomationFailure.unreadableWorkflows.message) }
     }
 
-    private func previewText(_ value: String, label: String) -> some View {
-        ScrollView([.horizontal, .vertical]) {
-            Text(verbatim: String(value.prefix(12_000)))
-                .font(.system(.body, design: .monospaced))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .padding(8)
-            if value.count > 12_000 {
-                Text(text("Preview shows the first 12,000 characters. Apply uses the complete result."))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 6))
-        .accessibilityLabel(label)
+    private func moveWorkflow(_ id: UUID, by offset: Int) {
+        guard let index = drafts.firstIndex(where: { $0.id == id }), drafts.indices.contains(index + offset) else { return }
+        let target = offset < 0 ? drafts[index - 1].id : (index + 2 < drafts.count ? drafts[index + 2].id : nil)
+        _ = reorderWorkflow("workflow:" + id.uuidString, before: target)
     }
 
-    private func move(_ id: UUID, by offset: Int) {
-        guard let index = workflow.steps.firstIndex(where: { $0.id == id }),
-              workflow.steps.indices.contains(index + offset) else { return }
-        workflow.steps.swapAt(index, index + offset)
-    }
-
-    private func stepBinding(_ snapshot: BuiltInAutomationStep) -> Binding<BuiltInAutomationStep> {
-        Binding {
-            workflow.steps.first { $0.id == snapshot.id } ?? snapshot
-        } set: { value in
-            guard let index = workflow.steps.firstIndex(where: { $0.id == snapshot.id }) else { return }
-            workflow.steps[index] = value
-        }
+    private func reorderWorkflow(_ payload: String?, before target: UUID?) -> Bool {
+        guard let payload, payload.hasPrefix("workflow:"), let id = UUID(uuidString: String(payload.dropFirst(9))),
+              id != target, let index = drafts.firstIndex(where: { $0.id == id }) else { return false }
+        let previous = drafts
+        let moved = drafts.remove(at: index)
+        if let target, let destination = drafts.firstIndex(where: { $0.id == target }) { drafts.insert(moved, at: destination) }
+        else { drafts.append(moved) }
+        guard library.workflows.contains(where: { $0.id == id }) else { return true }
+        let following = drafts.drop(while: { $0.id != id }).dropFirst()
+            .first { draft in library.workflows.contains { $0.id == draft.id } }
+        do { try library.move(id: id, before: following?.id); return true }
+        catch { drafts = previous; saveMessage = text(BuiltInAutomationFailure.unreadableWorkflows.message); return false }
     }
 }
-
 /// Embeddable in the Automation settings tab, with no nested grouped Form.
 struct BuiltInAutomationSettingsView: View {
     var history: (any ClipboardHistory)? = nil

@@ -21,10 +21,8 @@ struct AppearanceSettingsTab: View {
     @AppStorage(NativeAppearance.defaultsKey)
     private var nativeAppearance: NativeAppearance = .system
 
-    /// `@AppStorage` reads and writes the persisted raw values; the enum
-    /// conversion happens at the control's tag, keeping this view a pure
-    /// projection of the same UserDefaults keys `PanelAppearanceSettings`
-    /// owns. The wrapped defaults below are the documented product defaults.
+    /// The controls and panel share the same raw preference values, including
+    /// user-entered typography. No separate preset index limits custom input.
     @AppStorage(PanelAppearanceSettings.rowDensityDefaultsKey)
     private var rowDensity: HistoryRowDensity = PanelAppearanceSettings().rowDensity
     @AppStorage(PanelAppearanceSettings.snippetLineCountDefaultsKey)
@@ -81,31 +79,50 @@ struct AppearanceSettingsTab: View {
                     isExpanded: $isShowingTextAppearance
                 ) {
                     SettingsFieldLayout {
-                        Text(SettingsCopy.text("Text lines"))
-                            .fixedSize(horizontal: false, vertical: true)
-                        Picker(SettingsCopy.text("Text lines"), selection: $snippetLineCount) {
-                            ForEach(HistorySnippetLineCount.allCases, id: \.self) { count in
-                                Text(snippetLineCountLabel(count)).tag(count)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .accessibilityIdentifier("clipy.settings.appearance.snippet-lines")
-                        .frame(width: 220)
-                    }
-                    SettingsFieldLayout {
                         Text(SettingsCopy.text("Font size"))
-                            .fixedSize(horizontal: false, vertical: true)
-                        Picker(SettingsCopy.text("Font size"), selection: $rowFontSize) {
-                            ForEach(HistoryRowFontSize.allCases, id: \.self) { size in
-                                Text(rowFontSizeLabel(size)).tag(size)
-                            }
+                        HStack(spacing: 8) {
+                            TextField("", value: Binding(
+                                get: { rowFontSize.points },
+                                set: {
+                                    guard let size = HistoryRowFontSize(rawValue: String($0)) else { return }
+                                    rowFontSize = size
+                                }
+                            ), format: .number.grouping(.never))
+                            .textFieldStyle(.roundedBorder)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 88)
+                            .accessibilityLabel(SettingsCopy.text("Font size"))
+                            .accessibilityIdentifier("clipy.settings.appearance.font-size")
+                            Text("pt").foregroundStyle(.secondary)
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .accessibilityIdentifier("clipy.settings.appearance.font-size")
-                        .frame(width: 220)
+                        .frame(width: 120, alignment: .trailing)
                     }
+                    Toggle(SettingsCopy.text("Automatic text lines"), isOn: Binding(
+                        get: { snippetLineCount == .automatic },
+                        set: { snippetLineCount = $0 ? .automatic : .one }
+                    ))
+                    .accessibilityIdentifier("clipy.settings.appearance.automatic-lines")
+                    if snippetLineCount != .automatic {
+                        SettingsFieldLayout {
+                            Text(SettingsCopy.text("Text lines"))
+                            TextField("", value: Binding(
+                                get: { snippetLineCount.baseLineLimit(density: rowDensity) },
+                                set: {
+                                    guard let count = HistorySnippetLineCount(rawValue: String($0)) else { return }
+                                    snippetLineCount = count
+                                }
+                            ), format: .number.grouping(.never))
+                            .textFieldStyle(.roundedBorder)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 120)
+                            .accessibilityLabel(SettingsCopy.text("Text lines"))
+                            .accessibilityIdentifier("clipy.settings.appearance.snippet-lines")
+                        }
+                    }
+                    Text(SettingsCopy.text("Enter a font size from 1 to 200 pt and a line count from 1 to 100. Automatic uses the row density."))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.appearance.text-appearance"))
             } header: {
@@ -126,7 +143,7 @@ struct AppearanceSettingsTab: View {
                     ), format: .number)
                         .textFieldStyle(.roundedBorder)
                         .multilineTextAlignment(.trailing)
-                        .frame(minWidth: 64, idealWidth: 80, maxWidth: 120)
+                        .frame(width: 120)
                         .accessibilityLabel(AdaptiveSettingsCopy.text("Preferred panel gap (pt)"))
                         .accessibilityIdentifier("clipy.settings.preview.panel-gap")
                         .help(AdaptiveSettingsCopy.text("The preview opens beside the panel. A gap of zero joins their edges. Changes apply immediately; available screen space may reduce the gap."))
@@ -146,7 +163,7 @@ struct AppearanceSettingsTab: View {
                             ), format: .number.grouping(.never))
                                 .textFieldStyle(.roundedBorder)
                                 .multilineTextAlignment(.trailing)
-                                .frame(minWidth: 96, idealWidth: 120, maxWidth: 180)
+                                .frame(width: 120)
                                 .accessibilityLabel(AdaptiveSettingsCopy.text("Preview characters"))
                                 .accessibilityIdentifier("clipy.settings.preview.character-count")
                         }
@@ -194,6 +211,8 @@ struct AppearanceSettingsTab: View {
             }
         }
         .formStyle(.grouped)
+        .font(.body)
+        .controlSize(.regular)
     }
 
     /// V2-11: ordinary rows have a title, never a fabricated body excerpt.
@@ -331,25 +350,6 @@ struct AppearanceSettingsTab: View {
         switch density {
         case .compact: return SettingsCopy.text("Compact")
         case .comfortable: return SettingsCopy.text("Comfortable")
-        }
-    }
-
-    /// Auto stays short — a four-segment "Automatic" risks truncation; the
-    /// explicit cases label with their raw counts.
-    private func snippetLineCountLabel(_ count: HistorySnippetLineCount) -> String {
-        switch count {
-        case .automatic: return SettingsCopy.text("Auto")
-        case .one: return LocalizedCountPresentation.number(1, locale: .current)
-        case .two: return LocalizedCountPresentation.number(2, locale: .current)
-        case .three: return LocalizedCountPresentation.number(3, locale: .current)
-        }
-    }
-
-    private func rowFontSizeLabel(_ size: HistoryRowFontSize) -> String {
-        switch size {
-        case .small: return SettingsCopy.text("Small")
-        case .medium: return SettingsCopy.text("Medium")
-        case .large: return SettingsCopy.text("Large")
         }
     }
 

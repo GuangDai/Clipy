@@ -42,7 +42,16 @@ struct CapturePrivacySettingsView: View {
                     .foregroundStyle(.secondary)
             }
             DisclosureGroup(CapturePrivacyCopy.text("Enter a Bundle Identifier"), isExpanded: $showsManualEntry) {
-                TextField(SettingsCopy.text("Bundle identifier, e.g. com.1password.1password"), text: $identifierDraft)
+                TextField(
+                    CapturePrivacyCopy.text("Enter a Bundle Identifier"),
+                    text: $identifierDraft,
+                    prompt: Text(SettingsCopy.text("Bundle identifier, e.g. com.1password.1password"))
+                )
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.regular)
+                    .frame(maxWidth: .infinity)
+                    .accessibilityLabel(CapturePrivacyCopy.text("Enter a Bundle Identifier"))
                     .accessibilityIdentifier("clipy.settings.privacy.bundle-identifier")
                     .onSubmit {
                         guard ignoreList.add(identifierDraft) else { return }

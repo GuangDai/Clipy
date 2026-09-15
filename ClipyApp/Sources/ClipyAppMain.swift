@@ -76,6 +76,7 @@ private struct SettingsRootView: View {
                 localAutomation: composition.localAutomation?.settings,
                 interactionDefaults: appDelegate.interactionDefaults
             )
+            .environment(\.workflowExecutionQueue, composition.workflowRunner.executionQueue)
             .sheet(isPresented: $isRecordingSummonShortcut) {
                 SummonShortcutRecorderView(conflictingPanelAction: { chord in
                     chord.conflictingPanelAction(in: PanelShortcutSettings.load(from: appDelegate.interactionDefaults))

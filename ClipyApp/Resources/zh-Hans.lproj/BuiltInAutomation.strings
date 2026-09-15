@@ -126,3 +126,61 @@
 "Choose Applications…" = "选择应用…";
 
 "Conditions matched." = "条件已满足。";
+
+"Add condition" = "添加条件";
+
+"Condition" = "条件";
+
+"Drag steps between branches. Conditions choose Then or Otherwise; steps run from top to bottom." = "可将步骤拖入不同分支。按条件执行“那么”或“否则”中的步骤，各分支从上到下执行。";
+
+"Drag to reorder" = "拖动调整顺序";
+
+"Execution order" = "执行顺序";
+
+"If" = "如果";
+
+"Then" = "那么";
+
+"Otherwise" = "否则";
+
+"Input is an image" = "输入是图片";
+
+"Input is text" = "输入是文本";
+
+"Move workflow down" = "下移工作流";
+
+"Move workflow up" = "上移工作流";
+
+"New workflow" = "新建工作流";
+
+"Preview reads the configured source. Before shows the exact input used for this result." = "预览按配置读取来源，左侧显示本次结果实际使用的原始内容。";
+
+"Runs from top to bottom. Drag to change priority." = "从上到下依次执行，拖动可调整优先级。";
+
+"Sends a notification when this branch completes. Clipboard content is never included." = "此分支完成后发送通知，通知不包含剪贴板内容。";
+
+"Step actions" = "步骤操作";
+
+"Steps" = "步骤";
+
+"The workflow queue is full. Wait for running workflows to finish, then try again." = "工作流队列已满，本次任务未加入队列。请等待正在执行的任务完成后重试。";
+
+"Then continue with the following steps. Otherwise stop this workflow." = "那么继续执行后面的步骤，否则停止本条工作流。";
+
+"Unsaved changes" = "尚未保存的更改";
+
+"Untitled workflow" = "未命名工作流";
+
+"Workflow actions" = "工作流操作";
+
+"Workflow configuration" = "工作流配置";
+
+"Workflow finished." = "工作流已完成。";
+
+"Waiting to run…" = "等待执行…";
+
+"Running…" = "正在执行…";
+
+"Saved" = "已保存";
+
+"Preview never sends notifications. Run executes the selected branches and their notifications." = "预览不会发送通知。点击运行后，会执行符合条件的分支及其中的通知动作。";

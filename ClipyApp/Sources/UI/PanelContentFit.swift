@@ -136,22 +136,15 @@ enum PanelContentFit {
 
     // MARK: Row typography (PanelTheme's Font mappings)
 
-    /// Line boxes for the 11/13/15pt system title fonts in PanelTheme.
+    /// The system text line box scales with the actual point size. Ceil
+    /// reserves a whole point for fractional sizes and preserves the existing
+    /// 11/13/15pt title and 11/12/13pt snippet geometry.
     static func titleLineHeight(for size: HistoryRowFontSize) -> CGFloat {
-        switch size {
-        case .small: return 14
-        case .medium: return 16
-        case .large: return 18
-        }
+        ceil(CGFloat(size.points) * 1.2)
     }
 
-    /// Line boxes for the 11/12/13pt system snippet fonts in PanelTheme.
     static func snippetLineHeight(for size: HistoryRowFontSize) -> CGFloat {
-        switch size {
-        case .small: return 14
-        case .medium: return 15
-        case .large: return 16
-        }
+        ceil(CGFloat(size.snippetPoints) * 1.2)
     }
 
     /// One row: `max(slot, title block)` plus the row's vertical padding

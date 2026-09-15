@@ -37,6 +37,17 @@ final class BuiltInAutomationLibrary {
         try persist(readCurrent().filter { $0.id != id })
     }
 
+    func move(id: UUID, before destination: UUID?) throws {
+        guard failure == nil else { throw BuiltInAutomationFailure.unreadableWorkflows }
+        var updated = try readCurrent()
+        guard id != destination, let source = updated.firstIndex(where: { $0.id == id }) else { return }
+        if let destination, !updated.contains(where: { $0.id == destination }) { return }
+        let workflow = updated.remove(at: source)
+        let target = destination.flatMap { destination in updated.firstIndex(where: { $0.id == destination }) } ?? updated.endIndex
+        updated.insert(workflow, at: target)
+        try persist(updated)
+    }
+
     func reset() {
         defaults.removeObject(forKey: Self.defaultsKey)
         workflows = []
@@ -79,29 +90,41 @@ final class BuiltInAutomationLibrary {
               Set(workflow.steps.map(\.id)).count == workflow.steps.count else {
             throw BuiltInAutomationFailure.invalidWorkflow
         }
-        guard workflow.steps.count <= BuiltInAutomation.maximumSteps else {
-            throw BuiltInAutomationFailure.tooManySteps
-        }
+        try BuiltInAutomation.validateStepTree(workflow.steps)
         guard workflow.name.utf8.count <= 200 else { throw BuiltInAutomationFailure.definitionTooLarge }
         guard (1...1000).contains(workflow.scope.historyLimit), workflow.scope.validTimeRange else {
             throw BuiltInAutomationFailure.invalidScope
         }
-        let enabled = workflow.steps.filter(\.enabled)
-        if enabled.contains(where: { $0.operation == .notify }),
-           !enabled.contains(where: { [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation) }) {
-            throw BuiltInAutomationFailure.notificationNeedsCondition
+        try validateSteps(workflow.steps, insideCondition: false)
+    }
+
+    private static func validateSteps(_ steps: [BuiltInAutomationStep], insideCondition: Bool) throws {
+        // Old flat workflows deferred effects until all their guards passed,
+        // even when a notification appeared before a guard. Keep that behavior.
+        var notificationAllowed = insideCondition || steps.contains {
+            $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation)
         }
-        for step in workflow.steps {
+        for step in steps {
             guard step.find.utf8.count <= 16_384, step.replacement.utf8.count <= 16_384 else {
                 throw BuiltInAutomationFailure.definitionTooLarge
             }
-            if step.enabled && step.operation == .replace && step.find.isEmpty {
-                throw BuiltInAutomationFailure.emptyFind
-            }
-            if step.enabled && ([.regexReplace, .regexExtract, .matchesRegex].contains(step.operation)) {
+            guard step.enabled else { continue }
+            if step.operation == .replace && step.find.isEmpty { throw BuiltInAutomationFailure.emptyFind }
+            if [.regexReplace, .regexExtract, .matchesRegex].contains(step.operation)
+                || (step.operation == .conditional && step.condition == .matchesRegex) {
                 guard !step.find.isEmpty, (try? NSRegularExpression(pattern: step.find)) != nil else {
                     throw BuiltInAutomationFailure.invalidRegex
                 }
+            }
+            if [.requireText, .requireImage, .containsText, .matchesRegex].contains(step.operation) {
+                notificationAllowed = true
+            }
+            if step.operation == .notify && !notificationAllowed {
+                throw BuiltInAutomationFailure.notificationNeedsCondition
+            }
+            if step.operation == .conditional {
+                try validateSteps(step.thenSteps, insideCondition: true)
+                try validateSteps(step.otherwiseSteps, insideCondition: true)
             }
         }
     }
@@ -113,11 +136,16 @@ final class BuiltInAutomationModel {
     var result: String? { output?.matchedConditions == true ? output?.value.text : nil }
     @ObservationIgnored private let notify: @Sendable (String) async throws -> Void
 
-    init(notify: @escaping @Sendable (String) async throws -> Void = BuiltInAutomationNotifications.send) {
+    @ObservationIgnored let executionQueue: BuiltInAutomationExecutionQueue
+
+    init(executionQueue: BuiltInAutomationExecutionQueue = .init(),
+         notify: @escaping @Sendable (String) async throws -> Void = BuiltInAutomationNotifications.send) {
+        self.executionQueue = executionQueue
         self.notify = notify
     }
     private(set) var failure: BuiltInAutomationFailure?
     private(set) var isRunning = false
+    private(set) var isQueued = false
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var previewSource: BuiltInAutomationInput?
@@ -131,11 +159,14 @@ final class BuiltInAutomationModel {
         previewSource == input && previewSteps == steps
     }
 
+    private func isCurrentRequest(_ request: UUID) -> Bool { generation == request }
+
     func invalidate() {
         generation = UUID()
         task?.cancel()
         task = nil
         isRunning = false
+        isQueued = false
         output = nil
         failure = nil
         previewSource = nil
@@ -153,31 +184,55 @@ final class BuiltInAutomationModel {
         let request = generation
         previewSource = input
         previewSteps = steps
-        isRunning = true
-        let computation = Task.detached(priority: .userInitiated) {
-            if let workflow {
-                try await BuiltInAutomation.evaluateManual(input: input, workflow: workflow, history: history)
-            } else {
-                try await BuiltInAutomation.run(input, steps: steps)
-            }
+        // Read the current clipboard synchronously at the request boundary.
+        // Waiting in the shared queue must not silently change this input.
+        let capturedInput: BuiltInAutomationInput
+        var capturedWorkflow = workflow
+        do {
+            if workflow?.scope.source == .clipboard {
+                capturedInput = try BuiltInAutomationClipboard.read(image: BuiltInAutomation.prefersImage(steps))
+                capturedWorkflow?.scope.source = .input
+            } else { capturedInput = input }
+        } catch {
+            failure = (error as? BuiltInAutomationFailure) ?? .clipboardUnavailable
+            return
         }
+        let definition = capturedWorkflow
+        let queue = executionQueue
+        let sendNotification = notify
+        isQueued = true
         task = Task { [weak self] in
+            guard let model = self else { return }
             do {
-                let value = try await withTaskCancellationHandler {
-                    try await computation.value
-                } onCancel: { computation.cancel() }
+                let value = try await queue.execute(retainedBytes: capturedInput.byteCount, onStart: { [weak self] in
+                    guard let self, self.generation == request else { return }
+                    self.isQueued = false
+                    self.isRunning = true
+                }) {
+                    let value: BuiltInAutomationOutput
+                    if let definition {
+                        value = try await BuiltInAutomation.evaluateManual(input: capturedInput, workflow: definition, history: history)
+                    } else {
+                        value = try await BuiltInAutomation.run(capturedInput, steps: steps)
+                    }
+                    try Task.checkCancellation()
+                    if runEffects && value.matchedConditions && value.requestsNotification {
+                        guard await model.isCurrentRequest(request) else { throw CancellationError() }
+                        try await sendNotification(workflow?.name ?? notificationName)
+                        try Task.checkCancellation()
+                    }
+                    return value
+                }
                 guard let self, self.generation == request, !Task.isCancelled else { return }
                 self.output = value
-                if runEffects && value.matchedConditions && value.requestsNotification {
-                    try await self.notify(workflow?.name ?? notificationName)
-                    guard self.generation == request, !Task.isCancelled else { return }
-                }
                 self.isRunning = false
+                self.isQueued = false
                 self.task = nil
             } catch {
                 guard let self, self.generation == request, !Task.isCancelled else { return }
                 self.failure = (error as? BuiltInAutomationFailure) ?? .historyUnavailable
                 self.isRunning = false
+                self.isQueued = false
                 self.task = nil
             }
         }

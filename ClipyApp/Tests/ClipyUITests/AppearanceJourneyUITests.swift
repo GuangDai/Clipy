@@ -55,10 +55,11 @@ final class AppearanceJourneyUITests: XCTestCase {
         let lines = app.descendants(matching: .any)["clipy.settings.appearance.snippet-lines"]
         let font = app.descendants(matching: .any)["clipy.settings.appearance.font-size"]
         assertExists(sample, timeout: 5, in: app, context: "live list sample")
-        assertExists(lines, timeout: 5, in: app, context: "visible text line choices")
-        assertExists(font, timeout: 5, in: app, context: "visible font choices")
-        chooseOption("Auto", in: lines, app: app, context: "automatic sample lines")
-        chooseOption("Medium", in: font, app: app, context: "medium sample font")
+        let automaticLines = app.switches["clipy.settings.appearance.automatic-lines"]
+        assertExists(automaticLines, timeout: 5, in: app, context: "automatic text lines")
+        assertExists(font, timeout: 5, in: app, context: "editable font size")
+        setAutomaticLines(true, control: automaticLines, app: app)
+        enterNumber("13", in: font, app: app)
         chooseOption("Compact", in: density, app: app, context: "compact sample")
         let compactHeight = sample.frame.height
         attachAppearance(in: app, named: "Appearance — compact list sample")
@@ -76,18 +77,18 @@ final class AppearanceJourneyUITests: XCTestCase {
         chooseOption("Comfortable", in: density, app: app, context: "row density")
         XCTAssertTrue(waitUntil(timeout: 5) { sample.frame.height > compactHeight },
                       diagnostic(app, context: "density changes the visible sample spacing"))
-        chooseOption("1", in: lines, app: app, context: "single-line sample")
+        setAutomaticLines(false, control: automaticLines, app: app)
+        assertExists(lines, timeout: 5, in: app, context: "editable line count")
+        enterNumber("1", in: lines, app: app)
         let oneLineHeight = sample.frame.height
-        chooseOption("3", in: lines, app: app, context: "three-line sample")
+        enterNumber("5", in: lines, app: app)
         XCTAssertTrue(waitUntil(timeout: 5) { sample.frame.height > oneLineHeight },
                       diagnostic(app, context: "line choice expands the sample rows"))
         let mediumFontHeight = sample.frame.height
-        chooseOption("Large", in: font, app: app, context: "large sample font")
+        enterNumber("17.5", in: font, app: app)
         XCTAssertTrue(waitUntil(timeout: 5) { sample.frame.height > mediumFontHeight },
                       diagnostic(app, context: "font choice enlarges the sample rows"))
-        attachAppearance(in: app, named: "Appearance — comfortable three-line large text")
-        chooseOption("Auto", in: lines, app: app, context: "restore automatic lines")
-        chooseOption("Medium", in: font, app: app, context: "restore medium font")
+        attachAppearance(in: app, named: "Appearance — custom five-line 17.5 pt text")
 
         closeSettingsAndSummonPanel(control: density, panel: panel, app: app)
         assertRowCount(
@@ -101,8 +102,16 @@ final class AppearanceJourneyUITests: XCTestCase {
             diagnostic(app, context: "density journey row title")
         )
 
-        // Restore the compact product default for later journeys.
+        // Custom numeric values survive leaving Settings and reopening it.
         openAppearanceTab(in: app)
+        assertExists(font, timeout: 5, in: app, context: "persisted font size")
+        assertExists(lines, timeout: 5, in: app, context: "persisted line count")
+        XCTAssertEqual(font.value as? String, "17.5")
+        XCTAssertEqual(lines.value as? String, "5")
+        setAutomaticLines(true, control: automaticLines, app: app)
+        enterNumber("13", in: font, app: app)
+
+        // Restore the compact product default for later journeys.
         let restoreDensity = app.descendants(matching: .any)[
             "clipy.settings.appearance.row-density"
         ]
@@ -336,6 +345,25 @@ final class AppearanceJourneyUITests: XCTestCase {
         )
         app.typeKey("c", modifierFlags: [.command, .shift])
         assertExists(panel, timeout: 10, in: app, context: "resummoned panel")
+    }
+
+    @MainActor
+    private func enterNumber(_ value: String, in field: XCUIElement, app: XCUIApplication) {
+        SettingsJourneyControls.scroll(field,
+            into: app.scrollViews.containing(.any, identifier: field.identifier).firstMatch, app: app)
+        field.click()
+        field.typeKey("a", modifierFlags: .command)
+        field.typeText(value)
+        field.typeKey(.return, modifierFlags: [])
+    }
+
+    @MainActor
+    private func setAutomaticLines(_ enabled: Bool, control: XCUIElement, app: XCUIApplication) {
+        SettingsJourneyControls.scroll(control,
+            into: app.scrollViews.containing(.any, identifier: control.identifier).firstMatch, app: app)
+        if (control.value as? Int == 1) != enabled { control.click() }
+        XCTAssertTrue(waitUntil(timeout: 5) { (control.value as? Int == 1) == enabled },
+                      diagnostic(app, context: "automatic text line mode"))
     }
 
     /// Segmented/radio bridges expose one labeled child per option, while

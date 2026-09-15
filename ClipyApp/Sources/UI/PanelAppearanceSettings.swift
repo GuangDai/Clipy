@@ -26,54 +26,68 @@ import Foundation
 /// The snippet line count itself is the separate `HistorySnippetLineCount`
 /// preference (orthogonal): its `.automatic` case resolves through density
 /// (compact 1, comfortable 2 — the shipped mapping), while an explicit
-/// 1/2/3 overrides density entirely.
+/// count overrides density entirely.
 enum HistoryRowDensity: String, CaseIterable, Sendable {
     case compact
     case comfortable
 }
 
-/// The row's summary/snippet line-count preference (Settings ▸ Appearance).
-/// `.automatic` (the product default) defers to the row density — compact 1
-/// line, comfortable 2 lines, exactly the retired
-/// `PanelTheme.snippetLineLimit(for:)` mapping — so the shipped defaults
-/// reproduce the shipped layout at either density. An explicit
-/// `.one`/`.two`/`.three` overrides density entirely (a compact user who
-/// picks 3 gets 3). Wide-presentation breathing adds one line above the
-/// resolved base, hard capped at three — the pure rule is
-/// `HistoryRowLayout.effectiveSnippetLineLimit(setting:density:isWide:)`.
-/// Package (GOV-3), same access split as `HistoryRowDensity`. Case order is
-/// the Settings picker's segment order: Auto first.
-enum HistorySnippetLineCount: String, CaseIterable, Sendable {
-    case automatic = "automatic"
-    case one = "1"
-    case two = "2"
-    case three = "3"
+/// A user-entered line count, or the density's automatic allowance.
+/// Strings keep @AppStorage and the existing persisted preferences in sync.
+struct HistorySnippetLineCount: RawRepresentable, Hashable, Sendable {
+    static let allowedValues = 1...100
+    let count: Int?
 
-    /// The density-resolved base line limit. `.automatic` reproduces the
-    /// shipped density mapping (compact 1, comfortable 2); the explicit
-    /// cases carry their literal count regardless of density.
+    static let automatic = Self(count: nil)
+    static let one = Self(count: 1)
+    static let two = Self(count: 2)
+    static let three = Self(count: 3)
+
+    private init(count: Int?) { self.count = count }
+
+    init?(rawValue: String) {
+        if rawValue == "automatic" { self = .automatic; return }
+        guard let count = Int(rawValue), Self.allowedValues.contains(count) else { return nil }
+        self.count = count
+    }
+
+    var rawValue: String { count.map(String.init) ?? "automatic" }
+
     func baseLineLimit(density: HistoryRowDensity) -> Int {
-        switch self {
-        case .automatic:
-            switch density {
-            case .compact: return 1
-            case .comfortable: return 2
-            }
-        case .one: return 1
-        case .two: return 2
-        case .three: return 3
-        }
+        count ?? (density == .compact ? 1 : 2)
     }
 }
 
-/// The row typography scale (Settings ▸ Appearance). `medium` reproduces
-/// the shipped row fonts exactly — the pin lives in `PanelTheme`'s
-/// per-line-role mappings; `small` and `large` step one text-style rung
-/// down and up. Package (GOV-3), same access split as `HistoryRowDensity`.
-enum HistoryRowFontSize: String, CaseIterable, Sendable {
-    case small
-    case medium
-    case large
+/// Actual system-font points, including fractional values. The named values
+/// preserve existing callers and stored choices; Settings offers direct input.
+struct HistoryRowFontSize: RawRepresentable, Hashable, Sendable {
+    static let allowedValues = 1.0...200.0
+    let points: Double
+
+    static let small = Self(points: 11)
+    static let medium = Self(points: 13)
+    static let large = Self(points: 15)
+
+    private init(points: Double) { self.points = points }
+
+    init?(rawValue: String) {
+        switch rawValue {
+        case "small": self = .small
+        case "medium": self = .medium
+        case "large": self = .large
+        default:
+            guard let points = Double(rawValue), points.isFinite,
+                  Self.allowedValues.contains(points) else { return nil }
+            self.points = points
+        }
+    }
+
+    var rawValue: String { String(points) }
+
+    /// Supporting row text retains the former 11/12/13pt scale at the
+    /// former 11/13/15pt choices, and scales continuously for custom input.
+    var snippetPoints: Double { min(points, (points + 11) / 2) }
+    var metadataPoints: Double { max(1, points - 2) }
 }
 
 /// One immutable panel-appearance snapshot plus its UserDefaults
@@ -132,9 +146,8 @@ struct PanelAppearanceSettings: Equatable, Sendable {
         self.isPreviewAutoOpenEnabled = isPreviewAutoOpenEnabled
     }
 
-    /// Loads the persisted preferences. Raw strings no case recognizes
-    /// (written by an older or newer build) and non-Bool toggle values read
-    /// as the product defaults.
+    /// Loads the persisted preferences. Unrecognized or invalid numeric
+    /// values and non-Bool toggle values read as the product defaults.
     static func load(
         from defaults: UserDefaults
     ) -> PanelAppearanceSettings {

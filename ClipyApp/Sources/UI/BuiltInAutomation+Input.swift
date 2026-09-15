@@ -6,6 +6,10 @@ enum BuiltInAutomationInput: Sendable, Equatable {
     case text(String)
     case image(Data)
 
+    var byteCount: Int {
+        switch self { case let .text(text): text.utf8.count; case let .image(data): data.count }
+    }
+
     var text: String? {
         if case let .text(value) = self { value } else { nil }
     }
@@ -24,6 +28,7 @@ struct BuiltInAutomationOutput: Sendable {
     let requestsNotification: Bool
     var matchedConditions = true
     var matchedItemCount = 1
+    var originalInput: BuiltInAutomationInput?
 }
 
 extension BuiltInAutomation {
@@ -49,46 +54,78 @@ extension BuiltInAutomation {
         _ input: BuiltInAutomationInput, steps: [BuiltInAutomationStep],
         recognizeText: @Sendable (Data) async throws -> String = BuiltInAutomation.recognizeText
     ) async throws -> BuiltInAutomationOutput {
-        guard steps.count <= maximumSteps else { throw BuiltInAutomationFailure.tooManySteps }
+        try validateStepTree(steps)
         switch input {
         case let .text(text): try checkSize(text)
         case let .image(data): try validateImage(data)
         }
-        let enabled = steps.filter(\.enabled)
-        if enabled.contains(where: { $0.operation == .notify }),
-           !enabled.contains(where: { [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation) }) {
-            throw BuiltInAutomationFailure.notificationNeedsCondition
-        }
+        return try await runBranch(input, steps: steps, insideCondition: false, recognizeText: recognizeText)
+    }
+
+    private static func runBranch(
+        _ input: BuiltInAutomationInput, steps: [BuiltInAutomationStep], insideCondition: Bool,
+        recognizeText: @Sendable (Data) async throws -> String
+    ) async throws -> BuiltInAutomationOutput {
         var value = input
         var requestsNotification = false
+        var hasCondition = false
+        var matchedPath = false
+        // Old flat workflows deferred effects until all their guards passed,
+        // even when a notification appeared before a guard. Keep that behavior.
+        var notificationAllowed = insideCondition || steps.contains {
+            $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation)
+        }
         for step in steps where step.enabled {
             try Task.checkCancellation()
             switch step.operation {
-            case .requireText:
-                guard case .text = value else { return .init(value: input, requestsNotification: false, matchedConditions: false) }
-            case .requireImage:
-                guard case .image = value else { return .init(value: input, requestsNotification: false, matchedConditions: false) }
-            case .containsText, .matchesRegex:
-                guard let text = value.text else { return .init(value: input, requestsNotification: false, matchedConditions: false) }
-                let matches = step.operation == .containsText
-                    ? !step.find.isEmpty && text.range(of: step.find, options: .literal) != nil
-                    : try matchesRegularExpression(text, pattern: step.find)
-                guard matches else { return .init(value: input, requestsNotification: false, matchedConditions: false) }
+            case .conditional:
+                hasCondition = true
+                let matches = try conditionMatches(value, step: step)
+                let selected = matches ? step.thenSteps : step.otherwiseSteps
+                guard matches || selected.contains(where: \.enabled) else { continue }
+                let branch = try await runBranch(value, steps: selected, insideCondition: true, recognizeText: recognizeText)
+                if branch.matchedConditions {
+                    matchedPath = true
+                    value = branch.value
+                    requestsNotification = requestsNotification || branch.requestsNotification
+                }
+            case .requireText, .requireImage, .containsText, .matchesRegex:
+                hasCondition = true
+                let matches: Bool
+                switch step.operation {
+                case .requireText: matches = value.text != nil
+                case .requireImage: if case .image = value { matches = true } else { matches = false }
+                case .containsText: matches = !step.find.isEmpty && value.text?.range(of: step.find, options: .literal) != nil
+                case .matchesRegex:
+                    if let text = value.text { matches = try matchesRegularExpression(text, pattern: step.find) }
+                    else { matches = false }
+                default: matches = false
+                }
+                guard matches else {
+                    return .init(value: input, requestsNotification: false, matchedConditions: false, originalInput: input)
+                }
+                matchedPath = true
+                notificationAllowed = true
             case .recognizeText:
                 guard case let .image(data) = value else { throw BuiltInAutomationFailure.requiresImage }
                 let recognized = try await recognizeText(data)
+                try Task.checkCancellation()
                 try checkSize(recognized)
                 guard !recognized.isEmpty else { throw BuiltInAutomationFailure.noRecognizedText }
                 value = .text(recognized)
+                matchedPath = true
             case .notify:
+                guard notificationAllowed else { throw BuiltInAutomationFailure.notificationNeedsCondition }
                 requestsNotification = true
             default:
                 guard case let .text(text) = value else { throw BuiltInAutomationFailure.requiresText }
                 value = .text(try run(text, steps: [step]))
+                matchedPath = true
             }
         }
         try Task.checkCancellation()
-        return BuiltInAutomationOutput(value: value, requestsNotification: requestsNotification)
+        return BuiltInAutomationOutput(value: value, requestsNotification: requestsNotification,
+                                       matchedConditions: !hasCondition || matchedPath, originalInput: input)
     }
 
     private static func recognizeText(_ data: Data) async throws -> String {

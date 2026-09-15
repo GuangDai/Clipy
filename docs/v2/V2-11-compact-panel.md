@@ -199,3 +199,21 @@ The summoned History panel and its floating preview use solid native content
 backgrounds (white in light appearance, system text background in dark mode).
 They do not blend desktop colors through vibrancy/material. Quick Look and
 in-panel recovery surfaces share this treatment (2026-09-15 user correction).
+
+
+### Editable typography and pointer timing (2026-09-15 refinement)
+
+Text Appearance accepts an actual font size (1–200 pt, including fractional
+points) and line count (1–100), with an independent automatic-line toggle.
+The live sample and history rows use the same values and line-height metrics.
+The three-dot menu uses regular native controls and body text, independent of
+custom history-row typography. Manual application identifiers have a visible
+border and example placeholder and are added with Return.
+
+Native entry/exit tracking covers both windows. Entry is recorded even before
+the first real mouse movement; movement in either window activates pointer
+preview behavior without selecting a default row. Keyboard navigation cancels
+a pending exit synchronously. A delayed selection observation cannot schedule
+auto-preview after the pointer leaves the main panel. Hide grace remains a
+Duration in milliseconds, with the existing 150 ms default and immediate native
+window dismissal after the timer; entry into either surface cancels that grace.

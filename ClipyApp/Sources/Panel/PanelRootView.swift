@@ -73,6 +73,7 @@ struct PanelRootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .environment(\.workflowExecutionQueue, appDelegate.composition?.workflowRunner.executionQueue)
         .overlay(alignment: .top) {
             if appDelegate.pasteFailure != nil
                 || appDelegate.captureNotice != nil
@@ -92,8 +93,7 @@ struct PanelRootView: View {
             }
         }
         // The panel window is transparent; the content carries the
-        // material so the rounded corners (FloatingPanel's content layer)
-        // show material, not the desktop behind it.
+        // solid background; only the rounded corners remain transparent.
         .background { NativePanelBackground() }
         .onAppear {
             // Republish the documented public OpenSettingsAction to the

@@ -8,6 +8,8 @@ import SwiftUI
 struct BuiltInAutomationSourceEditor: NSViewRepresentable {
     @Binding var text: String
     let accessibilityLabel: String
+    var isEditable = true
+    var accessibilityIdentifier = "clipy.workflow.source"
 
     func makeNSView(context: Context) -> BuiltInAutomationSourceScrollView {
         BuiltInAutomationSourceScrollView()
@@ -16,7 +18,10 @@ struct BuiltInAutomationSourceEditor: NSViewRepresentable {
     func updateNSView(_ scroll: BuiltInAutomationSourceScrollView, context: Context) {
         guard let editor = scroll.documentView as? BuiltInAutomationSourceTextView else { return }
         editor.onTextChange = { text = $0 }
+        editor.isEditable = isEditable
+        editor.allowsUndo = isEditable
         editor.setAccessibilityLabel(accessibilityLabel)
+        editor.setAccessibilityIdentifier(accessibilityIdentifier)
         editor.update(text: text)
     }
 }
@@ -29,8 +34,9 @@ final class BuiltInAutomationSourceScrollView: NSScrollView {
         super.init(frame: .zero)
         hasVerticalScroller = true
         autohidesScrollers = true
-        borderType = .noBorder
-        drawsBackground = false
+        borderType = .bezelBorder
+        drawsBackground = true
+        backgroundColor = .textBackgroundColor
         documentView = BuiltInAutomationSourceTextView()
     }
 
@@ -63,10 +69,11 @@ final class BuiltInAutomationSourceTextView: NSTextView, NSTextViewDelegate {
         isSelectable = true
         allowsUndo = true
         font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        alignment = .left
         textColor = .textColor
         insertionPointColor = .textColor
         backgroundColor = .textBackgroundColor
-        textContainerInset = NSSize(width: 6, height: 6)
+        textContainerInset = NSSize(width: 8, height: 8)
         isHorizontallyResizable = false
         isVerticallyResizable = true
         autoresizingMask = [.width]

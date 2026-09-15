@@ -21,15 +21,17 @@ struct PanelAppearanceSettingsTests {
         #expect(settings.isPreviewAutoOpenEnabled)
     }
 
-    @Test("store→load round-trips every density, toggle, and typography value")
-    func storeLoadRoundTripsEveryCombination() throws {
+    @Test("store→load round-trips density, toggles, and custom typography")
+    func storeLoadRoundTripsCustomTypography() throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
+        let customLines = try #require(HistorySnippetLineCount(rawValue: "5"))
+        let customFont = try #require(HistoryRowFontSize(rawValue: "17.5"))
         for density in HistoryRowDensity.allCases {
             for autoOpen in [true, false] {
-                for lineCount in HistorySnippetLineCount.allCases {
-                    for fontSize in HistoryRowFontSize.allCases {
+                for lineCount in [HistorySnippetLineCount.automatic, .one, .two, .three, customLines] {
+                    for fontSize in [HistoryRowFontSize.small, .medium, .large, customFont] {
                         let settings = PanelAppearanceSettings(
                             rowDensity: density,
                             snippetLineCount: lineCount,
@@ -57,7 +59,7 @@ struct PanelAppearanceSettingsTests {
             forKey: PanelAppearanceSettings.rowDensityDefaultsKey
         )
         defaults.set(
-            "4",
+            "0",
             forKey: PanelAppearanceSettings.snippetLineCountDefaultsKey
         )
         defaults.set(
@@ -73,6 +75,19 @@ struct PanelAppearanceSettingsTests {
             PanelAppearanceSettings.load(from: defaults)
                 == PanelAppearanceSettings()
         )
+    }
+
+    @Test("custom typography rejects invalid values and recognizes existing choices")
+    func invalidCustomTypography() {
+        for value in ["0", "-1", "nan", "inf", "201", "invalid"] {
+            #expect(HistoryRowFontSize(rawValue: value) == nil)
+        }
+        for value in ["0", "-1", "1.5", "101", "invalid"] {
+            #expect(HistorySnippetLineCount(rawValue: value) == nil)
+        }
+        #expect(HistoryRowFontSize(rawValue: "small")?.points == 11)
+        #expect(HistoryRowFontSize(rawValue: "medium")?.points == 13)
+        #expect(HistoryRowFontSize(rawValue: "large")?.points == 15)
     }
 
     @Test("content width clamps at, below, and above the resizable bounds")
