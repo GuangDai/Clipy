@@ -27,7 +27,7 @@ private struct BuiltInAutomationBranchEditor: View {
             ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
                 BuiltInAutomationStepCard(root: $root, snapshot: step, parent: parent,
                                           otherwise: otherwise, index: index, siblingCount: steps.count, bundle: bundle)
-                    .dropDestination(for: String.self) { payloads, _ in drop(payloads.first, before: step.id) }
+                    .dropDestination(for: String.self, isEnabled: true) { payloads, _ in _ = drop(payloads.first, before: step.id) }
             }
             Menu {
                 Button(text("Add condition")) { add(.conditional) }
@@ -45,7 +45,7 @@ private struct BuiltInAutomationBranchEditor: View {
             .menuStyle(.borderlessButton)
             .disabled(BuiltInAutomationStepEditing.count(root) >= BuiltInAutomation.maximumSteps)
             .accessibilityIdentifier("clipy.workflow.add-step." + (parent?.uuidString ?? "root") + (otherwise ? ".otherwise" : ".then"))
-            .dropDestination(for: String.self) { payloads, _ in drop(payloads.first, before: nil) }
+            .dropDestination(for: String.self, isEnabled: true) { payloads, _ in _ = drop(payloads.first, before: nil) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

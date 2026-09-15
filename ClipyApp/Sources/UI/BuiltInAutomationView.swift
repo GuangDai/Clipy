@@ -87,7 +87,7 @@ struct BuiltInAutomationView: View {
             retainDraft()
             invalidatePreview()
         }
-        .onChange(of: source) { _, _ in invalidatePreview() }
+        .onChange(of: input) { _, _ in invalidatePreview() }
         .onDisappear { model.invalidate() }
         .fileImporter(isPresented: $choosesApplications, allowedContentTypes: [.application], allowsMultipleSelection: true) { result in
             if case let .success(urls) = result {
@@ -140,7 +140,7 @@ struct BuiltInAutomationView: View {
                         sidebarRow(draft, index: index)
                     }
                     Color.clear.frame(height: 20)
-                        .dropDestination(for: String.self) { values, _ in reorderWorkflow(values.first, before: nil) }
+                        .dropDestination(for: String.self, isEnabled: true) { values, _ in _ = reorderWorkflow(values.first, before: nil) }
                 }
             }
             .accessibilityIdentifier("clipy.workflow.sidebar")
@@ -178,7 +178,7 @@ struct BuiltInAutomationView: View {
         .buttonStyle(.plain)
         .accessibilityIdentifier("clipy.workflow.row." + draft.id.uuidString)
         .draggable("workflow:" + draft.id.uuidString)
-        .dropDestination(for: String.self) { values, _ in reorderWorkflow(values.first, before: draft.id) }
+        .dropDestination(for: String.self, isEnabled: true) { values, _ in _ = reorderWorkflow(values.first, before: draft.id) }
         .contextMenu {
             Button(text("Move workflow up")) { moveWorkflow(draft.id, by: -1) }.disabled(index == 0)
             Button(text("Move workflow down")) { moveWorkflow(draft.id, by: 1) }.disabled(index == drafts.count - 1)

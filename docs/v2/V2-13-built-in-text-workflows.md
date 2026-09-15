@@ -60,7 +60,7 @@ keyboard actions and explicit step controls support native macOS use.
 Each saved workflow chooses manual, new-copy automatic, or both triggers.
 Automatic runs process only newly observed, successfully admitted copies;
 opening the app and saving/enabling a workflow do not scan existing History.
-Manual scope chooses provided text/image, the current clipboard, or a bounded
+Manual scope chooses provided text, the current clipboard, or a bounded
 History range (1–1,000 items in History order). Source application bundle IDs
 and copy-time filters (any, last hour, today, last seven days, custom interval)
 restrict automatic captures and historical rows by their recorded source/time.

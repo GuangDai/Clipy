@@ -125,7 +125,7 @@ struct BuiltInAutomationWorkflow: Identifiable, Codable, Equatable, Sendable {
             Self(name: "Clean up text", steps: [.init(operation: .trimLines), .init(operation: .removeEmptyLines)]),
             Self(name: "Unique sorted lines", steps: [.init(operation: .trimLines), .init(operation: .removeEmptyLines), .init(operation: .uniqueLines), .init(operation: .sortLines)]),
             Self(name: "Format JSON", steps: [.init(operation: .prettyJSON)]),
-            Self(name: "Read text from image", steps: [.init(operation: .conditional, condition: .isImage, thenSteps: [.init(operation: .recognizeText), .init(operation: .trim)])]),
+            Self(name: "Read text from image", steps: [.init(operation: .conditional, condition: .isImage, thenSteps: [.init(operation: .recognizeText), .init(operation: .trim)])], scope: .init(source: .clipboard)),
             Self(name: "Extract email addresses", steps: [.init(operation: .conditional, condition: .isText, thenSteps: [.init(operation: .regexExtract, find: #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#), .init(operation: .uniqueLines)])]),
             Self(name: "Notify about TODO", steps: [.init(operation: .conditional, find: "TODO", thenSteps: [.init(operation: .notify)])])
         ]

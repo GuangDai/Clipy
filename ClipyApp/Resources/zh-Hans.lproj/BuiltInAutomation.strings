@@ -184,3 +184,5 @@
 "Saved" = "已保存";
 
 "Preview never sends notifications. Run executes the selected branches and their notifications." = "预览不会发送通知。点击运行后，会执行符合条件的分支及其中的通知动作。";
+
+"Provided text" = "输入的文本";
