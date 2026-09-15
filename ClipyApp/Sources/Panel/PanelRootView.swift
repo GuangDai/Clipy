@@ -73,6 +73,7 @@ struct PanelRootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .environment(\.workflowExecutionQueue, appDelegate.composition?.workflowRunner.executionQueue)
         .overlay(alignment: .top) {
             if appDelegate.pasteFailure != nil
                 || appDelegate.captureNotice != nil
@@ -92,8 +93,7 @@ struct PanelRootView: View {
             }
         }
         // The panel window is transparent; the content carries the
-        // material so the rounded corners (FloatingPanel's content layer)
-        // show material, not the desktop behind it.
+        // solid background; only the rounded corners remain transparent.
         .background { NativePanelBackground() }
         .onAppear {
             // Republish the documented public OpenSettingsAction to the
@@ -246,7 +246,7 @@ struct PanelRootView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         .shadow(radius: 4)
     }
 
@@ -287,7 +287,7 @@ struct PanelRootView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         .shadow(radius: 4)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.capture.notice.banner")
@@ -312,7 +312,7 @@ struct PanelRootView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         .shadow(radius: 4)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.capture.access.banner")

@@ -5,18 +5,27 @@ import ImageIO
 /// not History revisions; normal capture observes a copied result afterward.
 @MainActor
 enum BuiltInAutomationClipboard {
+    /// A workflow's steps choose a representation preference, not an input
+    /// requirement. Its If block must still see the other supported type and
+    /// select Otherwise when the preferred representation is absent.
     static func read(image: Bool, from pasteboard: NSPasteboard = .general) throws -> BuiltInAutomationInput {
-        if image {
+        func readImage() throws -> BuiltInAutomationInput? {
             for type in [NSPasteboard.PasteboardType.png, .tiff, .init("public.jpeg"), .init("public.heic")] {
                 if let data = pasteboard.data(forType: type) {
+                    // Present but invalid content fails here; it cannot be
+                    // silently replaced by another representation or text.
                     try BuiltInAutomation.validateImage(data)
                     return .image(data)
                 }
             }
-        } else if let text = pasteboard.string(forType: .string) {
+            return nil
+        }
+        if image, let selected = try readImage() { return selected }
+        if let text = pasteboard.string(forType: .string) {
             try BuiltInAutomation.checkSize(text)
             return .text(text)
         }
+        if !image, let selected = try readImage() { return selected }
         throw BuiltInAutomationFailure.clipboardUnavailable
     }
 

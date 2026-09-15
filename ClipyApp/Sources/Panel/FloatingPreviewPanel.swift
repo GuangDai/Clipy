@@ -166,18 +166,24 @@ struct FloatingPreviewRootView: View {
         // The preview is an interactive extension of the key browsing panel.
         // Its own never-key window must not wash out enabled native controls.
         // Use the parent's existing focus-driven state, not a permanent tint.
+        .environment(\.workflowExecutionQueue, appDelegate.composition?.workflowRunner.executionQueue)
         .environment(\.appearsActive, appDelegate.previewState.isAutoOpenEnabled)
         .environment(\.displayMemoryPressure, appDelegate.panelSurfaceState?.memoryPressure ?? .normal)
         .environment(\.displayMemoryPressureGeneration, appDelegate.panelSurfaceState?.memoryPressureGeneration ?? 0)
         .onChange(of: appDelegate.panelSurfaceState?.memoryPressureGeneration, initial: true) { _, _ in
             sourceIcons?.respondToMemoryPressure(appDelegate.panelSurfaceState?.memoryPressure ?? .normal)
         }
-        // The window is transparent; the content carries the material so
-        // the rounded corners show material, not the desktop behind it.
+        // The window is transparent; the content carries the solid background so
+        // only the rounded corners remain transparent.
         .background { NativePanelBackground() }
         // The pane's half of the two-window pointer presence: leaving BOTH
         // windows hides the preview after its grace; re-entry cancels.
-        .background(PanelMouseMovementMonitor(onMouseMoved: {}, onHover: { isInside in
+        .background(PanelMouseMovementMonitor(onMouseMoved: {
+            appDelegate.previewState.pointerMoved(over: .preview)
+            if let item = appDelegate.previewState.previewedItem {
+                appDelegate.panelSurfaceState?.selection = item.id
+            }
+        }, onHover: { isInside in
             if isInside {
                 appDelegate.previewState.pointerEntered(.preview)
                 if appDelegate.previewState.isPointerInteractionActive,
@@ -239,7 +245,7 @@ struct PanelMouseMovementMonitor: NSViewRepresentable {
                 rect: .zero,
                 options: onHover == nil
                     ? [.activeInKeyWindow, .inVisibleRect, .mouseMoved]
-                    : [.activeAlways, .inVisibleRect, .mouseEnteredAndExited],
+                    : [.activeAlways, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
                 owner: context.coordinator,
                 userInfo: nil
             )

@@ -18,7 +18,7 @@ struct BuiltInAutomationScope: Codable, Equatable, Sendable {
         case input, clipboard, history
         var title: String {
             switch self {
-            case .input: "Provided text or image"
+            case .input: "Provided text"
             case .clipboard: "Current clipboard"
             case .history: "History range"
             }

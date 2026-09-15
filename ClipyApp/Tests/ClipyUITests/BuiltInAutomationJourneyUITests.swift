@@ -82,6 +82,8 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
             .any, identifier: manage.identifier
         ).firstMatch, app: app)
         manage.click()
+        app.descendants(matching: .any)["clipy.workflow.load"].click()
+        app.menuItems["New workflow"].click()
         let source = app.textViews["clipy.workflow.source"]
         XCTAssertTrue(source.waitForExistence(timeout: 5), app.debugDescription)
         source.click()
@@ -93,8 +95,8 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         source.typeText(testText)
         XCTAssertTrue(waitUntil { source.value as? String == testText },
                       "Literal input changed: \(String(reflecting: source.value as? String)); expected \(String(reflecting: testText))\n\(app.debugDescription)")
-        app.buttons["clipy.workflow.preview"].click()
-        let result = app.scrollViews["After"].staticTexts.firstMatch
+        clickPreview(in: app)
+        let result = app.textViews["clipy.workflow.result"]
         XCTAssertTrue(waitUntil {
             result.exists && result.value as? String == "playground result"
         }, app.debugDescription)
@@ -106,7 +108,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         source.typeText(punctuation)
         XCTAssertTrue(waitUntil { source.value as? String == punctuation },
                       "Literal punctuation changed: \(String(reflecting: source.value as? String)); expected \(String(reflecting: punctuation))\n\(app.debugDescription)")
-        app.buttons["clipy.workflow.preview"].click()
+        clickPreview(in: app)
         XCTAssertTrue(waitUntil {
             result.exists && result.value as? String == "\"playground\" -- result..."
         }, app.debugDescription)
@@ -146,7 +148,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         let source = app.textViews["clipy.workflow.source"]
         source.click()
         source.typeText("ordinary text")
-        app.buttons["clipy.workflow.preview"].click()
+        clickPreview(in: app)
         let copy = app.buttons["clipy.workflow.copy"]
         XCTAssertTrue(waitUntil {
             app.staticTexts["Conditions did not match. No notification was sent."].exists && !copy.isEnabled
@@ -154,7 +156,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         source.click()
         source.typeKey("a", modifierFlags: .command)
         source.typeText("TODO: 42")
-        app.buttons["clipy.workflow.preview"].click()
+        clickPreview(in: app)
         XCTAssertTrue(waitUntil {
             app.descendants(matching: .any)["clipy.workflow.conditions-matched"].exists && copy.isEnabled
         }, app.debugDescription)
@@ -162,7 +164,11 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
                        "Preview must not rewrite the clipboard")
 
         let trigger = app.popUpButtons["clipy.workflow.trigger"]
-        SettingsJourneyControls.reveal(trigger, byExpanding: "clipy.workflow.scope-controls", in: app)
+        let scopeTab = app.descendants(matching: .any)["clipy.workflow.configuration"]
+            .descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Trigger and scope")).firstMatch
+        XCTAssertTrue(scopeTab.waitForExistence(timeout: 5), app.debugDescription)
+        scopeTab.click()
+        XCTAssertTrue(trigger.waitForExistence(timeout: 5), app.debugDescription)
         trigger.click()
         app.menuItems["New copies automatically"].click()
         XCTAssertFalse(app.buttons["clipy.workflow.run"].isEnabled)
@@ -175,6 +181,112 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         // schedules a real OS notification or changes automatic workflows.
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil { !source.exists && manage.isHittable })
+    }
+
+    @MainActor
+    func testMultipleWorkflowDraftsKeepInputAndPersistVisibleExecutionOrder() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = launch(capturing: "clipboard unchanged by workflow editing", directory: directory)
+        defer { app.terminate(); NSPasteboard.general.clearContents() }
+        XCTAssertTrue(app.descendants(matching: .any)["clipy.panel.root"].waitForExistence(timeout: 20))
+        app.typeKey(",", modifierFlags: .command)
+        let category = app.buttons["clipy.settings.category.automation"]
+        XCTAssertTrue(category.waitForExistence(timeout: 10))
+        category.click()
+        let manage = app.buttons["clipy.settings.workflows.manage"]
+        XCTAssertTrue(manage.waitForExistence(timeout: 5))
+        SettingsJourneyControls.scroll(manage, into: app.scrollViews.containing(.any, identifier: manage.identifier).firstMatch, app: app)
+        manage.click()
+        let source = app.textViews["clipy.workflow.source"]
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["clipy.workflow.read-clipboard"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["clipy.workflow.input-type"].exists)
+        let name = app.textFields["clipy.workflow.name"]
+        let firstName = "First workflow " + String(UUID().uuidString.prefix(8))
+        let secondName = "Second workflow " + String(UUID().uuidString.prefix(8))
+        defer {
+            if !source.exists && manage.isHittable { manage.click() }
+            for title in [firstName, secondName] {
+                let row = workflowRow(named: title, in: app)
+                if row.exists {
+                    row.rightClick()
+                    let remove = app.menuItems["Delete workflow"]
+                    if remove.exists { remove.click() }
+                }
+            }
+        }
+        app.descendants(matching: .any)["clipy.workflow.load"].click()
+        app.menuItems["New workflow"].click()
+        name.click()
+        name.typeKey("a", modifierFlags: .command)
+        name.typeText(firstName)
+        let literal = "  first line\n" + String(repeating: "long text to compare ", count: 8) + "\nlast line  "
+        source.click()
+        source.typeText(literal)
+
+        // Adding another definition keeps the first unsaved definition and its
+        // transient test input in this window. Neither source is persisted.
+        app.descendants(matching: .any)["clipy.workflow.load"].click()
+        app.menuItems["Notify about TODO"].click()
+        XCTAssertTrue(app.staticTexts["If"].waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Then"].exists, app.debugDescription)
+        XCTAssertTrue(app.staticTexts["Otherwise"].exists, app.debugDescription)
+        name.click()
+        name.typeKey("a", modifierFlags: .command)
+        name.typeText(secondName)
+        app.buttons["clipy.workflow.save"].click()
+        XCTAssertTrue(waitUntil { !app.buttons["clipy.workflow.save"].isEnabled })
+        let first = workflowRow(named: firstName, in: app)
+        let second = workflowRow(named: secondName, in: app)
+        XCTAssertTrue(first.exists && second.exists, app.debugDescription)
+        first.click()
+        XCTAssertTrue(waitUntil { name.value as? String == firstName && source.value as? String == literal }, app.debugDescription)
+        XCTAssertTrue(app.buttons["clipy.workflow.save"].isEnabled)
+        app.buttons["clipy.workflow.save"].click()
+        clickPreview(in: app)
+        let result = app.textViews["clipy.workflow.result"]
+        XCTAssertTrue(waitUntil { result.value as? String == literal.trimmingCharacters(in: .whitespacesAndNewlines) }, app.debugDescription)
+        XCTAssertEqual(source.frame.width, result.frame.width, accuracy: 1)
+        XCTAssertEqual(source.frame.minY, result.frame.minY, accuracy: 1)
+        let comparison = XCTAttachment(screenshot: app.screenshot())
+        comparison.name = "Multiple workflows with aligned multiline before and after"
+        comparison.lifetime = .keepAlways
+        add(comparison)
+
+        app.descendants(matching: .any)["clipy.workflow.actions"].click()
+        app.menuItems["Move workflow down"].click()
+        XCTAssertTrue(waitUntil { second.frame.minY < first.frame.minY }, app.debugDescription)
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !source.exists && manage.isHittable })
+        manage.click()
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        XCTAssertTrue(second.frame.minY < first.frame.minY, "Saved order must match automatic execution priority")
+        let branches = XCTAttachment(screenshot: app.screenshot())
+        branches.name = "Saved workflow priority with explicit If Then Otherwise branches"
+        branches.lifetime = .keepAlways
+        add(branches)
+        // Both workflows are manual and no real notification is requested.
+        // Remove the test definitions through the same visible library controls.
+        for row in [first, second] {
+            row.rightClick()
+            app.menuItems["Delete workflow"].click()
+        }
+        app.typeKey(.escape, modifierFlags: [])
+    }
+
+    @MainActor
+    private func workflowRow(named name: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
+                                         "clipy.workflow.row.", name)).firstMatch
+    }
+
+    @MainActor
+    private func clickPreview(in app: XCUIApplication) {
+        let preview = app.buttons["clipy.workflow.preview"]
+        XCTAssertTrue(waitUntil { preview.exists && preview.isEnabled && preview.isHittable },
+                      "Preview must remain reachable within the display, including an attached Settings sheet.\n" + app.debugDescription)
+        preview.click()
     }
 
     @MainActor
@@ -193,7 +305,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         let preview = app.buttons["clipy.workflow.preview"]
         XCTAssertTrue(preview.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertFalse(app.buttons["clipy.workflow.apply"].isEnabled, app.debugDescription)
-        preview.click()
+        clickPreview(in: app)
     }
 
     @MainActor

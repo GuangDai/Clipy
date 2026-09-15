@@ -40,9 +40,15 @@ final class CapturePrivacyJourneyUITests: XCTestCase {
         let field = app.textFields["clipy.settings.privacy.bundle-identifier"]
         SettingsJourneyControls.reveal(field, byExpanding: "clipy.settings.privacy.manual-entry", in: app)
         SettingsJourneyControls.scroll(field, into: form, app: app)
+        XCTAssertTrue(field.isHittable, "The expanded manual-entry field must be visible and usable")
+        let manualEntry = app.descendants(matching: .any)["clipy.settings.privacy.manual-entry"]
+        let attachment = XCTAttachment(screenshot: manualEntry.screenshot())
+        attachment.name = "Visible manual application identifier input"
+        attachment.lifetime = .keepAlways
+        add(attachment)
         field.click()
         field.typeText(identifier)
-        app.buttons["clipy.settings.privacy.add-ignore"].click()
+        field.typeKey(.return, modifierFlags: [])
         let ignored = app.descendants(matching: .any)["clipy.settings.privacy.application." + identifier]
         XCTAssertTrue(ignored.waitForExistence(timeout: 5), app.debugDescription)
         // A category change reconstructs the section from the persisted list.

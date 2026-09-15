@@ -11,8 +11,8 @@ the list.
 
 2026-09-14 refinement: pinned and recent groups share one native separator
 only when both are visible; neither group renders a heading. Its 9 pt height
-replaces both 28 pt heading allowances in content fitting. Use native menu
-material and paired macOS selection colors; selected search matches retain
+replaces both 28 pt heading allowances in content fitting. Use solid native
+content backgrounds and paired macOS selection colors; selected search matches retain
 bold emphasis with the selected foreground. Appearance defaults to following
 macOS with optional app-wide light/dark choices. See
 [`../design/native-clipy.md`](../design/native-clipy.md) for the interaction
@@ -194,3 +194,26 @@ stationary hover callbacks do not select or start preview dwell. The first Down
 selects the first row; Up selects the last; actual pointer movement restores
 hover selection. Text-family rows have no leading type icon or empty icon slot;
 links, files and image thumbnails retain their meaningful visuals.
+
+The summoned History panel and its floating preview use solid native content
+backgrounds (white in light appearance, system text background in dark mode).
+They do not blend desktop colors through vibrancy/material. Quick Look and
+in-panel recovery surfaces share this treatment (2026-09-15 user correction).
+
+
+### Editable typography and pointer timing (2026-09-15 refinement)
+
+Text Appearance accepts an actual font size (1–200 pt, including fractional
+points) and line count (1–100), with an independent automatic-line toggle.
+The live sample and history rows use the same values and line-height metrics.
+The three-dot menu uses regular native controls and body text, independent of
+custom history-row typography. Manual application identifiers have a visible
+border and example placeholder and are added with Return.
+
+Native entry/exit tracking covers both windows. Entry is recorded even before
+the first real mouse movement; movement in either window activates pointer
+preview behavior without selecting a default row. Keyboard navigation cancels
+a pending exit synchronously. A delayed selection observation cannot schedule
+auto-preview after the pointer leaves the main panel. Hide grace remains a
+Duration in milliseconds, with the existing 150 ms default and immediate native
+window dismissal after the timer; entry into either surface cancels that grace.

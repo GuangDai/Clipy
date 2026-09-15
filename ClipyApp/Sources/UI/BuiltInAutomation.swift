@@ -6,10 +6,11 @@ struct BuiltInAutomationStep: Identifiable, Codable, Equatable, Sendable {
     enum Operation: String, CaseIterable, Codable, Sendable {
         case trim, trimLines, removeEmptyLines, uniqueLines, sortLines
         case uppercase, lowercase, prettyJSON, compactJSON, replace
-        case requireText, requireImage, containsText, matchesRegex, recognizeText, regexReplace, regexExtract, notify
+        case requireText, requireImage, containsText, matchesRegex, recognizeText, regexReplace, regexExtract, notify, conditional
 
         var title: String {
             switch self {
+            case .conditional: "If"
             case .trim: "Trim surrounding whitespace"
             case .trimLines: "Trim each line"
             case .removeEmptyLines: "Remove empty lines"
@@ -32,16 +33,63 @@ struct BuiltInAutomationStep: Identifiable, Codable, Equatable, Sendable {
         }
     }
 
+    enum Condition: String, CaseIterable, Codable, Sendable {
+        case isText, isImage, containsText, matchesRegex
+
+        var title: String {
+            switch self {
+            case .isText: "Input is text"
+            case .isImage: "Input is an image"
+            case .containsText: "Text contains"
+            case .matchesRegex: "Text matches regular expression"
+            }
+        }
+    }
+
     var id = UUID()
     var operation: Operation
     var enabled = true
     var find = ""
     var replacement = ""
+    var condition: Condition = .containsText
+    var thenSteps: [Self] = []
+    var otherwiseSteps: [Self] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case id, operation, enabled, find, replacement, condition, thenSteps, otherwiseSteps
+    }
+
+    init(id: UUID = UUID(), operation: Operation, enabled: Bool = true, find: String = "",
+         replacement: String = "", condition: Condition = .containsText,
+         thenSteps: [Self] = [], otherwiseSteps: [Self] = []) {
+        self.id = id
+        self.operation = operation
+        self.enabled = enabled
+        self.find = find
+        self.replacement = replacement
+        self.condition = condition
+        self.thenSteps = thenSteps
+        self.otherwiseSteps = otherwiseSteps
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        operation = try values.decode(Operation.self, forKey: .operation)
+        enabled = try values.decode(Bool.self, forKey: .enabled)
+        find = try values.decode(String.self, forKey: .find)
+        replacement = try values.decode(String.self, forKey: .replacement)
+        condition = try values.decodeIfPresent(Condition.self, forKey: .condition) ?? .containsText
+        thenSteps = try values.decodeIfPresent([Self].self, forKey: .thenSteps) ?? []
+        otherwiseSteps = try values.decodeIfPresent([Self].self, forKey: .otherwiseSteps) ?? []
+    }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.id == rhs.id && lhs.operation == rhs.operation && lhs.enabled == rhs.enabled
             && lhs.find.utf8.elementsEqual(rhs.find.utf8)
             && lhs.replacement.utf8.elementsEqual(rhs.replacement.utf8)
+            && lhs.condition == rhs.condition && lhs.thenSteps == rhs.thenSteps
+            && lhs.otherwiseSteps == rhs.otherwiseSteps
     }
 }
 
@@ -77,9 +125,9 @@ struct BuiltInAutomationWorkflow: Identifiable, Codable, Equatable, Sendable {
             Self(name: "Clean up text", steps: [.init(operation: .trimLines), .init(operation: .removeEmptyLines)]),
             Self(name: "Unique sorted lines", steps: [.init(operation: .trimLines), .init(operation: .removeEmptyLines), .init(operation: .uniqueLines), .init(operation: .sortLines)]),
             Self(name: "Format JSON", steps: [.init(operation: .prettyJSON)]),
-            Self(name: "Read text from image", steps: [.init(operation: .requireImage), .init(operation: .recognizeText), .init(operation: .trim)]),
-            Self(name: "Extract email addresses", steps: [.init(operation: .requireText), .init(operation: .regexExtract, find: #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#), .init(operation: .uniqueLines)]),
-            Self(name: "Notify about TODO", steps: [.init(operation: .requireText), .init(operation: .containsText, find: "TODO"), .init(operation: .notify)])
+            Self(name: "Read text from image", steps: [.init(operation: .conditional, condition: .isImage, thenSteps: [.init(operation: .recognizeText), .init(operation: .trim)])], scope: .init(source: .clipboard)),
+            Self(name: "Extract email addresses", steps: [.init(operation: .conditional, condition: .isText, thenSteps: [.init(operation: .regexExtract, find: #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#), .init(operation: .uniqueLines)])]),
+            Self(name: "Notify about TODO", steps: [.init(operation: .conditional, find: "TODO", thenSteps: [.init(operation: .notify)])])
         ]
     }
 }
@@ -89,10 +137,11 @@ enum BuiltInAutomationFailure: Error, Equatable {
     case invalidWorkflow, unreadableWorkflows, workflowLimit, definitionTooLarge
     case requiresText, requiresImage, invalidImage, imageTooLarge, noRecognizedText, recognitionFailed
     case invalidRegex, regexEngineFailed, regexTimedOut, notificationDenied, notificationFailed, clipboardUnavailable
-    case conditionNotMet, notificationNeedsCondition, invalidScope, historyUnavailable
+    case conditionNotMet, notificationNeedsCondition, invalidScope, historyUnavailable, executionQueueFull
 
     var message: String {
         switch self {
+        case .executionQueueFull: "The workflow queue is full. Wait for running workflows to finish, then try again."
         case .conditionNotMet: "Conditions did not match. No notification was sent."
         case .notificationNeedsCondition: "Add an enabled type or text condition before using notifications."
         case .invalidScope: "Choose a valid time range and between 1 and 1,000 history items."
@@ -129,11 +178,14 @@ enum BuiltInAutomation {
     static func run(_ source: String, steps: [BuiltInAutomationStep]) throws -> String {
         try Task.checkCancellation()
         try checkSize(source)
-        guard steps.count <= maximumSteps else { throw BuiltInAutomationFailure.tooManySteps }
+        try validateStepTree(steps)
         var value = source
         for step in steps where step.enabled {
             try Task.checkCancellation()
             switch step.operation {
+            case .conditional:
+                let matches = try conditionMatches(.text(value), step: step)
+                value = try run(value, steps: matches ? step.thenSteps : step.otherwiseSteps)
             case .requireText, .notify:
                 break
             case .containsText:
@@ -182,6 +234,42 @@ enum BuiltInAutomation {
             try Task.checkCancellation()
         }
         return value
+    }
+
+    /// The existing 32-step product limit includes both branches, disabled
+    /// steps and every nesting level, so execution and persistence stay bounded.
+    static func validateStepTree(_ steps: [BuiltInAutomationStep]) throws {
+        var remaining = maximumSteps
+        var ids = Set<UUID>()
+        func visit(_ children: [BuiltInAutomationStep]) throws {
+            for step in children {
+                remaining -= 1
+                guard remaining >= 0 else { throw BuiltInAutomationFailure.tooManySteps }
+                guard ids.insert(step.id).inserted else { throw BuiltInAutomationFailure.invalidWorkflow }
+                try visit(step.thenSteps)
+                try visit(step.otherwiseSteps)
+            }
+        }
+        try visit(steps)
+    }
+
+    static func conditionMatches(_ input: BuiltInAutomationInput, step: BuiltInAutomationStep) throws -> Bool {
+        switch step.condition {
+        case .isText: return input.text != nil
+        case .isImage: if case .image = input { return true }; return false
+        case .containsText: return !step.find.isEmpty && input.text?.range(of: step.find, options: .literal) != nil
+        case .matchesRegex:
+            guard let text = input.text else { return false }
+            return try matchesRegularExpression(text, pattern: step.find)
+        }
+    }
+
+    static func prefersImage(_ steps: [BuiltInAutomationStep]) -> Bool {
+        steps.contains { step in
+            step.enabled && ([.requireImage, .recognizeText].contains(step.operation)
+                || (step.operation == .conditional && (step.condition == .isImage
+                    || prefersImage(step.thenSteps) || prefersImage(step.otherwiseSteps))))
+        }
     }
 
     static func checkSize(_ text: String) throws {

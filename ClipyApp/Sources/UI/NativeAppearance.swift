@@ -36,16 +36,11 @@ enum NativeAppearanceCopy {
     }
 }
 
-/// The same system menu material as a native transient utility. AppKit
-/// adapts it to accessibility contrast and transparency preferences.
-struct NativePanelBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .menu
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
+/// Solid native content background shared by the summoned panel and preview.
+/// textBackgroundColor is white in light appearance and adapts in dark mode;
+/// no material blends desktop colors through these reading surfaces.
+struct NativePanelBackground: View {
+    var body: some View {
+        Color(nsColor: .textBackgroundColor)
     }
-
-    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }

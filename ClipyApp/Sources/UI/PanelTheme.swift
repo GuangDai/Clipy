@@ -65,35 +65,19 @@ enum PanelTheme {
     // MARK: Row typography (HistoryRowFontSize)
 
     static func titleFont(for size: HistoryRowFontSize) -> Font {
-        switch size {
-        case .small: return .system(size: 11)
-        case .medium: return .system(size: 13)
-        case .large: return .system(size: 15)
-        }
+        .system(size: CGFloat(size.points))
     }
 
     static func snippetFont(for size: HistoryRowFontSize) -> Font {
-        switch size {
-        case .small: return .system(size: 11)
-        case .medium: return .system(size: 12)
-        case .large: return .system(size: 13)
-        }
+        .system(size: CGFloat(size.snippetPoints))
     }
 
     static func timestampFont(for size: HistoryRowFontSize) -> Font {
-        switch size {
-        case .small: return .caption2
-        case .medium: return .caption
-        case .large: return .footnote
-        }
+        .system(size: CGFloat(size.metadataPoints))
     }
 
     static func metadataFont(for size: HistoryRowFontSize) -> Font {
-        switch size {
-        case .small: return .caption2
-        case .medium: return .caption
-        case .large: return .caption
-        }
+        .system(size: CGFloat(size.metadataPoints))
     }
 
     // Pin symbols keep an 11pt semibold silhouette; their ordinal follows

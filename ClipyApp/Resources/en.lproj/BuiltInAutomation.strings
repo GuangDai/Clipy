@@ -126,3 +126,63 @@
 "Choose Applications…" = "Choose Applications…";
 
 "Conditions matched." = "Conditions matched.";
+
+"Add condition" = "Add condition";
+
+"Condition" = "Condition";
+
+"Drag steps between branches. Conditions choose Then or Otherwise; steps run from top to bottom." = "Drag steps between branches. Conditions choose Then or Otherwise; steps run from top to bottom.";
+
+"Drag to reorder" = "Drag to reorder";
+
+"Execution order" = "Execution order";
+
+"If" = "If";
+
+"Then" = "Then";
+
+"Otherwise" = "Otherwise";
+
+"Input is an image" = "Input is an image";
+
+"Input is text" = "Input is text";
+
+"Move workflow down" = "Move workflow down";
+
+"Move workflow up" = "Move workflow up";
+
+"New workflow" = "New workflow";
+
+"Preview reads the configured source. Before shows the exact input used for this result." = "Preview reads the configured source. Before shows the exact input used for this result.";
+
+"Runs from top to bottom. Drag to change priority." = "Runs from top to bottom. Drag to change priority.";
+
+"Sends a notification when this branch completes. Clipboard content is never included." = "Sends a notification when this branch completes. Clipboard content is never included.";
+
+"Step actions" = "Step actions";
+
+"Steps" = "Steps";
+
+"The workflow queue is full. Wait for running workflows to finish, then try again." = "The workflow queue is full. Wait for running workflows to finish, then try again.";
+
+"Then continue with the following steps. Otherwise stop this workflow." = "Then continue with the following steps. Otherwise stop this workflow.";
+
+"Unsaved changes" = "Unsaved changes";
+
+"Untitled workflow" = "Untitled workflow";
+
+"Workflow actions" = "Workflow actions";
+
+"Workflow configuration" = "Workflow configuration";
+
+"Workflow finished." = "Workflow finished.";
+
+"Waiting to run…" = "Waiting to run…";
+
+"Running…" = "Running…";
+
+"Saved" = "Saved";
+
+"Preview never sends notifications. Run executes the selected branches and their notifications." = "Preview never sends notifications. Run executes the selected branches and their notifications.";
+
+"Provided text" = "Provided text";

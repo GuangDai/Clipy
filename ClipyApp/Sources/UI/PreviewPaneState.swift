@@ -150,31 +150,19 @@ final class PreviewPaneState {
     private var isAutoOpenSuppressed = false
     private(set) var isAutoOpenSuspendedForMemoryPressure = false
 
-    /// The panel's pointer-vs-keyboard input mode, pushed in by
-    /// `HistoryPanelView` exactly like the auto-open preference above:
-    /// the entire pointer lifecycle below is inert until a REAL mouse
-    /// movement flips the panel into pointer interaction. SwiftUI
-    /// `.onHover` also delivers SYNTHESIZED exit events during
-    /// window/frame churn (the content-fit resize fires shortly after
-    /// summon), and in keyboard mode — every session's start — the
-    /// pointer is not over the panel, so an unguarded exit would cancel
-    /// the pending dwell with no re-entry ever following: the preview
-    /// could never open. Deactivation retires presence and any pending
-    /// grace so stale pointer state cannot leak into a keyboard-driven
-    /// session. Package (GOV-3): only the in-module panel view pushes
-    /// this.
+    /// Pointer entry can precede the first real movement that activates mouse
+    /// mode. Keep physical presence across keyboard navigation; gate timer
+    /// effects only. Closing the panel retires presence for the next session.
     var isPointerInteractionActive = false {
         didSet {
             guard !isPointerInteractionActive else { return }
-            pointerPresence = []
             cancelPendingPointerExit()
         }
     }
 
     /// Surfaces currently under the pointer. The floating preview hides
     /// (lightweight, no suppression) only once BOTH have been empty for
-    /// `pointerExitGrace`. Mutated only while
-    /// `isPointerInteractionActive` is set.
+    /// `pointerExitGrace`. Entry/exit updates also track keyboard mode.
     private var pointerPresence: Set<PreviewPointerSurface> = []
 
     /// The native windows confirm pointer presence when hover's exit grace
@@ -386,6 +374,7 @@ final class PreviewPaneState {
         cancelPendingAutoOpen()
         cancelPendingPointerExit()
         pointerPresence = []
+        isPointerInteractionActive = false
         currentSelectionReference = nil
         if isOpen { closePreview() }
         previewedItem = nil
@@ -395,17 +384,24 @@ final class PreviewPaneState {
 
     // MARK: - Pointer lifecycle (both windows)
 
+    /// Real movement anywhere in either window activates the pointer lifecycle.
+    /// Entry itself may be synthesized by window layout and never selects a row.
+    func pointerMoved(over surface: PreviewPointerSurface) {
+        isPointerInteractionActive = true
+        pointerEntered(surface)
+    }
+
     /// The pointer entered a surface. Re-entry cancels a pending
     /// pointer-exit grace. Re-entry into the MAIN PANEL also re-dwells the
     /// current selection when the pane is closed and unsuppressed — the
     /// pointer-exit hide is lightweight, so the preview reopens without
     /// any selection change. A manual (Esc) close keeps its suppression
     /// across pointer cycles; only a selection change lifts it.
-    /// Inert unless `isPointerInteractionActive` (keyboard-mode sessions
-    /// get deterministic dwell-open instead).
+    /// Presence is always recorded; timer effects require real pointer
+    /// interaction. Keyboard selection keeps its deterministic dwell.
     func pointerEntered(_ surface: PreviewPointerSurface) {
-        guard isPointerInteractionActive else { return }
         pointerPresence.insert(surface)
+        guard isPointerInteractionActive else { return }
         cancelPendingPointerExit()
         if surface == .preview, isOpen {
             // Keep the preview's current content while its controls are in
@@ -428,14 +424,13 @@ final class PreviewPaneState {
     /// The pointer left a surface. Only once BOTH surfaces are empty: any
     /// pending dwell retires immediately (never open for an absent
     /// pointer), and an OPEN pane hides after `pointerExitGrace`.
-    /// Inert unless `isPointerInteractionActive`, and a no-op for a
-    /// surface the pointer never entered: `.onHover` synthesizes exit
+    /// Timer effects require `isPointerInteractionActive`; an exit from a
+    /// surface the pointer never entered is ignored. Layout can synthesize exit
     /// events during window/frame churn, and with an empty presence such
     /// an event must cancel nothing and start no grace.
     func pointerExited(_ surface: PreviewPointerSurface) {
+        guard pointerPresence.remove(surface) != nil else { return }
         guard isPointerInteractionActive else { return }
-        guard pointerPresence.contains(surface) else { return }
-        pointerPresence.remove(surface)
         guard pointerPresence.isEmpty else { return }
         cancelPendingAutoOpen()
         guard isOpen, !isInformationPresented else { return }
@@ -538,6 +533,10 @@ final class PreviewPaneState {
     }
 
     private func scheduleAutoOpen(for item: HistoryItemReference) {
+        // Selection observation can arrive after the native exit event. Keep
+        // its current target for re-entry, without starting new work outside
+        // the list or retargeting while preview controls are under the pointer.
+        guard !isPointerInteractionActive || pointerPresence.contains(.mainPanel) else { return }
         pendingAutoOpenItem = item
         guard !isAutoOpenSuspendedForMemoryPressure else { return }
         onPreparationTargetChanged?(item)
@@ -551,6 +550,7 @@ final class PreviewPaneState {
             guard !Task.isCancelled else { return }
             guard let self,
                   self.pendingAutoOpenItem == item,
+                  !self.isPointerInteractionActive || self.pointerPresence.contains(.mainPanel),
                   self.isAutoOpenEnabled,
                   self.isAutoOpenPreferenceEnabled,
                   !self.isAutoOpenSuspendedForMemoryPressure,

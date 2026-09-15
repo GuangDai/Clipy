@@ -188,8 +188,8 @@ struct BuiltInAutomationConditionsTests {
 
     @MainActor private func wait(_ model: BuiltInAutomationModel) async {
         let deadline = ContinuousClock.now.advanced(by: .seconds(10))
-        while model.isRunning && ContinuousClock.now < deadline { await Task.yield() }
-        #expect(!model.isRunning)
+        while (model.isQueued || model.isRunning) && ContinuousClock.now < deadline { await Task.yield() }
+        #expect(!model.isQueued && !model.isRunning)
     }
 }
 

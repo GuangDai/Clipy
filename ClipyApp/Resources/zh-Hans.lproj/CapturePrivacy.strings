@@ -1,3 +1,5 @@
 "Add Applications…" = "添加应用…";
 "Enter a Bundle Identifier" = "输入应用标识符";
 "Some applications could not be added. You can enter their bundle identifiers below." = "部分应用无法添加。你可以在下方输入它们的应用标识符。";
+
+"Press Return to add the identifier." = "输入后按回车添加。";

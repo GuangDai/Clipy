@@ -6,6 +6,54 @@ import Testing
 @Suite("Literal workflow source editing", .serialized)
 @MainActor
 struct BuiltInAutomationSourceEditorHostedTests {
+    @Test func sourceAndResultShareWrappingInsetsAndFontWhileResultRemainsCopyable() throws {
+        let literal = "first line\n" + String(repeating: "long literal text 中文 e\u{301} ", count: 30) + "\nlast line"
+        let host = NSHostingView(rootView: HStack(spacing: 12) {
+            BuiltInAutomationSourceEditor(text: .constant(literal), accessibilityLabel: "Before")
+                .frame(maxWidth: .infinity)
+            BuiltInAutomationSourceEditor(text: .constant(literal), accessibilityLabel: "After",
+                                          isEditable: false, accessibilityIdentifier: "clipy.workflow.result")
+                .frame(maxWidth: .infinity)
+        })
+        host.sizingOptions = []
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 700, height: 220),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.close() }
+        host.layoutSubtreeIfNeeded()
+        let scrolls = findScrolls(in: host)
+        try #require(scrolls.count == 2)
+        for scroll in scrolls { scroll.tile() }
+        let source = try #require(scrolls[0].documentView as? BuiltInAutomationSourceTextView)
+        let result = try #require(scrolls[1].documentView as? BuiltInAutomationSourceTextView)
+        #expect(source.isEditable)
+        #expect(!result.isEditable)
+        #expect(result.isSelectable)
+        #expect(source.font == result.font)
+        #expect(source.alignment == .left && result.alignment == .left)
+        #expect(source.textContainerInset == result.textContainerInset)
+        #expect(abs(source.frame.width - result.frame.width) <= 1)
+        for editor in [source, result] {
+            editor.layoutManager?.ensureLayout(for: try #require(editor.textContainer))
+        }
+        #expect(abs(source.frame.height - result.frame.height) <= 1)
+        result.selectAll(nil)
+        let pasteboard = NSPasteboard(name: .init("clipy-workflow-result-\(UUID().uuidString)"))
+        defer { pasteboard.clearContents() }
+        // The public multi-type entry declares the pasteboard flavors before
+        // calling NSTextView's single-type writer, as native Copy does.
+        #expect(result.writeSelection(to: pasteboard, types: [.string]))
+        #expect(pasteboard.string(forType: .string)?.utf8.elementsEqual(literal.utf8) == true)
+
+        window.setContentSize(NSSize(width: 460, height: 220))
+        host.layoutSubtreeIfNeeded()
+        for scroll in scrolls { scroll.tile() }
+        #expect(abs(source.frame.width - result.frame.width) <= 1)
+        #expect(result.string.utf8.elementsEqual(literal.utf8))
+    }
+
     @Test func emptySwiftUIEditorFillsViewportAndRetainsNativeViewWhileResizing() throws {
         var source = ""
         let view = BuiltInAutomationSourceEditor(text: Binding(get: { source }, set: { source = $0 }),
@@ -126,5 +174,10 @@ struct BuiltInAutomationSourceEditorHostedTests {
             if let scroll = findScroll(in: child) { return scroll }
         }
         return nil
+    }
+
+    private func findScrolls(in view: NSView) -> [BuiltInAutomationSourceScrollView] {
+        if let scroll = view as? BuiltInAutomationSourceScrollView { return [scroll] }
+        return view.subviews.flatMap { findScrolls(in: $0) }
     }
 }

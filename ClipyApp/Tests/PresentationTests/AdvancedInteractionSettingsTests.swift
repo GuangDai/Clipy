@@ -119,6 +119,35 @@ struct AdvancedInteractionSettingsTests {
         #expect(preview.isOpen)
     }
 
+    @Test func keyboardNavigationSynchronouslyCancelsPointerExitBeforeViewUpdates() async throws {
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary)
+        )
+        let row = fixtureRow(id: "00000000-0000-0000-0000-000000003703", title: "pointer exit")
+        let preview = PreviewPaneState(autoOpenDelay: .zero, pointerExitGrace: .zero)
+        let surface = HistoryPanelSurfaceState(history: history, previewState: preview)
+        surface.beginSession(rows: [row])
+        defer { surface.endSession() }
+
+        preview.pointerEntered(.mainPanel)
+        surface.notePointerMovement()
+        #expect(preview.isPointerInteractionActive)
+        preview.togglePreview(for: row.item)
+        #expect(preview.isOpen)
+        preview.pointerExited(.mainPanel)
+
+        // A native key event can arrive before SwiftUI applies onChange.
+        // The surface must cancel the already-queued zero-delay hide now.
+        surface.noteKeyboardNavigation()
+        #expect(!preview.isPointerInteractionActive)
+        for _ in 0..<10 { await Task.yield() }
+        #expect(preview.isOpen)
+        #expect(preview.previewedItem == row.item)
+
+        surface.notePointerMovement()
+        #expect(preview.isPointerInteractionActive)
+    }
+
     @Test func disablingHoverRetiresDeferredSelectionButPreservesKeyboardNavigation() async throws {
         let history = try await SQLiteHistory.open(
             configuration: HistoryConfiguration(persistence: .temporary)

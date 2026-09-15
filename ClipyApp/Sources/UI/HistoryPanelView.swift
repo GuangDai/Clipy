@@ -284,6 +284,7 @@ final class HistoryPanelSurfaceState {
         isSessionActive = true
         selectionFilter = .all
         inputMode = .keyboard
+        previewState.isPointerInteractionActive = false
         deferredHoverSelection = nil
         thumbnails.isSurfaceActive = true
         detailsPath.removeAll()
@@ -368,6 +369,7 @@ final class HistoryPanelSurfaceState {
     /// selecting live and defers until the mouse next moves.
     func noteKeyboardNavigation() {
         inputMode = .keyboard
+        previewState.isPointerInteractionActive = false
     }
 
     /// A real mouse-movement event over the list area restores mouse mode
@@ -375,6 +377,7 @@ final class HistoryPanelSurfaceState {
     /// selection never scrolls: this writes the ID-only selection directly
     /// and the list carries no scroll-to-selection path it could trigger.
     func notePointerMovement() {
+        previewState.pointerMoved(over: .mainPanel)
         guard inputMode == .keyboard else { return }
         inputMode = .mouse
         guard selectsOnHover else { return }
@@ -595,13 +598,15 @@ struct HistoryPanelView: View {
             // Pointer presence across BOTH windows owns the preview's
             // lightweight exit lifecycle (150 ms grace, no manual-close
             // suppression); FloatingPreviewRootView reports the pane half.
-            .onHover { isInside in
+            .background(PanelMouseMovementMonitor(onMouseMoved: {
+                previewState.pointerMoved(over: .mainPanel)
+            }, onHover: { isInside in
                 if isInside {
                     previewState.pointerEntered(.mainPanel)
                 } else {
                     previewState.pointerExited(.mainPanel)
                 }
-            }
+            }))
             // The injected appearance snapshot owns the preference half of
             // PreviewPaneState's auto-open gate; `initial: true` covers the
             // first appearance, later changes repush (a re-enabled preference
@@ -609,14 +614,6 @@ struct HistoryPanelView: View {
             .onChange(of: appearance, initial: true) { _, newAppearance in
                 previewState.isAutoOpenPreferenceEnabled =
                     newAppearance.isPreviewAutoOpenEnabled
-            }
-            // The input-mode machine gates the preview's pointer
-            // lifecycle: sessions begin in keyboard mode and only a REAL
-            // mouse movement flips to pointer control, so a synthesized
-            // `.onHover` exit during window/frame churn can never cancel
-            // the selection dwell while no pointer is over the panel.
-            .onChange(of: surfaceState.inputMode, initial: true) { _, mode in
-                previewState.isPointerInteractionActive = mode == .mouse
             }
             // The content-fit oracle: any change to the displayed rows,
             // typography, or chrome republishes the analytic height demand;
@@ -1071,6 +1068,8 @@ struct HistoryPanelView: View {
                         }
                     }
             }
+            .font(.body)
+            .controlSize(.regular)
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()

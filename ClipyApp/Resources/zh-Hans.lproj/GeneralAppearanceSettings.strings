@@ -55,3 +55,7 @@
 "Reading notes — collect useful ideas, save a link, and pick up where you left off." = "阅读笔记——收集有用的想法，保存链接，下次从上次读到的地方继续。";
 "Weekend itinerary.pdf" = "周末行程.pdf";
 "List sample" = "列表示例";
+
+"Automatic text lines" = "自动文本行数";
+
+"Enter a font size from 1 to 200 pt and a line count from 1 to 100. Automatic uses the row density." = "输入 1–200 pt 的字号和 1–100 的行数。自动行数跟随列表密度。";

@@ -161,8 +161,8 @@ struct BuiltInAutomationTests {
 
     @MainActor private func waitForPreview(_ model: BuiltInAutomationModel) async {
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while model.isRunning && ContinuousClock.now < deadline { await Task.yield() }
-        if model.isRunning {
+        while (model.isQueued || model.isRunning) && ContinuousClock.now < deadline { await Task.yield() }
+        if model.isQueued || model.isRunning {
             Issue.record("Text workflow did not finish within five seconds")
             model.invalidate()
         }
