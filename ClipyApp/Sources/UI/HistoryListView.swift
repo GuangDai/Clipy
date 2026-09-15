@@ -37,6 +37,7 @@ struct HistoryListView: View {
     private let shortcuts: PanelShortcutSettings
     private let areShortcutsEnabled: Bool
     private let selection: Binding<HistoryItemID?>
+    private let inputMode: PanelInputMode
     private let onFocusHistory: () -> Void
     private let onHoverRow: (HistoryItemID) -> Void
     private let onKeyboardNavigation: () -> Void
@@ -53,6 +54,7 @@ struct HistoryListView: View {
         shortcuts: PanelShortcutSettings = PanelShortcutSettings(),
         areShortcutsEnabled: Bool = true,
         selection: Binding<HistoryItemID?>,
+        inputMode: PanelInputMode = .keyboard,
         onFocusHistory: @escaping () -> Void = {},
         onHoverRow: @escaping (HistoryItemID) -> Void = { _ in },
         onKeyboardNavigation: @escaping () -> Void = {},
@@ -68,6 +70,7 @@ struct HistoryListView: View {
         self.shortcuts = shortcuts
         self.areShortcutsEnabled = areShortcutsEnabled
         self.selection = selection
+        self.inputMode = inputMode
         self.onFocusHistory = onFocusHistory
         self.onHoverRow = onHoverRow
         self.onKeyboardNavigation = onKeyboardNavigation
@@ -76,6 +79,8 @@ struct HistoryListView: View {
     }
 
     @State private var dragSource = HistoryListDraggingView()
+    @State private var viewportHeight: CGFloat = 0
+    @FocusState private var isListFocused: Bool
 
     var body: some View {
         // One list-owned timeline refreshes idle relative metadata each
@@ -120,56 +125,78 @@ struct HistoryListView: View {
     // MARK: List
 
     private func list(now: Date) -> some View {
-        List(selection: selection) {
-            ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
-                rowContent(
-                    row,
-                    now: now,
-                    pinnedOrdinal: (row.pinnedPosition ?? 0) + 1
-                )
-            }
-            if showsGroupSeparator {
-                Divider()
-                    .frame(height: PanelContentFit.groupSeparatorHeight)
-                    .listRowInsets(EdgeInsets())
-                    .listRowSeparator(.hidden)
-                    .selectionDisabled()
-                    .disabled(true)
-                    .accessibilityHidden(true)
-            }
-            if !viewState.displayedUnpinnedRows.isEmpty || viewState.hasNextPage || viewState.isLoadingPage {
-                ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
-                    rowContent(row, now: now, pinnedOrdinal: nil)
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                LazyVStack(spacing: 0) {
+                    ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
+                        rowContent(row, now: now, pinnedOrdinal: (row.pinnedPosition ?? 0) + 1)
+                    }
+                    if showsGroupSeparator {
+                        Divider()
+                            .frame(height: PanelContentFit.groupSeparatorHeight)
+                            .accessibilityHidden(true)
+                    }
+                    ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
+                        rowContent(row, now: now, pinnedOrdinal: nil)
+                    }
+                    paginationControl
                 }
-                paginationControl
+                .padding(.horizontal, PanelContentFit.listRowHorizontalInset)
             }
-        }
-        // macOS inset lists retain extra internal margins even when scroll
-        // content margins are zero. A plain list keeps the first and last
-        // row inside the content-fitted viewport; horizontal inset is explicit.
-        .listStyle(.plain)
-        .contentMargins(.vertical, 0, for: .scrollContent)
-        .padding(.horizontal, PanelContentFit.listRowHorizontalInset)
-        .environment(\.defaultMinListRowHeight, 0)
-        .environment(\.defaultMinListHeaderHeight, 0)
-        .scrollContentBackground(.hidden)
-        .background {
-            HistoryListDragSource(view: dragSource) { reference in
-                try await viewState.dragPayload(for: reference)
+            .background { NativePanelBackground() }
+            .focusable()
+            .focusEffectDisabled()
+            .focused($isListFocused)
+            .onChange(of: isSearchFieldFocused, initial: true) { _, focused in
+                isListFocused = !focused
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
+            .onChange(of: selection.wrappedValue) { _, selected in
+                // Pointer hover must never scroll rows out from under the mouse.
+                // Keyboard selection, including arrows received by Search,
+                // reveals its current target without choosing an initial row.
+                if inputMode == .keyboard, let selected { proxy.scrollTo(selected) }
+            }
+            .onKeyPress(keys: [.upArrow, .downArrow, .pageUp, .pageDown, .home, .end]) { press in
+                guard !isSearchFieldFocused, areShortcutsEnabled else { return .ignored }
+                onKeyboardNavigation()
+                moveSelection(for: press.key)
+                return .handled
+            }
+            .background {
+                HistoryListDragSource(view: dragSource) { reference in
+                    try await viewState.dragPayload(for: reference)
+                }
+            }
+            .onPanelMouseMovement(onPointerMovement)
         }
-        // Real mouse movement (an NSTrackingArea, never SwiftUI hover —
-        // which also fires when content scrolls beneath a STATIONARY
-        // pointer) restores pointer control of the selection. Paging and
-        // beginning/end keys also scroll rows beneath that pointer, so they
-        // must establish keyboard intent before native scrolling (V2-07 §9).
-        // This list-scoped handler leaves search/editor text input alone;
-        // `.ignored` preserves native key bindings and scroll behavior.
-        .onKeyPress(keys: [.upArrow, .downArrow, .pageUp, .pageDown, .home, .end]) { _ in
-            onKeyboardNavigation()
-            return .ignored
+    }
+
+    /// SwiftUI owns one selection highlight and the scroll viewport. Keyboard
+    /// paging uses the same row heights as content fitting, including images.
+    private func moveSelection(for key: KeyEquivalent) {
+        let rows = viewState.displayedRows
+        guard !rows.isEmpty else { return }
+        if key == .home { selection.wrappedValue = rows.first?.item.id; return }
+        if key == .end { selection.wrappedValue = rows.last?.item.id; return }
+        let direction: PanelSelectionDirection = key == .upArrow || key == .pageUp ? .previous : .next
+        guard key == .pageUp || key == .pageDown,
+              let index = rows.firstIndex(where: { $0.item.id == selection.wrappedValue }) else {
+            selection.wrappedValue = PanelSessionSelection.movedSelection(selection.wrappedValue, in: rows, direction: direction)
+            return
         }
-        .onPanelMouseMovement(onPointerMovement)
+        let offset = direction == .previous ? -1 : 1
+        var target = index
+        var distance: CGFloat = 0
+        repeat {
+            let next = target + offset
+            guard rows.indices.contains(next) else { break }
+            target = next
+            let descriptor = PanelContentFit.RowDescriptor(row: rows[target],
+                snippetLineLimit: snippetLineCount.baseLineLimit(density: density))
+            distance += PanelContentFit.rowHeight(descriptor, density: density, fontSize: fontSize)
+        } while distance < viewportHeight
+        selection.wrappedValue = rows[target].item.id
     }
 
     private var showsGroupSeparator: Bool {
@@ -204,19 +231,13 @@ struct HistoryListView: View {
             onRemove: { id in viewState.remove(id) },
             onShowDetails: onShowDetails
         )
-        // Keep the insets inside our opaque content, so AppKit's unfocused
-        // selection cannot show as a gray surround behind the rounded row.
-        // The List still owns keyboard selection and scrolling.
         .padding(EdgeInsets(
             top: PanelContentFit.listRowVerticalInset,
             leading: PanelContentFit.listRowHorizontalInset,
             bottom: PanelContentFit.listRowVerticalInset,
             trailing: PanelContentFit.listRowHorizontalInset
         ))
-        .background { NativePanelBackground() }
-        .tag(row.item.id)
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets())
+        .id(row.item.id)
         // Hover selection (Maccy's HoverSelectionModifier): the surface
         // state arbitrates pointer-vs-keyboard mode, so hover selects
         // without scrolling only in mouse mode and otherwise defers until

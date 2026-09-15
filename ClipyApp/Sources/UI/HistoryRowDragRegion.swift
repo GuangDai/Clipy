@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// A geometry-only native view behind the row. SwiftUI List can host rows
-/// separately from its background, so named SwiftUI coordinates must not be
+/// A geometry-only native view behind the row. Lazy SwiftUI rows can be hosted
+/// separately from the drag source, so named SwiftUI coordinates must not be
 /// compared with an NSEvent converted into that background's coordinates.
 /// AppKit converts between the actual views in their shared window (01 §5.2).
 struct HistoryRowDragRegion: NSViewRepresentable {

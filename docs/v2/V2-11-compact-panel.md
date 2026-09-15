@@ -217,3 +217,20 @@ a pending exit synchronously. A delayed selection observation cannot schedule
 auto-preview after the pointer leaves the main panel. Hide grace remains a
 Duration in milliseconds, with the existing 150 ms default and immediate native
 window dismissal after the timer; entry into either surface cancels that grace.
+
+
+The history list uses SwiftUI ScrollView and LazyVStack. HistoryRowView owns
+its single rounded selection highlight; there is no native table selection
+underneath its horizontal margins. Keyboard navigation reveals its target,
+while mouse hover never scrolls the content. Paging uses the same row metrics
+as panel content fitting. Copy, Pin and Information in preview share the same
+circular glass button style, 24 pt label frame and 13 pt medium-weight symbols.
+
+
+Selectable preview text and file/URL spellings now use SwiftUI Text rather than
+selectable NSTextField wrappers. Display and selection share fixed typography
+and line spacing, avoiding field-editor substitution when clicked. Text keeps
+its bounded segments and lazy groups instead of joining large source strings.
+Window placement, clipboard/drag payloads, physical mouse tracking, shortcut
+recording and the search/literal-input text-system behavior retain their narrow
+AppKit integration; they do not draw an additional history selection background.

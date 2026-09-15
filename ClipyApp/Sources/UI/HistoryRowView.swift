@@ -1,7 +1,7 @@
 /// HistoryRowView.swift — content-first history rows. Titles and search
 /// excerpts share the available column width. Copy provenance lives in the
-/// expanded preview; a small accessory identifies multi-source items. Native List selection owns selection
-/// contrast, while pointer hover supplies a quieter secondary highlight.
+/// expanded preview; a small accessory identifies multi-source items. The row
+/// paints its rounded selection inside the SwiftUI scrolling list.
 /// Owning spec: docs/01-architecture.md §5.2 (gesture actions), §5.7
 /// (thumbnail is requested by exact `HistoryItemReference`);
 /// docs/03b-instruction-set.md §8 (row fields, search presentation, 1-based

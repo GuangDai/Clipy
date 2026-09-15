@@ -817,6 +817,7 @@ struct HistoryPanelView: View {
                 shortcuts: shortcuts,
                 areShortcutsEnabled: surfaceState.isAtListRoot,
                 selection: $surfaceState.selection,
+                inputMode: surfaceState.inputMode,
                 onFocusHistory: {
                     isSearchFieldFocused = false
                     // An actual click is a choice, not pointer transit.

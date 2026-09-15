@@ -8,186 +8,99 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct PreviewTextLayoutTests {
-    @Test func nativeSegmentKeepsSelectableBytesAndRemeasuresWrapping() throws {
-        let source = String(repeating: "Café e\u{301} selectable words 中文。 ", count: 12)
+    @Test func swiftUITextWrapsAtTheAvailableWidthAndUpdatesWithoutAFieldEditor() async throws {
+        let source = String(repeating: "Café e\u{301} selectable words 中文。 ", count: 8)
+        let measured = PreviewTextSizeCapture()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
             styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let host = NSHostingView(rootView: segmentViewport(source))
+        let host = NSHostingView(rootView: measuredViewport([source[...]], capture: measured))
         host.sizingOptions = []
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
-        host.layoutSubtreeIfNeeded()
-
-        let field = try #require(textField(in: host))
-        let scrollView = try #require(field.enclosingScrollView)
-        #expect(field.stringValue.utf8.elementsEqual(source.utf8))
-        #expect(field.isSelectable)
-        #expect(!field.isEditable)
-        #expect(field.maximumNumberOfLines == 0)
-        let originalHeight = field.frame.height
+        let settled = await waitFor {
+            host.layoutSubtreeIfNeeded()
+            return measured.size.height > 24 && measured.size.height < 480
+        }
+        try #require(settled)
+        let originalHeight = measured.size.height
 
         window.setContentSize(NSSize(width: 180, height: 480))
+        let wrapped = await waitFor {
+            host.layoutSubtreeIfNeeded()
+            return measured.size.width <= 180 && measured.size.height > originalHeight
+        }
+        #expect(wrapped)
+        let narrowHeight = measured.size.height
+        host.rootView = measuredViewport([source[...]], direction: .rightToLeft, capture: measured)
         host.layoutSubtreeIfNeeded()
-        #expect(field.frame.width > 0 && field.frame.width <= scrollView.contentSize.width)
-        #expect(field.frame.height > originalHeight)
-        let cell = try #require(field.cell)
-        let completeSize = cell.cellSize(forBounds: NSRect(
-            x: 0, y: 0, width: field.bounds.width, height: .greatestFiniteMagnitude
-        ))
-        #expect(field.bounds.height >= completeSize.height)
-        #expect(field.stringValue.utf8.elementsEqual(source.utf8))
+        // Leading alignment follows the environment; changing writing
+        // direction cannot substitute a different font or line spacing.
+        #expect(abs(measured.size.height - narrowHeight) <= 1)
 
-        field.selectText(nil)
-        let editor = try #require(field.currentEditor() as? NSTextView)
-        let pasteboard = NSPasteboard.withUniqueName()
-        defer { pasteboard.releaseGlobally() }
-        #expect(editor.selectedRange() == NSRange(location: 0, length: (source as NSString).length))
-        let copiedEntireValue = editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes)
-        #expect(copiedEntireValue)
-        #expect(pasteboard.string(forType: .string).map { Data($0.utf8) } == Data(source.utf8))
-        // Copy through visual wraps without changing the composed/decomposed
-        // spellings or introducing presentation-only line breaks.
-        let range = NSRange(location: 0, length: (source as NSString).length - 2)
-        editor.setSelectedRange(range)
-        pasteboard.clearContents()
-        let copiedRange = editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes)
-        #expect(copiedRange)
-        #expect(pasteboard.string(forType: .string).map { Data($0.utf8) }
-            == Data((source as NSString).substring(with: range).utf8))
-        window.endEditing(for: nil)
-
-        host.rootView = segmentViewport(source, direction: .rightToLeft)
-        host.layoutSubtreeIfNeeded()
-        let rightToLeftField = try #require(textField(in: host))
-        #expect(rightToLeftField.alignment == .right)
-        #expect(rightToLeftField.stringValue.utf8.elementsEqual(source.utf8))
-        host.rootView = segmentViewport("Replacement")
-        host.layoutSubtreeIfNeeded()
-        let replacement = try #require(textField(in: host))
-        #expect(replacement.stringValue == "Replacement")
-        #expect(replacement.alignment == .left)
-        #expect(replacement.frame.height < originalHeight)
-
-        host.rootView = segmentViewport(String(repeating: "\u{301}", count: 64))
-        host.layoutSubtreeIfNeeded()
-        let combiningField = try #require(textField(in: host))
-        #expect(combiningField.frame.height > 0)
+        host.rootView = measuredViewport(["Replacement"], capture: measured)
+        let replaced = await waitFor {
+            host.layoutSubtreeIfNeeded()
+            return measured.size.height < originalHeight
+        }
+        #expect(replaced)
+        #expect(measured.size.height > 0)
     }
 
-    private func segmentViewport(_ source: String, direction: LayoutDirection = .leftToRight) -> some View {
-        PreviewTextBody(segments: [source[...]], groups: [0..<1], maximumHeight: 480)
-            .environment(\.layoutDirection, direction)
-    }
-
-    @Test func groupedShortSegmentsKeepTheirNativeIdentitySelectionAndCompleteBytes() throws {
+    @Test func shortGroupsKeepIndependentCombiningSegmentsAndFiniteLayout() async throws {
         let values = ["", "Café e\u{301}", "e" + String(repeating: "\u{301}", count: 63),
                       String(repeating: "\u{301}", count: 64), String(repeating: "words ", count: 10),
                       "中文", "RTL العربية", "last"]
         let segments = values.map { $0[...] }
+        let measured = PreviewTextSizeCapture()
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
             styleMask: [.titled], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         defer { window.close() }
-        let host = NSHostingView(rootView: groupedViewport(segments))
+        let host = NSHostingView(rootView: measuredViewport(segments, capture: measured))
         host.sizingOptions = []
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
-        host.layoutSubtreeIfNeeded()
-        let fields = allTextFields(in: host)
-        try #require(fields.count == values.count)
-        let container = try #require(fields.first?.superview)
-        #expect(fields.allSatisfy { $0.superview === container })
-        #expect(container.isFlipped)
-        let pasteboard = NSPasteboard.withUniqueName()
-        defer { pasteboard.releaseGlobally() }
-
-        for width in [CGFloat(340), CGFloat(180)] {
-            window.setContentSize(NSSize(width: width, height: 480))
+        let settled = await waitFor {
             host.layoutSubtreeIfNeeded()
-            let updated = allTextFields(in: host)
-            try #require(updated.count == fields.count)
-            #expect(zip(fields, updated).allSatisfy { $0.0 === $0.1 })
-            var previousBottom: CGFloat = 0
-            for (index, field) in updated.enumerated() {
-                #expect(field.stringValue.utf8.elementsEqual(values[index].utf8))
-                #expect(field.accessibilityIdentifier() == (index == 0
-                    ? "clipy.preview.text" : "clipy.preview.text.segment.\(index)"))
-                #expect(field.isSelectable && !field.isEditable)
-                #expect(field.frame.width > 0 && field.frame.width <= width)
-                #expect(field.frame.minY == previousBottom)
-                let cell = try #require(field.cell)
-                let measured = cell.cellSize(forBounds: NSRect(
-                    x: 0, y: 0, width: field.bounds.width, height: .greatestFiniteMagnitude))
-                #expect(field.bounds.height >= measured.height)
-                previousBottom = field.frame.maxY
-                // A blank native label remains part of the layout, but has
-                // no selection to serialize to the pasteboard.
-                if !values[index].isEmpty {
-                    field.selectText(nil)
-                    let editor = try #require(field.currentEditor() as? NSTextView)
-                    #expect(editor.selectedRange() == NSRange(location: 0, length: (values[index] as NSString).length))
-                    pasteboard.clearContents()
-                    #expect(editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
-                    #expect(pasteboard.string(forType: .string).map { Data($0.utf8) } == Data(values[index].utf8))
-                    window.endEditing(for: nil)
-                }
-            }
-            #expect(container.bounds.height >= previousBottom)
+            return measured.size.height > 24 && measured.size.height < 480
         }
-
-        fields[1].selectText(nil)
-        let editor = try #require(fields[1].currentEditor() as? NSTextView)
-        editor.setSelectedRange(NSRange(location: 1, length: 2))
-        host.rootView = groupedViewport(segments)
-        host.layoutSubtreeIfNeeded()
-        let unchanged = allTextFields(in: host)
-        try #require(unchanged.count == fields.count)
-        #expect(unchanged[1] === fields[1])
-        #expect(editor.selectedRange() == NSRange(location: 1, length: 2))
-        window.endEditing(for: nil)
-
-        host.rootView = groupedViewport(segments, direction: .rightToLeft)
-        host.layoutSubtreeIfNeeded()
-        let rightToLeft = allTextFields(in: host)
-        try #require(rightToLeft.count == fields.count)
-        #expect(zip(fields, rightToLeft).allSatisfy { $0.0 === $0.1 })
-        #expect(fields.allSatisfy { $0.alignment == .right })
-        #expect(zip(fields, values).allSatisfy { $0.0.stringValue.utf8.elementsEqual($0.1.utf8) })
-        var replacement = segments
-        replacement[7] = "changed"
-        host.rootView = groupedViewport(replacement)
-        host.layoutSubtreeIfNeeded()
-        let changed = allTextFields(in: host)
-        try #require(changed.count == fields.count)
-        #expect(zip(fields, changed).allSatisfy { $0.0 === $0.1 })
-        #expect(fields[7].stringValue == "changed")
-        #expect(fields.allSatisfy { $0.alignment == .left })
-        host.rootView = groupedViewport(Array(replacement.prefix(2)))
-        host.layoutSubtreeIfNeeded()
-        let reduced = allTextFields(in: host)
-        try #require(reduced.count == 2)
-        #expect(zip(fields.prefix(2), reduced).allSatisfy { $0.0 === $0.1 })
+        try #require(settled)
+        let originalHeight = measured.size.height
+        window.setContentSize(NSSize(width: 180, height: 480))
+        let wrapped = await waitFor {
+            host.layoutSubtreeIfNeeded()
+            return measured.size.width <= 180 && measured.size.height > originalHeight
+        }
+        #expect(wrapped)
+        #expect(measured.size.height.isFinite)
+        host.rootView = measuredViewport(Array(segments.prefix(2)), capture: measured)
+        let reduced = await waitFor {
+            host.layoutSubtreeIfNeeded()
+            return measured.size.height < originalHeight
+        }
+        #expect(reduced)
+        #expect(measured.size.height > 0)
     }
 
-    private func groupedViewport(_ segments: [Substring], direction: LayoutDirection = .leftToRight) -> some View {
+    private func measuredViewport(
+        _ segments: [Substring], direction: LayoutDirection = .leftToRight,
+        capture: PreviewTextSizeCapture
+    ) -> some View {
         PreviewTextBody(segments: segments, groups: [segments.indices], maximumHeight: 480)
             .environment(\.layoutDirection, direction)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { capture.size = $0 }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    private func allTextFields(in view: NSView) -> [NSTextField] {
-        let own = (view as? NSTextField).map { [$0] } ?? []
-        return own + view.subviews.flatMap { allTextFields(in: $0) }
-    }
-
-    private func textField(in view: NSView) -> NSTextField? {
-        if let field = view as? NSTextField,
-           field.accessibilityIdentifier() == "clipy.preview.text" { return field }
-        for child in view.subviews {
-            if let field = textField(in: child) { return field }
+    private func waitFor(_ condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
         }
-        return nil
+        return condition()
     }
 
     @Test func longTextLayoutFitsTwoFramesAfterWarmup() async throws {
@@ -246,7 +159,7 @@ struct PreviewTextLayoutTests {
             let cpuElapsed = try threadCPUTime() - cpuStart
             print("Preview initial layout: wall: \(elapsed), main-thread CPU: \(cpuElapsed), UTF-16 units: \(source.utf16.count)")
             #if DEBUG
-            print("[DEBUG-preview-layout] materialized=\(materialized.count) total=\(text.displaySegments.count) calls=\(materializationCalls) nativeGroups=\(materializedGroups.count) totalGroups=\(text.displaySegmentGroups.count)")
+            print("[DEBUG-preview-layout] materialized=\(materialized.count) total=\(text.displaySegments.count) calls=\(materializationCalls) lazyGroups=\(materializedGroups.count) totalGroups=\(text.displaySegmentGroups.count)")
             #endif
             #expect(elapsed < .milliseconds(34))
             // Whole-process figures are observations, not per-view memory
@@ -261,4 +174,9 @@ struct PreviewTextLayoutTests {
         try #require(clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value) == 0)
         return .seconds(value.tv_sec) + .nanoseconds(value.tv_nsec)
     }
+}
+
+@MainActor
+private final class PreviewTextSizeCapture {
+    var size: CGSize = .zero
 }

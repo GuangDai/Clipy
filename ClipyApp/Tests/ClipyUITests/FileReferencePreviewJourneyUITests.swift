@@ -97,6 +97,22 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                     == "Only the reference is shown. Loading its contents requires confirmation."
         }, app.debugDescription)
         XCTAssertEqual(rows.count, 1, app.debugDescription)
+        let addressSize = address.frame.size
+        let referenceSize = reference.frame.size
+        let beforeSelection = XCTAttachment(screenshot: preview.screenshot())
+        beforeSelection.name = "Literal file reference before selection"
+        beforeSelection.lifetime = .keepAlways
+        add(beforeSelection)
+        address.click()
+        XCTAssertEqual(address.frame.width, addressSize.width, accuracy: 1)
+        XCTAssertEqual(address.frame.height, addressSize.height, accuracy: 1)
+        XCTAssertEqual(reference.frame.height, referenceSize.height, accuracy: 1,
+                       "Selecting a reference must not substitute a different font or line spacing")
+        XCTAssertEqual(Data(text(of: address).utf8), Data(originalAddress.utf8))
+        let afterSelection = XCTAttachment(screenshot: preview.screenshot())
+        afterSelection.name = "Literal file reference after selection"
+        afterSelection.lifetime = .keepAlways
+        add(afterSelection)
 
         // Recipe 5 exposes the decoded basename and reference metadata to
         // the ordinary search surface. Only the ASCII filename component is

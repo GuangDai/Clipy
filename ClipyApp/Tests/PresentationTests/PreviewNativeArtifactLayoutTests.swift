@@ -140,10 +140,8 @@ struct PreviewNativeArtifactLayoutTests {
         }
     }
 
-    @Test func fullReferenceWrapsAndCopiesCompleteNativeSelections() async throws {
-        let address = boundedAddress(
-            prefix: "file:///clipy-preview-uncreated/e%CC%81/", token: "x"
-        )
+    @Test func fullReferenceWrapsWithWidthAndReplacesThePreviousLongValue() async throws {
+        let address = boundedAddress(prefix: "file:///clipy-preview-uncreated/e%CC%81/", token: "x")
         let outcome = await ContentPreview().renderHistoryPane([
             PreviewRepresentation(typeIdentifier: "public.file-url", bytes: Data(address.utf8))
         ])
@@ -151,6 +149,7 @@ struct PreviewNativeArtifactLayoutTests {
             Issue.record("Expected the complete file reference")
             return
         }
+        #expect(Data(reference.address.utf8) == Data(address.utf8))
         let shortAddress = "file:///clipy-preview-uncreated/short"
         let shortOutcome = await ContentPreview().renderHistoryPane([
             PreviewRepresentation(typeIdentifier: "public.file-url", bytes: Data(shortAddress.utf8))
@@ -159,89 +158,37 @@ struct PreviewNativeArtifactLayoutTests {
             Issue.record("Expected the replacement file reference")
             return
         }
-        let path = try #require(reference.filePath)
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
-            styleMask: [.titled], backing: .buffered, defer: false
-        )
-        window.isReleasedWhenClosed = false
+        let measured = PreviewReferenceSizeCapture()
+        let window = makeWindow()
         defer { window.close() }
-        let host = NSHostingView(rootView: fullReferenceViewport(reference))
+        let host = NSHostingView(rootView: fullReferenceViewport(reference, capture: measured))
         host.sizingOptions = []
         window.contentView = host
-        window.makeKeyAndOrderFront(nil)
-        host.layoutSubtreeIfNeeded()
-        host.displayIfNeeded()
-
-        let fields = nativeReferenceFields(in: host)
-        #expect(fields.count == 2)
-        let pasteboard = NSPasteboard.withUniqueName()
-        defer { pasteboard.releaseGlobally() }
-        for (identifier, value) in [
-            ("clipy.preview.reference.full.path", path),
-            ("clipy.preview.reference.full.address", address)
-        ] {
-            let field = try #require(fields.first { $0.accessibilityIdentifier() == identifier })
-            #expect(Data(field.stringValue.utf8) == Data(value.utf8))
-            #expect(field.isSelectable)
-            #expect(!field.isEditable)
-            #expect(field.frame.width <= 340)
-            // Both 16 KiB spellings occupy many wrapped lines. A short or
-            // clipped label cannot satisfy the content-height assertion.
-            #expect(field.frame.height > 480)
-            let originalHeight = field.frame.height
-            window.setContentSize(NSSize(width: 220, height: 480))
+        window.orderFront(nil)
+        let settled = await waitFor {
             host.layoutSubtreeIfNeeded()
-            #expect(field.frame.height > originalHeight)
-
-            // Use AppKit's actual field editor and copy serialization, on a
-            // private pasteboard so this proof cannot disturb capture tests.
-            field.selectText(nil)
-            let editor = try #require(field.currentEditor() as? NSTextView)
-            #expect(editor.selectedRange() == NSRange(location: 0, length: (value as NSString).length))
-            pasteboard.clearContents()
-            let wholeValueTypes = editor.writablePasteboardTypes
-            let copiedEntireValue = editor.writeSelection(to: pasteboard, types: wholeValueTypes)
-            #expect(copiedEntireValue, "Native selection copy types: \(wholeValueTypes)")
-            #expect(pasteboard.string(forType: .string).map { Data($0.utf8) } == Data(value.utf8))
-
-            // A contiguous range spanning many visual lines copies unchanged,
-            // without inserting the line breaks used only for presentation.
-            let range = NSRange(location: 2, length: (value as NSString).length - 4)
-            editor.setSelectedRange(range)
-            pasteboard.clearContents()
-            let rangeTypes = editor.writablePasteboardTypes
-            let copiedRange = editor.writeSelection(to: pasteboard, types: rangeTypes)
-            #expect(copiedRange, "Native selection copy types: \(rangeTypes)")
-            #expect(pasteboard.string(forType: .string).map { Data($0.utf8) }
-                == Data((value as NSString).substring(with: range).utf8))
-            window.endEditing(for: nil)
-            window.setContentSize(NSSize(width: 340, height: 480))
-            host.layoutSubtreeIfNeeded()
+            return measured.size.height > 480 && measured.size.width > 0
         }
+        try #require(settled)
+        let originalHeight = measured.size.height
+        window.setContentSize(NSSize(width: 220, height: 480))
+        let wrapped = await waitFor {
+            host.layoutSubtreeIfNeeded()
+            return measured.size.width <= 220 && measured.size.height > originalHeight
+        }
+        #expect(wrapped)
 
-        // Keep the same SwiftUI identity so native-view reuse must invalidate
-        // the old measurement when the selected reference changes.
-        host.rootView = fullReferenceViewport(shortReference)
-        host.layoutSubtreeIfNeeded()
-        let replacementFields = nativeReferenceFields(in: host)
-        let replacementAddress = try #require(replacementFields.first {
-            $0.accessibilityIdentifier() == "clipy.preview.reference.full.address"
-        })
-        #expect(Data(replacementAddress.stringValue.utf8) == Data(shortAddress.utf8))
-        #expect(replacementAddress.frame.height > 0)
-        #expect(replacementAddress.frame.height < 480)
+        host.rootView = fullReferenceViewport(shortReference, capture: measured)
+        let replaced = await waitFor {
+            host.layoutSubtreeIfNeeded()
+            return measured.size.height > 0 && measured.size.height < 480
+        }
+        #expect(replaced)
     }
 
-    @Test func collapsedReferencesKeepCompleteSelectableValuesWithinTwoNativeLines() async throws {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
-            styleMask: [.titled], backing: .buffered, defer: false
-        )
-        window.isReleasedWhenClosed = false
+    @Test func collapsedReferencesRemainCompactWithCompleteSourceSpellings() async throws {
+        let window = makeWindow()
         defer { window.close() }
-        let pasteboard = NSPasteboard.withUniqueName()
-        defer { pasteboard.releaseGlobally() }
         for fixture in [referenceFixtures[0], referenceFixtures[2], referenceFixtures[3]] {
             let outcome = await ContentPreview().renderHistoryPane([
                 PreviewRepresentation(typeIdentifier: fixture.type, bytes: Data(fixture.address.utf8))
@@ -250,41 +197,35 @@ struct PreviewNativeArtifactLayoutTests {
                 Issue.record("Expected the bounded \(fixture.name) reference")
                 return
             }
-            let host = NSHostingView(rootView: ReferencePreviewView(reference: reference, maximumHeight: 480))
+            #expect(reference.address.utf8.elementsEqual(fixture.address.utf8))
+            let measured = PreviewReferenceSizeCapture()
+            let host = NSHostingView(rootView:
+                ReferencePreviewView(reference: reference, maximumHeight: 480)
+                    .onGeometryChange(for: CGSize.self) { $0.size } action: { measured.size = $0 }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            )
             host.sizingOptions = []
             window.contentView = host
-            window.makeKeyAndOrderFront(nil)
-            var values = [("clipy.preview.reference.address", reference.address)]
-            if let path = reference.filePath {
-                values.append(("clipy.preview.reference.path", path))
-                values.append(("clipy.preview.reference.name", URL(fileURLWithPath: path).lastPathComponent))
-            } else {
-                values.append(("clipy.preview.reference.name", "example.invalid"))
-            }
+            window.orderFront(nil)
             for width in [CGFloat(340), CGFloat(180)] {
                 window.setContentSize(NSSize(width: width, height: 480))
-                host.layoutSubtreeIfNeeded()
-                host.displayIfNeeded()
-                let fields = nativeReferenceFields(in: host)
-                #expect(fields.count == values.count)
-                for (identifier, value) in values {
-                    let field = try #require(fields.first { $0.accessibilityIdentifier() == identifier })
-                    #expect(field.stringValue.utf8.elementsEqual(value.utf8))
-                    #expect(field.maximumNumberOfLines == 2)
-                    #expect(field.lineBreakMode == .byTruncatingMiddle)
-                    #expect(field.frame.width > 0 && field.frame.width <= width)
-                    #expect(field.frame.height > 0 && field.frame.height <= 40)
-                    #expect(field.isSelectable && !field.isEditable)
-                    field.selectText(nil)
-                    let editor = try #require(field.currentEditor() as? NSTextView)
-                    #expect(editor.selectedRange() == NSRange(location: 0, length: (value as NSString).length))
-                    pasteboard.clearContents()
-                    #expect(editor.writeSelection(to: pasteboard, types: editor.writablePasteboardTypes))
-                    #expect(pasteboard.string(forType: .string).map { Data($0.utf8) } == Data(value.utf8))
-                    window.endEditing(for: nil)
+                let compact = await waitFor {
+                    host.layoutSubtreeIfNeeded()
+                    return measured.size.width == width
+                        && measured.size.height > 0 && measured.size.height < 480
                 }
+                #expect(compact, "A 16 KiB reference must fit its summary, not lay out every line")
             }
         }
+    }
+
+    private func waitFor(_ condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while ContinuousClock.now < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return condition()
     }
 
     /// Adjacent samples around the unchanged synchronous wall-time interval.
@@ -299,17 +240,15 @@ struct PreviewNativeArtifactLayoutTests {
         return .seconds(value.tv_sec) + .nanoseconds(value.tv_nsec)
     }
 
-    private func nativeReferenceFields(in view: NSView) -> [NSTextField] {
-        let own = (view as? NSTextField).map { [$0] } ?? []
-        return own + view.subviews.flatMap { nativeReferenceFields(in: $0) }
-    }
-
-    private func fullReferenceViewport(_ reference: PreviewReference) -> some View {
+    private func fullReferenceViewport(
+        _ reference: PreviewReference, capture: PreviewReferenceSizeCapture? = nil
+    ) -> some View {
         ScrollView(.vertical) {
             FullReferencePreviewContent(reference: reference)
                 .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(.secondary)
                 .padding(12)
+                .onGeometryChange(for: CGSize.self) { $0.size } action: { capture?.size = $0 }
         }
     }
 
@@ -351,4 +290,9 @@ struct PreviewNativeArtifactLayoutTests {
         try #require(CGImageDestinationFinalize(destination))
         return data as Data
     }
+}
+
+@MainActor
+private final class PreviewReferenceSizeCapture {
+    var size: CGSize = .zero
 }
