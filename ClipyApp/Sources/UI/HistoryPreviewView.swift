@@ -664,6 +664,7 @@ struct HistoryPreviewView: View {
                 } label: {
                     Image(systemName: "info.circle")
                         .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.primary)
                         .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
                 }
@@ -706,11 +707,12 @@ struct HistoryPreviewView: View {
                 if let row = observedRow {
                     Button { viewState.requestPasteFromDisplayedRow(row.item) } label: {
                         Image(systemName: "doc.on.doc")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.primary)
                             .frame(width: 24, height: 24)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
                     .controlSize(.mini)
                     .help(PanelActionsCopy.text("Copy to Clipboard") + "  ↵")

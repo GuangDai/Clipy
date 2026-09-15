@@ -58,7 +58,6 @@ struct HistoryRowView: View {
     private let onRemove: (HistoryItemID) -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
-    @State private var isHovered = false
     @State private var dragRegion = HistoryRowDragRegionView()
 
     @Environment(\.locale) private var locale
@@ -140,8 +139,7 @@ struct HistoryRowView: View {
         ) - 2 * PanelContentFit.listRowVerticalInset)
         .background {
             RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusSmall)
-                .fill(isSelected ? PanelTheme.selectedBackground
-                    : (isHovered ? Color.primary.opacity(0.045) : .clear))
+                .fill(isSelected ? PanelTheme.selectedBackground : .clear)
         }
     }
 
@@ -156,7 +154,6 @@ struct HistoryRowView: View {
         }
         .contentShape(Rectangle())
         .onHover { inside in
-            isHovered = inside
             // Use the same hit-tested row region as the visible hover state.
             // A transparent background sibling is not the row's event source.
             dragSource?.hover(row.item, region: dragRegion, isInside: inside)

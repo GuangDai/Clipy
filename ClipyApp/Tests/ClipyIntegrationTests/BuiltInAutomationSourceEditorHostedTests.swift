@@ -39,12 +39,17 @@ struct BuiltInAutomationSourceEditorHostedTests {
             editor.layoutManager?.ensureLayout(for: try #require(editor.textContainer))
         }
         #expect(abs(source.frame.height - result.frame.height) <= 1)
+        try #require(window.makeFirstResponder(result))
         result.selectAll(nil)
+        try #require(result.selectedRange() == NSRange(location: 0, length: (literal as NSString).length))
         let pasteboard = NSPasteboard(name: .init("clipy-workflow-result-\(UUID().uuidString)"))
         defer { pasteboard.clearContents() }
-        // The public multi-type entry declares the pasteboard flavors before
-        // calling NSTextView's single-type writer, as native Copy does.
-        #expect(result.writeSelection(to: pasteboard, types: [.string]))
+        // Native Copy asks the view which types its current selection can
+        // provide. A plain NSTextView need not advertise the modern .string
+        // spelling to its writer; NSPasteboard resolves the consumer's type.
+        let writableTypes = result.writablePasteboardTypes
+        try #require(!writableTypes.isEmpty)
+        #expect(result.writeSelection(to: pasteboard, types: writableTypes))
         #expect(pasteboard.string(forType: .string)?.utf8.elementsEqual(literal.utf8) == true)
 
         window.setContentSize(NSSize(width: 460, height: 220))

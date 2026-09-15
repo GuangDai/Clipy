@@ -118,6 +118,16 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), original)
+        // Exercise NSTextView's own native selection/Copy path, independently
+        // of the workflow's separate Copy result action and pasteboard writer.
+        result.click()
+        result.typeKey("a", modifierFlags: .command)
+        result.typeKey("c", modifierFlags: .command)
+        XCTAssertTrue(waitUntil {
+            NSPasteboard.general.string(forType: .string) == "\"playground\" -- result..."
+        }, app.debugDescription)
+        XCTAssertEqual(result.value as? String, "\"playground\" -- result...",
+                       "Copying a read-only result must leave its text unchanged")
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil { !source.exists && manage.isHittable }, app.debugDescription)
         app.buttons["clipy.settings.category.general"].click()

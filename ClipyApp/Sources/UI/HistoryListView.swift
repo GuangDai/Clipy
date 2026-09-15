@@ -204,14 +204,19 @@ struct HistoryListView: View {
             onRemove: { id in viewState.remove(id) },
             onShowDetails: onShowDetails
         )
-        .tag(row.item.id)
-        .listRowSeparator(.hidden)
-        .listRowInsets(EdgeInsets(
+        // Keep the insets inside our opaque content, so AppKit's unfocused
+        // selection cannot show as a gray surround behind the rounded row.
+        // The List still owns keyboard selection and scrolling.
+        .padding(EdgeInsets(
             top: PanelContentFit.listRowVerticalInset,
             leading: PanelContentFit.listRowHorizontalInset,
             bottom: PanelContentFit.listRowVerticalInset,
             trailing: PanelContentFit.listRowHorizontalInset
         ))
+        .background { NativePanelBackground() }
+        .tag(row.item.id)
+        .listRowSeparator(.hidden)
+        .listRowInsets(EdgeInsets())
         // Hover selection (Maccy's HoverSelectionModifier): the surface
         // state arbitrates pointer-vs-keyboard mode, so hover selects
         // without scrolling only in mouse mode and otherwise defers until
