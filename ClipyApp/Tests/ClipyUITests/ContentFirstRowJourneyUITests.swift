@@ -10,7 +10,7 @@ final class ContentFirstRowJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    func testLongContentKeepsAccessibleMetadataPinningAndKeyboardCopy() throws {
+    func testLongContentKeepsAccessibleMetadataPinningAndSingleClickCopy() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -41,7 +41,7 @@ final class ContentFirstRowJourneyUITests: XCTestCase {
         XCTAssertEqual(row.value as? String, "Copied 1 time")
         XCTAssertTrue(panel.frame.insetBy(dx: -2, dy: -2).contains(row.frame))
 
-        row.click()
+        HistoryJourneyControls.select(row, in: app)
         app.typeKey("p", modifierFlags: .command)
         XCTAssertTrue(waitUntil {
             rows.count == 1 && rows.element(boundBy: 0).identifier == identifier
@@ -59,8 +59,8 @@ final class ContentFirstRowJourneyUITests: XCTestCase {
         XCTAssertTrue(sentinel.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType")))
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.writeObjects([sentinel]))
-        app.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(waitUntil { pasteboard.string(forType: .string) == captured }, app.debugDescription)
+        rows.element(boundBy: 0).click()
+        XCTAssertTrue(waitUntil { !panel.exists && pasteboard.string(forType: .string) == captured }, app.debugDescription)
     }
 
     @MainActor

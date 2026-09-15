@@ -176,3 +176,15 @@ Keyboard selection and explicit row clicks update an open preview immediately. H
 dwells before switching content; entering the preview cancels a crossed row's
 pending demand and restores selection to the previewed item. Copy, Pin and
 Information therefore operate on the content the user approached.
+
+### Pointer activation and dismissal (2026-09-15 user direction)
+
+A single primary click selects that exact displayed row, copies its complete
+payload to the system clipboard, and closes only after the write succeeds.
+Dragging still exports without click activation. Keyboard navigation and hover
+remain available for inspection. One settled Escape closes ordinary browsing,
+including its search and passive preview. An explicit Quick Look/information
+popover dismisses first; editors retain unsaved-change confirmation and IME
+composition keeps its own Escape. Outside mouse clicks also close when AppKit
+does not transfer key status (for example, the desktop); preview controls and
+attached sheets remain inside the interaction surface.

@@ -96,9 +96,8 @@ enum PanelTheme {
         }
     }
 
-    // The pin badge (8pt bold capsule) and the type-symbol fallback (15pt)
-    // keep their fixed sizes: they scale with the density-owned thumbnail
-    // slot, not with the row's text settings.
+    // Pin symbols keep an 11pt semibold silhouette; their ordinal follows
+    // metadata typography. Type symbols fit the density-owned thumbnail slot.
 
     // MARK: Header, footer, and banner chrome
 

@@ -164,7 +164,7 @@ struct HistoryRowView: View {
             dragSource?.refresh(new, region: dragRegion)
         }
         .onDisappear { dragSource?.retire(row.item) }
-        .onTapGesture(count: 2) { onCopy(row.item) }
+        .onTapGesture() { onCopy(row.item) }
         .contextMenu { contextMenu }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("clipy.history.row.\(row.item.id.description)")
@@ -206,7 +206,7 @@ struct HistoryRowView: View {
     /// toggle, ⌫ remove, ⌘I details). The four `accessibilityAction`
     /// modifiers above are thin shells over this method so assistive
     /// activation and the direct tests share one path; the context menu,
-    /// double-click, and the menu's `.last` placement variants keep their
+    /// single-click, and the menu's `.last` placement variants keep their
     /// own call sites (zero behavior change).
     func performAccessibilityAction(
         _ action: HistoryRowAccessibilityAction
@@ -378,12 +378,12 @@ struct HistoryRowView: View {
         if let ordinal = pinnedOrdinal {
             HStack(spacing: PanelTheme.spacingXXXSmall) {
                 Image(systemName: "pin.fill")
-                    .imageScale(.small)
+                    .font(.system(size: 11, weight: .semibold))
                 Text(LocalizedCountPresentation.number(ordinal, locale: locale))
                     .monospacedDigit()
             }
-            .font(PanelTheme.metadataFont(for: fontSize))
-            .foregroundStyle(secondaryForeground)
+            .font(PanelTheme.metadataFont(for: fontSize).weight(.medium))
+            .foregroundStyle(isSelected ? PanelTheme.selectedForeground : Color.primary)
             .fixedSize()
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(PanelActionsCopy.pinnedPosition(ordinal, bundle: copyBundle, locale: locale))

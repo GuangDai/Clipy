@@ -194,7 +194,11 @@ struct HistoryListView: View {
             areShortcutsEnabled: areShortcutsEnabled,
             thumbnails: thumbnails,
             dragSource: dragSource,
-            onCopy: { viewState.requestPasteFromDisplayedRow($0) },
+            onCopy: { reference in
+                selection.wrappedValue = reference.id
+                onFocusHistory()
+                viewState.requestPasteFromDisplayedRow(reference)
+            },
             onPin: { id, placement in viewState.pin(id, at: placement) },
             onUnpin: { id in viewState.unpin(id) },
             onRemove: { id in viewState.remove(id) },
@@ -208,16 +212,6 @@ struct HistoryListView: View {
             bottom: PanelContentFit.listRowVerticalInset,
             trailing: PanelContentFit.listRowHorizontalInset
         ))
-        // Clicking even the already-selected row transfers keyboard intent
-        // out of search, so Space opens Quick Look instead of editing the
-        // query. Keep this simultaneous with the row's double-click Copy;
-        // a single click only selects and changes focus (Card 14A).
-        .simultaneousGesture(
-            TapGesture().onEnded {
-                selection.wrappedValue = row.item.id
-                onFocusHistory()
-            }
-        )
         // Hover selection (Maccy's HoverSelectionModifier): the surface
         // state arbitrates pointer-vs-keyboard mode, so hover selects
         // without scrolling only in mouse mode and otherwise defers until

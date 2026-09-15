@@ -141,14 +141,14 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         ).firstMatch.exists, app.debugDescription)
         XCTAssertFalse(FileManager.default.fileExists(atPath: expectedPath))
 
-        // Transfer focus out of Search with a real row click. Space opens
+        // Transfer focus out of Search with keyboard navigation. Space opens
         // Clipy's overlay for the same retained reference, not system Quick
         // Look and not the target that was removed before preview began.
         let row = rows.matching(NSPredicate(
             format: "identifier == %@", capturedRowIdentifier
         )).firstMatch
         XCTAssertTrue(row.exists && row.isHittable, app.debugDescription)
-        row.click()
+        HistoryJourneyControls.select(row, in: app)
         let quickLook = app.descendants(matching: .any)["clipy.panel.quicklook"]
         XCTAssertFalse(quickLook.exists, app.debugDescription)
         app.typeKey(.space, modifierFlags: [])

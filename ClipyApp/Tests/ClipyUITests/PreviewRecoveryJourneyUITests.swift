@@ -107,7 +107,7 @@ final class PreviewRecoveryJourneyUITests: XCTestCase {
             $0.identifier != unsupportedID
         })
         XCTAssertTrue(malformedRow.isHittable, diagnostic(app, context: "malformed row selection"))
-        malformedRow.click()
+        HistoryJourneyControls.select(malformedRow, in: app)
         let failed = app.descendants(matching: .any)["clipy.preview.failed"]
         XCTAssertTrue(
             failed.waitForExistence(timeout: 10),

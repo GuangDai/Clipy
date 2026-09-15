@@ -84,7 +84,7 @@ final class KeyboardShortcutsJourneyUITests: XCTestCase {
             format: "identifier BEGINSWITH %@", "clipy.history.row."
         )).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
-        row.click()
+        HistoryJourneyControls.select(row, in: app)
         app.typeKey("k", modifierFlags: [.command, .shift])
         XCTAssertTrue(waitUntil { row.label.contains("Pinned at position 1") }, app.debugDescription)
         app.typeKey("p", modifierFlags: .command)
@@ -99,7 +99,7 @@ final class KeyboardShortcutsJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil { pinRecord.value as? String == "Not set" })
         showPanel(fromSettingsIn: app)
         XCTAssertTrue(row.waitForExistence(timeout: 5))
-        row.click()
+        HistoryJourneyControls.select(row, in: app)
         app.typeKey("k", modifierFlags: [.command, .shift])
         XCTAssertFalse(waitUntil(timeout: 1) { !row.label.contains("Pinned at position 1") },
                        "An explicitly cleared shortcut must not dispatch its former action")

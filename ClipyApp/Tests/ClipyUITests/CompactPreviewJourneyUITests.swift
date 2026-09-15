@@ -80,7 +80,7 @@ final class CompactPreviewJourneyUITests: XCTestCase {
             "clipy.history.row.", "A longer thought."
         )).firstMatch
         XCTAssertTrue(longRow.waitForExistence(timeout: 10))
-        longRow.click()
+        HistoryJourneyControls.select(longRow, in: app)
         XCTAssertTrue(waitUntil {
             text.exists && self.value(text).contains("Content earns its space.")
                 && preview.frame.height > shortHeight + 100
@@ -106,7 +106,7 @@ final class CompactPreviewJourneyUITests: XCTestCase {
             format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
             "clipy.history.row.", short
         )).firstMatch
-        shortRow.click()
+        HistoryJourneyControls.select(shortRow, in: app)
         XCTAssertTrue(waitUntil {
             text.exists && self.value(text) == short && abs(preview.frame.height - shortHeight) < 3
         }, app.debugDescription)

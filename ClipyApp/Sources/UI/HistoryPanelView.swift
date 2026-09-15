@@ -1176,12 +1176,9 @@ struct HistoryPanelView: View {
 
     // MARK: Hidden shortcuts
 
-    /// At the list root, Esc dismisses preview information, then Quick Look, then
-    /// the floating preview pane (a manual close that suppresses auto-open until
-    /// the selection changes), then clears the search term, and otherwise asks
-    /// the hosting panel to close (Maccy's KeyChord `.escape` → `close`). A
-    /// pushed Details/editor destination owns Esc itself; retaining this root
-    /// shortcut there would bypass the editor's dirty-discard confirmation.
+    /// At the list root, one Esc closes the panel, including its passive preview
+    /// and current search. Explicit information/Quick Look overlays dismiss first;
+    /// Details and editors retain their own navigation and dirty-draft handling.
     /// Space toggles the quick-look overlay (Maccy's Quick Look chord): gated
     /// like the list's ⌫ shortcut
     /// — disabled while the search field has focus, so Space keeps editing
@@ -1216,16 +1213,11 @@ struct HistoryPanelView: View {
                 .disabled(previewSelection.reference == nil)
             }
             if surfaceState.detailsPath.isEmpty {
-                Button(PanelFooterCopy.text("Clear Search or Close")) {
+                Button(PanelFooterCopy.text("Close Panel")) {
                     if previewState.isInformationPresented {
                         previewState.isInformationPresented = false
                     } else if surfaceState.quickLookReference != nil {
                         surfaceState.quickLookReference = nil
-                    } else if previewState.dismissPreview() {
-                        // The floating preview took this Esc; the next one
-                        // continues down the chain.
-                    } else if viewState.isSearchActive {
-                        viewState.clearSearch()
                     } else {
                         onRequestClose()
                     }
