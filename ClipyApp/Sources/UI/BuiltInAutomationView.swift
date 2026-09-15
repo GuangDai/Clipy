@@ -137,7 +137,7 @@ struct BuiltInAutomationView: View {
                     Button(text("Preview result")) {
                         executionMessage = nil
                         model.preview(input: input, steps: workflow.steps,
-                                      workflow: apply == nil ? workflow : nil, history: history)
+                                      workflow: apply == nil ? workflow : nil, history: history, notificationName: workflow.name)
                     }
                         .disabled(!canRun)
                         .accessibilityIdentifier("clipy.workflow.preview")
@@ -146,7 +146,7 @@ struct BuiltInAutomationView: View {
                     Button(text("Run workflow")) {
                         executionMessage = nil
                         model.preview(input: input, steps: workflow.steps, runEffects: true,
-                                      workflow: apply == nil ? workflow : nil, history: history)
+                                      workflow: apply == nil ? workflow : nil, history: history, notificationName: workflow.name)
                     }
                     .disabled(!canRun || !workflow.trigger.includesManual)
                     .accessibilityIdentifier("clipy.workflow.run")

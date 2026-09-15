@@ -111,9 +111,9 @@ final class BuiltInAutomationLibrary {
 final class BuiltInAutomationModel {
     private(set) var output: BuiltInAutomationOutput?
     var result: String? { output?.matchedConditions == true ? output?.value.text : nil }
-    @ObservationIgnored private let notify: @Sendable () async throws -> Void
+    @ObservationIgnored private let notify: @Sendable (String) async throws -> Void
 
-    init(notify: @escaping @Sendable () async throws -> Void = BuiltInAutomationNotifications.send) {
+    init(notify: @escaping @Sendable (String) async throws -> Void = BuiltInAutomationNotifications.send) {
         self.notify = notify
     }
     private(set) var failure: BuiltInAutomationFailure?
@@ -147,7 +147,8 @@ final class BuiltInAutomationModel {
     }
 
     func preview(input: BuiltInAutomationInput, steps: [BuiltInAutomationStep], runEffects: Bool = false,
-                 workflow: BuiltInAutomationWorkflow? = nil, history: (any ClipboardHistory)? = nil) {
+                 workflow: BuiltInAutomationWorkflow? = nil, history: (any ClipboardHistory)? = nil,
+                 notificationName: String = "") {
         invalidate()
         let request = generation
         previewSource = input
@@ -168,7 +169,7 @@ final class BuiltInAutomationModel {
                 guard let self, self.generation == request, !Task.isCancelled else { return }
                 self.output = value
                 if runEffects && value.matchedConditions && value.requestsNotification {
-                    try await self.notify()
+                    try await self.notify(workflow?.name ?? notificationName)
                     guard self.generation == request, !Task.isCancelled else { return }
                 }
                 self.isRunning = false

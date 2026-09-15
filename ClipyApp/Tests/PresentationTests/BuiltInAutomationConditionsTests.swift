@@ -42,7 +42,7 @@ struct BuiltInAutomationConditionsTests {
 
     @MainActor @Test func previewIsInertAndManualRunNotifiesOnlyOnMatch() async throws {
         let notifications = NotificationCounter()
-        let model = BuiltInAutomationModel(notify: { await notifications.record() })
+        let model = BuiltInAutomationModel(notify: { await notifications.record($0) })
         let steps: [BuiltInAutomationStep] = [.init(operation: .matchesRegex, find: "TODO: [0-9]+"), .init(operation: .notify)]
         model.preview(input: .text("TODO: 42"), steps: steps)
         await wait(model)
@@ -67,7 +67,7 @@ struct BuiltInAutomationConditionsTests {
         workflow.scope.applications = "com.example.Editor"
         try BuiltInAutomationLibrary(defaults: defaults).save(workflow)
         let notifications = NotificationCounter()
-        let runner = BuiltInAutomationAutomaticRunner(defaults: defaults, notify: { await notifications.record() })
+        let runner = BuiltInAutomationAutomaticRunner(defaults: defaults, notify: { await notifications.record($0) })
         defer { runner.stop() }
         #expect(await notifications.count == 0, "Saving/enabling definitions must not scan old clipboard history")
         runner.submit(capture("TODO: one", app: "com.example.Other"))
@@ -79,6 +79,7 @@ struct BuiltInAutomationConditionsTests {
         runner.submit(capture("TODO: one", app: "com.example.Editor"))
         await runner.waitForPendingWorkForTesting()
         #expect(await notifications.count == 1)
+        #expect(await notifications.names == ["TODO"])
         workflow.trigger = .manual
         try BuiltInAutomationLibrary(defaults: defaults).save(workflow)
         runner.submit(capture("TODO: two", app: "com.example.Editor"))
@@ -106,6 +107,21 @@ struct BuiltInAutomationConditionsTests {
         #expect(result.value.text == "TODO recent")
         #expect(result.requestsNotification)
         #expect(try await history.browse(.init(kind: .recent, limit: 10)) == before)
+    }
+
+    @Test func historyRangeSpansPagesWithoutChangingCursorQuery() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        for index in 0..<52 {
+            _ = try await history.perform(.capture(capture("matching-\(index)", app: "com.example.Editor")))
+        }
+        var workflow = BuiltInAutomationWorkflow(name: "Matching rows", steps: [
+            .init(operation: .containsText, find: "matching-")
+        ])
+        workflow.scope.source = .history
+        workflow.scope.historyLimit = 51
+        let result = try await BuiltInAutomation.evaluateManual(input: .text(""), workflow: workflow, history: history)
+        #expect(result.matchedItemCount == 51)
+        #expect(result.value.text == "matching-51")
     }
 
     @MainActor @Test func systemOCRFeedsTextConditionsAndPreservesOriginalImage() async throws {
@@ -148,6 +164,7 @@ struct BuiltInAutomationConditionsTests {
 }
 
 private actor NotificationCounter {
-    private(set) var count = 0
-    func record() { count += 1 }
+    private(set) var names: [String] = []
+    var count: Int { names.count }
+    func record(_ name: String) { names.append(name) }
 }

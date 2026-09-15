@@ -248,7 +248,7 @@ final class AppComposition {
     private var captureTask: Task<Void, Never>?
     private var activeCaptureBytes = 0
     private var pendingCapture: AdmittedCapture?
-    let workflowRunner = BuiltInAutomationAutomaticRunner()
+    private(set) var workflowRunner = BuiltInAutomationAutomaticRunner()
     private var isStartingCaptureObservation = false
     private var replacedCaptureCount = 0
     private var failedCaptureCount = 0
@@ -776,7 +776,8 @@ final class AppComposition {
         captureAccessBehaviorProvider:
             (@MainActor () -> PasteboardAccessBehavior)? = nil,
         capturePauseSleep:
-            (@MainActor @Sendable (Duration) async throws -> Void)? = nil
+            (@MainActor @Sendable (Duration) async throws -> Void)? = nil,
+        workflowRunner: BuiltInAutomationAutomaticRunner? = nil
     ) -> AppComposition {
         let composition = AppComposition(
             history: history,
@@ -788,6 +789,7 @@ final class AppComposition {
                 ?? captureAccessBehaviorProvider?(),
             capturePauseDuration: capturePauseDuration
         )
+        if let workflowRunner { composition.workflowRunner = workflowRunner }
         composition.pasteWriteFailureForTesting = pasteWriteFailure
         composition.nextCaptureFailureForTesting = initialCaptureFailure
         composition.captureAccessBehaviorForTesting =

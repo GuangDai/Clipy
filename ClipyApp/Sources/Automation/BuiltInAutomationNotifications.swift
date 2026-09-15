@@ -5,7 +5,7 @@ import UserNotifications
 /// only by an explicit Run containing an enabled notification step, after every
 /// transformation succeeds. Preview and Save never enter this effect.
 enum BuiltInAutomationNotifications {
-    static func send() async throws {
+    static func send(workflowName: String) async throws {
         try Task.checkCancellation()
         let center = UNUserNotificationCenter.current()
         do {
@@ -15,7 +15,8 @@ enum BuiltInAutomationNotifications {
             try Task.checkCancellation()
             let content = UNMutableNotificationContent()
             content.title = "Clipy"
-            content.body = BuiltInAutomationCopy.text("Workflow conditions matched.")
+            let message = BuiltInAutomationCopy.text("Workflow conditions matched.")
+            content.body = workflowName.isEmpty ? message : String(workflowName.prefix(200)) + "\n" + message
             content.sound = .default
             try await center.add(UNNotificationRequest(
                 identifier: "clipy.workflow.\(UUID().uuidString)", content: content, trigger: nil

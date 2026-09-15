@@ -60,12 +60,15 @@ extension BuiltInAutomation {
             guard (1...1000).contains(remaining), workflow.scope.validTimeRange else {
                 throw BuiltInAutomationFailure.invalidScope
             }
+            // History cursors bind the original request limit. Keep it
+            // constant, then truncate the last page to the user's range.
+            let pageSize = min(remaining, 50)
             var cursor: HistoryPageCursor?
             var first: BuiltInAutomationOutput?
             var count = 0
             repeat {
                 try Task.checkCancellation()
-                let page = try await history.browse(.init(kind: .recent, limit: min(remaining, 50), cursor: cursor))
+                let page = try await history.browse(.init(kind: .recent, limit: pageSize, cursor: cursor))
                 for row in page.rows.prefix(remaining) {
                     remaining -= 1
                     guard workflow.scope.includes(application: row.lastSource, copiedAt: row.lastCopiedAt, now: now) else { continue }
@@ -93,12 +96,12 @@ extension BuiltInAutomation {
 final class BuiltInAutomationAutomaticRunner {
     private var task: Task<Void, Never>?
     private var pending: ClipboardCapture?
-    private let notify: @Sendable () async throws -> Void
+    private let notify: @Sendable (String) async throws -> Void
     private let defaults: UserDefaults
     private(set) var lastFailure: BuiltInAutomationFailure?
 
     init(defaults: UserDefaults = .standard,
-         notify: @escaping @Sendable () async throws -> Void = BuiltInAutomationNotifications.send) {
+         notify: @escaping @Sendable (String) async throws -> Void = BuiltInAutomationNotifications.send) {
         self.defaults = defaults
         self.notify = notify
     }
@@ -131,7 +134,7 @@ final class BuiltInAutomationAutomaticRunner {
                         } onCancel: { computation.cancel() }
                         try Task.checkCancellation()
                         guard BuiltInAutomationLibrary(defaults: defaults).workflows.contains(workflow) else { continue }
-                        if result.matchedConditions && result.requestsNotification { try await notify() }
+                        if result.matchedConditions && result.requestsNotification { try await notify(workflow.name) }
                         lastFailure = nil
                     } catch is CancellationError { break }
                     catch { lastFailure = (error as? BuiltInAutomationFailure) ?? .notificationFailed }

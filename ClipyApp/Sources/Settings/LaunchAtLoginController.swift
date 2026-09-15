@@ -66,8 +66,8 @@ struct LaunchAtLoginOperations {
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> LaunchAtLoginOperations? {
         guard environment["CLIPY_RUNNING_UI_TEST"] == "1",
-              environment["CLIPY_UI_TEST_LAUNCH_AT_LOGIN_STATUS"]
-                == "requires-approval",
+              let initialStatus = environment["CLIPY_UI_TEST_LAUNCH_AT_LOGIN_STATUS"],
+              ["requires-approval", "not-found"].contains(initialStatus),
               let markerPath = environment[
                   "CLIPY_UI_TEST_LOGIN_ITEMS_SETTINGS_MARKER_PATH"
               ],
@@ -84,7 +84,8 @@ struct LaunchAtLoginOperations {
         else { return nil }
 
         let state = RunningUITestLaunchAtLoginState(
-            markerURL: markerURL
+            markerURL: markerURL,
+            status: initialStatus == "not-found" ? .notFound : .requiresApproval
         )
         return state.operations
     }
@@ -104,8 +105,9 @@ private final class RunningUITestLaunchAtLoginState {
     private var status: LaunchAtLoginSystemStatus = .requiresApproval
     private let markerURL: URL
 
-    init(markerURL: URL) {
+    init(markerURL: URL, status: LaunchAtLoginSystemStatus) {
         self.markerURL = markerURL
+        self.status = status
     }
 
     var operations: LaunchAtLoginOperations {
@@ -224,13 +226,17 @@ final class LaunchAtLoginController {
         for status: LaunchAtLoginSystemStatus
     ) -> LaunchAtLoginState {
         switch status {
-        case .notRegistered:
+        case .notRegistered, .notFound:
+            // ServiceManagement may report notFound before it has ever seen
+            // this service. Allow the user's first register attempt instead
+            // of permanently disabling the toggle; register errors remain
+            // visible and its fresh status is authoritative (Apple DTS 719862).
             .off
         case .enabled:
             .on
         case .requiresApproval:
             .requiresApproval
-        case .notFound, .unknown:
+        case .unknown:
             .unavailable
         }
     }

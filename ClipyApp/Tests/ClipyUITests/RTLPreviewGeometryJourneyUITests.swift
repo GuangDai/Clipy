@@ -71,9 +71,6 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         // unresolved issue; launch preferences provide only this setup.
         // Move the real pointer using the visible panel, then start a fresh
         // dwell at x=40 with room for the 360-point panel and trailing pane.
-        app.typeKey("c", modifierFlags: [.command, .shift])
-        XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
-        HistoryJourneyControls.selectFirst(in: app)
         panel.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
             .withOffset(CGVector(dx: 40 - panel.frame.minX, dy: 0))
             .hover()

@@ -214,12 +214,14 @@ final class AppearanceJourneyUITests: XCTestCase {
             diagnostic(app, context: "auto-open preference restored")
         )
         // Same tab-neutral finish as the density restore above, then prove
-        // the gate reopened: the resummoned panel's own selection dwell
-        // presents the floating pane without any further input.
+        // the gate reopened: intentional keyboard selection starts the
+        // dwell, while simply reopening the panel leaves preview closed.
         let generalTab = app.buttons["clipy.settings.category.general"]
         assertExists(generalTab, timeout: 5, in: app, context: "General tab")
         generalTab.click()
         closeSettingsAndSummonPanel(control: generalTab, panel: panel, app: app)
+        XCTAssertFalse(preview.exists)
+        HistoryJourneyControls.selectFirst(in: app)
         assertExists(
             preview,
             timeout: 10,

@@ -30,8 +30,8 @@ duplicate lines, sort lines, uppercase, lowercase, format JSON, compact JSON and
 literal case-sensitive find/replace. Line operations normalize CRLF/CR to LF;
 deduplication compares exact UTF-8 bytes and preserves first occurrence; sorting
 uses UTF-8 lexical order. JSON is validated, then formatted without rewriting
-number spellings, repeated keys, string escapes, or key order. Replacement text
-is literal, with no regular expressions, interpolation or executable language.
+number spellings, repeated keys, string escapes, or key order. The literal replacement step treats replacement text literally. Separate regex
+conditions, extraction and capture-template replacement are defined below.
 
 One preview accepts at most 1 MiB of UTF-8 source and output, 32 steps and 50,000
 lines for line operations. Output expansion is checked while constructing JSON

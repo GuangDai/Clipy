@@ -81,8 +81,9 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil { rows.count == 1 }, app.debugDescription)
         let emptySearchFrame = search.frame
 
-        // No mouse focus repair: compact mode controls preserve the active
-        // editor and every subsequent query character at the narrow width.
+        // Return from the preview-inspection setup to Search. From this
+        // point, mode changes must preserve the active editor without repair.
+        search.click()
         app.typeKey("3", modifierFlags: .command)
         app.typeText("^clipy.*alpha$")
         let clear = app.buttons["clipy.search.clear"]
