@@ -119,3 +119,5 @@
 "Automatic runs check new copies only, never existing history. Save the workflow to enable automatic runs. Source and time filters need a recorded copy; untracked manual input will not match these filters." = "自动运行只检查新复制的内容，不扫描已有历史。保存工作流后自动运行才会生效。来源与时间过滤需要复制记录；没有记录的手动输入不会满足这些限制。";
 "Checks the selected range in history order. Source and time filters use each item's most recent copy." = "按历史顺序检查指定范围。来源与时间过滤使用各条目最近一次复制的信息。";
 "items matched. Showing the first result; Copy result copies only this result." = "项满足条件。当前显示第一个结果；“复制结果”仅复制此结果。";
+
+"The regular expression engine could not finish. Simplify the pattern or shorten the input." = "正则引擎无法完成处理，请简化表达式或缩短输入。";

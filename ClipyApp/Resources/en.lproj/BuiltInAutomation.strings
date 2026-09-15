@@ -119,3 +119,5 @@
 "Automatic runs check new copies only, never existing history. Save the workflow to enable automatic runs. Source and time filters need a recorded copy; untracked manual input will not match these filters." = "Automatic runs check new copies only, never existing history. Save the workflow to enable automatic runs. Source and time filters need a recorded copy; untracked manual input will not match these filters.";
 "Checks the selected range in history order. Source and time filters use each item's most recent copy." = "Checks the selected range in history order. Source and time filters use each item's most recent copy.";
 "items matched. Showing the first result; Copy result copies only this result." = "items matched. Showing the first result; Copy result copies only this result.";
+
+"The regular expression engine could not finish. Simplify the pattern or shorten the input." = "The regular expression engine could not finish. Simplify the pattern or shorten the input.";

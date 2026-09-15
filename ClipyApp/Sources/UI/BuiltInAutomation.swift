@@ -88,7 +88,7 @@ enum BuiltInAutomationFailure: Error, Equatable {
     case textTooLarge, tooManySteps, tooManyLines, emptyFind, invalidJSON
     case invalidWorkflow, unreadableWorkflows, workflowLimit, definitionTooLarge
     case requiresText, requiresImage, invalidImage, imageTooLarge, noRecognizedText, recognitionFailed
-    case invalidRegex, regexTimedOut, notificationDenied, notificationFailed, clipboardUnavailable
+    case invalidRegex, regexEngineFailed, regexTimedOut, notificationDenied, notificationFailed, clipboardUnavailable
     case conditionNotMet, notificationNeedsCondition, invalidScope, historyUnavailable
 
     var message: String {
@@ -104,6 +104,7 @@ enum BuiltInAutomationFailure: Error, Equatable {
         case .noRecognizedText: "Apple OCR found no text in this image. Try a clearer image."
         case .recognitionFailed: "Apple OCR could not read this image. Try another image."
         case .invalidRegex: "Enter a valid regular expression. Replacement templates support $1, $2 and other capture groups."
+        case .regexEngineFailed: "The regular expression engine could not finish. Simplify the pattern or shorten the input."
         case .regexTimedOut: "The regular expression took too long. Simplify the pattern and try again."
         case .notificationDenied: "The workflow finished, but notifications are disabled. Allow Clipy in System Settings > Notifications."
         case .notificationFailed: "The workflow finished, but its notification could not be sent."

@@ -111,6 +111,10 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
             result.exists && result.value as? String == "\"playground\" -- result..."
         }, app.debugDescription)
         XCTAssertFalse(app.buttons["clipy.workflow.apply"].exists, app.debugDescription)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Native workflow editor and preview"
+        attachment.lifetime = .keepAlways
+        add(attachment)
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), original)
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil { !source.exists && manage.isHittable }, app.debugDescription)

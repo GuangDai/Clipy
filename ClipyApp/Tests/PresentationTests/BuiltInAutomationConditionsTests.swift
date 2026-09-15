@@ -18,6 +18,14 @@ struct BuiltInAutomationConditionsTests {
             try BuiltInAutomation.run("text", steps: [.init(operation: .regexReplace, find: "(")])
         }
         #expect(throws: BuiltInAutomationFailure.textTooLarge) {
+            try BuiltInAutomation.run(String(repeating: "a", count: 1024), steps: [
+                .init(operation: .regexReplace, find: "(a{1024})", replacement: String(repeating: "$1", count: 1025))
+            ])
+        }
+    }
+
+    @Test func engineFailureDoesNotMisreportAValidPatternAsInvalidSyntax() throws {
+        #expect(throws: BuiltInAutomationFailure.regexEngineFailed) {
             try BuiltInAutomation.run(String(repeating: "a", count: 600_000), steps: [
                 .init(operation: .regexReplace, find: "(a+)", replacement: "$1$1")
             ])

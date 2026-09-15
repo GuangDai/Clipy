@@ -155,7 +155,7 @@ struct FilteredSelectionTests {
         await history.finishObservation()
     }
 
-    @Test func clearingAnEmptyFilterRestoresSelectionButSameQueryDeletionDoesNotRepick() async throws {
+    @Test func clearingAnEmptyFilterWaitsForNavigationAndDeletionDoesNotRepick() async throws {
         let (state, history) = activatedMixedState()
         defer { state.deactivate() }
         try #require(await pollUntil { state.rows.count == 5 })
@@ -176,6 +176,8 @@ struct FilteredSelectionTests {
         #expect(surface.selection == nil)
         try await publish(original, filter: .all, to: state, history: history)
         surface.reconcileSessionSelection(rows: state.rows, filter: .all)
+        #expect(surface.selection == nil)
+        surface.moveSelection(in: state.rows, direction: .next)
         #expect(surface.selection == original[0].item.id)
 
         // A later removal still clears the selection even with other visible
@@ -190,7 +192,7 @@ struct FilteredSelectionTests {
         await history.finishObservation()
     }
 
-    @Test func firstMatchingPageSelectsDefaultAfterEmptyOpen() async throws {
+    @Test func firstMatchingPageWaitsForNavigationAfterEmptyOpen() async throws {
         let (state, history) = activatedMixedState()
         defer { state.deactivate() }
         try #require(await pollUntil { state.rows.count == 5 })
@@ -201,6 +203,8 @@ struct FilteredSelectionTests {
         try await publish([original[0], original[2]], filter: .init(type: .text), to: state, history: history)
         surface.reconcileSessionSelection(rows: state.rows, hasAuthoritativeFirstPage: true, filter: .init(type: .text))
         surface.retargetHiddenSelectionToDisplayedDefault(displayedRows: state.displayedRows)
+        #expect(surface.selection == nil)
+        surface.moveSelection(in: state.rows, direction: .next)
         #expect(surface.selection == original[0].item.id)
 
         state.showsPinnedOnly = true
@@ -211,6 +215,8 @@ struct FilteredSelectionTests {
         second.reconcileSessionSelection(rows: state.rows, hasAuthoritativeFirstPage: true,
                                          filter: .init(type: .links, pinnedOnly: true))
         second.retargetHiddenSelectionToDisplayedDefault(displayedRows: state.displayedRows)
+        #expect(second.selection == nil)
+        second.moveSelection(in: state.rows, direction: .next)
         #expect(second.selection == original[1].item.id)
         await history.finishObservation()
     }

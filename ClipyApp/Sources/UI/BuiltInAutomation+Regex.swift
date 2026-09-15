@@ -38,7 +38,7 @@ extension BuiltInAutomation {
             do {
                 try Task.checkCancellation()
                 guard clock.now < deadline else { throw BuiltInAutomationFailure.regexTimedOut }
-                guard !flags.contains(.internalError) else { throw BuiltInAutomationFailure.invalidRegex }
+                guard !flags.contains(.internalError) else { throw BuiltInAutomationFailure.regexEngineFailed }
                 guard let match else { return }
                 if step.operation == .matchesRegex {
                     output = "matched"
