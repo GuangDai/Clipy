@@ -82,6 +82,8 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
             .any, identifier: manage.identifier
         ).firstMatch, app: app)
         manage.click()
+        app.descendants(matching: .any)["clipy.workflow.load"].click()
+        app.menuItems["New workflow"].click()
         let source = app.textViews["clipy.workflow.source"]
         XCTAssertTrue(source.waitForExistence(timeout: 5), app.debugDescription)
         source.click()
@@ -93,7 +95,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         source.typeText(testText)
         XCTAssertTrue(waitUntil { source.value as? String == testText },
                       "Literal input changed: \(String(reflecting: source.value as? String)); expected \(String(reflecting: testText))\n\(app.debugDescription)")
-        app.buttons["clipy.workflow.preview"].click()
+        clickPreview(in: app)
         let result = app.textViews["clipy.workflow.result"]
         XCTAssertTrue(waitUntil {
             result.exists && result.value as? String == "playground result"
@@ -106,7 +108,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         source.typeText(punctuation)
         XCTAssertTrue(waitUntil { source.value as? String == punctuation },
                       "Literal punctuation changed: \(String(reflecting: source.value as? String)); expected \(String(reflecting: punctuation))\n\(app.debugDescription)")
-        app.buttons["clipy.workflow.preview"].click()
+        clickPreview(in: app)
         XCTAssertTrue(waitUntil {
             result.exists && result.value as? String == "\"playground\" -- result..."
         }, app.debugDescription)
@@ -146,7 +148,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         let source = app.textViews["clipy.workflow.source"]
         source.click()
         source.typeText("ordinary text")
-        app.buttons["clipy.workflow.preview"].click()
+        clickPreview(in: app)
         let copy = app.buttons["clipy.workflow.copy"]
         XCTAssertTrue(waitUntil {
             app.staticTexts["Conditions did not match. No notification was sent."].exists && !copy.isEnabled
@@ -154,7 +156,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         source.click()
         source.typeKey("a", modifierFlags: .command)
         source.typeText("TODO: 42")
-        app.buttons["clipy.workflow.preview"].click()
+        clickPreview(in: app)
         XCTAssertTrue(waitUntil {
             app.descendants(matching: .any)["clipy.workflow.conditions-matched"].exists && copy.isEnabled
         }, app.debugDescription)
@@ -242,7 +244,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil { name.value as? String == firstName && source.value as? String == literal }, app.debugDescription)
         XCTAssertTrue(app.buttons["clipy.workflow.save"].isEnabled)
         app.buttons["clipy.workflow.save"].click()
-        app.buttons["clipy.workflow.preview"].click()
+        clickPreview(in: app)
         let result = app.textViews["clipy.workflow.result"]
         XCTAssertTrue(waitUntil { result.value as? String == literal.trimmingCharacters(in: .whitespacesAndNewlines) }, app.debugDescription)
         XCTAssertEqual(source.frame.width, result.frame.width, accuracy: 1)
@@ -280,6 +282,14 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
     }
 
     @MainActor
+    private func clickPreview(in app: XCUIApplication) {
+        let preview = app.buttons["clipy.workflow.preview"]
+        XCTAssertTrue(waitUntil { preview.exists && preview.isEnabled && preview.isHittable },
+                      "Preview must remain reachable within the display, including an attached Settings sheet.\n" + app.debugDescription)
+        preview.click()
+    }
+
+    @MainActor
     private func openEditor(in app: XCUIApplication) {
         let edit = app.buttons["Edit Content"]
         XCTAssertTrue(waitUntil { edit.exists && edit.isHittable }, app.debugDescription)
@@ -295,7 +305,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         let preview = app.buttons["clipy.workflow.preview"]
         XCTAssertTrue(preview.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertFalse(app.buttons["clipy.workflow.apply"].isEnabled, app.debugDescription)
-        preview.click()
+        clickPreview(in: app)
     }
 
     @MainActor

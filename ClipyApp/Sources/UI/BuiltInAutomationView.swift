@@ -61,8 +61,8 @@ struct BuiltInAutomationView: View {
                     editorHeader
                     Divider()
                     VSplitView {
-                        definitionArea.frame(minHeight: 230, idealHeight: 330)
-                        comparisonArea.frame(minHeight: 190, idealHeight: 250)
+                        definitionArea.frame(minHeight: 140, idealHeight: 330)
+                        comparisonArea.frame(minHeight: 150, idealHeight: 250)
                     }
                     Divider()
                     executionFooter
@@ -72,7 +72,10 @@ struct BuiltInAutomationView: View {
         }
         .font(.body)
         .controlSize(.regular)
-        .frame(minWidth: 900, idealWidth: 1060, minHeight: 650, idealHeight: 780)
+        // Attached sheets begin below the Settings toolbar. On a small
+        // display, a 650 pt minimum pushes Run/Preview underneath the Dock.
+        // Both editors scroll independently so the footer can stay visible.
+        .frame(minWidth: 900, idealWidth: 1060, minHeight: 560, idealHeight: 780)
         .onAppear {
             guard !hasAppeared else { return }
             hasAppeared = true

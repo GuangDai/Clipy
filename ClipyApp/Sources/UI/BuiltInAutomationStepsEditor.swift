@@ -144,6 +144,7 @@ private struct BuiltInAutomationStepCard: View {
         .padding(10)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.workflow.step." + step.id.uuidString)
     }
 

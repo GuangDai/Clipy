@@ -42,7 +42,9 @@ struct BuiltInAutomationSourceEditorHostedTests {
         result.selectAll(nil)
         let pasteboard = NSPasteboard(name: .init("clipy-workflow-result-\(UUID().uuidString)"))
         defer { pasteboard.clearContents() }
-        #expect(result.writeSelection(to: pasteboard, type: .string))
+        // The public multi-type entry declares the pasteboard flavors before
+        // calling NSTextView's single-type writer, as native Copy does.
+        #expect(result.writeSelection(to: pasteboard, types: [.string]))
         #expect(pasteboard.string(forType: .string)?.utf8.elementsEqual(literal.utf8) == true)
 
         window.setContentSize(NSSize(width: 460, height: 220))
