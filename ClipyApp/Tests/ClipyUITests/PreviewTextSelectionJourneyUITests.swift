@@ -2,7 +2,7 @@ import AppKit
 import XCTest
 
 /// Selecting text must not replace the display font or paragraph spacing.
-/// Uses the actual non-key floating pane and SwiftUI's native selection menu.
+/// Uses the actual floating pane and the macOS standard Copy command.
 final class PreviewTextSelectionJourneyUITests: XCTestCase {
     override func setUpWithError() throws {
         try super.setUpWithError()
@@ -60,10 +60,10 @@ final class PreviewTextSelectionJourneyUITests: XCTestCase {
         XCTAssertEqual(preview.frame.width, originalPreviewSize.width, accuracy: 1)
         XCTAssertEqual(preview.frame.height, originalPreviewSize.height, accuracy: 1)
 
-        firstWord.rightClick()
-        let copy = app.menuItems.matching(identifier: "Copy").firstMatch
-        XCTAssertTrue(copy.waitForExistence(timeout: 5), app.debugDescription)
-        copy.click()
+        // SwiftUI documents Edit > Copy / Command-C for selected macOS
+        // Text. It does not promise a contextual Copy menu; a global menu
+        // query can instead match the hidden Edit-menu command.
+        app.typeKey("c", modifierFlags: .command)
         XCTAssertTrue(waitUntil {
             pasteboard.string(forType: .string).map { Data($0.utf8) } == Data(selectedWord.utf8)
         }, "Copy must preserve the selected decomposed spelling, not copy the complete history item")

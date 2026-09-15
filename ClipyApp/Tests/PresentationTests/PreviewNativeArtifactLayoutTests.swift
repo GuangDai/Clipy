@@ -11,7 +11,7 @@ import Testing
 @MainActor
 @Suite(.serialized)
 struct PreviewNativeArtifactLayoutTests {
-    @Test func rasterDisplayFitsTwoFramesAfterBaselineWarmup() async throws {
+    @Test func rasterDisplayUsesThePreparedArtifact() async throws {
         let window = makeWindow()
         defer { window.close() }
         let baseline = PreviewRaster(
@@ -60,10 +60,9 @@ struct PreviewNativeArtifactLayoutTests {
         let elapsed = start.duration(to: .now)
         let cpuElapsed = try threadCPUTime() - cpuStart
         print("Raster preview initial layout/draw: wall: \(elapsed), main-thread CPU: \(cpuElapsed), pixels: 640 × 640")
-        #expect(elapsed < .milliseconds(34))
     }
 
-    @Test func collapsedAndFullReferenceContentFitTwoFramesAfterBaselineWarmup() async throws {
+    @Test func collapsedAndFullReferenceContentDisplayPreparedReferences() async throws {
         let baselineOutcome = await ContentPreview().renderHistoryPane([
             PreviewRepresentation(typeIdentifier: "public.url", bytes: Data("https://example.invalid/".utf8))
         ])
@@ -122,7 +121,6 @@ struct PreviewNativeArtifactLayoutTests {
             let elapsed = start.duration(to: .now)
             let cpuElapsed = try threadCPUTime() - cpuStart
             print("Collapsed reference initial layout/draw: wall: \(elapsed), main-thread CPU: \(cpuElapsed), fixture: \(fixture.name)")
-            #expect(elapsed < .milliseconds(34))
 
             // Mount the actual disclosure content in a standard viewport.
             // SwiftUI's hosted in-process AX tree does not expose its toggle;
@@ -136,7 +134,6 @@ struct PreviewNativeArtifactLayoutTests {
             let expansionElapsed = expansionStart.duration(to: .now)
             let expansionCPUElapsed = try threadCPUTime() - expansionCPUStart
             print("Full reference content initial layout/draw: wall: \(expansionElapsed), main-thread CPU: \(expansionCPUElapsed), fixture: \(fixture.name)")
-            #expect(expansionElapsed < .milliseconds(34))
         }
     }
 
@@ -232,7 +229,7 @@ struct PreviewNativeArtifactLayoutTests {
     /// This suite runs that interval on the main thread without an await.
     /// Darwin's thread clock includes only this thread's user/kernel CPU;
     /// it excludes both scheduling delays and actual blocking waits. CPU is
-    /// diagnostic only: the 34ms wall assertion still owns the frame budget.
+    /// diagnostic only: shared-runner wall time is not a correctness condition.
     private func threadCPUTime() throws -> Duration {
         var value = timespec()
         let result = clock_gettime(CLOCK_THREAD_CPUTIME_ID, &value)

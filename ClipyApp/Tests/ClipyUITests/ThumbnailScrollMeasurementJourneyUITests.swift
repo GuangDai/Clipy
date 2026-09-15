@@ -97,7 +97,7 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
 
         // A left-side preview can also contain a scroll view. This query
         // identifies History specifically, once the first PNG creates its List.
-        let scrollView = panel.scrollViews.containing(.outline, identifier: nil).firstMatch
+        let scrollView = panel.scrollViews["clipy.history.scroll"]
         // —— Seeding: maintain the real History viewport at the newest end
         //    while waiting for each distinct capture. Native List may preserve
         //    an old scroll anchor when a new row is prepended.

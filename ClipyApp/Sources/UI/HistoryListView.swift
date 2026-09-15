@@ -80,7 +80,6 @@ struct HistoryListView: View {
 
     @State private var dragSource = HistoryListDraggingView()
     @State private var viewportHeight: CGFloat = 0
-    @FocusState private var isListFocused: Bool
 
     var body: some View {
         // One list-owned timeline refreshes idle relative metadata each
@@ -146,10 +145,10 @@ struct HistoryListView: View {
             .background { NativePanelBackground() }
             .focusable()
             .focusEffectDisabled()
-            .focused($isListFocused)
-            .onChange(of: isSearchFieldFocused, initial: true) { _, focused in
-                isListFocused = !focused
-            }
+            // Search owns explicit focus requests on open, Back and Clear.
+            // The scroll view receives focus through actual keyboard/mouse
+            // navigation, never by mirroring an earlier search-focus value.
+            .accessibilityIdentifier("clipy.history.scroll")
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
             .onChange(of: selection.wrappedValue) { _, selected in
                 // Pointer hover must never scroll rows out from under the mouse.

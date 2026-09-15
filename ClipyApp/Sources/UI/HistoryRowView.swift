@@ -166,6 +166,7 @@ struct HistoryRowView: View {
         .onTapGesture() { onCopy(row.item) }
         .contextMenu { contextMenu }
         .accessibilityElement(children: .combine)
+        .accessibilityLabel(Text(verbatim: rowAccessibilityLabel))
         .accessibilityIdentifier("clipy.history.row.\(row.item.id.description)")
         .accessibilityAddTraits(rowAccessibilityTraits)
         .accessibilityValue(copyAccessibilityLabel)
@@ -185,6 +186,18 @@ struct HistoryRowView: View {
     }
 
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
+
+    /// Publish the current row facts as one label. Lazy row reuse must not
+    /// depend on AppKit re-aggregating a newly inserted pin badge's children.
+    private var rowAccessibilityLabel: String {
+        var parts = [row.title]
+        if let snippet = row.search?.snippet, !snippet.isEmpty { parts.append(snippet) }
+        if row.sourceCount > 1 { parts.append(PreviewCopy.text("Multiple Applications")) }
+        if let pinnedOrdinal {
+            parts.append(PanelActionsCopy.pinnedPosition(pinnedOrdinal, bundle: copyBundle, locale: locale))
+        }
+        return parts.joined(separator: ", ")
+    }
 
     private var rowAccessibilityTraits: AccessibilityTraits {
         isSelected ? [.isButton, .isSelected] : .isButton
