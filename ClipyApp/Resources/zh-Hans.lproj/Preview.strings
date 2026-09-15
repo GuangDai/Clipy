@@ -28,6 +28,7 @@
 "The file is too large to preview." = "文件过大，无法预览。";
 "This file type cannot be previewed." = "无法预览此文件类型。";
 "Only the reference is shown. Loading its contents requires confirmation." = "当前仅显示文件引用。加载文件内容需要确认。";
+"Copying keeps the original file reference." = "复制时仍保留原文件引用。";
 "Previous PDF Page" = "上一页 PDF";
 "Next PDF Page" = "下一页 PDF";
 "Page %@ of %@" = "第 %@ 页，共 %@ 页";

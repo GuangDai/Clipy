@@ -8,7 +8,7 @@ import Testing
 
 @MainActor
 struct FilePDFNavigationTests {
-    @Test func confirmedPDFPagesUseOneSnapshotAndBackRequiresANewExplicitRead() async throws {
+    @Test func requestedPDFPagesUseOneSnapshotAndBackRequiresANewExplicitRead() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let address = "file:///not-opened/preview.pdf"
         let item = try await capture(address, in: history)
@@ -18,8 +18,7 @@ struct FilePDFNavigationTests {
         await loader.load(item: item)
         #expect(loader.loadFilePDFPage(2) == nil)
         #expect(await reads.count == 0)
-        loader.requestFilePreview()
-        let firstLoad = try #require(loader.confirmFilePreview())
+        let firstLoad = try #require(loader.requestFilePreview())
         await firstLoad.value
         #expect(loader.pdfPageNumber == 1)
         #expect(loader.pdfPageCount == 2)
@@ -28,7 +27,7 @@ struct FilePDFNavigationTests {
         #expect(loader.filePreviewSourceByteCount == original.count)
 #endif
         // The external file has changed. Navigation must still use the one
-        // document the user confirmed, not quietly read the replacement.
+        // document the user opened, not quietly read the replacement.
         await reads.replace(with: Data("not a PDF anymore".utf8))
         let next = try #require(loader.loadFilePDFPage(2))
         #expect(loader.raster == nil)
@@ -55,8 +54,7 @@ struct FilePDFNavigationTests {
 #if DEBUG
         #expect(loader.filePreviewSourceByteCount == 0)
 #endif
-        loader.requestFilePreview()
-        let changedFile = try #require(loader.confirmFilePreview())
+        let changedFile = try #require(loader.requestFilePreview())
         await changedFile.value
         #expect(await reads.count == 2)
         #expect(loader.phase == .failed)
@@ -75,9 +73,8 @@ struct FilePDFNavigationTests {
         let reads = PDFFileReads(bytes: try pdfData())
         let loader = PreviewContentLoader(history: history, filePreviewSettings: .init(load: { await reads.load($0) }))
         await loader.load(item: item)
-        loader.requestFilePreview()
         if wasLoaded {
-            let task = try #require(loader.confirmFilePreview())
+            let task = try #require(loader.requestFilePreview())
             await task.value
             let page = try #require(loader.loadFilePDFPage(2))
             await page.value
@@ -105,8 +102,7 @@ struct FilePDFNavigationTests {
 #if DEBUG
         #expect(loader.filePreviewSourceByteCount == 0)
 #endif
-        loader.requestFilePreview()
-        let reload = try #require(loader.confirmFilePreview())
+        let reload = try #require(loader.requestFilePreview())
         await reload.value
         #expect(loader.pdfPageNumber == 1)
         #expect(await reads.count == (wasLoaded ? 2 : 1))
@@ -123,8 +119,7 @@ struct FilePDFNavigationTests {
         let reads = PDFFileReads(bytes: try pdfData())
         let loader = PreviewContentLoader(history: history, filePreviewSettings: .init(load: { await reads.load($0) }))
         await loader.load(item: item)
-        loader.requestFilePreview()
-        let initialLoad = try #require(loader.confirmFilePreview())
+        let initialLoad = try #require(loader.requestFilePreview())
         await initialLoad.value
         let suspension = FilePDFPageSuspension()
         let pending = ContentPreviewDebugInstrumentation.$renderDidStart.withValue({

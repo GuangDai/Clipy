@@ -88,6 +88,9 @@ final class PreviewTextSelectionJourneyUITests: XCTestCase {
         // reach Search without another click or explicit focus request.
         app.typeText(" when")
         XCTAssertTrue(waitUntil { search.value as? String == "spelling when" }, app.debugDescription)
+        XCTAssertTrue(waitUntil {
+            originalRow.exists && originalRow.isSelected && text.exists && self.value(text) == source
+        }, "Refining a matching query must preserve its selected row and preview without another arrow key.\n" + app.debugDescription)
 
         firstWord.doubleClick()
         let information = preview.buttons["clipy.preview.information"]

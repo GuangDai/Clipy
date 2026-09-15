@@ -28,6 +28,7 @@
 "The file is too large to preview." = "The file is too large to preview.";
 "This file type cannot be previewed." = "This file type cannot be previewed.";
 "Only the reference is shown. Loading its contents requires confirmation." = "Only the reference is shown. Loading its contents requires confirmation.";
+"Copying keeps the original file reference." = "Copying keeps the original file reference.";
 "Previous PDF Page" = "Previous PDF Page";
 "Next PDF Page" = "Next PDF Page";
 "Page %@ of %@" = "Page %@ of %@";

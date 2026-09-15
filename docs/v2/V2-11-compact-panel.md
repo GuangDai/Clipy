@@ -234,3 +234,24 @@ its bounded segments and lazy groups instead of joining large source strings.
 Window placement, clipboard/drag payloads, physical mouse tracking, shortcut
 recording and the search/literal-input text-system behavior retain their narrow
 AppKit integration; they do not draw an additional history selection background.
+
+
+### Copied local PDF files (2026-09-15 user correction)
+
+Selecting a copied local PDF file reference opens its first PDF page directly
+in the visible preview, without a separate Load File confirmation. Hover
+preparation still reads only the History payload; the visible view starts the
+existing bounded local-file loader after joining that preparation. The renderer
+continues to validate the PDF bytes. Page navigation reuses the immutable
+loaded document, and Copy/Return retain the original History file reference.
+
+Back to File Reference keeps the reference visible. An explicit PDF reload
+reads the current file without confirmation; a failed read does not retry
+automatically. Other local file types keep their existing confirmation flow,
+and website references remain inert. Closing, changing the target or purging
+the item retires outstanding local reads and discards the document.
+
+A search reload's temporary empty rows preserve the selected preview. Only an
+authoritative replacement that removes its target closes it. Clicking a preview
+allows native text-selection Copy; opening the preview itself preserves Search
+focus, and Return from the preview copies the original History item.

@@ -702,6 +702,10 @@ struct HistoryPanelView: View {
                     previewState.refreshOpenPreview(target)
                     return
                 }
+                // A search restart clears rows before publishing its replacement
+                // page. Keep the current preview through that loading gap; the
+                // same selected ID will not emit another selection change later.
+                guard viewState.hasAuthoritativeFirstPage else { return }
                 // The selected row may still exist while the previously displayed
                 // cross-item dwell target was removed. Close only the preview;
                 // preserve the valid list selection and restart its dwell from

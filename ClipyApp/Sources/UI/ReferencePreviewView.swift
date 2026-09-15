@@ -45,9 +45,7 @@ struct ReferencePreviewView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(reference.kind == .file && requestFileLoad != nil
-                        ? PreviewCopy.text("Only the reference is shown. Loading its contents requires confirmation.")
-                        : PreviewCopy.referenceDisclosure())
+                    Text(disclosure)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -72,6 +70,16 @@ struct ReferencePreviewView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.preview.reference")
+    }
+
+    private var disclosure: String {
+        guard reference.kind == .file, requestFileLoad != nil else {
+            return PreviewCopy.referenceDisclosure()
+        }
+        if reference.displayName.lowercased().hasSuffix(".pdf") {
+            return PreviewCopy.text("Copying keeps the original file reference.")
+        }
+        return PreviewCopy.text("Only the reference is shown. Loading its contents requires confirmation.")
     }
 
     private func field(label: String, value: String, identifier: String) -> some View {

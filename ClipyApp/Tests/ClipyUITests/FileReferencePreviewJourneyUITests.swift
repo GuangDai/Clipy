@@ -328,7 +328,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    func testConfirmedFilePDFNavigatesItsLoadedPagesWithoutReadingAReplacement() throws {
+    func testCopiedPDFFileOpensDirectlyAndNavigatesWithoutReadingAReplacement() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -347,13 +347,13 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         writer.closePDF()
         try (output as Data).write(to: file)
         let fileType = NSPasteboard.PasteboardType("public.file-url")
-        let referenceBytes = Data(file.absoluteString.utf8)
-        let item = NSPasteboardItem()
-        XCTAssertTrue(item.setData(referenceBytes, forType: fileType))
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         defer { pasteboard.clearContents() }
-        XCTAssertTrue(pasteboard.writeObjects([item]))
+        // Use the system's file-URL pasteboard writer, preserving its actual
+        // representation for the final original-file Copy assertion.
+        XCTAssertTrue(pasteboard.writeObjects([file as NSURL]))
+        let referenceBytes = try XCTUnwrap(pasteboard.pasteboardItems?.first?.data(forType: fileType))
 
         let app = XCUIApplication()
         // Arm production dwell without inheriting another journey's preference.
@@ -376,26 +376,26 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 }, app.debugDescription)
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
         HistoryJourneyControls.selectFirst(in: app)
-        // Same floating-pane trigger as the sibling journey: the launch
-        // selection's dwell; no manual preview chord exists anymore.
+        // Selecting a copied PDF shows its first page without a second
+        // "Preview File Contents" action or a confirmation sheet.
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
         let request = preview.buttons["clipy.preview.file.request"]
-        XCTAssertTrue(request.waitForExistence(timeout: 10), app.debugDescription)
         let image = preview.descendants(matching: .any)["clipy.preview.image"]
         let caption = preview.descendants(matching: .any)["clipy.preview.pdf.page"]
-        XCTAssertFalse(image.exists)
-        XCTAssertFalse(caption.exists)
-        request.click()
         let confirmation = app.sheets.containing(
             .button, identifier: "clipy.preview.file.confirm"
         ).firstMatch
         let confirm = confirmation.buttons["clipy.preview.file.confirm"]
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
-        confirm.click()
         XCTAssertTrue(waitUntil(timeout: 10) {
             image.exists && image.label == "PDF preview, page 1 of 2"
                 && caption.exists && self.text(of: caption) == "Page 1 of 2"
         }, app.debugDescription)
+        XCTAssertFalse(confirm.exists)
+        XCTAssertFalse(request.exists)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Copied PDF opens directly"
+        attachment.lifetime = .keepAlways
+        add(attachment)
 
         // A later explicit page action must use the already loaded PDF.
         // Reopening this replaced file would fail decoding, exposing rereads.
@@ -420,13 +420,12 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertFalse(image.exists)
         XCTAssertFalse(caption.exists)
 
-        // Retiring the preview discarded its document. A new confirmation
-        // now reads the changed file and reports its actual decoding failure.
+        // Back discarded the document. An explicit reload reads the changed
+        // file and reports its decoding failure without a confirmation sheet.
         request.click()
-        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
-        confirm.click()
         let failure = preview.descendants(matching: .any)["clipy.preview.failed"]
         XCTAssertTrue(failure.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertFalse(confirm.exists)
         preview.buttons["clipy.preview.file.back"].click()
         XCTAssertTrue(request.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertEqual(rows.count, 1)

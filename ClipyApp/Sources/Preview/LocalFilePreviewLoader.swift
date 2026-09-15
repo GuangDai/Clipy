@@ -11,8 +11,9 @@ enum LocalFilePreviewDebugInstrumentation {
 #endif
 
 /// Explicit file-preview I/O lives in the app, apart from the inert copied
-/// URL renderer. Constructing this actor reads nothing. Only the UI's two
-/// confirmed actions call load; the result never enters History storage.
+/// URL renderer. Constructing this actor reads nothing. A visible PDF preview
+/// or an explicitly confirmed file action calls load; the result never enters
+/// History storage.
 actor LocalFilePreviewLoader {
     static let maximumBytes = 64 * 1_048_576
     private static let chunkBytes = 64 * 1_024

@@ -250,10 +250,17 @@ struct HistoryPreviewView: View {
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
         .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration, pdfPage: requestedPDFPage,
                               maximumTextCharacters: maximumTextCharacters, isTextLengthLimited: isTextLengthLimited)) {
-            await loader.loadForDisplay(item: targetItem, pdfPage: requestedPDFPage,
+            let item = targetItem
+            await loader.loadForDisplay(item: item, pdfPage: requestedPDFPage,
                 textConfiguration: PreviewTextSettings.configuration(
                     maximumCharacters: maximumTextCharacters, isLengthLimited: isTextLengthLimited),
                 isRetry: retryGeneration > 0)
+            // A displayed local PDF opens its first page directly. Preparing
+            // a potential hover target still renders only the copied URL.
+            guard !Task.isCancelled, let item else { return }
+            if let fileTask = loader.loadPDFFileForDisplay(item: item) {
+                await fileTask.value
+            }
         }
         .task(id: pinRequest) {
             guard let request = pinRequest, !Task.isCancelled else { return }

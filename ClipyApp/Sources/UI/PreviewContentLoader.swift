@@ -81,15 +81,19 @@ final class PreviewContentLoader {
     /// head of every `load(item:)`; late completions compare against it.
     private(set) var requestedItem: HistoryItemReference?
 
-    /// A confirmation never performs I/O. Only confirmFilePreview starts the
-    /// app-owned read, and every retarget/clear retires both steps.
+    /// A confirmation never performs I/O. Other files require confirmation;
+    /// a visible PDF preview may start the same bounded app-owned read directly.
+    /// Every retarget/clear retires either kind of request.
     private(set) var fileLoadConfirmation: PreviewReference?
     private(set) var loadedFileReference: PreviewReference?
     private(set) var filePreviewFailure: FilePreviewFailure?
     private let filePreviewSettings: FilePreviewSettings?
     private var fileLoadTask: Task<Void, Never>?
+    /// One automatic attempt per displayed History load. Back and failures
+    /// keep it consumed; only a new load or clear permits another attempt.
+    private var hasAttemptedAutomaticPDFPreview = false
     /// Only a successful bounded PDF decode admits this source. It belongs
-    /// to the confirmed file preview, never to History or a shared cache.
+    /// to the displayed file preview, never to History or a shared cache.
     @ObservationIgnored private var loadedFilePDFSource: (
         representation: PreviewRepresentation, pageCount: Int
     )?
@@ -234,6 +238,7 @@ final class PreviewContentLoader {
         preparation?.task.cancel()
         preparation = nil
         retireFileLoad()
+        hasAttemptedAutomaticPDFPreview = false
         requestGeneration += 1
         requestedItem = nil
         requestedPDFPage = 1
@@ -259,6 +264,7 @@ final class PreviewContentLoader {
             return
         }
         retireFileLoad()
+        hasAttemptedAutomaticPDFPreview = false
         self.textConfiguration = textConfiguration
         requestGeneration += 1
         let generation = requestGeneration
@@ -355,17 +361,47 @@ final class PreviewContentLoader {
         }
     }
 
-    func requestFilePreview() {
-        guard canLoadFilePreview, case .content(.reference(let reference)) = phase else { return }
+    @discardableResult
+    func requestFilePreview() -> Task<Void, Never>? {
+        guard canLoadFilePreview, case .content(.reference(let reference)) = phase else { return nil }
+        if Self.isPDFFileReference(reference) {
+            hasAttemptedAutomaticPDFPreview = true
+            return startFilePreview(reference)
+        }
         fileLoadConfirmation = reference
+        return nil
     }
 
     func cancelFilePreviewConfirmation() { fileLoadConfirmation = nil }
 
+    /// Called by the visible HistoryPreviewView after its History load joins.
+    /// Preparation and ordinary load(item:) keep references inert. A filename
+    /// extension is only admission to the real bounded loader and PDF decoder,
+    /// never evidence that the destination contains a valid document.
+    @discardableResult
+    func loadPDFFileForDisplay(item: HistoryItemReference) -> Task<Void, Never>? {
+        guard !Task.isCancelled, requestedItem == item, canLoadFilePreview,
+              !hasAttemptedAutomaticPDFPreview,
+              case .content(.reference(let reference)) = phase,
+              Self.isPDFFileReference(reference) else { return nil }
+        hasAttemptedAutomaticPDFPreview = true
+        return startFilePreview(reference)
+    }
+
     @discardableResult
     func confirmFilePreview() -> Task<Void, Never>? {
-        guard !Task.isCancelled, let filePreviewSettings,
-              let reference = fileLoadConfirmation, let item = requestedItem,
+        guard let reference = fileLoadConfirmation else { return nil }
+        return startFilePreview(reference)
+    }
+
+    private static func isPDFFileReference(_ reference: PreviewReference) -> Bool {
+        guard reference.kind == .file,
+              let url = URL(string: reference.address, encodingInvalidCharacters: false) else { return false }
+        return url.pathExtension.lowercased() == "pdf"
+    }
+
+    private func startFilePreview(_ reference: PreviewReference) -> Task<Void, Never>? {
+        guard !Task.isCancelled, let filePreviewSettings, let item = requestedItem,
               phase == .content(.reference(reference)), reference.kind == .file else { return nil }
         fileLoadConfirmation = nil
         loadedFileReference = reference
@@ -393,8 +429,9 @@ final class PreviewContentLoader {
                     )
                 }
                 self.apply(outcome)
-                // Retrying a file requires the same explicit confirmation;
-                // the ordinary Retry control rereads History and is not used.
+                // File failures do not trigger automatic rereads. Returning
+                // to the reference keeps the explicit file action available;
+                // ordinary Retry rereads History and is not used here.
                 self.canRetryFailure = false
                 self.fileLoadTask = nil
             } catch {
@@ -409,7 +446,7 @@ final class PreviewContentLoader {
         return fileLoadTask
     }
 
-    /// Navigation reuses the one confirmed immutable document. It performs
+    /// Navigation reuses the one loaded immutable document. It performs
     /// no file reads and retains only the requested bounded page artifact.
     /// The same file task/generation retires both an initial read and a page
     /// render when Back, close, retarget, or purge removes this preview.
@@ -445,6 +482,7 @@ final class PreviewContentLoader {
 
     func showFileReference() {
         guard let reference = loadedFileReference else { return }
+        hasAttemptedAutomaticPDFPreview = true
         requestGeneration += 1
         retireFileLoad()
         requestedPDFPage = 1
