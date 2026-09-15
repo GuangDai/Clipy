@@ -10,7 +10,7 @@ final class ContentFirstRowJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    func testLongContentKeepsAccessibleMetadataPinningAndKeyboardCopy() throws {
+    func testLongContentKeepsAccessibleMetadataPinningAndSingleClickCopy() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -22,7 +22,8 @@ final class ContentFirstRowJourneyUITests: XCTestCase {
         XCTAssertTrue(pasteboard.setString(captured, forType: .string))
 
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+                                "-clipy.appearance.previewAutoOpen", "YES"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.store").path
@@ -41,7 +42,11 @@ final class ContentFirstRowJourneyUITests: XCTestCase {
         XCTAssertEqual(row.value as? String, "Copied 1 time")
         XCTAssertTrue(panel.frame.insetBy(dx: -2, dy: -2).contains(row.frame))
 
-        row.click()
+        let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        XCTAssertFalse(row.isSelected, "Opening the panel must not choose a row")
+        XCTAssertFalse(preview.waitForExistence(timeout: 1), "Stationary opening must not start preview dwell")
+        HistoryJourneyControls.select(row, in: app)
+        XCTAssertTrue(preview.waitForExistence(timeout: 5), "Keyboard selection must start the enabled preview")
         app.typeKey("p", modifierFlags: .command)
         XCTAssertTrue(waitUntil {
             rows.count == 1 && rows.element(boundBy: 0).identifier == identifier
@@ -59,8 +64,8 @@ final class ContentFirstRowJourneyUITests: XCTestCase {
         XCTAssertTrue(sentinel.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType")))
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.writeObjects([sentinel]))
-        app.typeKey(.return, modifierFlags: [])
-        XCTAssertTrue(waitUntil { pasteboard.string(forType: .string) == captured }, app.debugDescription)
+        rows.element(boundBy: 0).click()
+        XCTAssertTrue(waitUntil { !panel.exists && pasteboard.string(forType: .string) == captured }, app.debugDescription)
     }
 
     @MainActor

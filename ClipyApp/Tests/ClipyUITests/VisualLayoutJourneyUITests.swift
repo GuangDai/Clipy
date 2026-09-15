@@ -75,12 +75,13 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         XCTAssertTrue(pasteboard.setData(try samplePNG(), forType: .png))
         XCTAssertTrue(waitUntil { rows.count == 3 }, app.debugDescription)
         let imageRow = try XCTUnwrap(rows.allElementsBoundByIndex.first { !previousIDs.contains($0.identifier) })
-        imageRow.click()
+        HistoryJourneyControls.select(imageRow, in: app)
         // The preview is the floating child pane now — a separate window, so
         // scope its content queries to the app, not the panel. Auto-open
         // dwells from the selection; the pane never touches the panel's
         // width, so the compact/wide captures need no preview juggling.
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
 
         resize(panel, toWidth: 400)
         XCTAssertTrue(waitUntil { abs(panel.frame.width - 400) <= 4 && rows.count == 3 }, app.debugDescription)
@@ -90,7 +91,7 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil { panel.frame.width >= compactWidth + 200 }, app.debugDescription)
         attach(panel, named: "History — Wide")
 
-        imageRow.click()
+        HistoryJourneyControls.select(imageRow, in: app)
         let image = preview.descendants(matching: .any)["clipy.preview.image"]
         XCTAssertTrue(waitUntil { preview.exists && image.exists && image.isHittable }, app.debugDescription)
         // The floating pane sits beside the panel: capture the whole app so

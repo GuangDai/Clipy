@@ -6,6 +6,7 @@ struct BuiltInAutomationStep: Identifiable, Codable, Equatable, Sendable {
     enum Operation: String, CaseIterable, Codable, Sendable {
         case trim, trimLines, removeEmptyLines, uniqueLines, sortLines
         case uppercase, lowercase, prettyJSON, compactJSON, replace
+        case requireText, requireImage, containsText, matchesRegex, recognizeText, regexReplace, regexExtract, notify
 
         var title: String {
             switch self {
@@ -19,6 +20,14 @@ struct BuiltInAutomationStep: Identifiable, Codable, Equatable, Sendable {
             case .prettyJSON: "Format JSON"
             case .compactJSON: "Compact JSON"
             case .replace: "Find and replace"
+            case .requireText: "Require text"
+            case .requireImage: "Require image"
+            case .recognizeText: "Recognize text (Apple OCR)"
+            case .regexReplace: "Regular expression replacement"
+            case .regexExtract: "Extract regular expression matches"
+            case .notify: "Notify when conditions match"
+            case .containsText: "Text contains"
+            case .matchesRegex: "Text matches regular expression"
             }
         }
     }
@@ -40,12 +49,37 @@ struct BuiltInAutomationWorkflow: Identifiable, Codable, Equatable, Sendable {
     var id = UUID()
     var name: String
     var steps: [BuiltInAutomationStep]
+    var trigger: BuiltInAutomationTrigger = .manual
+    var scope = BuiltInAutomationScope()
+
+    private enum CodingKeys: String, CodingKey { case id, name, steps, trigger, scope }
+
+    init(id: UUID = UUID(), name: String, steps: [BuiltInAutomationStep],
+         trigger: BuiltInAutomationTrigger = .manual, scope: BuiltInAutomationScope = .init()) {
+        self.id = id
+        self.name = name
+        self.steps = steps
+        self.trigger = trigger
+        self.scope = scope
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        name = try values.decode(String.self, forKey: .name)
+        steps = try values.decode([BuiltInAutomationStep].self, forKey: .steps)
+        trigger = try values.decodeIfPresent(BuiltInAutomationTrigger.self, forKey: .trigger) ?? .manual
+        scope = try values.decodeIfPresent(BuiltInAutomationScope.self, forKey: .scope) ?? .init()
+    }
 
     static var presets: [Self] {
         [
             Self(name: "Clean up text", steps: [.init(operation: .trimLines), .init(operation: .removeEmptyLines)]),
             Self(name: "Unique sorted lines", steps: [.init(operation: .trimLines), .init(operation: .removeEmptyLines), .init(operation: .uniqueLines), .init(operation: .sortLines)]),
-            Self(name: "Format JSON", steps: [.init(operation: .prettyJSON)])
+            Self(name: "Format JSON", steps: [.init(operation: .prettyJSON)]),
+            Self(name: "Read text from image", steps: [.init(operation: .requireImage), .init(operation: .recognizeText), .init(operation: .trim)]),
+            Self(name: "Extract email addresses", steps: [.init(operation: .requireText), .init(operation: .regexExtract, find: #"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"#), .init(operation: .uniqueLines)]),
+            Self(name: "Notify about TODO", steps: [.init(operation: .requireText), .init(operation: .containsText, find: "TODO"), .init(operation: .notify)])
         ]
     }
 }
@@ -53,9 +87,28 @@ struct BuiltInAutomationWorkflow: Identifiable, Codable, Equatable, Sendable {
 enum BuiltInAutomationFailure: Error, Equatable {
     case textTooLarge, tooManySteps, tooManyLines, emptyFind, invalidJSON
     case invalidWorkflow, unreadableWorkflows, workflowLimit, definitionTooLarge
+    case requiresText, requiresImage, invalidImage, imageTooLarge, noRecognizedText, recognitionFailed
+    case invalidRegex, regexEngineFailed, regexTimedOut, notificationDenied, notificationFailed, clipboardUnavailable
+    case conditionNotMet, notificationNeedsCondition, invalidScope, historyUnavailable
 
     var message: String {
         switch self {
+        case .conditionNotMet: "Conditions did not match. No notification was sent."
+        case .notificationNeedsCondition: "Add an enabled type or text condition before using notifications."
+        case .invalidScope: "Choose a valid time range and between 1 and 1,000 history items."
+        case .historyUnavailable: "History could not be read. Reopen the workflow and try again."
+        case .requiresText: "This step requires text. Add OCR before text steps when the input is an image."
+        case .requiresImage: "This step requires an image. Choose an image input or disable this step."
+        case .invalidImage: "This image could not be read. Choose a PNG, JPEG, TIFF or HEIC image."
+        case .imageTooLarge: "Use an image no larger than 32 MiB and 16 million pixels."
+        case .noRecognizedText: "Apple OCR found no text in this image. Try a clearer image."
+        case .recognitionFailed: "Apple OCR could not read this image. Try another image."
+        case .invalidRegex: "Enter a valid regular expression. Replacement templates support $1, $2 and other capture groups."
+        case .regexEngineFailed: "The regular expression engine could not finish. Simplify the pattern or shorten the input."
+        case .regexTimedOut: "The regular expression took too long. Simplify the pattern and try again."
+        case .notificationDenied: "The workflow finished, but notifications are disabled. Allow Clipy in System Settings > Notifications."
+        case .notificationFailed: "The workflow finished, but its notification could not be sent."
+        case .clipboardUnavailable: "The clipboard does not contain the selected input type, or it could not be written."
         case .textTooLarge: "Text exceeds the 1 MiB workflow limit. Shorten the text or reduce replacement expansion."
         case .tooManySteps: "Use no more than 32 steps in one workflow."
         case .tooManyLines: "Line operations support up to 50,000 lines. Shorten the text before running this workflow."
@@ -81,6 +134,20 @@ enum BuiltInAutomation {
         for step in steps where step.enabled {
             try Task.checkCancellation()
             switch step.operation {
+            case .requireText, .notify:
+                break
+            case .containsText:
+                guard !step.find.isEmpty, value.range(of: step.find, options: .literal) != nil else {
+                    throw BuiltInAutomationFailure.conditionNotMet
+                }
+            case .matchesRegex:
+                guard try matchesRegularExpression(value, pattern: step.find) else {
+                    throw BuiltInAutomationFailure.conditionNotMet
+                }
+            case .requireImage, .recognizeText:
+                throw BuiltInAutomationFailure.requiresImage
+            case .regexReplace, .regexExtract:
+                value = try regularExpression(value, step: step)
             case .trim:
                 value = value.trimmingCharacters(in: .whitespacesAndNewlines)
             case .uppercase:
@@ -117,7 +184,7 @@ enum BuiltInAutomation {
         return value
     }
 
-    private static func checkSize(_ text: String) throws {
+    static func checkSize(_ text: String) throws {
         guard text.utf8.count <= maximumBytes else { throw BuiltInAutomationFailure.textTooLarge }
     }
 

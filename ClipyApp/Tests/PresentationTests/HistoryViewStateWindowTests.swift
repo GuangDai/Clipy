@@ -157,6 +157,7 @@ struct HistoryViewStateWindowTests {
         try #require(await pollUntil { state.rows.count == 2 })
         let surface = HistoryPanelSurfaceState(viewState: state, previewState: PreviewPaneState())
         surface.beginSession(rows: state.rows)
+        surface.moveSelection(in: state.rows, direction: .next)
         surface.detailsPath = [allRows[0].item]
         var pasted: HistoryItemReference?
         state.onPaste = { pasted = $0 }

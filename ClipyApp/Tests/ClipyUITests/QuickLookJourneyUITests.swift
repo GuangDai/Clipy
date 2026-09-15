@@ -78,10 +78,10 @@ final class QuickLookJourneyUITests: XCTestCase {
             search.value as? String == "" && rows.count == 2
         }, app.debugDescription)
 
-        // A real List-row mouse click transfers focus and selects older
+        // Keyboard navigation transfers focus and selects older
         // alpha. Newest beta is deliberately different from this target.
         XCTAssertTrue(alphaRow.isHittable, app.debugDescription)
-        alphaRow.click()
+        HistoryJourneyControls.select(alphaRow, in: app)
         app.typeKey(.space, modifierFlags: [])
         assertQuickLook(alpha, in: quickLook, app: app)
         let attachment = XCTAttachment(screenshot: panel.screenshot())
@@ -111,7 +111,7 @@ final class QuickLookJourneyUITests: XCTestCase {
         XCTAssertTrue(panel.exists, "Escape must dismiss Quick Look before closing the panel.\n\(app.debugDescription)")
 
         XCTAssertTrue(betaRow.isHittable, app.debugDescription)
-        betaRow.click()
+        HistoryJourneyControls.select(betaRow, in: app)
         XCTAssertFalse(quickLook.exists, app.debugDescription)
         app.typeKey(.space, modifierFlags: [])
         assertQuickLook(beta, in: quickLook, app: app)

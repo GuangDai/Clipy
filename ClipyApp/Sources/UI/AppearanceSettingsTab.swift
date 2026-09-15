@@ -66,24 +66,15 @@ struct AppearanceSettingsTab: View {
                 SettingsFieldLayout {
                     Text(SettingsCopy.text("Row density"))
                         .fixedSize(horizontal: false, vertical: true)
-                    VStack(spacing: 6) {
-                        HStack(spacing: 0) {
-                            ForEach(HistoryRowDensity.allCases, id: \.self) { density in
-                                densitySample(density)
-                                    .frame(maxWidth: .infinity)
-                            }
+                    Picker(SettingsCopy.text("Row density"), selection: $rowDensity) {
+                        ForEach(HistoryRowDensity.allCases, id: \.self) { density in
+                            Text(rowDensityLabel(density)).tag(density)
                         }
-                        .accessibilityHidden(true)
-                        Picker(SettingsCopy.text("Row density"), selection: $rowDensity) {
-                            ForEach(HistoryRowDensity.allCases, id: \.self) { density in
-                                Text(rowDensityLabel(density)).tag(density)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .accessibilityIdentifier("clipy.settings.appearance.row-density")
                     }
-                    .frame(idealWidth: 220, maxWidth: 220)
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .accessibilityIdentifier("clipy.settings.appearance.row-density")
+                    .frame(width: 220)
                 }
                 DisclosureGroup(
                     AdaptiveSettingsCopy.text("Text Appearance"),
@@ -100,7 +91,7 @@ struct AppearanceSettingsTab: View {
                         .pickerStyle(.segmented)
                         .labelsHidden()
                         .accessibilityIdentifier("clipy.settings.appearance.snippet-lines")
-                        .frame(idealWidth: 220, maxWidth: 220)
+                        .frame(width: 220)
                     }
                     SettingsFieldLayout {
                         Text(SettingsCopy.text("Font size"))
@@ -113,7 +104,7 @@ struct AppearanceSettingsTab: View {
                         .pickerStyle(.segmented)
                         .labelsHidden()
                         .accessibilityIdentifier("clipy.settings.appearance.font-size")
-                        .frame(idealWidth: 220, maxWidth: 220)
+                        .frame(width: 220)
                     }
                 }
                 .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.appearance.text-appearance"))
@@ -212,7 +203,7 @@ struct AppearanceSettingsTab: View {
         VStack(spacing: 0) {
             sampleHistoryRow(
                 SettingsCopy.text("Reading notes — collect useful ideas, save a link, and pick up where you left off."),
-                symbol: "text.alignleft", selected: true
+                symbol: nil, selected: true
             )
             sampleHistoryRow("https://example.org/reading-list", symbol: "link")
             sampleHistoryRow(SettingsCopy.text("Weekend itinerary.pdf"), symbol: "doc")
@@ -232,17 +223,19 @@ struct AppearanceSettingsTab: View {
     }
 
     private func sampleHistoryRow(
-        _ title: String, symbol: String, selected: Bool = false
+        _ title: String, symbol: String?, selected: Bool = false
     ) -> some View {
         let lines = snippetLineCount.baseLineLimit(density: rowDensity)
         let descriptor = PanelContentFit.RowDescriptor(
             isImageRow: false, titleLineCount: lines, snippetLineCount: 0
         )
         return HStack(spacing: PanelTheme.spacingSmall) {
-            Image(systemName: symbol)
-                .font(.system(size: 15))
-                .foregroundStyle(selected ? PanelTheme.selectedForeground : Color.secondary)
-                .frame(width: PanelTheme.thumbnailSize(for: rowDensity))
+            if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 15))
+                    .foregroundStyle(selected ? PanelTheme.selectedForeground : Color.secondary)
+                    .frame(width: PanelTheme.thumbnailSize(for: rowDensity))
+            }
             Text(title)
                 .foregroundStyle(selected ? PanelTheme.selectedForeground : Color.primary)
                 .font(PanelTheme.titleFont(for: rowFontSize))
@@ -258,21 +251,6 @@ struct AppearanceSettingsTab: View {
                 .fill(selected ? PanelTheme.selectedBackground : Color.clear)
         }
         .padding(.vertical, PanelContentFit.listRowVerticalInset)
-    }
-
-    /// Keep the picker itself native. Its paired diagrams compare actual
-    /// density spacing without relying on custom NSSegmentedControl content.
-    private func densitySample(_ density: HistoryRowDensity) -> some View {
-        VStack(spacing: density == .compact ? 3 : 7) {
-            ForEach(0..<3) { _ in
-                HStack(spacing: 4) {
-                    RoundedRectangle(cornerRadius: 1).frame(width: 5, height: 5)
-                    Capsule().frame(width: 42, height: 3)
-                }
-            }
-        }
-        .foregroundStyle(rowDensity == density ? Color.accentColor : Color.secondary)
-        .frame(height: 30)
     }
 
     /// A small scale drawing expresses the relationship between the windows.

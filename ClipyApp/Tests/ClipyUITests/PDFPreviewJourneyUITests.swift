@@ -56,6 +56,7 @@ final class PDFPreviewJourneyUITests: XCTestCase {
         // The dwell preview is the floating child pane now — a separate,
         // never-key window — so its queries scope to the app, not the panel.
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
         expectPage(1, in: preview)
         XCTAssertFalse(preview.buttons["clipy.preview.pdf.previous"].isEnabled)
@@ -71,7 +72,7 @@ final class PDFPreviewJourneyUITests: XCTestCase {
             format: "identifier == %@", capturedRowIdentifier
         )).firstMatch
         XCTAssertTrue(row.exists && row.isHittable, app.debugDescription)
-        row.click()
+        HistoryJourneyControls.select(row, in: app)
         let quickLook = app.descendants(matching: .any)["clipy.panel.quicklook"]
         XCTAssertFalse(quickLook.exists)
         app.typeKey(.space, modifierFlags: [])
@@ -87,7 +88,7 @@ final class PDFPreviewJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { !quickLook.exists })
         expectPage(1, in: preview)
         XCTAssertEqual(rows.count, 1)
-        row.click()
+        HistoryJourneyControls.select(row, in: app)
 
         // An ignored sentinel makes unchanged seed bytes insufficient proof
         // of Return copying. It never becomes another History item.

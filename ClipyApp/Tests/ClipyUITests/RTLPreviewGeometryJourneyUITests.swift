@@ -78,6 +78,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 5) { !panel.exists }, app.debugDescription)
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
+        HistoryJourneyControls.selectFirst(in: app)
 
         let pane = app.descendants(matching: .any)["clipy.panel.floatingPreview"]
         XCTAssertTrue(
@@ -102,16 +103,18 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
                 && pane.frame.height > 0 && pane.frame.height < 140
         }, "trailing floating pane under RTL.\n\(app.debugDescription)")
 
-        // Esc dismisses the floating pane first (a manual close); the panel
-        // stays open.
+        // One Escape retires both ordinary browsing and its passive preview.
         app.typeKey(.escape, modifierFlags: [])
-        XCTAssertTrue(waitUntil(timeout: 5) { !pane.exists && panel.exists },
-                      "Esc must dismiss the floating pane before the panel.\n\(app.debugDescription)")
+        XCTAssertTrue(waitUntil(timeout: 5) { !pane.exists && !panel.exists },
+                      "Esc must dismiss the panel and its floating preview together.\n\(app.debugDescription)")
 
         // Reopen near the screen's right edge: no trailing room, so the pane
         // flips to the PHYSICAL leading (left) side without resizing or
         // moving the main panel. Move the real pointer first, then close and
         // re-summon at the cursor.
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
+        HistoryJourneyControls.selectFirst(in: app)
         panel.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
             .withOffset(CGVector(dx: 900 - panel.frame.minX, dy: 0))
             .hover()
@@ -119,6 +122,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 5) { !panel.exists }, app.debugDescription)
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
+        HistoryJourneyControls.selectFirst(in: app)
         XCTAssertTrue(
             pane.waitForExistence(timeout: 10),
             "the reopened session's dwell must present the floating pane.\n\(app.debugDescription)"

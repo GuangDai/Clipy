@@ -50,6 +50,7 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         // The preview is the floating child pane now — a separate window, so
         // its queries scope to the app, never to the main panel.
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         let notice = preview.descendants(matching: .any)["clipy.preview.truncation-notice"]
         XCTAssertTrue(waitUntil(timeout: 10) {
             notice.exists && notice.isHittable
@@ -60,7 +61,7 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
             format: "identifier == %@", longRowIdentifier
         )).firstMatch
         XCTAssertTrue(longRow.exists && longRow.isHittable)
-        longRow.click()
+        HistoryJourneyControls.select(longRow, in: app)
         // Replace General with an ignored transient sentinel so an unchanged
         // seed cannot masquerade as a successful product copy.
         let sentinel = NSPasteboardItem()
@@ -92,7 +93,7 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         )).firstMatch
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 2 && shortRow.exists })
         XCTAssertTrue(shortRow.isHittable)
-        shortRow.click()
+        HistoryJourneyControls.select(shortRow, in: app)
         let body = preview.descendants(matching: .any)["clipy.preview.text"]
         XCTAssertTrue(waitUntil(timeout: 10) {
             body.exists && self.text(of: body) == shortText && !notice.exists

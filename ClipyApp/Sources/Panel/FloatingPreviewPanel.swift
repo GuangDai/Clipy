@@ -163,6 +163,10 @@ struct FloatingPreviewRootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // The preview is an interactive extension of the key browsing panel.
+        // Its own never-key window must not wash out enabled native controls.
+        // Use the parent's existing focus-driven state, not a permanent tint.
+        .environment(\.appearsActive, appDelegate.previewState.isAutoOpenEnabled)
         .environment(\.displayMemoryPressure, appDelegate.panelSurfaceState?.memoryPressure ?? .normal)
         .environment(\.displayMemoryPressureGeneration, appDelegate.panelSurfaceState?.memoryPressureGeneration ?? 0)
         .onChange(of: appDelegate.panelSurfaceState?.memoryPressureGeneration, initial: true) { _, _ in

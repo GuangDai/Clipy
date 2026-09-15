@@ -94,6 +94,41 @@ struct LaunchAtLoginControllerTests {
         #expect(!controller.presentation.operationFailed)
     }
 
+    @Test("a service not yet known to macOS can be registered")
+    @MainActor
+    func firstRegistrationFromNotFoundIsNotPermanentlyDisabled() async {
+        let recorder = LaunchAtLoginOperationRecorder(status: .notFound)
+        recorder.statusAfterRegister = .enabled
+        let controller = LaunchAtLoginController(operations: recorder.operations)
+        #expect(controller.presentation.canToggle)
+        #expect(!controller.presentation.isOn)
+        controller.setEnabled(true)
+        await joinPendingOperation(controller) {}
+        #expect(recorder.registerCount == 1)
+        #expect(controller.presentation.state == .on)
+        #expect(!controller.presentation.operationFailed)
+    }
+
+    @Test("not-found registration errors stay visible and can be retried")
+    @MainActor
+    func failedFirstRegistrationCanRetry() async {
+        let recorder = LaunchAtLoginOperationRecorder(status: .notFound)
+        recorder.registerShouldFail = true
+        let controller = LaunchAtLoginController(operations: recorder.operations)
+        controller.setEnabled(true)
+        await joinPendingOperation(controller) {}
+        #expect(recorder.registerCount == 1)
+        #expect(controller.presentation.operationFailed)
+        #expect(controller.presentation.canToggle)
+        recorder.registerShouldFail = false
+        recorder.statusAfterRegister = .requiresApproval
+        controller.setEnabled(true)
+        await joinPendingOperation(controller) {}
+        #expect(recorder.registerCount == 2)
+        #expect(controller.presentation.state == .requiresApproval)
+        #expect(!controller.presentation.operationFailed)
+    }
+
     @Test("successful unregister rereads authoritative status")
     @MainActor
     func successfulUnregisterRereadsStatus() async {
@@ -134,7 +169,7 @@ struct LaunchAtLoginControllerTests {
             (.notRegistered, .off),
             (.enabled, .on),
             (.requiresApproval, .requiresApproval),
-            (.notFound, .unavailable),
+            (.notFound, .off),
         ]
 
         for (status, expected) in cases {
@@ -305,7 +340,7 @@ struct LaunchAtLoginControllerTests {
             (.requiresApproval, .requiresApproval),
             (.enabled, .on),
             (.notRegistered, .off),
-            (.notFound, .unavailable),
+            (.notFound, .off),
             (.unknown, .unavailable),
         ]
 

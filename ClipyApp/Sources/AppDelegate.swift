@@ -22,6 +22,7 @@ import HistoryStorage
 import Observation
 import PasteboardAdapter
 import SwiftUI
+import UserNotifications
 
 #if DEBUG
 /// Exact launch envelope for the running-app XCUI journeys. It is compiled
@@ -440,6 +441,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         guard !Self.isRunningTests || isRunningUITest else { return }
         reloadNativeAppearance()
 

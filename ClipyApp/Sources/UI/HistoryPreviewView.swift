@@ -631,7 +631,7 @@ struct HistoryPreviewView: View {
                                 ProgressView().controlSize(.mini)
                             } else {
                                 Image(systemName: row.pinnedPosition == nil ? "pin" : "pin.fill")
-                                    .font(.system(size: 12))
+                                    .font(.system(size: 13, weight: .medium))
                             }
                         }
                         .frame(width: 24, height: 24)
@@ -641,7 +641,7 @@ struct HistoryPreviewView: View {
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
                     .controlSize(.mini)
-                    .foregroundStyle(row.pinnedPosition == nil ? Color.secondary : Color.accentColor)
+                    .foregroundStyle(row.pinnedPosition == nil ? Color.primary : Color.accentColor)
                     // The floating pane is never key; Quick Look shares this
                     // button in the key window while the list is disabled.
                     .keyboardShortcut(shortcuts.keyboardShortcut(for: .togglePin))
@@ -663,7 +663,7 @@ struct HistoryPreviewView: View {
                     }
                 } label: {
                     Image(systemName: "info.circle")
-                        .font(.system(size: 12))
+                        .font(.system(size: 13, weight: .medium))
                         .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
                 }

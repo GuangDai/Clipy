@@ -107,7 +107,7 @@ final class PreviewRecoveryJourneyUITests: XCTestCase {
             $0.identifier != unsupportedID
         })
         XCTAssertTrue(malformedRow.isHittable, diagnostic(app, context: "malformed row selection"))
-        malformedRow.click()
+        HistoryJourneyControls.select(malformedRow, in: app)
         let failed = app.descendants(matching: .any)["clipy.preview.failed"]
         XCTAssertTrue(
             failed.waitForExistence(timeout: 10),
@@ -170,6 +170,7 @@ final class PreviewRecoveryJourneyUITests: XCTestCase {
         // production 200 ms dwell; there is no manual preview chord anymore
         // (the pane dismisses through Esc and re-arms on selection change).
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         XCTAssertTrue(
             preview.waitForExistence(timeout: 10),
             diagnostic(app, context: "floating preview pane")

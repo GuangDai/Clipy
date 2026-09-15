@@ -101,6 +101,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// state. The single replaceable task also coalesces duplicate resign
     /// callbacks without introducing a second lifecycle owner (Card 14D).
     private var deferredFocusLossCloseTask: Task<Void, Never>?
+    private var outsideClickMonitor: Any?
+
 
     init(
         rootView: PanelRootView,
@@ -174,8 +176,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// SwiftUI child currently owns first responder. Marked Return/Escape is
     /// delivered directly to that text responder so a window-level SwiftUI
     /// key equivalent cannot overtake the IME. Settled Escape continues
-    /// through normal window dispatch: the list root owns Clear Search then
-    /// Close, while Details/editor destinations own their dismissal intent.
+    /// through normal window dispatch: the list root closes the panel, while
+    /// Details/editor destinations own their dismissal intent.
     /// Only an unmodified settled Return enters the product paste intent
     /// (REVIEW Card 14A/15; UI-7).
     override func sendEvent(_ event: NSEvent) {
@@ -272,6 +274,19 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         orderFrontRegardless()
         makeKey()
         isPresented = true
+        if outsideClickMonitor == nil {
+            // A desktop click need not transfer key status from a nonactivating
+            // panel. Global mouse observation covers that path without keyboard
+            // monitoring or Accessibility permission. In-app windows continue
+            // through resignKey, preserving menus and attached sheets.
+            outsideClickMonitor = NSEvent.addGlobalMonitorForEvents(
+                matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.dismissForOutsideClick(at: NSEvent.mouseLocation)
+                }
+            }
+        }
         applyContentFit()
     }
 
@@ -281,9 +296,21 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         guard isPresented else { return }
         deferredFocusLossCloseTask?.cancel()
         deferredFocusLossCloseTask = nil
+        if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
+        outsideClickMonitor = nil
         super.close()
         isPresented = false
         onPanelClosed()
+    }
+
+    /// Explicit outside clicks dismiss even when the focus-loss pin is active.
+    /// The passive preview belongs to this interaction surface; clicking its
+    /// controls or an attached editor must not retire the browsing session.
+    func dismissForOutsideClick(at screenPoint: NSPoint) {
+        guard isPresented, !frame.contains(screenPoint),
+              !(childWindows ?? []).contains(where: { $0.isVisible && $0.frame.contains(screenPoint) }),
+              !NSApp.isModalAlertPresented else { return }
+        close()
     }
 
     /// Whether any current screen's safe drawing area still contains a

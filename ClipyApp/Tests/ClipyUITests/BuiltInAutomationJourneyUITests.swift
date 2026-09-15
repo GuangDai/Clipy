@@ -111,10 +111,70 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
             result.exists && result.value as? String == "\"playground\" -- result..."
         }, app.debugDescription)
         XCTAssertFalse(app.buttons["clipy.workflow.apply"].exists, app.debugDescription)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Native workflow editor and preview"
+        attachment.lifetime = .keepAlways
+        add(attachment)
         XCTAssertEqual(NSPasteboard.general.string(forType: .string), original)
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil { !source.exists && manage.isHittable }, app.debugDescription)
         app.buttons["clipy.settings.category.general"].click()
+    }
+
+    @MainActor
+    func testConditionalPresetShowsMatchAndKeepsAutomaticTriggerSeparateFromManualRun() throws {
+        let original = "clipy condition journey retained clipboard"
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = launch(capturing: original, directory: directory)
+        defer { app.terminate(); NSPasteboard.general.clearContents() }
+        XCTAssertTrue(app.descendants(matching: .any)["clipy.panel.root"].waitForExistence(timeout: 20))
+        app.typeKey(",", modifierFlags: .command)
+        let category = app.buttons["clipy.settings.category.automation"]
+        XCTAssertTrue(category.waitForExistence(timeout: 10))
+        category.click()
+        let manage = app.buttons["clipy.settings.workflows.manage"]
+        XCTAssertTrue(manage.waitForExistence(timeout: 5))
+        SettingsJourneyControls.scroll(manage, into: app.scrollViews.containing(.any, identifier: manage.identifier).firstMatch, app: app)
+        manage.click()
+        let load = app.descendants(matching: .any)["clipy.workflow.load"]
+        XCTAssertTrue(load.waitForExistence(timeout: 5))
+        load.click()
+        let preset = app.menuItems["Notify about TODO"]
+        XCTAssertTrue(preset.waitForExistence(timeout: 5))
+        preset.click()
+        let source = app.textViews["clipy.workflow.source"]
+        source.click()
+        source.typeText("ordinary text")
+        app.buttons["clipy.workflow.preview"].click()
+        let copy = app.buttons["clipy.workflow.copy"]
+        XCTAssertTrue(waitUntil {
+            app.staticTexts["Conditions did not match. No notification was sent."].exists && !copy.isEnabled
+        }, app.debugDescription)
+        source.click()
+        source.typeKey("a", modifierFlags: .command)
+        source.typeText("TODO: 42")
+        app.buttons["clipy.workflow.preview"].click()
+        XCTAssertTrue(waitUntil {
+            app.descendants(matching: .any)["clipy.workflow.conditions-matched"].exists && copy.isEnabled
+        }, app.debugDescription)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), original,
+                       "Preview must not rewrite the clipboard")
+
+        let trigger = app.popUpButtons["clipy.workflow.trigger"]
+        SettingsJourneyControls.reveal(trigger, byExpanding: "clipy.workflow.scope-controls", in: app)
+        trigger.click()
+        app.menuItems["New copies automatically"].click()
+        XCTAssertFalse(app.buttons["clipy.workflow.run"].isEnabled)
+        XCTAssertTrue(app.buttons["clipy.workflow.preview"].isEnabled)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Conditional workflow trigger and scope"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        // The definition is deliberately unsaved, so this UI test never
+        // schedules a real OS notification or changes automatic workflows.
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !source.exists && manage.isHittable })
     }
 
     @MainActor

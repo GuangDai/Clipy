@@ -21,12 +21,10 @@ import Testing
 @MainActor
 struct PanelLifecycleHostedTests {
 
-    /// UI-7 settled-Escape contract through the actual AppDelegate-owned
-    /// panel and SwiftUI list root. The first event clears the current query
-    /// without retiring the session; the next closes it. Editor/Details are
-    /// covered separately because their navigation destination owns Esc.
-    @Test("settled list-root Escape clears search, then closes")
-    func settledListRootEscapePreservesTheTwoStepIntent() async throws {
+    /// One settled Escape closes browsing even with a nonempty query.
+    /// Editor/Details retain their own dismissal and dirty-draft confirmation.
+    @Test("settled list-root Escape closes immediately with active search")
+    func settledListRootEscapeClosesImmediately() async throws {
         let installed = installedOwner()
         let appDelegate = installed.appDelegate
         let composition = installed.composition
@@ -46,10 +44,28 @@ struct PanelLifecycleHostedTests {
         composition.viewState.searchText = "settled-escape-query"
 
         NSApp.sendEvent(try #require(escapeKeyDown(for: panel)))
-        #expect(composition.viewState.searchText.isEmpty)
-        #expect(panel.isPresented)
+        #expect(!panel.isPresented)
+        #expect(!(appDelegate.panelSurfaceState?.isSessionActive ?? true))
+    }
 
-        NSApp.sendEvent(try #require(escapeKeyDown(for: panel)))
+    @Test("outside click preserves the panel and preview interior, then closes once")
+    func outsideClickClosesEvenWithoutFocusLoss() throws {
+        let installed = installedOwner()
+        let appDelegate = installed.appDelegate
+        defer { appDelegate.closePanel(); installed.composition.stop() }
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        let child = NSPanel(contentRect: NSRect(
+            x: panel.frame.maxX + 10, y: panel.frame.minY, width: 100, height: 100
+        ), styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.addChildWindow(child, ordered: .above)
+        child.orderFrontRegardless()
+        defer { panel.removeChildWindow(child); child.orderOut(nil) }
+        panel.dismissForOutsideClick(at: NSPoint(x: panel.frame.midX, y: panel.frame.midY))
+        #expect(panel.isPresented)
+        panel.dismissForOutsideClick(at: NSPoint(x: child.frame.midX, y: child.frame.midY))
+        #expect(panel.isPresented)
+        panel.dismissForOutsideClick(at: NSPoint(x: panel.frame.minX - 20, y: panel.frame.minY - 20))
         #expect(!panel.isPresented)
         #expect(!(appDelegate.panelSurfaceState?.isSessionActive ?? true))
     }
