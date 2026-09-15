@@ -343,8 +343,27 @@ struct HistoryPreviewView: View {
             Text(PreviewCopy.text("Clipy will read this local file once to show a preview. Its current contents are not added to clipboard history. No website will be opened.")
                 + "\n\n" + (loader.fileLoadConfirmation?.filePath ?? ""))
         }
+        .background { copyShortcut }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.preview.root")
+    }
+
+    /// Return is the same reserved copy command as the history list. Keeping
+    /// it on an invisible command button preserves the footer's glass style.
+    /// Confirmation and information surfaces retain their own keyboard input;
+    /// Command-C remains the system command for the selected text range.
+    private var copyShortcut: some View {
+        Button(PanelActionsCopy.text("Copy to Clipboard"), action: copyDisplayedHistoryItem)
+            .keyboardShortcut(.return, modifiers: [])
+            .disabled(observedRow == nil || fileConfirmationPresented || previewState.isInformationPresented)
+            .opacity(0)
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+    }
+
+    private func copyDisplayedHistoryItem() {
+        guard let row = observedRow else { return }
+        viewState.requestPasteFromDisplayedRow(row.item)
     }
 
     /// Captured documents use the view-owned History task; confirmed local
@@ -703,8 +722,8 @@ struct HistoryPreviewView: View {
                     .padding(16)
                     .frame(idealWidth: 240, maxWidth: 360, alignment: .leading)
                 }
-                if let row = observedRow {
-                    Button { viewState.requestPasteFromDisplayedRow(row.item) } label: {
+                if observedRow != nil {
+                    Button(action: copyDisplayedHistoryItem) {
                         Image(systemName: "doc.on.doc")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(.primary)

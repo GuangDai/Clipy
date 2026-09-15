@@ -408,8 +408,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
                 && caption.exists && self.text(of: caption) == "Page 2 of 2"
         }, app.debugDescription)
         XCTAssertFalse(next.isEnabled)
-        // The floating pane is never the key window, so the pager's ⌥⌘←
-        // shortcut cannot fire there; page back through the same button.
+        // Page back using the same retained document and native control.
         let previous = preview.buttons["clipy.preview.pdf.previous"]
         XCTAssertTrue(previous.exists && previous.isEnabled && previous.isHittable)
         previous.click()
