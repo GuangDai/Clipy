@@ -124,19 +124,24 @@ struct HistoryListView: View {
     // MARK: List
 
     private func list(now: Date) -> some View {
-        ScrollViewReader { proxy in
+        let rows = viewState.displayedRows
+        let separatorID = showsGroupSeparator ? viewState.displayedUnpinnedRows.first?.item.id : nil
+        return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
-                    ForEach(viewState.displayedPinnedRows, id: \.item.id) { row in
-                        rowContent(row, now: now, pinnedOrdinal: (row.pinnedPosition ?? 0) + 1)
-                    }
-                    if showsGroupSeparator {
-                        Divider()
-                            .frame(height: PanelContentFit.groupSeparatorHeight)
-                            .accessibilityHidden(true)
-                    }
-                    ForEach(viewState.displayedUnpinnedRows, id: \.item.id) { row in
-                        rowContent(row, now: now, pinnedOrdinal: nil)
+                    // One identity stream lets a pin move the existing item
+                    // while updating its facts. Separate pinned/recent ForEach
+                    // branches can reuse the old unpinned lazy row for that ID.
+                    ForEach(rows, id: \.item.id) { row in
+                        VStack(spacing: 0) {
+                            if row.item.id == separatorID {
+                                Divider()
+                                    .frame(height: PanelContentFit.groupSeparatorHeight)
+                                    .accessibilityHidden(true)
+                            }
+                            rowContent(row, now: now, pinnedOrdinal: row.pinnedPosition.map { $0 + 1 })
+                        }
+                        .id(row.item.id)
                     }
                     paginationControl
                 }
@@ -236,7 +241,6 @@ struct HistoryListView: View {
             bottom: PanelContentFit.listRowVerticalInset,
             trailing: PanelContentFit.listRowHorizontalInset
         ))
-        .id(row.item.id)
         // Hover selection (Maccy's HoverSelectionModifier): the surface
         // state arbitrates pointer-vs-keyboard mode, so hover selects
         // without scrolling only in mouse mode and otherwise defers until

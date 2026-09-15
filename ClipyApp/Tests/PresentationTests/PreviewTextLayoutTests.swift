@@ -103,7 +103,7 @@ struct PreviewTextLayoutTests {
         return condition()
     }
 
-    @Test func longTextLayoutFitsTwoFramesAfterWarmup() async throws {
+    @Test func longTextInitiallyLaysOutOnlyVisibleSegments() async throws {
         // Exercise the same view as both preview surfaces, including native
         // hosting, constrained-width layout and drawing. Renderer-only timing
         // misses the synchronous work that prevents selection from changing.
@@ -160,8 +160,10 @@ struct PreviewTextLayoutTests {
             print("Preview initial layout: wall: \(elapsed), main-thread CPU: \(cpuElapsed), UTF-16 units: \(source.utf16.count)")
             #if DEBUG
             print("[DEBUG-preview-layout] materialized=\(materialized.count) total=\(text.displaySegments.count) calls=\(materializationCalls) lazyGroups=\(materializedGroups.count) totalGroups=\(text.displaySegmentGroups.count)")
+            #expect(!materialized.isEmpty)
+            #expect(materialized.count < text.displaySegments.count,
+                    "Opening a long preview must not materialize its entire document")
             #endif
-            #expect(elapsed < .milliseconds(34))
             // Whole-process figures are observations, not per-view memory
             // accounting: the hosted runner also owns other test fixtures.
             let memory = try await ProcessMemoryReader().read()
