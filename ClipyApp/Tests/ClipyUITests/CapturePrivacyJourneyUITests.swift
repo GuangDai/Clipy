@@ -42,7 +42,7 @@ final class CapturePrivacyJourneyUITests: XCTestCase {
         SettingsJourneyControls.scroll(field, into: form, app: app)
         field.click()
         field.typeText(identifier)
-        app.buttons["clipy.settings.privacy.add-ignore"].click()
+        field.typeKey(.return, modifierFlags: [])
         let ignored = app.descendants(matching: .any)["clipy.settings.privacy.application." + identifier]
         XCTAssertTrue(ignored.waitForExistence(timeout: 5), app.debugDescription)
         // A category change reconstructs the section from the persisted list.

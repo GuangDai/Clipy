@@ -86,7 +86,7 @@ struct HistoryQuickLookOverlay: View {
             .font(.subheadline.weight(.medium))
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(.regularMaterial)
+            .background { NativePanelBackground() }
             .background {
                 Color.clear
                     .contentShape(Rectangle())

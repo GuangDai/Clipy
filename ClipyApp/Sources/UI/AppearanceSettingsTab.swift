@@ -58,7 +58,7 @@ struct AppearanceSettingsTab: View {
                 }
                 .accessibilityIdentifier("clipy.settings.appearance.color-scheme")
             } footer: {
-                Text(NativeAppearanceCopy.text("Uses the macOS accent color, contrast and transparency settings."))
+                Text(NativeAppearanceCopy.text("Uses the macOS accent color and contrast settings."))
             }
             Section {
                 sampleRow

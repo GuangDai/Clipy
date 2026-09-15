@@ -11,8 +11,8 @@ the list.
 
 2026-09-14 refinement: pinned and recent groups share one native separator
 only when both are visible; neither group renders a heading. Its 9 pt height
-replaces both 28 pt heading allowances in content fitting. Use native menu
-material and paired macOS selection colors; selected search matches retain
+replaces both 28 pt heading allowances in content fitting. Use solid native
+content backgrounds and paired macOS selection colors; selected search matches retain
 bold emphasis with the selected foreground. Appearance defaults to following
 macOS with optional app-wide light/dark choices. See
 [`../design/native-clipy.md`](../design/native-clipy.md) for the interaction
@@ -194,3 +194,8 @@ stationary hover callbacks do not select or start preview dwell. The first Down
 selects the first row; Up selects the last; actual pointer movement restores
 hover selection. Text-family rows have no leading type icon or empty icon slot;
 links, files and image thumbnails retain their meaningful visuals.
+
+The summoned History panel and its floating preview use solid native content
+backgrounds (white in light appearance, system text background in dark mode).
+They do not blend desktop colors through vibrancy/material. Quick Look and
+in-panel recovery surfaces share this treatment (2026-09-15 user correction).

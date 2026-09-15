@@ -42,17 +42,16 @@ struct CapturePrivacySettingsView: View {
                     .foregroundStyle(.secondary)
             }
             DisclosureGroup(CapturePrivacyCopy.text("Enter a Bundle Identifier"), isExpanded: $showsManualEntry) {
-                HStack {
-                    TextField(SettingsCopy.text("Bundle identifier, e.g. com.1password.1password"), text: $identifierDraft)
-                        .accessibilityIdentifier("clipy.settings.privacy.bundle-identifier")
-                    Button(SettingsCopy.text("Add")) {
+                TextField(SettingsCopy.text("Bundle identifier, e.g. com.1password.1password"), text: $identifierDraft)
+                    .accessibilityIdentifier("clipy.settings.privacy.bundle-identifier")
+                    .onSubmit {
                         guard ignoreList.add(identifierDraft) else { return }
                         ignoreList.store(to: .standard)
                         identifierDraft = ""
                     }
-                    .accessibilityIdentifier("clipy.settings.privacy.add-ignore")
-                    .disabled(!canAddIdentifier)
-                }
+                Text(CapturePrivacyCopy.text("Press Return to add the identifier."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.privacy.manual-entry"))
         } header: {
@@ -62,11 +61,6 @@ struct CapturePrivacySettingsView: View {
             Text(SettingsCopy.text("Clipboard contents from these apps are never recorded."))
         }
         .onAppear { ignoreList = CaptureIgnoreList.load(from: .standard) }
-    }
-
-    private var canAddIdentifier: Bool {
-        var edited = ignoreList
-        return edited.add(identifierDraft)
     }
 
     /// Returns only the count that could not be identified. An already-listed
