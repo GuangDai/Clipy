@@ -356,13 +356,27 @@ final class HistoryPanelSurfaceState {
         in rows: [HistoryRow],
         direction: PanelSelectionDirection
     ) {
+        selectForKeyboardNavigation(
+            PanelSessionSelection.movedSelection(selection, in: rows, direction: direction),
+            in: rows
+        )
+    }
+
+    /// A boundary key can confirm the current row after pointer transit
+    /// cancelled its preview dwell. That is new keyboard intent even when
+    /// the ID stays equal and SwiftUI therefore emits no selection change.
+    func selectForKeyboardNavigation(_ id: HistoryItemID?, in rows: [HistoryRow]) {
         guard isSessionActive else { return }
         noteKeyboardNavigation()
-        selection = PanelSessionSelection.movedSelection(
-            selection,
-            in: rows,
-            direction: direction
+        let unchanged = selection == id
+        selection = id
+        guard unchanged else { return }
+        previewState.handleSelectionChange(
+            PreviewSelectionResolution.resolve(selectedID: id, rows: rows).reference,
+            isExplicit: true
         )
+        // Changed IDs retain the existing onChange path. Calling both paths
+        // for one key would cancel and restart a closed pane's pending dwell.
     }
 
     /// Arrow/shortcut selection movement is keyboard intent: hover stops
@@ -633,7 +647,8 @@ struct HistoryPanelView: View {
                     PreviewSelectionResolution.resolve(
                         selectedID: newSelection,
                         rows: viewState.rows
-                    ).reference
+                    ).reference,
+                    isExplicit: surfaceState.inputMode == .keyboard
                 )
             }
             // An authoritative row replacement can change the exact reference
@@ -828,7 +843,9 @@ struct HistoryPanelView: View {
                     )
                 },
                 onHoverRow: { id in surfaceState.handleRowHover(id) },
-                onKeyboardNavigation: { surfaceState.noteKeyboardNavigation() },
+                onKeyboardSelection: { id in
+                    surfaceState.selectForKeyboardNavigation(id, in: viewState.displayedRows)
+                },
                 onPointerMovement: { surfaceState.notePointerMovement() },
                 onShowDetails: { item in surfaceState.detailsPath.append(item) }
             )

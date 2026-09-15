@@ -398,4 +398,50 @@ struct PanelSessionSelectionTests {
         #expect(previewState.previewedItem == rows[1].item)
         #expect(events == [.show(rows[1].item)])
     }
+
+    @Test(arguments: [false, true])
+    func keyboardBoundaryNavigationRetargetsAfterPointerCancelsPendingPreview(fromList: Bool) {
+        // Hold timers pending without sleeping so the real input ordering,
+        // rather than scheduler speed, decides which item remains visible.
+        let previewState = PreviewPaneState(
+            autoOpenDelay: .seconds(3_600), pointerExitGrace: .seconds(3_600)
+        )
+        let surface = makeSurface(previewState: previewState)
+        surface.beginSession(rows: rows)
+        defer { surface.endSession() }
+        surface.moveSelection(in: rows, direction: .next)
+        surface.moveSelection(in: rows, direction: .next)
+        previewState.togglePreview(for: rows[1].item)
+
+        // Hovering the first row changes the selection and schedules its
+        // preview. Forward the actual HistoryPanelView.onChange boundary.
+        surface.notePointerMovement()
+        surface.handleRowHover(rows[0].item.id)
+        previewState.handleSelectionChange(
+            PreviewSelectionResolution.resolve(selectedID: surface.selection, rows: rows).reference
+        )
+        #expect(surface.selection == rows[0].item.id)
+        #expect(previewState.previewedItem == rows[1].item)
+
+        // Leave both windows, then re-enter the main panel's search header
+        // before its hide grace expires. There is no preview-window entry
+        // here: that callback would also restore the old row selection.
+        previewState.pointerExited(.mainPanel)
+        previewState.pointerMoved(over: .mainPanel)
+        #expect(previewState.isOpen)
+        #expect(surface.selection == rows[0].item.id)
+        #expect(previewState.previewedItem == rows[1].item)
+
+        // Search's Up or the list's Home key targets the same first item.
+        // The ID does not change, so SwiftUI does not call onChange again;
+        // this explicit keyboard intent must still retarget the preview.
+        if fromList {
+            surface.selectForKeyboardNavigation(rows[0].item.id, in: rows)
+        } else {
+            surface.moveSelection(in: rows, direction: .previous)
+        }
+        #expect(surface.inputMode == .keyboard)
+        #expect(surface.selection == rows[0].item.id)
+        #expect(previewState.previewedItem == rows[0].item)
+    }
 }

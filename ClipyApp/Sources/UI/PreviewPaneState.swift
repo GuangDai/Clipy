@@ -307,9 +307,8 @@ final class PreviewPaneState {
         return true
     }
 
-    /// Monotonic republished ⌘R retry requests. The floating pane is never
-    /// the key window, so its own `.keyboardShortcut` cannot fire; the main
-    /// panel's hidden shortcut captures the chord and republishes it here,
+    /// Monotonic republished ⌘R retry requests. While the main panel has
+    /// keyboard focus, its shortcut captures the chord and republishes it here,
     /// and the pane's `HistoryPreviewView` applies it exactly like its
     /// Retry button (only while the loader exposes a retryable failure).
     private(set) var previewRetryRequestGeneration = 0
@@ -325,8 +324,8 @@ final class PreviewPaneState {
     }
 
     /// Monotonic republished ⌥⌘←/→ pager requests, the exact twin of the
-    /// ⌘R retry channel above: the floating pane is never key, so the main
-    /// panel's hidden shortcuts capture the chords and republish them
+    /// ⌘R retry channel above: while the main panel has keyboard focus,
+    /// its hidden shortcuts capture the chords and republish them
     /// here, and the pane's `HistoryPreviewView` applies each request
     /// exactly like its pager buttons (the same `selectPDFPage` guards
     /// keep out-of-range steps inert). The quick-look overlay keeps its

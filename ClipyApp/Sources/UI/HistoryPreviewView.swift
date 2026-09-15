@@ -297,9 +297,8 @@ struct HistoryPreviewView: View {
             loader.purgePreview(purge.scope, isPinned: observedRow?.pinnedPosition != nil)
             if loader.fileLoadConfirmation == nil { fileConfirmationPresented = false }
         }
-        // The floating pane is never key, so its Retry button's ⌘R
-        // shortcut cannot fire there; the main panel republishes the chord
-        // through the pane state, applied exactly like the button.
+        // While the main panel has keyboard focus, it republishes ⌘R
+        // through the pane state, applied exactly like the Retry button.
         .onChange(of: previewState.previewRetryRequestGeneration) { _, _ in
             if loader.phase == .failed, loader.canRetryFailure {
                 retryGeneration += 1
@@ -642,8 +641,8 @@ struct HistoryPreviewView: View {
                     .buttonBorderShape(.circle)
                     .controlSize(.mini)
                     .foregroundStyle(row.pinnedPosition == nil ? Color.primary : Color.accentColor)
-                    // The floating pane is never key; Quick Look shares this
-                    // button in the key window while the list is disabled.
+                    // The focused preview owns this chord. Quick Look shares
+                    // this button in the main window while the list is disabled.
                     .keyboardShortcut(shortcuts.keyboardShortcut(for: .togglePin))
                     .help(PanelActionsCopy.text(row.pinnedPosition == nil ? "Pin" : "Unpin")
                         + (shortcuts.binding(for: .togglePin).map { "  " + $0.displayName } ?? ""))

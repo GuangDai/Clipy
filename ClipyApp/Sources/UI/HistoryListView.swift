@@ -40,7 +40,7 @@ struct HistoryListView: View {
     private let inputMode: PanelInputMode
     private let onFocusHistory: () -> Void
     private let onHoverRow: (HistoryItemID) -> Void
-    private let onKeyboardNavigation: () -> Void
+    private let onKeyboardSelection: (HistoryItemID?) -> Void
     private let onPointerMovement: () -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
@@ -57,7 +57,7 @@ struct HistoryListView: View {
         inputMode: PanelInputMode = .keyboard,
         onFocusHistory: @escaping () -> Void = {},
         onHoverRow: @escaping (HistoryItemID) -> Void = { _ in },
-        onKeyboardNavigation: @escaping () -> Void = {},
+        onKeyboardSelection: @escaping (HistoryItemID?) -> Void,
         onPointerMovement: @escaping () -> Void = {},
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
@@ -73,7 +73,7 @@ struct HistoryListView: View {
         self.inputMode = inputMode
         self.onFocusHistory = onFocusHistory
         self.onHoverRow = onHoverRow
-        self.onKeyboardNavigation = onKeyboardNavigation
+        self.onKeyboardSelection = onKeyboardSelection
         self.onPointerMovement = onPointerMovement
         self.onShowDetails = onShowDetails
     }
@@ -163,8 +163,7 @@ struct HistoryListView: View {
             }
             .onKeyPress(keys: [.upArrow, .downArrow, .pageUp, .pageDown, .home, .end]) { press in
                 guard !isSearchFieldFocused, areShortcutsEnabled else { return .ignored }
-                onKeyboardNavigation()
-                moveSelection(for: press.key)
+                onKeyboardSelection(selectionTarget(for: press.key))
                 return .handled
             }
             .background {
@@ -178,16 +177,15 @@ struct HistoryListView: View {
 
     /// SwiftUI owns one selection highlight and the scroll viewport. Keyboard
     /// paging uses the same row heights as content fitting, including images.
-    private func moveSelection(for key: KeyEquivalent) {
+    private func selectionTarget(for key: KeyEquivalent) -> HistoryItemID? {
         let rows = viewState.displayedRows
-        guard !rows.isEmpty else { return }
-        if key == .home { selection.wrappedValue = rows.first?.item.id; return }
-        if key == .end { selection.wrappedValue = rows.last?.item.id; return }
+        guard !rows.isEmpty else { return nil }
+        if key == .home { return rows.first?.item.id }
+        if key == .end { return rows.last?.item.id }
         let direction: PanelSelectionDirection = key == .upArrow || key == .pageUp ? .previous : .next
         guard key == .pageUp || key == .pageDown,
               let index = rows.firstIndex(where: { $0.item.id == selection.wrappedValue }) else {
-            selection.wrappedValue = PanelSessionSelection.movedSelection(selection.wrappedValue, in: rows, direction: direction)
-            return
+            return PanelSessionSelection.movedSelection(selection.wrappedValue, in: rows, direction: direction)
         }
         let offset = direction == .previous ? -1 : 1
         var target = index
@@ -200,7 +198,7 @@ struct HistoryListView: View {
                 snippetLineLimit: snippetLineCount.baseLineLimit(density: density))
             distance += PanelContentFit.rowHeight(descriptor, density: density, fontSize: fontSize)
         } while distance < viewportHeight
-        selection.wrappedValue = rows[target].item.id
+        return rows[target].item.id
     }
 
     private var showsGroupSeparator: Bool {
@@ -425,6 +423,7 @@ private struct HistoryListViewPreview: View {
             thumbnails: thumbnails,
             isSearchFieldFocused: false,
             selection: $selection,
+            onKeyboardSelection: { selection = $0 },
             onShowDetails: { _ in }
         )
         .task { viewState.activate() }
