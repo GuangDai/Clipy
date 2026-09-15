@@ -435,7 +435,8 @@ struct HistoryDetailsView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(isPinned ? Color.accentColor : Color.primary)
             .controlSize(.small)
             .labelStyle(.iconOnly)
             .help(isPinned ? PanelActionsCopy.text("Unpin", bundle: copyBundle) : PanelActionsCopy.text("Pin", bundle: copyBundle))
@@ -894,7 +895,7 @@ private struct DetailsBody: View {
             Label(PanelActionsCopy.text("Unpinned", bundle: copyBundle), systemImage: "pin.slash")
                 .labelStyle(.iconOnly)
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .help(PanelActionsCopy.text("Unpinned", bundle: copyBundle))
                 .accessibilityLabel(PanelActionsCopy.text("Unpinned", bundle: copyBundle))
                 .accessibilityIdentifier("clipy.details.pin-status")
