@@ -36,6 +36,9 @@ struct BuiltInAutomationView: View {
     private var input: BuiltInAutomationInput {
         usesImageInput ? .image(imageData ?? Data()) : .text(source)
     }
+    private var hasConditions: Bool {
+        workflow.steps.contains { $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation) }
+    }
     private var resultUnchanged: Bool { model.output?.value == input }
     private var isCurrent: Bool { model.isCurrent(input: input, steps: workflow.steps) }
     private var canRun: Bool {
@@ -66,6 +69,7 @@ struct BuiltInAutomationView: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("clipy.workflow.load")
             }
             Text(text("Conditions decide whether the workflow continues. A notification is sent only when all enabled conditions match. Preview never sends notifications."))
                 .foregroundStyle(.secondary)
@@ -119,7 +123,12 @@ struct BuiltInAutomationView: View {
                         Text(text("Conditions did not match. No notification was sent."))
                             .font(.callout).foregroundStyle(.secondary)
                     }
-                    if resultUnchanged && model.output?.matchedConditions == true {
+                    if hasConditions && model.output?.matchedConditions == true {
+                        Label(text("Conditions matched."), systemImage: "checkmark.circle")
+                            .font(.callout)
+                            .accessibilityIdentifier("clipy.workflow.conditions-matched")
+                    }
+                    if resultUnchanged && model.output?.matchedConditions == true && (apply != nil || !hasConditions) {
                         Text(text("No changes. Try another step or adjust the workflow."))
                             .font(.callout).foregroundStyle(.secondary)
                     }
@@ -257,6 +266,7 @@ struct BuiltInAutomationView: View {
             }
             .padding(.top, 8)
         }
+        .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.workflow.scope-controls"))
     }
 
     private var inputControls: some View {
