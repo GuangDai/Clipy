@@ -39,6 +39,7 @@ final class CompactPreviewJourneyUITests: XCTestCase {
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         let text = preview.descendants(matching: .any)["clipy.preview.text"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20))
         XCTAssertTrue(waitUntil {

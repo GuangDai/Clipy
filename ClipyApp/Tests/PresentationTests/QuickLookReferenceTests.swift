@@ -16,6 +16,7 @@ struct QuickLookReferenceTests {
     private func surface(history: any ClipboardHistory = ScriptedHistory()) -> HistoryPanelSurfaceState {
         let surface = HistoryPanelSurfaceState(history: history, previewState: PreviewPaneState())
         surface.beginSession(rows: [row()])
+        surface.moveSelection(in: [row()], direction: .next)
         surface.quickLookReference = row().item
         return surface
     }
@@ -78,6 +79,7 @@ struct QuickLookReferenceTests {
         let preview = PreviewPaneState(autoOpenDelay: .zero)
         let surface = HistoryPanelSurfaceState(history: ScriptedHistory(), previewState: preview)
         surface.beginSession(rows: [quickLook, other])
+        surface.moveSelection(in: [quickLook, other], direction: .next)
         surface.quickLookReference = quickLook.item
         surface.selection = other.item.id
         preview.togglePreview(for: other.item)

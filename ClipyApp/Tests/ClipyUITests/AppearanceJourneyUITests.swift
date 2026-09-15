@@ -186,6 +186,7 @@ final class AppearanceJourneyUITests: XCTestCase {
         // app, never to the panel's descendants.
         Thread.sleep(forTimeInterval: 0.5)
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         XCTAssertFalse(
             preview.exists,
             diagnostic(app, context: "disabled auto-open must stop the dwell")

@@ -80,6 +80,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         // The preview is the floating child pane now — a separate window, so
         // its queries scope to the app, never to the main panel.
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
         let reference = preview.descendants(matching: .any)["clipy.preview.reference"]
         XCTAssertTrue(reference.waitForExistence(timeout: 10), app.debugDescription)
@@ -254,6 +255,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         )
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 }, app.debugDescription)
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         // The launch selection's production 200 ms dwell presents the
         // floating pane; there is no manual preview chord anymore (the pane
         // dismisses through Esc and re-arms on selection change).
@@ -357,6 +359,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         )
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 }, app.debugDescription)
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         // Same floating-pane trigger as the sibling journey: the launch
         // selection's dwell; no manual preview chord exists anymore.
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)

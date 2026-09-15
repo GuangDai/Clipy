@@ -22,9 +22,21 @@ struct PanelSessionSelectionTests {
         ),
     ]
 
-    @Test func openSelectsNewestAndEmptyOpenSelectsNothing() {
-        #expect(PanelSessionSelection.preparedSelection(in: rows) == rows[0].item.id)
-        #expect(PanelSessionSelection.preparedSelection(in: []) == nil)
+    @Test func openAndArrivingPagesStayUnselectedUntilActualInput() {
+        let surface = makeSurface()
+        surface.beginSession(rows: rows)
+        #expect(surface.selection == nil)
+        surface.handleRowHover(rows[0].item.id)
+        surface.reconcileSessionSelection(rows: rows)
+        #expect(surface.selection == nil)
+        surface.notePointerMovement()
+        #expect(surface.selection == rows[0].item.id)
+        surface.endSession()
+        surface.beginSession(rows: [])
+        surface.reconcileSessionSelection(rows: rows)
+        #expect(surface.selection == nil)
+        surface.moveSelection(in: rows, direction: .next)
+        #expect(surface.selection == rows[0].item.id)
     }
 
     @Test func detailsAndItsInlineEditorCannotSubmitTheRetainedListSelection() {
@@ -33,6 +45,7 @@ struct PanelSessionSelectionTests {
             previewState: PreviewPaneState()
         )
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         #expect(surface.selectedReference(in: rows) == rows[0].item)
 
         // The search header remains above a pushed Details destination. Its
@@ -112,6 +125,7 @@ struct PanelSessionSelectionTests {
         )
 
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         #expect(surface.isSessionActive)
         #expect(surface.sessionGeneration == 1)
         #expect(surface.selection == rows[0].item.id)
@@ -127,6 +141,7 @@ struct PanelSessionSelectionTests {
         #expect(surface.sessionGeneration == 1)
 
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         #expect(surface.sessionGeneration == 2)
         #expect(surface.selection == rows[0].item.id)
     }
@@ -139,6 +154,7 @@ struct PanelSessionSelectionTests {
         )
 
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         surface.moveSelection(in: rows, direction: .next)
         let selectedID = rows[1].item.id
         #expect(surface.selection == selectedID)
@@ -170,6 +186,7 @@ struct PanelSessionSelectionTests {
         )
 
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         surface.moveSelection(in: rows, direction: .next)
         let selectedID = rows[1].item.id
         #expect(surface.selection == selectedID)
@@ -207,6 +224,7 @@ struct PanelSessionSelectionTests {
         )
 
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         let selectedID = rows[0].item.id
         #expect(surface.selection == selectedID)
 
@@ -234,6 +252,7 @@ struct PanelSessionSelectionTests {
 
         surface.beginSession(rows: rows)
         surface.moveSelection(in: rows, direction: .next)
+        surface.moveSelection(in: rows, direction: .next)
         let selectedID = rows[1].item.id
 
         // A failed first-page request has stopped loading, but it still did
@@ -246,7 +265,7 @@ struct PanelSessionSelectionTests {
         #expect(surface.selectedReference(in: []) == nil)
     }
 
-    @Test func firstAuthoritativePageSelectsNewestAfterEmptyOpen() {
+    @Test func firstAuthoritativePageDoesNotSelectAfterEmptyOpen() {
         let viewState = HistoryViewState(history: ScriptedHistory())
         let surface = HistoryPanelSurfaceState(
             viewState: viewState,
@@ -254,11 +273,12 @@ struct PanelSessionSelectionTests {
         )
 
         surface.beginSession(rows: [])
+        surface.moveSelection(in: [], direction: .next)
         #expect(surface.selection == nil)
 
         surface.reconcileSessionSelection(rows: rows)
 
-        #expect(surface.selection == rows[0].item.id)
+        #expect(surface.selection == nil)
     }
 
     // MARK: Input mode and hover selection (Maccy NavigationManager)
@@ -287,6 +307,7 @@ struct PanelSessionSelectionTests {
     @Test func hoverSelectsImmediatelyInMouseMode() {
         let surface = makeSurface()
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         surface.notePointerMovement()
         #expect(surface.inputMode == .mouse)
 
@@ -298,6 +319,7 @@ struct PanelSessionSelectionTests {
     @Test func hoverDefersDuringKeyboardNavigationAndAppliesOnNextMouseMovement() {
         let surface = makeSurface()
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
 
         // A session starts in keyboard mode: hover alone must not select.
         #expect(surface.inputMode == .keyboard)
@@ -316,6 +338,7 @@ struct PanelSessionSelectionTests {
     @Test func arrowMovementRestoresKeyboardMode() {
         let surface = makeSurface()
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         surface.notePointerMovement()
         #expect(surface.inputMode == .mouse)
 
@@ -335,6 +358,7 @@ struct PanelSessionSelectionTests {
     @Test func endSessionRetiresInputModeAndDeferredHover() {
         let surface = makeSurface()
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         surface.handleRowHover(rows[1].item.id)
         #expect(surface.deferredHoverSelection == rows[1].item.id)
 
@@ -344,6 +368,7 @@ struct PanelSessionSelectionTests {
         // The next session restarts in keyboard mode with no stale
         // deferral able to jump the fresh preselection.
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         #expect(surface.inputMode == .keyboard)
         #expect(surface.selection == rows[0].item.id)
     }
@@ -355,6 +380,7 @@ struct PanelSessionSelectionTests {
         let surface = makeSurface(previewState: previewState)
 
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         // The hover → selection → dwell → show chain: hover drives the
         // ID-only selection, then the panel's selection onChange forwards
         // the exact reference (mirrored here) and the dwell opens the pane.

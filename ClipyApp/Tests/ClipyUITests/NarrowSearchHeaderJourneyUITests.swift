@@ -67,6 +67,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         // (`clipy.panel.floatingPreview`): it never extends the main panel,
         // so while the dwell-presented pane is on screen the browsing column
         // still holds the user's chosen 320-point width.
+        HistoryJourneyControls.selectFirst(in: app)
         let preview = app.descendants(matching: .any)["clipy.panel.floatingPreview"]
         XCTAssertTrue(waitUntil {
             preview.exists && abs(panel.frame.width - narrowWidth) <= 3

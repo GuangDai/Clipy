@@ -4,6 +4,15 @@ import XCTest
 /// ordinary row click now copies and closes; preview tests must not copy.
 @MainActor
 enum HistoryJourneyControls {
+    static func selectFirst(in app: XCUIApplication) {
+        let row = app.descendants(matching: .any)["clipy.panel.root"]
+            .descendants(matching: .any).matching(NSPredicate(
+                format: "identifier BEGINSWITH %@", "clipy.history.row."
+            )).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 20), app.debugDescription)
+        select(row, in: app)
+    }
+
     static func select(_ target: XCUIElement, in app: XCUIApplication) {
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         let rows = panel.descendants(matching: .any).matching(NSPredicate(

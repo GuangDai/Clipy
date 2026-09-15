@@ -102,7 +102,9 @@ struct HistoryRowView: View {
 
     private var rowLayout: some View {
         HStack(alignment: .center, spacing: PanelTheme.spacingSmall) {
-            thumbnail
+            if HistoryRowKind.classify(effectiveTypeIdentifiers: row.typeIdentifiers) != .text {
+                thumbnail
+            }
             VStack(alignment: .leading, spacing: PanelTheme.spacingXXSmall) {
                 HStack(alignment: .firstTextBaseline, spacing: PanelTheme.spacingXSmall) {
                     title

@@ -61,7 +61,10 @@ struct LocalAutomationSettings {
 struct LocalAutomationSettingsView: View {
     @State private var model: LocalAutomationSettingsModel
 
-    init(settings: LocalAutomationSettings) {
+    private let history: (any ClipboardHistory)?
+
+    init(settings: LocalAutomationSettings, history: (any ClipboardHistory)? = nil) {
+        self.history = history
         _model = State(initialValue: LocalAutomationSettingsModel(settings: settings))
     }
 
@@ -69,7 +72,7 @@ struct LocalAutomationSettingsView: View {
 
     var body: some View {
         Form {
-            Section { BuiltInAutomationSettingsView() }
+            Section { BuiltInAutomationSettingsView(history: history) }
             Group {
                 accessSection
                 commandLineSection

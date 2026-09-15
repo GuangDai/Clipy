@@ -177,11 +177,6 @@ final class HistoryPanelSurfaceState {
     private(set) var detailsPurgeGeneration = 0
 
     private let previewState: PreviewPaneState
-    /// A panel can open before its first authoritative page arrives because
-    /// `HistoryViewState.activate()` clears the previous snapshot
-    /// synchronously. This one-shot bit distinguishes that empty bootstrap
-    /// from an intentional nil selection after a selected row is retired.
-    private var isAwaitingInitialSelection = false
     /// The last authoritative filter distinguishes user navigation from a
     /// selected row disappearing in a later commit under the same query.
     private var selectionFilter = HistoryFilter.all
@@ -245,14 +240,12 @@ final class HistoryPanelSurfaceState {
         case .all:
             detailsPurgeGeneration += 1
             detailsPath.removeAll()
-            isAwaitingInitialSelection = false
             selection = nil
             quickLookReference = nil
             deferredHoverSelection = nil
         case .unpinned:
             detailsPurgeGeneration += 1
             detailsPath.removeAll()
-            isAwaitingInitialSelection = false
             selection = nil
             quickLookReference = nil
             deferredHoverSelection = nil
@@ -262,7 +255,6 @@ final class HistoryPanelSurfaceState {
             }
             detailsPath.removeAll { $0.id == id }
             if selection == id {
-                isAwaitingInitialSelection = false
                 selection = nil
             }
             if quickLookReference?.id == id {
@@ -284,9 +276,9 @@ final class HistoryPanelSurfaceState {
         thumbnails.purge(scope)
     }
 
-    /// Starts one AppDelegate-owned panel session. Selection follows the
-    /// authoritative display order; the view observes `sessionGeneration`
-    /// only to move first responder into search (Card 14A/14D).
+    /// Open/reopen never selects a row or starts preview dwell. The first
+    /// pointer movement or arrow establishes a target; arriving pages and
+    /// stationary hover callbacks cannot manufacture that user intent.
     func beginSession(rows: [HistoryRow]) {
         sessionGeneration += 1
         isSessionActive = true
@@ -296,8 +288,7 @@ final class HistoryPanelSurfaceState {
         thumbnails.isSurfaceActive = true
         detailsPath.removeAll()
         quickLookReference = nil
-        selection = PanelSessionSelection.preparedSelection(in: rows)
-        isAwaitingInitialSelection = selection == nil
+        selection = nil
     }
 
     /// Ends one session and retires content-bearing transient UI state. The
@@ -308,7 +299,6 @@ final class HistoryPanelSurfaceState {
         isSessionActive = false
         thumbnails.isSurfaceActive = false
         detailsPath.removeAll()
-        isAwaitingInitialSelection = false
         selection = nil
         quickLookReference = nil
         inputMode = .keyboard
@@ -344,31 +334,21 @@ final class HistoryPanelSurfaceState {
         // Query restart synchronously clears `HistoryViewState.rows` before
         // the replacement observation publishes its first authoritative page.
         // That loading gap is not evidence that the selected item was removed:
-        // preserve both an existing selection and the one-shot initial-open
-        // intent until a replacement page (including an authoritative empty
+        // preserve an existing user selection until a replacement page (including an authoritative empty
         // page) actually arrives. Merely ending loading with a failure is not
         // authoritative removal evidence (review Card 8A/8C).
         guard hasAuthoritativeFirstPage else { return }
         let filterChanged = selectionFilter != filter
         selectionFilter = filter
         quickLookReference = resolvedQuickLookReference(in: rows)
-        guard let selection else {
-            guard isAwaitingInitialSelection || filterChanged else { return }
-            self.selection = PanelSessionSelection.preparedSelection(in: rows)
-            if self.selection != nil {
-                isAwaitingInitialSelection = false
-            }
-            return
-        }
+        guard let selection else { return }
         guard rows.contains(where: { $0.item.id == selection }) else {
-            isAwaitingInitialSelection = false
             // Filter changes and page navigation keep a visible keyboard
             // target. A deletion within the same query still clears it.
             self.selection = selectsVisibleWindow || filterChanged
                 ? PanelSessionSelection.preparedSelection(in: rows) : nil
             return
         }
-        isAwaitingInitialSelection = false
     }
 
     func moveSelection(
@@ -377,7 +357,6 @@ final class HistoryPanelSurfaceState {
     ) {
         guard isSessionActive else { return }
         noteKeyboardNavigation()
-        isAwaitingInitialSelection = false
         selection = PanelSessionSelection.movedSelection(
             selection,
             in: rows,

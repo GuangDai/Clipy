@@ -212,7 +212,7 @@ struct AppearanceSettingsTab: View {
         VStack(spacing: 0) {
             sampleHistoryRow(
                 SettingsCopy.text("Reading notes — collect useful ideas, save a link, and pick up where you left off."),
-                symbol: "text.alignleft", selected: true
+                symbol: nil, selected: true
             )
             sampleHistoryRow("https://example.org/reading-list", symbol: "link")
             sampleHistoryRow(SettingsCopy.text("Weekend itinerary.pdf"), symbol: "doc")
@@ -232,17 +232,19 @@ struct AppearanceSettingsTab: View {
     }
 
     private func sampleHistoryRow(
-        _ title: String, symbol: String, selected: Bool = false
+        _ title: String, symbol: String?, selected: Bool = false
     ) -> some View {
         let lines = snippetLineCount.baseLineLimit(density: rowDensity)
         let descriptor = PanelContentFit.RowDescriptor(
             isImageRow: false, titleLineCount: lines, snippetLineCount: 0
         )
         return HStack(spacing: PanelTheme.spacingSmall) {
-            Image(systemName: symbol)
-                .font(.system(size: 15))
-                .foregroundStyle(selected ? PanelTheme.selectedForeground : Color.secondary)
-                .frame(width: PanelTheme.thumbnailSize(for: rowDensity))
+            if let symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 15))
+                    .foregroundStyle(selected ? PanelTheme.selectedForeground : Color.secondary)
+                    .frame(width: PanelTheme.thumbnailSize(for: rowDensity))
+            }
             Text(title)
                 .foregroundStyle(selected ? PanelTheme.selectedForeground : Color.primary)
                 .font(PanelTheme.titleFont(for: rowFontSize))

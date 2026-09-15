@@ -170,6 +170,7 @@ final class PreviewRecoveryJourneyUITests: XCTestCase {
         // production 200 ms dwell; there is no manual preview chord anymore
         // (the pane dismisses through Esc and re-arms on selection change).
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         XCTAssertTrue(
             preview.waitForExistence(timeout: 10),
             diagnostic(app, context: "floating preview pane")

@@ -28,6 +28,7 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         defer { app.terminate() }
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         let text = preview.descendants(matching: .any)["clipy.preview.text"]
         let notice = preview.descendants(matching: .any)["clipy.preview.truncation-notice"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20))
@@ -45,6 +46,7 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         add(screenshot)
         settings.buttons["_XCUI:CloseWindow"].click()
         app.typeKey("c", modifierFlags: [.command, .shift])
+        HistoryJourneyControls.selectFirst(in: app)
         XCTAssertTrue(waitUntil {
             text.exists && self.value(text) == "Prefix" && notice.exists
         }, app.debugDescription)
@@ -58,6 +60,7 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         revealCompleteToggle(in: app).click()
         settings.buttons["_XCUI:CloseWindow"].click()
         app.typeKey("c", modifierFlags: [.command, .shift])
+        HistoryJourneyControls.selectFirst(in: app)
         XCTAssertTrue(waitUntil {
             text.exists && self.value(text) == source && !notice.exists
         }, app.debugDescription)

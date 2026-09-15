@@ -248,6 +248,8 @@ final class AppComposition {
     private var captureTask: Task<Void, Never>?
     private var activeCaptureBytes = 0
     private var pendingCapture: AdmittedCapture?
+    let workflowRunner = BuiltInAutomationAutomaticRunner()
+    private var isStartingCaptureObservation = false
     private var replacedCaptureCount = 0
     private var failedCaptureCount = 0
     private var lastCaptureFailure: ClipyCaptureFailure?
@@ -283,6 +285,7 @@ final class AppComposition {
         let capture: ClipboardCapture
         let byteCount: Int
         let failureCountAtAdmission: Int
+        var runsAutomaticWorkflows = false
     }
 
     /// App-internal, content-free trace of capture capacity and failure state.
@@ -627,6 +630,7 @@ final class AppComposition {
     /// publish a late side effect after shutdown.
     func stop() {
         isStarted = false
+        workflowRunner.stop()
         if let localAutomation {
             Task { await localAutomation.stop() }
         }
@@ -826,7 +830,7 @@ final class AppComposition {
     /// Synchronously admits an already-frozen value. There is exactly one
     /// active operation and one replaceable pending capture; no observation
     /// creates an independent task (REVIEW Card 6).
-    private func admitCapture(_ capture: ClipboardCapture) {
+    private func admitCapture(_ capture: ClipboardCapture, runAutomaticWorkflows: Bool = true) {
         guard isStarted, acceptsCaptures else { return }
         // The Settings ▸ Privacy ignore list is re-read on EVERY admission
         // (a cheap immutable-struct load; no cached copy can go stale, so a
@@ -837,10 +841,11 @@ final class AppComposition {
         guard !CaptureIgnoreList.load(from: .standard)
             .ignores(capture.origin.sourceApplication)
         else { return }
-        guard let admitted = admittedCapture(capture) else {
+        guard var admitted = admittedCapture(capture) else {
             recordCaptureFailure(.invalidInput)
             return
         }
+        admitted.runsAutomaticWorkflows = runAutomaticWorkflows
         guard captureTask == nil else {
             if pendingCapture != nil {
                 replacedCaptureCount += 1
@@ -864,6 +869,7 @@ final class AppComposition {
             guard !Task.isCancelled, let self else { return }
             self.captureDidFinish(
                 outcome,
+                capture: admitted.runsAutomaticWorkflows ? admitted.capture : nil,
                 failureCountAtAdmission: admitted.failureCountAtAdmission
             )
         }
@@ -902,6 +908,7 @@ final class AppComposition {
     /// `perform` has returned, this is the lane's strict serialization point.
     private func captureDidFinish(
         _ outcome: CaptureExecutionOutcome,
+        capture: ClipboardCapture?,
         failureCountAtAdmission: Int
     ) {
         captureTask = nil
@@ -909,6 +916,7 @@ final class AppComposition {
         switch outcome {
         case .completed(let receipt):
             viewState.acceptCaptureReceipt(receipt)
+            if let capture, acceptsCaptures { workflowRunner.submit(capture) }
             if failureCountAtAdmission == failedCaptureCount {
                 lastCaptureFailure = nil
             }
@@ -960,7 +968,7 @@ final class AppComposition {
 #endif
         switch outcome {
         case let .complete(complete):
-            admitCapture(complete.capture)
+            admitCapture(complete.capture, runAutomaticWorkflows: !isStartingCaptureObservation)
         case .concealed:
             return
         case .unsupportedMultiItem:
@@ -1018,6 +1026,7 @@ final class AppComposition {
         if shouldObserve {
             let captureCurrent = captureCurrentOnNextObserverStart
             captureCurrentOnNextObserverStart = true
+            isStartingCaptureObservation = true
             observer.start(
                 captureCurrent: captureCurrent,
                 onAccessBehaviorChanged: { [weak self] behavior in
@@ -1027,8 +1036,10 @@ final class AppComposition {
                     self?.receiveCaptureOutcome(outcome)
                 }
             )
+            isStartingCaptureObservation = false
         } else {
             observer.stop()
+            workflowRunner.stop()
         }
     }
 

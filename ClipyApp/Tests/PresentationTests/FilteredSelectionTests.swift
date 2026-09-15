@@ -315,6 +315,7 @@ struct FilteredSelectionTests {
             previewState: PreviewPaneState()
         )
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         return surface
     }
 

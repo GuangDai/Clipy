@@ -83,6 +83,7 @@ final class ClipboardJourneyUITests: XCTestCase {
         // alpha, making the final byte-exact paste distinguish arrow routing
         // from merely leaving the initial selection untouched.
         search.typeKey(.downArrow, modifierFlags: [])
+        search.typeKey(.downArrow, modifierFlags: [])
         pasteboard.clearContents()
         let sentinel = NSPasteboardItem()
         XCTAssertTrue(

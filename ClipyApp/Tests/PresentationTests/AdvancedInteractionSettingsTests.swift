@@ -129,6 +129,7 @@ struct AdvancedInteractionSettingsTests {
         ]
         let surface = HistoryPanelSurfaceState(history: history, previewState: PreviewPaneState())
         surface.beginSession(rows: rows)
+        surface.moveSelection(in: rows, direction: .next)
         defer { surface.endSession() }
         surface.handleRowHover(rows[1].item.id)
         #expect(surface.deferredHoverSelection == rows[1].item.id)

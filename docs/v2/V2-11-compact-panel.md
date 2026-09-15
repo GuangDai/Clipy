@@ -188,3 +188,9 @@ popover dismisses first; editors retain unsaved-change confirmation and IME
 composition keeps its own Escape. Outside mouse clicks also close when AppKit
 does not transfer key status (for example, the desktop); preview controls and
 attached sheets remain inside the interaction surface.
+
+Opening/reopening the panel leaves every row unselected. Initial pages and
+stationary hover callbacks do not select or start preview dwell. The first Down
+selects the first row; Up selects the last; actual pointer movement restores
+hover selection. Text-family rows have no leading type icon or empty icon slot;
+links, files and image thumbnails retain their meaningful visuals.

@@ -56,6 +56,7 @@ final class PDFPreviewJourneyUITests: XCTestCase {
         // The dwell preview is the floating child pane now — a separate,
         // never-key window — so its queries scope to the app, not the panel.
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
         XCTAssertTrue(preview.waitForExistence(timeout: 10), app.debugDescription)
         expectPage(1, in: preview)
         XCTAssertFalse(preview.buttons["clipy.preview.pdf.previous"].isEnabled)

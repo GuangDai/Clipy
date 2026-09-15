@@ -81,6 +81,7 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         // dwells from the selection; the pane never touches the panel's
         // width, so the compact/wide captures need no preview juggling.
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        HistoryJourneyControls.selectFirst(in: app)
 
         resize(panel, toWidth: 400)
         XCTAssertTrue(waitUntil { abs(panel.frame.width - 400) <= 4 && rows.count == 3 }, app.debugDescription)
