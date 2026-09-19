@@ -29,17 +29,22 @@ struct StoreFolderUsageTests {
         }
         let externalFile = outside.appendingPathComponent("not-counted")
         try Data(repeating: 7, count: 262_144).write(to: externalFile)
-        try FileManager.default.createSymbolicLink(
-            at: folder.appendingPathComponent("linked-folder"), withDestinationURL: outside
-        )
-        try FileManager.default.createSymbolicLink(
-            at: folder.appendingPathComponent("linked-file"), withDestinationURL: externalFile
-        )
         // The filesystem supplies allocation units; the expected membership
         // is the exact fixture files, not another directory traversal.
         let expected = try included.reduce(0) { try $0 + allocation(of: $1) }
         let reader = StoreFolderUsage(directoryURL: folder)
-        #expect(try await reader.allocatedBytes() == expected)
+        let beforeLinks = try await reader.allocatedBytes()
+        #expect(beforeLinks == expected, "Hidden and package contents are included")
+        try FileManager.default.createSymbolicLink(
+            at: folder.appendingPathComponent("linked-file"), withDestinationURL: externalFile
+        )
+        let withFileLink = try await reader.allocatedBytes()
+        #expect(withFileLink == expected, "A file link neither contributes bytes nor skips other entries")
+        try FileManager.default.createSymbolicLink(
+            at: folder.appendingPathComponent("linked-folder"), withDestinationURL: outside
+        )
+        let withDirectoryLink = try await reader.allocatedBytes()
+        #expect(withDirectoryLink == expected, "A directory link neither contributes bytes nor skips other entries")
     }
 
     @Test("a linked store root is unavailable rather than traversing its target")

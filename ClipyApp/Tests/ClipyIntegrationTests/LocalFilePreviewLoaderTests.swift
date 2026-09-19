@@ -6,6 +6,19 @@ import Testing
 
 struct LocalFilePreviewLoaderTests {
     @Test(arguments: [
+        ("file:///not-opened/file.txt", true),
+        ("file:///not-opened/image.PNG", true),
+        ("file:///not-opened/document.pdf", false),
+        ("file:///not-opened/file.unknown", false),
+        ("https://example.com/image.png", false),
+        ("file://remote/image.png", false),
+        ("file:///not-opened/image%00.png", false),
+    ])
+    func previewAvailabilityUsesAddressAndSupportedSuffixOnly(address: String, expected: Bool) {
+        #expect(LocalFilePreviewLoader.canPreview(address: address) == expected)
+    }
+
+    @Test(arguments: [
         ("txt", "public.utf8-plain-text"), ("PNG", "public.png"),
         ("jpg", "public.jpeg"), ("tiff", "public.tiff"),
         ("heic", "public.heic"), ("heif", "public.heif"),

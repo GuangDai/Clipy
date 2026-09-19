@@ -24,6 +24,36 @@ struct FilePreviewTests {
         #expect(await probe.requestCount() == 0)
     }
 
+    @Test(arguments: ["pdf", "unknown"])
+    func unsupportedFileDoesNotOfferOrStartPreview(_ suffix: String) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let item = try await capture("file:///not-opened/document.\(suffix)", type: "public.file-url", in: history)
+        let probe = FileReadProbe()
+        let loader = PreviewContentLoader(history: history, filePreviewSettings: .init(load: probe.read))
+        await loader.load(item: item)
+        #expect(!loader.canLoadFilePreview)
+        loader.requestFilePreview()
+        #expect(loader.fileLoadConfirmation == nil)
+        #expect(loader.confirmFilePreview() == nil)
+        #expect(await probe.requestCount() == 0)
+    }
+
+    @Test func supportedImageRequiresConfirmationThenRenders() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let item = try await capture("file:///not-opened/image.PNG", type: "public.file-url", in: history)
+        let probe = FileReadProbe(answer: HistoryRepresentation(typeIdentifier: "public.png", bytes: fixturePNGData))
+        let loader = PreviewContentLoader(history: history, filePreviewSettings: .init(load: probe.read))
+        await loader.load(item: item)
+        #expect(loader.canLoadFilePreview)
+        loader.requestFilePreview()
+        #expect(loader.fileLoadConfirmation != nil)
+        #expect(await probe.requestCount() == 0)
+        let task = try #require(loader.confirmFilePreview())
+        await task.value
+        #expect(loader.phase == .content(.image))
+        #expect(await probe.requestCount() == 1)
+    }
+
     @Test func referenceAndCancelledConfirmationPerformNoFileReads() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("file:///not-opened/private.txt", type: "public.file-url", in: history)

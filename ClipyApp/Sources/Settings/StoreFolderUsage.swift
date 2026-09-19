@@ -38,10 +38,10 @@ actor StoreFolderUsage {
         while let child = enumerator.nextObject() as? URL {
             try Task.checkCancellation()
             let values = try child.resourceValues(forKeys: keys)
-            if values.isSymbolicLink == true {
-                enumerator.skipDescendants()
-                continue
-            }
+            // URL enumeration already excludes symlink descendants. Its
+            // skipDescendants operation is for a returned directory, not
+            // a link; simply exclude the link's own allocation here.
+            if values.isSymbolicLink == true { continue }
             if values.isRegularFile == true {
                 guard let allocated = values.totalFileAllocatedSize ?? values.fileAllocatedSize else {
                     throw CocoaError(.fileReadUnknown)

@@ -91,7 +91,7 @@ final class PreviewContentLoader {
     var canLoadFilePreview: Bool {
         guard filePreviewSettings != nil,
               case .content(.reference(let reference)) = phase else { return false }
-        return reference.kind == .file
+        return reference.kind == .file && LocalFilePreviewLoader.canPreview(address: reference.address)
     }
 
     /// Distinguishes overlapping load episodes even when they request the

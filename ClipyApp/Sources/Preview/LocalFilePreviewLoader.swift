@@ -18,20 +18,17 @@ actor LocalFilePreviewLoader {
     static let maximumBytes = 64 * 1_048_576
     private static let chunkBytes = 64 * 1_024
 
+    /// This checks the copied address and supported suffix only, with no
+    /// destination lookup or I/O. The confirmed load uses the same rules.
+    nonisolated static func canPreview(address: String) -> Bool {
+        guard let url = try? localFileURL(address) else { return false }
+        return (try? typeIdentifier(forExtension: url.pathExtension)) != nil
+    }
+
     func load(_ address: String) async throws -> HistoryRepresentation {
         try Task.checkCancellation()
-        guard address.utf8.count <= 16 * 1_024,
-              let url = URL(string: address, encodingInvalidCharacters: false),
-              url.isFileURL,
-              url.host == nil || url.host == "" || url.host?.lowercased() == "localhost",
-              url.user == nil, url.password == nil, url.port == nil,
-              url.query == nil, url.fragment == nil else {
-            throw FilePreviewFailure.invalidReference
-        }
+        let url = try Self.localFileURL(address)
         let path = url.path(percentEncoded: false)
-        guard path.hasPrefix("/"), !path.utf8.contains(0) else {
-            throw FilePreviewFailure.invalidReference
-        }
         let type = try Self.typeIdentifier(forExtension: url.pathExtension)
 
         // lstat reads metadata, not file contents. Dataless placeholders and
@@ -114,6 +111,22 @@ actor LocalFilePreviewLoader {
         return HistoryRepresentation(typeIdentifier: finalType, bytes: bytes)
     }
 
+    private nonisolated static func localFileURL(_ address: String) throws -> URL {
+        guard address.utf8.count <= 16 * 1_024,
+              let url = URL(string: address, encodingInvalidCharacters: false),
+              url.isFileURL,
+              url.host == nil || url.host == "" || url.host?.lowercased() == "localhost",
+              url.user == nil, url.password == nil, url.port == nil,
+              url.query == nil, url.fragment == nil else {
+            throw FilePreviewFailure.invalidReference
+        }
+        let path = url.path(percentEncoded: false)
+        guard path.hasPrefix("/"), !path.utf8.contains(0) else {
+            throw FilePreviewFailure.invalidReference
+        }
+        return url
+    }
+
     private static func checkFile(_ status: stat) throws {
         guard status.st_mode & S_IFMT == S_IFREG else { throw FilePreviewFailure.unsupported }
         guard status.st_flags & UInt32(SF_DATALESS) == 0 else { throw FilePreviewFailure.unavailable }
@@ -140,7 +153,7 @@ actor LocalFilePreviewLoader {
 
     /// The formats the existing renderer consumes; no system app launch,
     /// extension handler, dynamic registry, or fallback decoder is involved.
-    private static func typeIdentifier(forExtension suffix: String) throws -> String {
+    private nonisolated static func typeIdentifier(forExtension suffix: String) throws -> String {
         switch suffix.lowercased() {
         case "txt", "text": "public.utf8-plain-text"
         case "png": "public.png"
