@@ -62,6 +62,51 @@ struct LocalAutomationIngressTests {
         #expect(reads.allSatisfy { $0.capability == .readEffectiveContent })
     }
 
+    @Test("Effective reply limit is checked before opening unavailable payload bytes",
+          arguments: [24_000_000, 24_000_001])
+    func effectiveReplyLimitPrecedesPayloadHydration(byteCount: Int) async throws {
+        let fixture = try await makeFixture()
+        let credential = fixture.credentials[0]
+        let row = try #require(try await page(fixture).rows.first)
+        try await fixture.history.grantCapability(.readEffectiveContent, to: credential.connection)
+        try await fixture.history.authority.withTestDatabase { authority in
+            // This owner test deliberately creates an inline-length mismatch;
+            // production SQL rejects it before a read could exercise the cap.
+            try authority.database.execute("PRAGMA ignore_check_constraints = ON")
+            defer { try? authority.database.execute("PRAGMA ignore_check_constraints = OFF") }
+            try authority.database.writeTransaction {
+                // Keep current scalar descriptors coherent, but leave the
+                // original tiny inline payload: hydrating it must fail.
+                try authority.database.execute(
+                    "UPDATE history_items SET canonicalBytes = ?", bindings: [.integer(Int64(byteCount))]
+                )
+                try authority.database.execute(
+                    "UPDATE contents SET contentByteCount = ?", bindings: [.integer(Int64(byteCount))]
+                )
+                try authority.database.execute(
+                    "UPDATE representations SET byteCount = ?", bindings: [.integer(Int64(byteCount))]
+                )
+            }
+        }
+        // Preserve the existing external size-failure classification. At the
+        // exact cap, admission proceeds and the corrupt payload is detected;
+        // one byte above it, the size rejection wins before payload hydration.
+        let expected: ExternalFailure = byteCount > 24_000_000
+            ? .history(.capacityExceeded(.storageBytes)) : .persistence(.corruptStoredValue)
+        for request in [
+            LocalAutomationRequest.detailsEffective(locator: row.locator),
+            .pasteEffective(locator: row.locator),
+        ] {
+            await #expect(throws: expected) {
+                _ = try await fixture.ingress.execute(request, presenting: credential.exactBytes)
+            }
+        }
+        let audit = try await fixture.history.auditLog(since: 1)
+        let reads = audit.filter { $0.operationKind == .readEffectiveContent }
+        #expect(reads.count == 2)
+        #expect(reads.allSatisfy { $0.outcome == .failed && $0.changePosition == nil })
+    }
+
     @Test func organizeCannotDeleteAndSuccessfulRemovalPurgesBeforeReply() async throws {
         let removal = IngressRemovalRecorder()
         let fixture = try await makeFixture(onCommittedRemoval: { await removal.record($0) })

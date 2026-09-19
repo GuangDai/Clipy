@@ -14,11 +14,10 @@ struct RetentionRevisionCandidateTests {
         let before = try await history.usage()
         let plan = try await history.authority.withTestDatabase { authority in
             let query = try authority.database.prepare("""
-                EXPLAIN QUERY PLAN SELECT id FROM history_items
+                EXPLAIN QUERY PLAN SELECT id,revisionCount,revisionBytes FROM history_items
                 WHERE id > ? AND (revisionCount > 0 OR revisionBytes > 0)
-                    AND (revisionCount > ? OR revisionBytes > ?)
                 ORDER BY id LIMIT 32
-                """, bindings: [.text(""), .integer(1), .integer(1)])
+                """, bindings: [.text("")])
             defer { query.finalize() }
             var steps: [String] = []
             while try query.step() { steps.append(try query.text(at: 3)) }
@@ -79,6 +78,50 @@ struct RetentionRevisionCandidateTests {
         }
         let untouched = try #require(rows.last?.item.id)
         #expect(try await history.details(for: untouched).revisions.isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func satisfiedCandidatePagesYieldAndDoNotHideLaterPruneWork(hasLaterPrune: Bool) async throws {
+        let history = try await makeHistory(count: 65)
+        let rows = try await history.browse(.init(kind: .recent, limit: 100)).rows
+        let lastID = try #require(rows.map(\.item.id).max())
+        for row in rows { try await revise(row.item.id, version: 1, in: history) }
+        if hasLaterPrune { try await revise(lastID, version: 2, in: history) }
+        let before = try await history.usage()
+        let configuration = try await history.retentionConfiguration()
+        let gate = SuspensionGate()
+        await history.authority.setSuspensionHandler { point in
+            if point == .retentionPlanningBatch { await gate.park(at: point.rawValue) }
+        }
+        let sweep = Task {
+            try await history.perform(.setRetentionPolicies(.init(
+                age: nil, storage: nil,
+                revisions: .init(maxRevisionsPerItem: 1, maxRevisionBytesPerItem: nil)
+            )))
+        }
+        // The first 32 revised items satisfy the policy. Preparation must
+        // nevertheless yield with all SELECTs released before scanning on.
+        await gate.waitForPark(AuthoritySuspensionPoint.retentionPlanningBatch.rawValue)
+        #expect(try await history.usage() == before)
+        if !hasLaterPrune { sweep.cancel() }
+        await history.authority.setSuspensionHandler(nil)
+        await gate.resume(AuthoritySuspensionPoint.retentionPlanningBatch.rawValue)
+        if hasLaterPrune {
+            let receipt = try await sweep.value
+            guard case .committed(let commit) = receipt,
+                  case .retentionPoliciesSet(let retired, let pruned) = commit.outcome else {
+                Issue.record("Empty match pages must advance to the final prune candidate")
+                return
+            }
+            #expect(retired == 0 && pruned == 1)
+            #expect(commit.position.rawValue == before.position.rawValue + 1)
+            #expect(try await history.details(for: lastID).revisions.count == 1)
+            #expect(try await history.usage().revisionBytes == 65)
+        } else {
+            await #expect(throws: CancellationError.self) { _ = try await sweep.value }
+            #expect(try await history.usage() == before)
+            #expect(try await history.retentionConfiguration() == configuration)
+        }
     }
 
     @Test(arguments: [false, true])

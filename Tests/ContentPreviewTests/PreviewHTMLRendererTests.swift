@@ -4,6 +4,34 @@ import Testing
 
 struct PreviewHTMLRendererTests {
     @Test(arguments: [
+        "<p title=don't>visible</p>",
+        "<p title=a\"b>visible</p>",
+        "<p title=a='b>visible</p>",
+        "<p data'flag>visible</p>",
+        "<p data\"flag>visible</p>",
+        "<p title = 'a > b'>visible</p>",
+        "<p title = \"a > b\">visible</p>",
+        "<p title='x'data=don't>visible</p>",
+        "<p title=a/b data='x > y'>visible</p>",
+        "<p title='x' data = 'a > b'>visible</p>",
+        "<script title=don't>hidden</script><p>visible</p>",
+        "<style title=a\"b>hidden</style><p>visible</p>",
+    ])
+    func attributeQuotesOnlyOpenAtTheStartOfAValue(source: String) throws {
+        #expect(try rendered(source).text == "visible")
+    }
+
+    @Test func longUnquotedAttributeDoesNotRetainOrRenderItsBytes() throws {
+        let source = "<p title=" + String(repeating: "a'\"=", count: 200_000) + ">visible</p>"
+        #expect(try rendered(source).text == "visible")
+    }
+
+    @Test func tagNamesUseASCIICaseFoldingWithoutUnicodeAliases() throws {
+        #expect(try rendered("before<bLOCkQUOTE>middle</bLOCkQUOTE>after").text == "before\nmiddle\nafter")
+        #expect(try rendered("before<blocKquote>middle</blocKquote>after").text == "beforemiddleafter")
+    }
+
+    @Test(arguments: [
         ("<textarea><b>bold</b> &amp; <!-- note --> <script>code</script></textarea><p>after</p>",
          "<b>bold</b> & <!-- note --> <script>code</script>\nafter"),
         ("<textarea>&lt;/textarea&gt; &lt;b&gt;</textarea><p>after</p>", "</textarea> <b>\nafter"),

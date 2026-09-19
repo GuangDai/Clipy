@@ -52,7 +52,9 @@ final class HistoryExternalOpener {
     /// Metadata first; image bytes are read only after the explicit click.
     /// Menu choices are bounded independently of the retained payload size.
     func options(for item: HistoryItemReference) async throws -> [HistoryOpenOption] {
+        try Task.checkCancellation()
         let metadata = try await history.representationMetadata(for: item)
+        try Task.checkCancellation()
         let groups = Dictionary(grouping: metadata, by: \.pasteboardItemIndex)
         var result: [HistoryOpenOption] = []
         var firstFailure: HistoryOpenFailure?
@@ -70,6 +72,7 @@ final class HistoryExternalOpener {
                     let request = HistoryRepresentationRequest(item: item, basis: .effective,
                         typeIdentifier: reference.typeIdentifier, pasteboardItemIndex: index)
                     let representation = try await history.representation(request)
+                    try Task.checkCancellation()
                     file = Self.localFileURL(representation.bytes)
                     if file == nil && reference.typeIdentifier == ClipboardFormatIdentifier.fileURL.rawValue {
                         throw HistoryOpenFailure.unavailable
@@ -77,19 +80,44 @@ final class HistoryExternalOpener {
                 }
                 let selected: HistoryRepresentationMetadata
                 let suffix: String?
+                let application: URL
                 if file != nil, let reference {
                     selected = reference
                     suffix = nil
+                    guard let resolved = applicationFor(file, selected.typeIdentifier) else {
+                        throw HistoryOpenFailure.noApplication
+                    }
+                    application = resolved
                 } else {
-                    guard let image = representations.first(where: { Self.imageExtension(for: $0.typeIdentifier) != nil }) else { continue }
-                    guard image.byteCount <= ExternalImageFiles.maximumFileBytes else { throw HistoryOpenFailure.temporaryLimit }
-                    selected = image
-                    suffix = Self.imageExtension(for: image.typeIdentifier)
+                    // One unavailable raster encoding must not hide another
+                    // representation the installed default application can
+                    // open. This selection still reads no image payloads.
+                    var choice: (HistoryRepresentationMetadata, String, URL)?
+                    var imageFailure: HistoryOpenFailure?
+                    for image in representations {
+                        try Task.checkCancellation()
+                        guard let imageSuffix = Self.imageExtension(for: image.typeIdentifier) else { continue }
+                        guard image.byteCount <= ExternalImageFiles.maximumFileBytes else {
+                            if imageFailure == nil { imageFailure = .temporaryLimit }
+                            continue
+                        }
+                        guard let resolved = applicationFor(nil, image.typeIdentifier) else {
+                            if imageFailure == nil { imageFailure = .noApplication }
+                            continue
+                        }
+                        choice = (image, imageSuffix, resolved)
+                        break
+                    }
+                    guard let choice else {
+                        if let imageFailure { throw imageFailure }
+                        continue
+                    }
+                    selected = choice.0
+                    suffix = choice.1
+                    application = choice.2
                 }
                 let request = HistoryRepresentationRequest(item: item, basis: .effective,
                     typeIdentifier: selected.typeIdentifier, pasteboardItemIndex: index)
-                let application = applicationFor(file, selected.typeIdentifier)
-                guard let application else { throw HistoryOpenFailure.noApplication }
                 result.append(HistoryOpenOption(request: request, application: application,
                     applicationName: application.deletingPathExtension().lastPathComponent,
                     file: file, imageExtension: suffix))

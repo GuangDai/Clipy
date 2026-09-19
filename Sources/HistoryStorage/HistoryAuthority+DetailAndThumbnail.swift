@@ -30,12 +30,7 @@ extension HistoryAuthority {
         return try sqliteContentRead {
             try database.readTransaction {
                 let reads = contentReads
-                let item = try reads.item(for: expected.id)
-                guard item.reference == expected else {
-                    throw HistoryFailure.staleContent(
-                        expected: expected.contentVersion, current: item.reference.contentVersion
-                    )
-                }
+                let item = try reads.item(for: expected.id, expectedVersion: expected.contentVersion)
                 let metadata = try reads.currentRepresentations(for: item).map {
                     HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount,
                                                   pasteboardItemIndex: $0.pasteboardItemIndex)
@@ -125,8 +120,7 @@ extension HistoryAuthority {
         try sqliteContentRead {
             try database.readTransaction {
                 let reads = contentReads
-                try reads.requireCurrent(request.item)
-                let current = try reads.item(for: request.item.id)
+                let current = try reads.item(for: request.item.id, expectedVersion: request.item.contentVersion)
                 let sources: [SQLiteRepresentationSource]
                 switch request.basis {
                 case .canonical:
@@ -165,8 +159,7 @@ extension HistoryAuthority {
         return try sqliteContentRead {
             try database.readTransaction {
                 let reads = contentReads
-                try reads.requireCurrent(item)
-                let current = try reads.item(for: item.id)
+                let current = try reads.item(for: item.id, expectedVersion: item.contentVersion)
                 let sources = try reads.currentRepresentations(for: current)
                 guard let selected = sources.first(where: {
                     Self.thumbnailImageTypeIdentifiers.contains($0.typeIdentifier)

@@ -139,6 +139,10 @@ package actor ThumbnailService {
         loadSource: @escaping @Sendable () async throws -> Data?,
         validateJoin: @Sendable () async throws -> Void
     ) async throws -> ThumbnailPayload? {
+        // A retired caller must not create a source/decode flight or cross
+        // the join fence. Cancellation of an admitted caller still leaves
+        // the shared task available to its other exact-key consumers.
+        try Task.checkCancellation()
         let key = ThumbnailFlightKey(item: item, pixels: pixels)
 
         // Existing-key callers cross their own scalar version fence before
@@ -146,7 +150,10 @@ package actor ThumbnailService {
         // cancels or removes the creator-owned flight.
         if let existing = flights[key] {
             try await validateJoin()
-            return try await existing.value
+            try Task.checkCancellation()
+            let payload = try await existing.value
+            try Task.checkCancellation()
+            return payload
         }
 
         // Snapshot actor-owned immutable dependencies, then install the task
@@ -187,7 +194,12 @@ package actor ThumbnailService {
             flights.removeValue(forKey: key)
             if flights.isEmpty { completionTail = nil }
         }
-        return try await task.value
+        let payload = try await task.value
+        // Native work is shared and may outlive an individual caller. Its
+        // successful result belongs only to callers that still want it;
+        // cancelling this caller never cancels another consumer's decode.
+        try Task.checkCancellation()
+        return payload
     }
 
     /// Package-only direct-source convenience used by the Part VI §9 runner

@@ -27,6 +27,7 @@ struct FilteredSelectionTests {
         surface.reconcileSessionSelection(rows: state.rows, hasAuthoritativeFirstPage: false, filter: filter)
         #expect(surface.selection == hidden.item.id)
         #expect(surface.selectedReference(in: state.displayedRows) == nil)
+        #expect(state.displayedRow(for: hidden.item.id) == nil)
         state.requestPasteFromDisplayedRow(hidden.item)
         #expect(recorder.items.isEmpty)
 
@@ -35,6 +36,8 @@ struct FilteredSelectionTests {
         surface.reconcileSessionSelection(rows: state.rows, hasAuthoritativeFirstPage: true, filter: filter)
         surface.retargetHiddenSelectionToDisplayedDefault(displayedRows: state.displayedRows)
         #expect(surface.selectedReference(in: state.displayedRows) == visible.item)
+        #expect(state.displayedRow(for: hidden.item.id) == nil)
+        #expect(state.displayedRow(for: visible.item.id) == visible)
         state.requestPasteFromDisplayedRow(visible.item)
         #expect(recorder.items == [visible.item])
         await history.finishObservation()

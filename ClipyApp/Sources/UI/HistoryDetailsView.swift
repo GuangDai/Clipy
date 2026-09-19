@@ -22,6 +22,7 @@ import SwiftUI
 struct HistoryDetailsLoadFence {
     private(set) var generation = 0
     private(set) var isPurged = false
+    private(set) var isActive = true
     private(set) var observedSurfacePurgeGeneration: Int
 
     /// A newly constructed details surface starts after the purge currently
@@ -32,7 +33,7 @@ struct HistoryDetailsLoadFence {
     }
 
     mutating func begin() -> Int? {
-        guard !isPurged else { return nil }
+        guard isActive, !isPurged else { return nil }
         generation += 1
         return generation
     }
@@ -41,6 +42,17 @@ struct HistoryDetailsLoadFence {
     /// purging the item or cancelling an already-submitted History mutation.
     mutating func invalidateReads() {
         generation += 1
+    }
+
+    /// A retained SwiftUI navigation value must neither accept an outstanding
+    /// read nor start a mutation's delayed readback after it disappears.
+    mutating func suspend() {
+        isActive = false
+        invalidateReads()
+    }
+
+    mutating func resume() {
+        isActive = true
     }
 
     mutating func purge(
@@ -235,7 +247,11 @@ struct HistoryDetailsView: View {
         .accessibilityIdentifier("clipy.details.root")
         .navigationTitle(PanelActionsCopy.text("Details", bundle: copyBundle))
         .navigationBarBackButtonHidden(true)
-        .task { await load() }
+        .task {
+            guard !Task.isCancelled else { return }
+            loadFence.resume()
+            await load()
+        }
         .confirmationDialog(
             PanelActionsCopy.text("Remove this item from your clipboard history?", bundle: copyBundle),
             isPresented: $showsRemoveConfirmation,
@@ -248,8 +264,11 @@ struct HistoryDetailsView: View {
             Button(PanelActionsCopy.text("Cancel", bundle: copyBundle), role: .cancel) {}
         }
         .onDisappear {
+            loadFence.suspend()
             cancelExport()
             cancelRepresentationPreview()
+            showsEditor = false
+            phase = .loading
         }
         .onChange(of: basis) { _, _ in
             cancelExport()
@@ -641,7 +660,7 @@ struct HistoryDetailsView: View {
         // A previously submitted Pin still commits normally. Its subsequent
         // metadata readback waits for the editor's own dismissal instead of
         // replacing a live authored draft (V2-09 §5).
-        guard !showsEditor else { return }
+        guard loadFence.isActive, !showsEditor else { return }
         cancelRepresentationPreview()
         cancelExport()
         guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
@@ -1111,20 +1130,16 @@ private struct RepresentationRow: View {
             .controlSize(.small)
             if isLoading { ProgressView().controlSize(.small) }
             if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
-            if case .some(.plainText(let preview, let wasTruncated)) = preview {
-                Text(verbatim: preview)
-                    .font(.body)
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+            if let text = preview?.text {
+                DetailsTextPreview(text: text,
+                    accessibilityID: "clipy.details.text-preview." + representation.identity.accessibilitySuffix)
                     .frame(maxWidth: 840, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, PanelTheme.spacingMedium)
-                    .accessibilityIdentifier("clipy.details.text-preview." + representation.identity.accessibilitySuffix)
                     .accessibilityLabel(
                         PanelActionsCopy.format("Text preview of %@", representation.identity.accessibilityLabel, bundle: copyBundle)
                     )
-                if wasTruncated {
+                if text.wasTruncated {
                     Text(PreviewCopy.text(
                         "Preview truncated. Copying the item keeps its complete content.",
                         bundle: copyBundle
@@ -1181,6 +1196,63 @@ private struct RepresentationRow: View {
         }
         .padding(PanelTheme.spacingSmall)
         .background(.background.opacity(0.55), in: RoundedRectangle(cornerRadius: PanelTheme.cornerRadiusMedium))
+    }
+}
+
+/// Details uses the renderer's lossless work units inside its existing outer
+/// scroll view. Even one very large Character must not be joined back into a
+/// single native Text layout (01 §6; V2-11 text previews).
+struct DetailsTextPreview: View {
+    let text: PreviewText
+    let accessibilityID: String
+    #if DEBUG
+    var onSegmentMaterialized: ((Int) -> Void)?
+    var onGroupMaterialized: ((Int) -> Void)?
+    #endif
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 0) {
+            ForEach(text.displaySegmentGroups, id: \.lowerBound) { group in
+                textGroup(group)
+            }
+        }
+    }
+
+    private func textGroup(_ group: Range<Int>) -> some View {
+        #if DEBUG
+        return DetailsTextSegmentGroup(text: text.displaySegments[group], accessibilityID: accessibilityID,
+            onSegmentMaterialized: onSegmentMaterialized, onGroupMaterialized: onGroupMaterialized)
+        #else
+        return DetailsTextSegmentGroup(text: text.displaySegments[group], accessibilityID: accessibilityID)
+        #endif
+    }
+}
+
+private struct DetailsTextSegmentGroup: View {
+    let text: ArraySlice<Substring>
+    let accessibilityID: String
+    #if DEBUG
+    var onSegmentMaterialized: ((Int) -> Void)?
+    var onGroupMaterialized: ((Int) -> Void)?
+    #endif
+
+    var body: some View {
+        #if DEBUG
+        onGroupMaterialized?(text.startIndex)
+        for index in text.indices { onSegmentMaterialized?(index) }
+        #endif
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(text.indices, id: \.self) { index in
+                Text(verbatim: String(text[index]))
+                    .font(.body)
+                    .lineSpacing(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier(index == 0
+                        ? accessibilityID : accessibilityID + ".segment.\(index)")
+            }
+        }
+        .textSelection(.enabled)
     }
 }
 
@@ -1272,21 +1344,26 @@ internal enum ContentBasis: String, Hashable {
 }
 
 /// Details' bounded preview for one explicitly selected representation.
-/// Exact UTF-8/UTF-16 text keeps the editor's strict codec; rich text, images,
-/// and inert references retain ContentPreview's artifacts and disclosure
+/// Exact UTF-8/UTF-16 text, rich text, images, and inert references retain
+/// ContentPreview's strictly decoded artifacts and disclosure
 /// facts. Other identifiers never acquire semantics merely from UTF-8-looking
 /// bytes. Each row addresses its own Canonical/Effective source (V2-09 §5;
 /// review TYPE-2), independently of sibling formats and the item's thumbnail.
 enum DetailsRepresentationPresentation: Equatable, Sendable {
-    case plainText(String, wasTruncated: Bool = false)
+    case text(PreviewText)
     case image(PreviewRaster)
     case reference(PreviewReference)
     case metadataOnly
 
+    var text: PreviewText? {
+        if case .text(let text) = self { return text }
+        return nil
+    }
+
     var raster: PreviewRaster? {
         switch self {
         case .image(let raster): raster
-        case .plainText, .reference, .metadataOnly: nil
+        case .text, .reference, .metadataOnly: nil
         }
     }
 
@@ -1307,49 +1384,26 @@ enum DetailsRepresentationPresentation: Equatable, Sendable {
         ]).first, source.preflightFailure == nil else { return .metadataOnly }
         let raw = try await history.representation(request)
         try Task.checkCancellation()
-        let type = ClipboardFormatIdentifier(rawValue: raw.typeIdentifier)
-        if type == .utf8PlainText || type == .utf16PlainText || type == .utf16ExternalPlainText {
-            let decoding = Task.detached {
-                guard !Task.isCancelled else { return DetailsRepresentationPresentation.metadataOnly }
-                return resolve(raw)
-            }
-            let presentation = await withTaskCancellationHandler {
-                await decoding.value
-            } onCancel: { decoding.cancel() }
-            try Task.checkCancellation()
-            return presentation
-        }
+        let presentation = await resolve(raw, source: source, renderer: renderer)
+        try Task.checkCancellation()
+        return presentation
+    }
+
+    /// The same renderer validates the complete source before keeping a
+    /// 500-Character excerpt and its bounded native layout segments. Details
+    /// never joins those segments back into a larger shaping operation.
+    static func resolve(
+        _ raw: HistoryRepresentation, source: PreviewSource, renderer: ContentPreview
+    ) async -> DetailsRepresentationPresentation {
         let outcome = await renderer.renderSelectedHistoryPane(source, representation: PreviewRepresentation(
             typeIdentifier: raw.typeIdentifier, bytes: raw.bytes
-        ))
-        try Task.checkCancellation()
+        ), textConfiguration: .init(maximumCharacters: 500))
         switch outcome {
-        case .content(.text(let text)): return excerpt(text.text, wasTruncated: text.wasTruncated)
+        case .content(.text(let text)): return .text(text)
         case .content(.raster(let raster)): return .image(raster)
         case .content(.reference(let reference)): return .reference(reference)
         default: return .metadataOnly
         }
-    }
-
-    static func resolve(
-        _ representation: HistoryRepresentation
-    ) -> DetailsRepresentationPresentation {
-        // Both surfaces admit the same three exact plain-text encodings.
-        // Share strict byte decoding with the editor so Details cannot strip
-        // UTF-8 U+FEFF or interpret a second UTF-16 marker as encoding metadata.
-        // The excerpt/empty-text policy remains owned by Details (roadmap 05).
-        guard let text = EditorTextCodec.decode(representation)?.text, !text.isEmpty
-        else {
-            return .metadataOnly
-        }
-        return excerpt(text)
-    }
-
-    /// Keep truncation separate from selectable text. A renderer may already
-    /// have truncated rich text before Details applies its shorter excerpt.
-    private static func excerpt(_ text: String, wasTruncated: Bool = false) -> Self {
-        let end = text.index(text.startIndex, offsetBy: 500, limitedBy: text.endIndex) ?? text.endIndex
-        return .plainText(String(text[..<end]), wasTruncated: wasTruncated || end != text.endIndex)
     }
 }
 

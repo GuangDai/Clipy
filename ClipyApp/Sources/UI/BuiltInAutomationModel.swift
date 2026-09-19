@@ -69,19 +69,28 @@ final class BuiltInAutomationLibrary {
     private func readCurrent() throws -> [BuiltInAutomationWorkflow] {
         do {
             guard let saved = defaults.object(forKey: Self.defaultsKey) else { return [] }
-            guard let data = saved as? Data, data.count <= 4 * BuiltInAutomation.maximumBytes else {
+            guard let data = saved as? Data else {
                 throw BuiltInAutomationFailure.unreadableWorkflows
             }
-            let decoded = try JSONDecoder().decode([BuiltInAutomationWorkflow].self, from: data)
-            guard decoded.count <= 50, Set(decoded.map(\.id)).count == decoded.count else {
-                throw BuiltInAutomationFailure.unreadableWorkflows
-            }
-            for workflow in decoded { try Self.validate(workflow) }
-            return decoded
+            return try Self.decodeDefinitions(data)
         } catch {
             failure = .unreadableWorkflows
             throw BuiltInAutomationFailure.unreadableWorkflows
         }
+    }
+
+    /// The automatic runner validates the same exact saved bytes as an editor,
+    /// without constructing an observable library for every captured copy.
+    static func decodeDefinitions(_ data: Data) throws -> [BuiltInAutomationWorkflow] {
+        guard data.count <= 4 * BuiltInAutomation.maximumBytes else {
+            throw BuiltInAutomationFailure.unreadableWorkflows
+        }
+        let decoded = try JSONDecoder().decode([BuiltInAutomationWorkflow].self, from: data)
+        guard decoded.count <= 50, Set(decoded.map(\.id)).count == decoded.count else {
+            throw BuiltInAutomationFailure.unreadableWorkflows
+        }
+        for workflow in decoded { try validate(workflow) }
+        return decoded
     }
 
     private static func validate(_ workflow: BuiltInAutomationWorkflow) throws {

@@ -607,6 +607,49 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == second)
     }
 
+    @Test func refreshedPreviewReopensAtTheCurrentVersionAfterPointerReentry() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        let original = reference()
+        let revised = HistoryItemReference(
+            id: original.id, contentVersion: ContentVersion(rawValue: 2)
+        )
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(original)
+        await waitForScheduledDwell { state.isOpen }
+        state.refreshOpenPreview(revised)
+        #expect(state.previewedItem == revised)
+
+        state.pointerExited(.mainPanel)
+        await waitForScheduledDwell { !state.isOpen }
+        state.pointerEntered(.mainPanel)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == revised)
+    }
+
+    @Test func refreshingVisibleContentPreservesAnotherSelectionsReentryTarget() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        let visible = reference()
+        let selected = reference()
+        let revised = HistoryItemReference(
+            id: visible.id, contentVersion: ContentVersion(rawValue: 2)
+        )
+        state.pointerEntered(.mainPanel)
+        state.handleSelectionChange(visible)
+        await waitForScheduledDwell { state.isOpen }
+        state.handleSelectionChange(selected)
+        state.refreshOpenPreview(revised)
+        #expect(state.previewedItem == revised)
+        // Retire the cross-item dwell before its task can execute, then
+        // exercise the retained selection independently of the visible item.
+        state.pointerExited(.mainPanel)
+        await waitForScheduledDwell { !state.isOpen }
+        state.pointerEntered(.mainPanel)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == selected)
+    }
+
     @Test(arguments: [false, true])
     func purgingUnrelatedContentPreservesAPendingDwell(isRevision: Bool) async {
         let state = makeState()

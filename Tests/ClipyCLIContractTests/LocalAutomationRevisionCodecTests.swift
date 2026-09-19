@@ -64,6 +64,22 @@ struct LocalAutomationRevisionCodecTests {
         #expect(failure(ClipyCLIContract.decodeRequest(exact))?.code == .requestTooLarge)
     }
 
+    @Test func canonicallyEquivalentTypesAreDuplicateRevisionDecisionsWithinOneItem() {
+        // Revision decision identity uses canonical equivalence (02 §2.1),
+        // even though retained identifiers preserve their original spelling.
+        let composed = "com.example.\u{00E9}"
+        let decomposed = "com.example.e\u{0301}"
+        let arguments = """
+        {"locator":"i1_exact","expectedContentVersion":1,"representations":[
+          {"typeIdentifier":"\(composed)","bytesBase64":"AQ=="},
+          {"typeIdentifier":"\(decomposed)","bytesBase64":"Ag=="}
+        ]}
+        """
+        #expect(failure(ClipyCLIContract.decodeRequest(
+            requestBytes(operation: "reviseContent", arguments: arguments)
+        ))?.code == .invalidRequest)
+    }
+
     private static func request(version: String = "1", encoded: String = "AA==") -> Data {
         requestBytes(operation: "reviseContent", arguments:
             "{\"locator\":\"i1_exact\",\"expectedContentVersion\":\(version)," +

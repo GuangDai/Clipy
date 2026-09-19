@@ -6,6 +6,23 @@ import Testing
 /// V2-09 §§5/6: each database owns its content directory, and a disposable
 /// directory outlives every search that still holds its location.
 struct HistoryStoreLocationTests {
+    @Test func embeddedNULPathIsRejectedBeforeDerivingAContentDirectory() throws {
+        let parent = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let url = try #require(URL(
+            string: parent.appendingPathComponent("history.sqlite").absoluteString + "%00-other.sqlite",
+            encodingInvalidCharacters: false
+        ))
+        // Build the malformed address without a filesystem-path conversion
+        // that can consume its NUL before the store receives the URL.
+        #expect(url.absoluteString.contains("%00-other.sqlite"))
+        #expect(url.path(percentEncoded: false).utf8.contains(0))
+        #expect(throws: HistoryFailure.persistence(.openStore)) {
+            try HistoryStoreLocation(persistence: .persistent(storeURL: url))
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: parent.path).isEmpty)
+    }
+
     @Test func siblingDatabasesCleanOnlyTheirOwnUnreferencedBlobs() throws {
         let parent = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: parent) }

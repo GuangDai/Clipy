@@ -337,13 +337,26 @@ final class HistoryViewState {
     /// old selection cannot paste a hidden row while SwiftUI is still
     /// reconciling the filter change (01 §5.6; review Card 14A).
     var displayedRows: [HistoryRow] {
-        var displayed = displayedPinnedRows
+        // Keep the UI's stable pinned/recency lanes even while supplied rows
+        // are interleaved. HistoryListView reuses this snapshot for a render.
+        var displayed: [HistoryRow] = []
+        displayed.reserveCapacity(rows.count)
+        for row in rows where row.pinnedPosition != nil && isDisplayed(row) {
+            displayed.append(row)
+        }
         if !showsPinnedOnly {
             for row in rows where row.pinnedPosition == nil && isDisplayed(row) {
                 displayed.append(row)
             }
         }
         return displayed
+    }
+
+    /// Keyboard actions resolve the current row without allocating the
+    /// complete displayed array. Query invalidation still retires it in the
+    /// same MainActor turn, before SwiftUI reconciles its old selection.
+    func displayedRow(for id: HistoryItemID) -> HistoryRow? {
+        rows.first { $0.item.id == id && isDisplayed($0) }
     }
 
     private func isDisplayed(_ row: HistoryRow) -> Bool {

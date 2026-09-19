@@ -56,7 +56,7 @@ internal final class SQLiteDatabase {
 
     private init(url: URL?, readOnly: Bool, storeLocation: HistoryStoreLocation?) throws {
         self.storeLocation = storeLocation
-        if let url, !url.isFileURL {
+        if let url, !url.isFileURL || url.path(percentEncoded: false).utf8.contains(0) {
             throw HistoryFailure.persistence(.openStore)
         }
         guard !readOnly || url != nil else {

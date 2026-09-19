@@ -507,18 +507,35 @@ fileprivate enum PreviewTextCodec: Sendable {
             // Foundation can decode a valid prefix while ignoring an odd
             // trailing byte. A UTF-16 preview requires complete code units.
             guard bytes.count.isMultiple(of: 2) else { return nil }
+            let littleEndian: Bool
+            let hasBOM: Bool
             if bytes.starts(with: [0xFE, 0xFF]) {
-                return String(data: bytes.dropFirst(2), encoding: .utf16BigEndian)
+                littleEndian = false
+                hasBOM = true
+            } else if bytes.starts(with: [0xFF, 0xFE]) {
+                littleEndian = true
+                hasBOM = true
+            } else {
+                // Native text follows arm64 little endian; external UTF-16
+                // defaults to big endian when no encoding marker is present.
+                if case .declared(.externalUTF16) = self { littleEndian = false }
+                else { littleEndian = true }
+                hasBOM = false
             }
-            if bytes.starts(with: [0xFF, 0xFE]) {
-                return String(data: bytes.dropFirst(2), encoding: .utf16LittleEndian)
+            let body = bytes.dropFirst(hasBOM ? 2 : 0)
+            var units: [UInt16] = []
+            units.reserveCapacity(body.count / 2)
+            var iterator = body.makeIterator()
+            while let first = iterator.next(), let second = iterator.next() {
+                units.append(littleEndian
+                    ? UInt16(first) | (UInt16(second) << 8)
+                    : (UInt16(first) << 8) | UInt16(second))
             }
-            // Native text follows this app's arm64 little-endian platform;
-            // external UTF-16 defaults to big endian when no BOM is present.
-            if case .declared(.externalUTF16) = self {
-                return String(data: bytes, encoding: .utf16BigEndian)
-            }
-            return String(data: bytes, encoding: .utf16LittleEndian)
+            // Validate the complete source before applying any display cap.
+            // Explicit code units reject unpaired surrogates without repair;
+            // a second FEFF/FFFE is content, never another encoding marker
+            // (roadmap 05: Details and the large preview share exact text).
+            return String(validating: units, as: UTF16.self)
         }
     }
 

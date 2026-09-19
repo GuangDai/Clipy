@@ -12,6 +12,7 @@ extension HistoryAuthority {
         _ representation: ContentRepresentation,
         itemID: HistoryItemID
     ) throws -> (inline: SQLiteValue, blobID: SQLiteValue)? {
+        try Task.checkCancellation()
         let itemKey = itemID.rawValue.uuidString
         let statement = try database.prepare("""
             SELECT inlineBytes, blobID FROM representations
@@ -28,18 +29,20 @@ extension HistoryAuthority {
             ])
         defer { statement.finalize() }
         while try statement.step() {
-            let inline = try statement.optionalBlob(at: 0)
-            let blob = try statement.optionalText(at: 1)
-            switch (inline, blob) {
-            case (.some(let bytes), .none):
-                guard bytes.count == representation.bytes.count else {
+            try Task.checkCancellation()
+            switch (try statement.isNull(at: 0), try statement.isNull(at: 1)) {
+            case (false, true):
+                guard try statement.blobByteCount(at: 0) == representation.bytes.count else {
                     throw HistoryFailure.persistence(.corruptStoredValue)
                 }
+                let bytes = try statement.blob(at: 0)
                 if bytes == representation.bytes { return (.blob(bytes), .null) }
-            case (.none, .some(let identifier)):
-                guard let id = UUID(uuidString: identifier) else {
+            case (true, false):
+                guard try statement.textByteCount(at: 1) == 36 else {
                     throw HistoryFailure.persistence(.corruptStoredValue)
                 }
+                let identifier = try statement.text(at: 1)
+                let id = try HistoryItemRowHydration.uuid(identifier)
                 let bytes = try blobStore.read(id: id, expectedByteCount: representation.bytes.count)
                 if bytes == representation.bytes { return (.null, .text(identifier)) }
             default:

@@ -464,6 +464,76 @@ struct HCRAtomicAppendTests {
         #expect(state.bytes == UInt64(try #require(state.blobByteCounts.first)))
     }
 
+    @Test("retention byte accounting uses each row's actual encoded length")
+    func variablePayloadLengthsTrimExactlyOnePrefix() async throws {
+        let epoch = Date(timeIntervalSinceReferenceDate: 902_200_000)
+        let ids = (0..<4).map { _ in HistoryItemID(rawValue: UUID()) }
+        let largeBlob = try AffectedItemsBlobCodec.encode(.explicit(Array(ids.prefix(3))), for: .insert)
+        let smallBlob = try AffectedItemsBlobCodec.encode(.explicit([ids[3]]), for: .insert)
+        let limits = try #require(JournalLimits(
+            maxAffectedItemsPerRecord: 3,
+            maxJournalRecordCount: 10,
+            maxJournalAgeSeconds: 1_000,
+            maxJournalBytes: UInt64(largeBlob.count + smallBlob.count),
+            compactionCadenceCommits: 50
+        ))
+        let authority = try await Self.makeJournalStore([
+            SeedRecord(sequence: 1, itemID: ids[0], createdAt: epoch),
+            SeedRecord(sequence: 2, itemID: ids[3], createdAt: epoch),
+        ], limits: limits)
+        try await authority.withTestDatabase { authority in
+            try authority.database.writeTransaction {
+                try authority.database.execute(
+                    "UPDATE history_change_records SET affectedItemsBlob = ? WHERE sequence = ?",
+                    bindings: [.blob(largeBlob), .blob(sqliteUInt64(1))]
+                )
+                try authority.database.execute(
+                    "UPDATE journal_config SET journalBytes = ?",
+                    bindings: [.blob(sqliteUInt64(UInt64(largeBlob.count + smallBlob.count)))]
+                )
+            }
+        }
+        try await Self.append(sequence: 3, itemID: ids[3], createdAt: epoch, limits: limits, in: authority)
+        let state = try await Self.journalRows(in: authority)
+        #expect(state.floor == 1)
+        #expect(state.sequences == [2, 3])
+        #expect(state.bytes == UInt64(2 * smallBlob.count))
+    }
+
+    @Test("retention length projection rejects non-BLOB payloads before trimming")
+    func retentionRejectsTextPayloadWithoutCommitting() async throws {
+        let epoch = Date(timeIntervalSinceReferenceDate: 902_200_000)
+        let id = HistoryItemID(rawValue: UUID())
+        let limits = try #require(JournalLimits(
+            maxAffectedItemsPerRecord: 3,
+            maxJournalRecordCount: 1,
+            compactionCadenceCommits: 50
+        ))
+        let authority = try await Self.makeJournalStore([
+            SeedRecord(sequence: 1, itemID: id, createdAt: epoch),
+        ], limits: limits)
+        let before = try await Self.snapshot(in: authority)
+        let blob = try #require(before.records.first).affectedItemsBlob
+        try await authority.withTestDatabase { authority in
+            try authority.database.execute(
+                "UPDATE history_change_records SET affectedItemsBlob = ?",
+                bindings: [.text(String(repeating: "a", count: blob.count))]
+            )
+        }
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await Self.append(sequence: 2, itemID: id, createdAt: epoch, limits: limits, in: authority)
+        }
+        // Restore only the deliberately corrupt column, then prove the failed
+        // append changed neither records, floor, accounting, nor position.
+        try await authority.withTestDatabase { authority in
+            try authority.database.execute(
+                "UPDATE history_change_records SET affectedItemsBlob = ?",
+                bindings: [.blob(blob)]
+            )
+        }
+        #expect(try await Self.snapshot(in: authority) == before)
+    }
+
     @Test("age expiry scans only on the configured ChangePosition cadence")
     func ageExpiryUsesPositionCadence() async throws {
         let cadenceLimits = try #require(JournalLimits(
