@@ -36,9 +36,8 @@ import Observation
 /// Retention: only the REQUESTED item's applied content lives here — a
 /// bounded decoded image or a capped text body. Only selected representation
 /// bytes enter the concurrent metadata-to-render function, never the
-/// MainActor load frame. Unselected payloads remain in storage. An explicitly
-/// loaded local PDF retains one bounded immutable source while its preview is
-/// open, so page navigation never rereads a destination or changes documents.
+/// MainActor load frame. Unselected payloads remain in storage. Explicit file
+/// loads release their source bytes after producing the bounded artifact.
 @MainActor @Observable
 final class PreviewContentLoader {
 
@@ -81,22 +80,13 @@ final class PreviewContentLoader {
     /// head of every `load(item:)`; late completions compare against it.
     private(set) var requestedItem: HistoryItemReference?
 
-    /// A confirmation never performs I/O. Other files require confirmation;
-    /// a visible PDF preview may start the same bounded app-owned read directly.
-    /// Every retarget/clear retires either kind of request.
+    /// A confirmation never performs I/O. File reads require explicit
+    /// confirmation; every retarget or clear retires the request.
     private(set) var fileLoadConfirmation: PreviewReference?
     private(set) var loadedFileReference: PreviewReference?
     private(set) var filePreviewFailure: FilePreviewFailure?
     private let filePreviewSettings: FilePreviewSettings?
     private var fileLoadTask: Task<Void, Never>?
-    /// One automatic attempt per displayed History load. Back and failures
-    /// keep it consumed; only a new load or clear permits another attempt.
-    private var hasAttemptedAutomaticPDFPreview = false
-    /// Only a successful bounded PDF decode admits this source. It belongs
-    /// to the displayed file preview, never to History or a shared cache.
-    @ObservationIgnored private var loadedFilePDFSource: (
-        representation: PreviewRepresentation, pageCount: Int
-    )?
 
     var canLoadFilePreview: Bool {
         guard filePreviewSettings != nil,
@@ -116,12 +106,6 @@ final class PreviewContentLoader {
     private(set) var textSegments: [Substring] = []
     private(set) var textSegmentGroups: [Range<Int>] = []
 
-    /// PDF uses the same bitmap surface, but its page count must not be
-    /// mistaken for an image source's frame count. Other formats keep nil.
-    private(set) var pdfPageCount: Int?
-    private(set) var pdfPageNumber: Int?
-    private(set) var requestedPDFPage = 1
-
     /// The applied image's pixel dimensions — the package-observable proof
     /// of a decode without exposing the image itself.
     var appliedImageSize: CGSize? {
@@ -137,17 +121,11 @@ final class PreviewContentLoader {
 
     func imageAccessibilityLabel(locale: Locale) -> String? {
         guard let raster else { return nil }
-        if let pdfPageCount, let pdfPageNumber {
-            return PreviewCopy.pdfPageAccessibilityLabel(pageNumber: pdfPageNumber, pageCount: pdfPageCount, locale: locale)
-        }
         return PreviewCopy.imageDimensions(width: raster.width, height: raster.height, locale: locale)
     }
 
-    func appliedRasterNotice(locale: Locale = .current) -> String? {
+    func appliedRasterNotice() -> String? {
         guard phase == .content(.image), let raster else { return nil }
-        if let pdfPageCount, let pdfPageNumber {
-            return PreviewCopy.pdfPageDisclosure(pageNumber: pdfPageNumber, pageCount: pdfPageCount, locale: locale)
-        }
         return raster.sourceImageCount > 1 ? PreviewCopy.multiImageDisclosure() : nil
     }
 
@@ -193,18 +171,18 @@ final class PreviewContentLoader {
     }
 
     /// A view joins its prepared read instead of resetting to a spinner or
-    /// reading the payload twice. Explicit Retry, PDF navigation and changed
+    /// reading the payload twice. Explicit Retry and changed
     /// preferences still start a new fenced operation.
-    func loadForDisplay(item: HistoryItemReference?, pdfPage: Int,
+    func loadForDisplay(item: HistoryItemReference?,
                         textConfiguration: PreviewTextConfiguration, isRetry: Bool) async {
-        if !isRetry, pdfPage == 1, let preparation,
+        if !isRetry, let preparation,
            preparation.item == item, preparation.configuration == textConfiguration {
             await preparation.task.value
             return
         }
         self.preparation?.task.cancel()
         self.preparation = nil
-        await load(item: item, pdfPage: pdfPage, textConfiguration: textConfiguration)
+        await load(item: item, textConfiguration: textConfiguration)
     }
 
     #if DEBUG
@@ -212,10 +190,6 @@ final class PreviewContentLoader {
     /// The concrete renderer remains private and Release exposes no hook.
     func rendererDebugSnapshot() async -> ContentPreviewDebugSnapshot {
         await renderer.debugSnapshot()
-    }
-
-    var filePreviewSourceByteCount: Int {
-        loadedFilePDFSource?.representation.bytes.count ?? 0
     }
     #endif
 
@@ -227,7 +201,7 @@ final class PreviewContentLoader {
               canRetryFailure,
               let requestedItem
         else { return }
-        await load(item: requestedItem, pdfPage: requestedPDFPage, textConfiguration: textConfiguration)
+        await load(item: requestedItem, textConfiguration: textConfiguration)
     }
 
     /// View disappearance releases applied content immediately, including
@@ -238,25 +212,21 @@ final class PreviewContentLoader {
         preparation?.task.cancel()
         preparation = nil
         retireFileLoad()
-        hasAttemptedAutomaticPDFPreview = false
         requestGeneration += 1
         requestedItem = nil
-        requestedPDFPage = 1
         raster = nil
         textSegments = []
         textSegmentGroups = []
-        pdfPageCount = nil
-        pdfPageNumber = nil
         canRetryFailure = false
         phase = .unsupported
     }
 
-    /// Loads one requested PDF page, or the ordinary preview for other types.
-    /// `nil` clears the pane. Driven by the view's reference/page/retry task: a
+    /// Loads the ordinary preview for a requested item.
+    /// `nil` clears the pane. Driven by the view's reference/retry task: a
     /// retarget cancels the previous load's task, and the fence covers the
     /// case where cancellation arrives late or the awaited work does not
     /// throw on cancellation.
-    func load(item: HistoryItemReference?, pdfPage: Int = 1,
+    func load(item: HistoryItemReference?,
               textConfiguration: PreviewTextConfiguration = .init()) async {
         guard !Task.isCancelled else { return }
         guard let item else {
@@ -264,17 +234,13 @@ final class PreviewContentLoader {
             return
         }
         retireFileLoad()
-        hasAttemptedAutomaticPDFPreview = false
         self.textConfiguration = textConfiguration
         requestGeneration += 1
         let generation = requestGeneration
         requestedItem = item
-        requestedPDFPage = pdfPage
         raster = nil
         textSegments = []
         textSegmentGroups = []
-        pdfPageCount = nil
-        pdfPageNumber = nil
         canRetryFailure = false
         phase = .loading
         do {
@@ -285,7 +251,7 @@ final class PreviewContentLoader {
             }
 #endif
             let outcome = try await Self.renderPayload(
-                for: item, pdfPage: pdfPage, history: history, renderer: renderer,
+                for: item, history: history, renderer: renderer,
                 textConfiguration: textConfiguration,
                 isCurrent: { [weak self] in
                     self?.requestGeneration == generation && self?.requestedItem == item
@@ -335,17 +301,10 @@ final class PreviewContentLoader {
         raster = nil
         textSegments = []
         textSegmentGroups = []
-        pdfPageCount = nil
-        pdfPageNumber = nil
         canRetryFailure = false
         switch outcome {
         case .content(.raster(let artifact)):
             raster = artifact
-            phase = .content(.image)
-        case .content(.pdf(let artifact)):
-            raster = artifact.raster
-            pdfPageCount = artifact.pageCount
-            pdfPageNumber = artifact.pageNumber
             phase = .content(.image)
         case .content(.text(let artifact)):
             textSegments = artifact.displaySegments
@@ -361,43 +320,17 @@ final class PreviewContentLoader {
         }
     }
 
-    @discardableResult
-    func requestFilePreview() -> Task<Void, Never>? {
-        guard canLoadFilePreview, case .content(.reference(let reference)) = phase else { return nil }
-        if Self.isPDFFileReference(reference) {
-            hasAttemptedAutomaticPDFPreview = true
-            return startFilePreview(reference)
-        }
+    func requestFilePreview() {
+        guard canLoadFilePreview, case .content(.reference(let reference)) = phase else { return }
         fileLoadConfirmation = reference
-        return nil
     }
 
     func cancelFilePreviewConfirmation() { fileLoadConfirmation = nil }
-
-    /// Called by the visible HistoryPreviewView after its History load joins.
-    /// Preparation and ordinary load(item:) keep references inert. A filename
-    /// extension is only admission to the real bounded loader and PDF decoder,
-    /// never evidence that the destination contains a valid document.
-    @discardableResult
-    func loadPDFFileForDisplay(item: HistoryItemReference) -> Task<Void, Never>? {
-        guard !Task.isCancelled, requestedItem == item, canLoadFilePreview,
-              !hasAttemptedAutomaticPDFPreview,
-              case .content(.reference(let reference)) = phase,
-              Self.isPDFFileReference(reference) else { return nil }
-        hasAttemptedAutomaticPDFPreview = true
-        return startFilePreview(reference)
-    }
 
     @discardableResult
     func confirmFilePreview() -> Task<Void, Never>? {
         guard let reference = fileLoadConfirmation else { return nil }
         return startFilePreview(reference)
-    }
-
-    private static func isPDFFileReference(_ reference: PreviewReference) -> Bool {
-        guard reference.kind == .file,
-              let url = URL(string: reference.address, encodingInvalidCharacters: false) else { return false }
-        return url.pathExtension.lowercased() == "pdf"
     }
 
     private func startFilePreview(_ reference: PreviewReference) -> Task<Void, Never>? {
@@ -406,7 +339,6 @@ final class PreviewContentLoader {
         fileLoadConfirmation = nil
         loadedFileReference = reference
         filePreviewFailure = nil
-        requestedPDFPage = 1
         requestGeneration += 1
         let generation = requestGeneration
         phase = .loading
@@ -422,12 +354,6 @@ final class PreviewContentLoader {
                 ], textConfiguration: self.textConfiguration)
                 try Task.checkCancellation()
                 guard self.requestGeneration == generation, self.requestedItem == item else { return }
-                if case .content(.pdf(let pdf)) = outcome, pdf.pageCount > 1 {
-                    self.loadedFilePDFSource = (
-                        PreviewRepresentation(typeIdentifier: representation.typeIdentifier, bytes: representation.bytes),
-                        pdf.pageCount
-                    )
-                }
                 self.apply(outcome)
                 // File failures do not trigger automatic rereads. Returning
                 // to the reference keeps the explicit file action available;
@@ -446,56 +372,19 @@ final class PreviewContentLoader {
         return fileLoadTask
     }
 
-    /// Navigation reuses the one loaded immutable document. It performs
-    /// no file reads and retains only the requested bounded page artifact.
-    /// The same file task/generation retires both an initial read and a page
-    /// render when Back, close, retarget, or purge removes this preview.
-    @discardableResult
-    func loadFilePDFPage(_ page: Int) -> Task<Void, Never>? {
-        guard !Task.isCancelled, let item = requestedItem,
-              loadedFileReference != nil, let source = loadedFilePDFSource,
-              (1...source.pageCount).contains(page), page != requestedPDFPage else { return nil }
-        fileLoadTask?.cancel()
-        requestGeneration += 1
-        let generation = requestGeneration
-        requestedPDFPage = page
-        raster = nil
-        pdfPageNumber = nil
-        pdfPageCount = nil
-        phase = .loading
-        canRetryFailure = false
-        let renderer = self.renderer
-        fileLoadTask = Task { [weak self] in
-            let outcome = await renderer.renderHistoryPane([source.representation], pdfPage: page)
-            guard !Task.isCancelled, let self, self.requestGeneration == generation,
-                  self.requestedItem == item else { return }
-            self.apply(outcome)
-            switch outcome {
-            case .content(.pdf(_)): break
-            default: self.loadedFilePDFSource = nil
-            }
-            self.canRetryFailure = false
-            self.fileLoadTask = nil
-        }
-        return fileLoadTask
-    }
-
     func showFileReference() {
         guard let reference = loadedFileReference else { return }
-        hasAttemptedAutomaticPDFPreview = true
         requestGeneration += 1
         retireFileLoad()
-        requestedPDFPage = 1
         raster = nil
-        pdfPageCount = nil
-        pdfPageNumber = nil
+        textSegments = []
+        textSegmentGroups = []
         canRetryFailure = false
         phase = .content(.reference(reference))
     }
 
-    /// A removal also retires an in-flight PDF page request. Pinned captured
-    /// previews survive Clear Unpinned; file reads retain their existing
-    /// conservative retirement behavior.
+    /// Pinned captured previews survive Clear Unpinned; file reads retain
+    /// their existing conservative retirement behavior.
     func purgePreview(_ scope: HistorySurfacePurge.Scope, isPinned: Bool = false) {
         guard let requestedItem = requestedItem ?? preparation?.item else { return }
         switch scope {
@@ -520,7 +409,6 @@ final class PreviewContentLoader {
     private func retireFileLoad() {
         fileLoadTask?.cancel()
         fileLoadTask = nil
-        loadedFilePDFSource = nil
         fileLoadConfirmation = nil
         loadedFileReference = nil
         filePreviewFailure = nil
@@ -533,7 +421,6 @@ final class PreviewContentLoader {
     @concurrent
     private static func renderPayload(
         for item: HistoryItemReference,
-        pdfPage: Int,
         history: any ClipboardHistory,
         renderer: ContentPreview,
         textConfiguration: PreviewTextConfiguration,
@@ -566,7 +453,7 @@ final class PreviewContentLoader {
                 guard await isCurrent() else { return nil }
                 outcome = await renderer.renderSelectedHistoryPane(source, representation: PreviewRepresentation(
                     typeIdentifier: representation.typeIdentifier, bytes: representation.bytes
-                ), pdfPage: pdfPage, textConfiguration: textConfiguration)
+                ), textConfiguration: textConfiguration)
                 try Task.checkCancellation()
                 guard await isCurrent() else { return nil }
                 if case .content = outcome { return outcome }

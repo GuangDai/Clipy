@@ -211,9 +211,13 @@ enum BuiltInAutomation {
             case .prettyJSON, .compactJSON:
                 value = try formatJSON(value, pretty: step.operation == .prettyJSON)
             case .trimLines, .removeEmptyLines, .uniqueLines, .sortLines:
-                var lines = value.replacingOccurrences(of: "\r\n", with: "\n")
-                    .replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
-                guard lines.count <= 50_000 else { throw BuiltInAutomationFailure.tooManyLines }
+                // Bound splitting before allocating owned line strings: a
+                // valid 1 MiB input can contain over a million empty lines.
+                let parts = value.replacingOccurrences(of: "\r\n", with: "\n")
+                    .replacingOccurrences(of: "\r", with: "\n")
+                    .split(separator: "\n", maxSplits: 50_000, omittingEmptySubsequences: false)
+                guard parts.count <= 50_000 else { throw BuiltInAutomationFailure.tooManyLines }
+                var lines = parts.map(String.init)
                 switch step.operation {
                 case .trimLines:
                     lines = lines.map { $0.trimmingCharacters(in: .whitespaces) }

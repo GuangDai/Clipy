@@ -1,5 +1,5 @@
 /// Maintenance reads the folder of the configured store, including hidden
-/// SwiftData files. It does not infer a private database-family layout.
+/// files. It does not infer a private database-family layout.
 import Foundation
 
 actor StoreFolderUsage {
@@ -23,27 +23,34 @@ actor StoreFolderUsage {
             .isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey,
             .totalFileAllocatedSizeKey, .fileAllocatedSizeKey,
         ]
-        var directories = [root]
+        // Stream entries rather than retaining every URL in a blob directory.
+        // A failed subtree makes the estimate unavailable, never a misleading
+        // successful partial total. Enumeration is synchronous on this actor.
+        var enumerationFailure: (any Error)?
+        guard let enumerator = manager.enumerator(
+            at: root, includingPropertiesForKeys: Array(keys), options: [],
+            errorHandler: { _, error in
+                enumerationFailure = error
+                return false
+            }
+        ) else { throw CocoaError(.fileReadUnknown) }
         var total = 0
-        while let directory = directories.popLast() {
+        while let child = enumerator.nextObject() as? URL {
             try Task.checkCancellation()
-            let children = try manager.contentsOfDirectory(
-                at: directory, includingPropertiesForKeys: Array(keys), options: []
-            )
-            for child in children {
-                try Task.checkCancellation()
-                let values = try child.resourceValues(forKeys: keys)
-                if values.isSymbolicLink == true { continue }
-                if values.isDirectory == true {
-                    directories.append(child)
-                } else if values.isRegularFile == true {
-                    guard let allocated = values.totalFileAllocatedSize ?? values.fileAllocatedSize else {
-                        throw CocoaError(.fileReadUnknown)
-                    }
-                    total += allocated
+            let values = try child.resourceValues(forKeys: keys)
+            if values.isSymbolicLink == true {
+                enumerator.skipDescendants()
+                continue
+            }
+            if values.isRegularFile == true {
+                guard let allocated = values.totalFileAllocatedSize ?? values.fileAllocatedSize else {
+                    throw CocoaError(.fileReadUnknown)
                 }
+                total += allocated
             }
         }
+        if let enumerationFailure { throw enumerationFailure }
+        try Task.checkCancellation()
         return total
     }
 }

@@ -237,7 +237,6 @@ struct ContentPreviewTests {
     @Test(arguments: [
         ("public.utf8-plain-text", 64 * 1_048_576),
         ("public.png", 64 * 1_048_576),
-        ("com.adobe.pdf", 64 * 1_048_576),
         ("public.rtf", 1_048_576),
         ("public.html", 1_048_576),
         ("public.file-url", 16 * 1_024),
@@ -251,6 +250,12 @@ struct ContentPreviewTests {
             PreviewRepresentationMetadata(typeIdentifier: type, byteCount: maximum + 1),
         ]).first)
         #expect(rejected.preflightFailure == .failed(.resourceLimit))
+    }
+
+    @Test func pdfMetadataDoesNotPrepareAContentRead() {
+        #expect(ContentPreview.prepareHistoryPane([
+            PreviewRepresentationMetadata(typeIdentifier: "com.adobe.pdf", byteCount: Int.max),
+        ]).isEmpty)
     }
 
     @Test func largeUnselectedRepresentationDoesNotConsumeSelectedSourceBudget() async throws {
@@ -476,22 +481,22 @@ struct ContentPreviewTests {
             let active = Task { await renderer.rasterizePNGForDisplay(Self.onePixelPNG) }
             await gate.waitUntilParked()
             // The parked native operation deliberately ignores cancellation,
-            // just like a synchronous drawPDFPage that has not returned yet.
+            // just like a synchronous ImageIO decode that has not returned yet.
             if cancelActiveRender { active.cancel() }
 
             var imageOutcome: PreviewOutcome?
-            var pdfOutcome: PreviewOutcome?
+            var malformedImageOutcome: PreviewOutcome?
             let image = Task {
                 imageOutcome = await renderer.renderHistoryPane([
                     PreviewRepresentation(typeIdentifier: "public.png", bytes: Self.onePixelPNG),
                     PreviewRepresentation(typeIdentifier: "com.example.opaque", bytes: Data(repeating: 0, count: 4_096)),
                 ])
             }
-            let pdf = Task {
-                // No PDF decoding should occur while the slot is occupied;
+            let malformedImage = Task {
+                // No image decoding should occur while the slot is occupied;
                 // even malformed input must report renderer availability here.
-                pdfOutcome = await renderer.renderHistoryPane([
-                    PreviewRepresentation(typeIdentifier: "com.adobe.pdf", bytes: Data("%PDF-1.4".utf8)),
+                malformedImageOutcome = await renderer.renderHistoryPane([
+                    PreviewRepresentation(typeIdentifier: "public.png", bytes: Data("invalid image".utf8)),
                 ])
             }
             let text = await renderer.renderHistoryPane([
@@ -508,20 +513,20 @@ struct ContentPreviewTests {
             // wait. A regression must fail and release the parked renderer,
             // rather than leave the test suite suspended forever.
             let observationDeadline = ContinuousClock.now.advanced(by: .seconds(5))
-            while (imageOutcome == nil || pdfOutcome == nil), ContinuousClock.now < observationDeadline {
+            while (imageOutcome == nil || malformedImageOutcome == nil), ContinuousClock.now < observationDeadline {
                 try? await Task.sleep(for: .milliseconds(10))
             }
             let imageBeforeRelease = imageOutcome
-            let pdfBeforeRelease = pdfOutcome
+            let malformedImageBeforeRelease = malformedImageOutcome
             let afterTimeout = await renderer.debugSnapshot()
             let nativeEntriesBeforeRelease = await gate.entryCount
             await gate.resume()
             _ = await active.value
             await image.value
-            await pdf.value
+            await malformedImage.value
 
             #expect(imageBeforeRelease == .failed(.renderer))
-            #expect(pdfBeforeRelease == .failed(.renderer))
+            #expect(malformedImageBeforeRelease == .failed(.renderer))
             #expect(afterTimeout.activeJobs == 1)
             #expect(afterTimeout.queuedRasterJobs == 0)
             #expect(afterTimeout.retainedSourceBytes == Self.onePixelPNG.count)

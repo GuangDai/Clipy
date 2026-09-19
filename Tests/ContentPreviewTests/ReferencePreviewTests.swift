@@ -258,6 +258,21 @@ struct ReferencePreviewTests {
         }
     }
 
+    @Test("opaque PDF bytes leave an exact file reference available")
+    func pdfDoesNotBlockFileReference() async {
+        let address = "file:///clipy-nonexistent-reference/document.pdf"
+        let outcome = await ContentPreview().renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "com.adobe.pdf", bytes: Data("%PDF-1.4".utf8)),
+            PreviewRepresentation(typeIdentifier: "public.file-url", bytes: Data(address.utf8)),
+        ])
+        guard case let .content(.reference(reference)) = outcome else {
+            Issue.record("expected file reference beside opaque PDF bytes, got \(outcome)")
+            return
+        }
+        #expect(reference.kind == .file)
+        #expect(reference.address == address)
+    }
+
     @Test("invalid plain text can yield to a valid reference")
     func invalidPlainTextFallback() async {
         let address = "https://example.invalid/fallback?q=1#part"

@@ -1,7 +1,6 @@
 /// Details must preserve renderer facts when adapting an explicitly selected
-/// representation: inert references, PDF page counts, and excerpt truncation.
+/// representation: inert references and excerpt truncation.
 @testable import ContentPreview
-import CoreGraphics
 import Foundation
 @testable import HistoryCore
 @testable import HistoryStorage
@@ -9,6 +8,16 @@ import Testing
 @testable import ClipyApp
 
 struct DetailsPreviewArtifactTests {
+    @Test func unsupportedDocumentKeepsMetadataAndOriginalBytes() async throws {
+        let bytes = Data("opaque document bytes".utf8)
+        let (history, request, metadata) = try await capture(bytes, type: "com.adobe.pdf")
+        let preview = try await DetailsRepresentationPresentation.load(
+            request, metadata: metadata, history: history, renderer: ContentPreview()
+        )
+        #expect(preview == .metadataOnly)
+        #expect(try await history.representation(request).bytes == bytes)
+    }
+
     @Test(arguments: [
         ("public.url", "https://example.invalid/a%2Fb?q=e%CC%81#section"),
         ("public.file-url", "file:///clipy-nonexistent-preview-fixture/a%20b.pdf"),
@@ -27,25 +36,6 @@ struct DetailsPreviewArtifactTests {
         #expect(reference.kind == (type == "public.file-url" ? .file : .url))
         #expect(reference.filePath == (type == "public.file-url" ? "/clipy-nonexistent-preview-fixture/a b.pdf" : nil))
         #expect(preview.raster == nil)
-        let exported = try await history.representation(request)
-        #expect(exported.bytes == bytes)
-    }
-
-    @Test func pdfPreviewPreservesTheDisplayedPageAndDocumentPageCount() async throws {
-        let bytes = try twoPagePDF()
-        let (history, request, metadata) = try await capture(bytes, type: "com.adobe.pdf")
-        let preview = try await DetailsRepresentationPresentation.load(
-            request, metadata: metadata, history: history, renderer: ContentPreview()
-        )
-        guard case .pdf(let pdf) = preview else {
-            Issue.record("Details discarded the PDF page facts")
-            return
-        }
-        #expect(pdf.pageNumber == 1)
-        #expect(pdf.pageCount == 2)
-        #expect(pdf.raster.width == 80)
-        #expect(pdf.raster.height == 60)
-        #expect(preview.raster == pdf.raster)
         let exported = try await history.representation(request)
         #expect(exported.bytes == bytes)
     }
@@ -86,18 +76,4 @@ struct DetailsPreviewArtifactTests {
         return (history, HistoryRepresentationRequest(item: item, basis: .effective, typeIdentifier: type), metadata)
     }
 
-    private func twoPagePDF() throws -> Data {
-        let output = try #require(CFDataCreateMutable(kCFAllocatorDefault, 0))
-        let consumer = try #require(CGDataConsumer(data: output))
-        var mediaBox = CGRect(x: 0, y: 0, width: 80, height: 60)
-        let context = try #require(CGContext(consumer: consumer, mediaBox: &mediaBox, nil))
-        for gray in [CGFloat(0), CGFloat(1)] {
-            context.beginPDFPage(nil)
-            context.setFillColor(gray: gray, alpha: 1)
-            context.fill(mediaBox)
-            context.endPDFPage()
-        }
-        context.closePDF()
-        return output as Data
-    }
 }

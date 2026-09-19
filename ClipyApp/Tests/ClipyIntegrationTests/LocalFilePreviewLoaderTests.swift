@@ -10,7 +10,7 @@ struct LocalFilePreviewLoaderTests {
         ("jpg", "public.jpeg"), ("tiff", "public.tiff"),
         ("heic", "public.heic"), ("heif", "public.heif"),
         ("gif", "com.compuserve.gif"), ("bmp", "com.microsoft.bmp"),
-        ("pdf", "com.adobe.pdf"), ("rtf", "public.rtf"),
+        ("rtf", "public.rtf"),
         ("html", "public.html"),
     ])
     func supportedLocalFilesReturnExactBytes(suffix: String, type: String) async throws {
@@ -54,6 +54,9 @@ struct LocalFilePreviewLoaderTests {
         }
         await #expect(throws: FilePreviewFailure.unsupported) {
             try await loader.load(directory.appendingPathComponent("unread.zip").absoluteString)
+        }
+        await #expect(throws: FilePreviewFailure.unsupported) {
+            try await loader.load(directory.appendingPathComponent("unread.pdf").absoluteString)
         }
         let folder = directory.appendingPathComponent("directory.txt")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)

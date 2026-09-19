@@ -13,8 +13,6 @@
 "Only the reference is shown. Its destination has not been opened." = "Only the reference is shown. Its destination has not been opened.";
 "Preview truncated. Copying the item keeps its complete content." = "Preview truncated. Copying the item keeps its complete content.";
 "Showing one image from a multi-image item. Copying the item keeps its complete content." = "Showing one image from a multi-image item. Copying the item keeps its complete content.";
-"Showing PDF page %@ of %@. Copying the item keeps its complete content." = "Showing PDF page %@ of %@. Copying the item keeps its complete content.";
-"PDF preview, page %@ of %@" = "PDF preview, page %@ of %@";
 "Preview File Contents…" = "Preview File Contents…";
 "Load File Contents?" = "Load File Contents?";
 "Load File" = "Load File";
@@ -29,9 +27,6 @@
 "This file type cannot be previewed." = "This file type cannot be previewed.";
 "Only the reference is shown. Loading its contents requires confirmation." = "Only the reference is shown. Loading its contents requires confirmation.";
 "Copying keeps the original file reference." = "Copying keeps the original file reference.";
-"Previous PDF Page" = "Previous PDF Page";
-"Next PDF Page" = "Next PDF Page";
-"Page %@ of %@" = "Page %@ of %@";
 "The file changed while it was being read. Return to the file reference to load it again." = "The file changed while it was being read. Return to the file reference to load it again.";
 
 "Last Copied" = "Last copied";

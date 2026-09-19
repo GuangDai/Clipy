@@ -32,12 +32,12 @@ struct RealHistoryLazyPreviewTests {
         // Opening manually before the timer fires consumes the same work.
         pane.togglePreview(for: item)
         #expect(pane.isOpen)
-        await loader.loadForDisplay(item: item, pdfPage: 1, textConfiguration: .init(), isRetry: false)
+        await loader.loadForDisplay(item: item, textConfiguration: .init(), isRetry: false)
         #expect(await history.reads().representations.count == 1)
         #expect(loader.phase == .content(.text("Already prepared")))
 
         // A changed user preference cannot reuse the old prepared prefix.
-        await loader.loadForDisplay(item: item, pdfPage: 1,
+        await loader.loadForDisplay(item: item,
             textConfiguration: .init(maximumCharacters: 7), isRetry: false)
         #expect(await history.reads().representations.count == 2)
         #expect(loader.phase == .content(.text("Already", wasTruncated: true)))

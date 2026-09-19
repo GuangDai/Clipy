@@ -22,7 +22,6 @@ struct PreviewRasterNoticeTests {
         await loader.load(item: multiple)
         #expect(loader.phase == .content(.image))
         #expect(loader.raster?.sourceImageCount == 2)
-        #expect(loader.pdfPageCount == nil)
         #expect(loader.appliedRasterNotice() == PreviewCopy.multiImageDisclosure())
         #expect(try await history.pastePayload(for: multiple.id).representations.map(\.bytes) == [bytes])
 
@@ -33,59 +32,6 @@ struct PreviewRasterNoticeTests {
         await loader.load(item: text)
         #expect(loader.phase == .content(.text("plain text")))
         #expect(loader.raster == nil)
-        #expect(loader.pdfPageCount == nil)
-        #expect(loader.appliedRasterNotice() == nil)
-    }
-
-    @Test func pdfPageFactsFollowOnlyTheirLoadedDocument() async throws {
-        let history = try await SQLiteHistory.open(
-            configuration: HistoryConfiguration(persistence: .temporary)
-        )
-        let bytes = try twoPagePDF()
-        let pdf = try await capture(bytes, type: "com.adobe.pdf", in: history)
-        let single = try await capture(fixturePNGData, type: "public.png", in: history)
-        let malformed = try await capture(Data("not a PDF".utf8), type: "com.adobe.pdf", in: history)
-        let unsupported = try await capture(Data([1, 2, 3]), type: "dyn.preview.notice", in: history)
-        let loader = PreviewContentLoader(history: history)
-        await loader.load(item: pdf)
-        #expect(loader.phase == .content(.image))
-        #expect(loader.pdfPageCount == 2)
-        #expect(loader.raster != nil)
-        #expect(loader.appliedRasterNotice() == PreviewCopy.pdfPageDisclosure(pageCount: 2))
-        #expect(loader.appliedImageAccessibilityLabel == PreviewCopy.pdfPageAccessibilityLabel(pageCount: 2))
-        #expect(loader.imageAccessibilityLabel(locale: Locale(identifier: "de_DE")) ==
-            PreviewCopy.pdfPageAccessibilityLabel(pageCount: 2, locale: Locale(identifier: "de_DE")))
-        #expect(try await history.pastePayload(for: pdf.id).representations.map(\.bytes) == [bytes])
-
-        await loader.load(item: single)
-        #expect(loader.phase == .content(.image))
-        #expect(loader.pdfPageCount == nil)
-        #expect(loader.appliedRasterNotice() == nil)
-        #expect(loader.appliedImageAccessibilityLabel == PreviewCopy.imageDimensions(width: 1, height: 1))
-        #expect(loader.imageAccessibilityLabel(locale: Locale(identifier: "de_DE")) ==
-            PreviewCopy.imageDimensions(width: 1, height: 1, locale: Locale(identifier: "de_DE")))
-        await loader.load(item: pdf)
-        loader.clear()
-        #expect(loader.pdfPageCount == nil)
-        #expect(loader.raster == nil)
-        #expect(loader.appliedRasterNotice() == nil)
-        #expect(loader.appliedImageAccessibilityLabel == nil)
-
-        for target in [unsupported, malformed] {
-            await loader.load(item: pdf)
-            #expect(loader.pdfPageCount == 2)
-            await loader.load(item: target)
-            #expect(loader.phase == (target == unsupported ? .unsupported : .failed))
-            #expect(loader.pdfPageCount == nil)
-            #expect(loader.raster == nil)
-            #expect(loader.appliedRasterNotice() == nil)
-            #expect(loader.appliedImageAccessibilityLabel == nil)
-        }
-        await loader.load(item: pdf)
-        _ = try await history.perform(.remove(pdf.id))
-        await loader.load(item: pdf)
-        #expect(loader.phase == .failed)
-        #expect(loader.pdfPageCount == nil)
         #expect(loader.appliedRasterNotice() == nil)
     }
 
@@ -104,22 +50,6 @@ struct PreviewRasterNoticeTests {
             CGImageDestinationAddImage(destination, try #require(context.makeImage()), nil)
         }
         try #require(CGImageDestinationFinalize(destination))
-        return data as Data
-    }
-
-    private func twoPagePDF() throws -> Data {
-        let data = try #require(CFDataCreateMutable(kCFAllocatorDefault, 0))
-        let consumer = try #require(CGDataConsumer(data: data))
-        var mediaBox = CGRect(x: 0, y: 0, width: 80, height: 60)
-        let pdfContext = CGContext(consumer: consumer, mediaBox: &mediaBox, nil)
-        let context = try #require(pdfContext)
-        for red in [CGFloat(1), CGFloat(0)] {
-            context.beginPDFPage(nil)
-            context.setFillColor(red: red, green: 0, blue: 1 - red, alpha: 1)
-            context.fill(mediaBox)
-            context.endPDFPage()
-        }
-        context.closePDF()
         return data as Data
     }
 

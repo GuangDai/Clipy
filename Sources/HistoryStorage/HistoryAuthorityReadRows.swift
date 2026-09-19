@@ -27,6 +27,15 @@ internal struct ScalarReadRow {
         """
 
     internal init(_ statement: SQLiteStatement, limits: HistoryLimits) throws {
+        // V2-09 §4: bound every variable-size scalar before copying it out
+        // of SQLite, just as the search batch reader does.
+        guard try statement.textByteCount(at: 0) == 36,
+              try statement.blobByteCount(at: 1) == 8,
+              try statement.blobByteCount(at: 5) == 8,
+              try statement.isNull(at: 6)
+                || statement.textByteCount(at: 6) <= limits.maximumSourceApplicationObservationUTF8Bytes else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
         let rawID = try statement.text(at: 0)
         guard let uuid = UUID(uuidString: rawID), uuid.uuidString == rawID,
               try statement.blobByteCount(at: 2) <= limits.maximumStoredTitleUTF8Bytes,

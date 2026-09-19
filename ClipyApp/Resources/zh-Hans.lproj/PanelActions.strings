@@ -127,3 +127,12 @@
 "Clipy couldn't save this file. Choose another location and try again." = "Clipy 无法保存此文件。请选择其他位置后重试。";
 
 "Each clipboard item must keep at least one format" = "剪贴板中的每一项都必须保留至少一种格式";
+"Open in %@" = "在“%@”中打开";
+"Open %@ in %@" = "在“%2$@”中打开“%1$@”";
+"Open in Default Application" = "在默认应用中打开";
+"Cannot Open Item" = "无法打开条目";
+"This item changed or was removed. Open its menu again." = "此条目已更改或移除，请重新打开它的菜单。";
+"The file is missing or cannot be opened." = "文件不存在或无法打开。";
+"No application is available to open this file." = "没有可用于打开此文件的应用。";
+"Temporary image storage is full. Save the image to a file instead." = "临时图片存储空间已满，请将图片另存为文件。";
+"Opens a temporary copy. Changes are not saved to history. Copies older than 24 hours are removed when opening another image in a later session." = "打开临时副本，修改不会保存到历史记录。下次启动 Clipy 后打开图片时，会清理超过 24 小时的副本。";

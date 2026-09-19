@@ -127,3 +127,12 @@
 "Clipy couldn't save this file. Choose another location and try again." = "Clipy couldn't save this file. Choose another location and try again.";
 
 "Each clipboard item must keep at least one format" = "Each clipboard item must keep at least one format";
+"Open in %@" = "Open in %@";
+"Open %@ in %@" = "Open %@ in %@";
+"Open in Default Application" = "Open in Default Application";
+"Cannot Open Item" = "Cannot Open Item";
+"This item changed or was removed. Open its menu again." = "This item changed or was removed. Open its menu again.";
+"The file is missing or cannot be opened." = "The file is missing or cannot be opened.";
+"No application is available to open this file." = "No application is available to open this file.";
+"Temporary image storage is full. Save the image to a file instead." = "Temporary image storage is full. Save the image to a file instead.";
+"Opens a temporary copy. Changes are not saved to history. Copies older than 24 hours are removed when opening another image in a later session." = "Opens a temporary copy. Changes are not saved to history. Copies older than 24 hours are removed when opening another image in a later session.";

@@ -1,11 +1,8 @@
 import Foundation
 import HistoryCore
 
-/// An app-owned local-file read, invoked for a visible PDF reference or after
-/// explicit confirmation for other file types. The address is the original copied file URL spelling;
-/// the returned bytes are transient and never become History content. A
-/// successfully rendered PDF retains this bounded immutable snapshot only
-/// while its file preview is open, allowing navigation without rereads.
+/// An app-owned local-file read after explicit confirmation. The returned
+/// bytes are transient and never become History content.
 struct FilePreviewSettings: Sendable {
     let load: @Sendable (String) async throws -> HistoryRepresentation
 

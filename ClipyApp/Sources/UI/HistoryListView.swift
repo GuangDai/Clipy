@@ -223,6 +223,7 @@ struct HistoryListView: View {
             areShortcutsEnabled: areShortcutsEnabled,
             thumbnails: thumbnails,
             dragSource: dragSource,
+            externalOpener: viewState.externalOpener,
             onCopy: { reference in
                 selection.wrappedValue = reference.id
                 onFocusHistory()

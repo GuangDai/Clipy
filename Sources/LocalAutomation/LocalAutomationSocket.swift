@@ -61,6 +61,10 @@ package enum LocalAutomationSocket {
         _ descriptor: Int32, to endpoint: URL,
         deadline: ContinuousClock.Instant
     ) async throws {
+        // An immediately ready local socket must honor the same preflight
+        // cancellation/deadline semantics as send and receive (07 §8.3).
+        try Task.checkCancellation()
+        guard ContinuousClock.now < deadline else { throw Failure.timeout }
         let result = try withAddress(endpoint) {
             Darwin.connect(descriptor, $0, $1)
         }
@@ -70,6 +74,7 @@ package enum LocalAutomationSocket {
         }
         while true {
             try Task.checkCancellation()
+            guard ContinuousClock.now < deadline else { throw Failure.timeout }
             var readiness = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
             let ready = Darwin.poll(&readiness, 1, 0)
             if ready > 0 {

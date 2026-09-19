@@ -49,7 +49,7 @@ There is no `DomainCore` target. The few values that must appear in both the cal
 | Target | Surface | Owns | Must not own |
 |---|---|---|---|
 | `ClipboardFormats` | Public app-used identifiers, Foundation-only | Open-world exact identifiers and package-only declared string-codec facts | Purpose admission, decoders, bytes, registries, caches, plugins, framework objects |
-| `ContentPreview` | Public concrete renderer and immutable values; internal implementation | Preview source priority, exact text codecs, fixed resource profiles, eager ImageIO/PDF page rendering, and bounded inert text/raster/copied-address outcomes | History reads, item/reference identity, selection or panel lifecycle, thumbnail request/source/cache policy, external I/O, registries, plugins, or framework objects in its interface |
+| `ContentPreview` | Public concrete renderer and immutable values; internal implementation | Preview source priority, exact text codecs, fixed resource profiles, eager ImageIO rendering, and bounded inert text/raster/copied-address outcomes | History reads, item/reference identity, selection or panel lifecycle, thumbnail request/source/cache policy, external I/O, registries, plugins, or framework objects in its interface |
 | `ClipyCLIContract` | Package-only, Foundation-only, no product | Versioned UTF-8 JSON request/reply values, bounded decoding/encoding, and stable exit classes | File handles or standard-stream side effects, transport, credentials, Gateway/History access, a product CLI, operation dispatch, or fabricated Gateway results |
 | `LocalAutomation` | Public concrete service/client and immutable output | Same-user local socket transport, request-to-ingress calls, fixed endpoint locations, bounded request/reply frames | SwiftData models, a second writer, UI state, clipboard capture, or automatic mutation retries |
 | `clipyctl` | Bundled XcodeGen command-line tool | One stdin JSON request, exact stdout reply, content-free stderr, containing-app cold launch, bounded connection retries | Store access, enrollment/grant decisions, endpoint selection from request input, or installer/symlink management |
@@ -354,7 +354,7 @@ real multi-display matrix.
 
 #### Background isolation
 
-- `ContentPreview` owns transient preview source selection, text/image/PDF
+- `ContentPreview` owns transient preview source selection, text/image
   rendering, and inert URL-reference parsing on its actor. Copied addresses
   and decoded file-URL paths are immutable strings, not filesystem handles or
   loading capabilities; displaying them never follows the destination.
@@ -368,20 +368,44 @@ real multi-display matrix.
   native slot has a two-second deadline; expiration returns the retryable
   `PreviewFailure.renderer` and releases that waiter's retained source. A
   timed-out or cancelled waiter never releases the active native slot. The
-  active draw must finish before another rasterization starts, so a slow PDF
+  active draw must finish before another rasterization starts, so a slow image decode
   cannot turn retries into unbounded native concurrency.
   History-pane priority is image, valid exact plain text, derived offline
-  RTF/HTML text, exact `com.adobe.pdf`, then an inert copied reference.
+  RTF/HTML text, then an inert copied reference.
   The concrete rich-text parsers consume only copied bytes and produce
   bounded text without document importers, script execution, or attachment
-  loading; Part VI §5 defines their fixed limits. PDF rendering uses a
-  memory data provider and local Core Graphics document/page objects in the
-  existing native slot: only the first cropped/rotated page becomes a white-
-  backed raster within the 640-pixel/output-byte profile. Password-protected
-  PDFs remain unsupported. No PDF text indexing, editing, interactive
-  document actions or additional file access is introduced. The UI discloses
-  page 1 and the total page count; multi-image raster sources likewise carry
-  a static-preview notice. Neither notice changes complete item copying.
+  loading; Part VI §5 defines their fixed limits. Multi-image raster sources
+  carry a static-preview notice without changing complete item copying.
+  PDF preview rendering, automatic local PDF reads, page navigation and its
+  shortcuts are removed. PDF representations remain opaque clipboard data:
+  capture, storage and complete copying retain their original bytes. A PDF's
+  copied file URL can still produce an inert reference preview.
+
+
+#### Explicit opening in another application
+
+The history row context menu resolves the system's default application for a
+local file reference or supported raster format using
+[`NSWorkspace.urlForApplication(toOpen:)`](https://developer.apple.com/documentation/appkit/nsworkspace/urlforapplication(toopen:)-7qkzf).
+The label names that application. Multi-item captures expose individual
+choices, preferring each item's actual file reference over an accompanying
+image representation. Merely showing a row or preview never launches an app.
+Visible candidate rows prepare small menu descriptors from bounded reference
+bytes and representation metadata; image bytes are loaded only after the user chooses Open. The action re-reads
+its exact `HistoryRepresentationRequest` so a changed or removed item cannot
+silently substitute another content version. Missing files and absent handlers
+produce a user-visible failure.
+
+A copied image without a file is exported byte-for-byte to a private,
+UUID-named temporary directory with the matching raster extension, then opened
+with its default app. This is an independent temporary copy: edits do not
+modify retained History. Each file is limited to 64 MiB; temporary exports have
+a combined 256 MiB / 128-file admission bound. Files survive the application
+launch callback because the receiving app may still need to read them.
+The first image export in a later session removes only Clipy's own expired
+UUID directories older than 24 hours. Capacity never evicts active exports.
+The menu describes this lifecycle. Opening local file references uses their
+existing location and does not create or delete a copy.
 
 All of the following are `actor` types; each is therefore `Sendable`, which is what makes `SwiftDataHistory: Sendable` derivable without `@unchecked Sendable`. `SwiftDataHistory` stores six of them as fields (Part V §2); `ThumbnailWorker` is owned and invoked by `ThumbnailService`, not stored directly.
 

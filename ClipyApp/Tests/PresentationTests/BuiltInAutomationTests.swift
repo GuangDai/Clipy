@@ -54,6 +54,26 @@ struct BuiltInAutomationTests {
         #expect(try BuiltInAutomation.run("bad json", steps: [.init(operation: .prettyJSON, enabled: false)]) == "bad json")
     }
 
+    @Test func lineLimitCountsEmptyLinesAndNormalizesLineEndings() throws {
+        let trimLines = [BuiltInAutomationStep(operation: .trimLines)]
+        #expect(try BuiltInAutomation.run("", steps: trimLines) == "")
+        #expect(try BuiltInAutomation.run("\r\n x \r\r\n", steps: trimLines) == "\nx\n\n")
+        let atLimit = String(repeating: "\n", count: 49_999)
+        #expect(try BuiltInAutomation.run(atLimit, steps: trimLines) == atLimit)
+        // Even remove-empty-lines must enforce the input line bound before
+        // discarding lines; a full-size newline input must not expand into
+        // a million individually owned strings before it can be rejected.
+        let operations: [BuiltInAutomationStep.Operation] = [.trimLines, .removeEmptyLines, .uniqueLines, .sortLines]
+        for operation in operations {
+            #expect(throws: BuiltInAutomationFailure.tooManyLines) {
+                try BuiltInAutomation.run(
+                    String(repeating: "\n", count: BuiltInAutomation.maximumBytes),
+                    steps: [.init(operation: operation)]
+                )
+            }
+        }
+    }
+
     @MainActor @Test func cancellationAndSupersedingPreviewNeverPublishAnOldResult() async {
         let cancelled = Task { @MainActor in
             try BuiltInAutomation.run("text", steps: [.init(operation: .uppercase)])

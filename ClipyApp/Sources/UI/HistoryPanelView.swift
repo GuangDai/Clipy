@@ -1253,30 +1253,6 @@ struct HistoryPanelView: View {
                     || !surfaceState.detailsPath.isEmpty
                     || surfaceState.quickLookReference != nil
             )
-
-            // The floating pane's PDF pager chords (⌥⌘←/→) get the same
-            // republish, gated identically: while the quick-look overlay is
-            // open its in-view pager buttons own the chords, so these stay
-            // disabled and nothing double-handles.
-            Button(PreviewCopy.text("Previous PDF Page")) {
-                previewState.requestPreviewPage(.previous)
-            }
-            .keyboardShortcut(shortcuts.keyboardShortcut(for: .previousPDFPage, whileEditingText: isSearchFieldFocused))
-            .disabled(
-                !previewState.isOpen
-                    || !surfaceState.detailsPath.isEmpty
-                    || surfaceState.quickLookReference != nil
-            )
-
-            Button(PreviewCopy.text("Next PDF Page")) {
-                previewState.requestPreviewPage(.next)
-            }
-            .keyboardShortcut(shortcuts.keyboardShortcut(for: .nextPDFPage, whileEditingText: isSearchFieldFocused))
-            .disabled(
-                !previewState.isOpen
-                    || !surfaceState.detailsPath.isEmpty
-                    || surfaceState.quickLookReference != nil
-            )
         }
         .opacity(0)
         .frame(width: 0, height: 0)

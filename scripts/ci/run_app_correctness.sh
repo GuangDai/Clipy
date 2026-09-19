@@ -24,7 +24,6 @@ gui_group_1=(
   ClipboardJourneyUITests
   RetentionCountJourneyUITests
   RetentionPolicyJourneyUITests
-  PDFPreviewJourneyUITests
   TextPreviewTruncationJourneyUITests
 )
 gui_group_2=(

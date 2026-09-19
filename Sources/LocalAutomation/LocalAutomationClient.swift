@@ -73,6 +73,7 @@ public actor LocalAutomationClient {
             return LocalAutomationClient(descriptor: descriptor)
         } catch {
             _ = Darwin.close(descriptor)
+            if let failure = error as? LocalAutomationClientFailure { throw failure }
             if error is CancellationError { throw LocalAutomationClientFailure.cancelled }
             if case LocalAutomationSocket.Failure.timeout = error {
                 throw LocalAutomationClientFailure.timeout

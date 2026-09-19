@@ -197,8 +197,8 @@ HTML derived output is also limited to 1 MiB of UTF-8. These are text
 extractions, not rich-layout renderings or editable substitutes for the
 retained representations. Unknown entities remain literal, unsupported RTF
 encodings remain explicitly unavailable, and malformed selected rich text
-does not silently switch to another sibling. The existing PDF preview follows
-these text choices. When none applies, the first exact `public.url` or `public.file-url`
+does not silently switch to another sibling. PDF representations are not
+preview candidates. When none applies, the first exact `public.url` or `public.file-url`
 representation can produce an inert reference artifact. That selected input
 is limited to 16 KiB and must be strict UTF-8 with an absolute URL scheme;
 file references additionally require an absolute path. Parsing uses
@@ -206,7 +206,8 @@ file references additionally require an absolute path. Parsing uses
 and [syntactic path extraction](https://developer.apple.com/documentation/foundation/url/path(percentencoded:)).
 The artifact retains the complete original address spelling and, for files,
 its decoded path. It does not resolve bookmarks or symlinks, query resource
-values, open files, request network resources, or provide an Open action.
+values, open files, request network resources, or itself launch another application. The app owns the separate explicit
+context-menu Open action; it is never triggered by preview selection.
 The UI presents selectable literal text and explains that the destination
 has not been opened. Invalid/oversized selected references return the existing
 malformed/resource-limit outcomes rather than silently trying another URL.

@@ -12,8 +12,9 @@ struct StoreFolderUsageTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let folder = root.appendingPathComponent("Store", isDirectory: true)
         let hidden = folder.appendingPathComponent(".hidden", isDirectory: true)
+        let package = folder.appendingPathComponent("nested.bundle/Contents", isDirectory: true)
         let outside = root.appendingPathComponent("Outside", isDirectory: true)
-        for directory in [hidden, outside] {
+        for directory in [hidden, package, outside] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
         let included = [
@@ -21,6 +22,7 @@ struct StoreFolderUsageTests {
             folder.appendingPathComponent("history.store-wal"),
             hidden.appendingPathComponent("blob"),
             folder.appendingPathComponent("other-data"),
+            package.appendingPathComponent("package-data"),
         ]
         for (index, file) in included.enumerated() {
             try Data(repeating: UInt8(index + 1), count: 16_384).write(to: file)
@@ -34,10 +36,22 @@ struct StoreFolderUsageTests {
             at: folder.appendingPathComponent("linked-file"), withDestinationURL: externalFile
         )
         // The filesystem supplies allocation units; the expected membership
-        // is the four exact fixture files, not another directory traversal.
+        // is the exact fixture files, not another directory traversal.
         let expected = try included.reduce(0) { try $0 + allocation(of: $1) }
         let reader = StoreFolderUsage(directoryURL: folder)
         #expect(try await reader.allocatedBytes() == expected)
+    }
+
+    @Test("a linked store root is unavailable rather than traversing its target")
+    func linkedRootIsRejected() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Store", isDirectory: true)
+        let link = root.appendingPathComponent("linked-store")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: folder)
+        let reader = StoreFolderUsage(directoryURL: link)
+        await #expect(throws: (any Error).self) { try await reader.allocatedBytes() }
     }
 
     @Test("refresh measures current allocation and missing folders are unavailable")

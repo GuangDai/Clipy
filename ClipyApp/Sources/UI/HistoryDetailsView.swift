@@ -1144,16 +1144,6 @@ private struct RepresentationRow: View {
                     .frame(maxWidth: CGFloat(raster.width))
                     .accessibilityIdentifier("clipy.details.image-preview." + representation.identity.accessibilitySuffix)
             }
-            if case .some(.pdf(let pdf)) = preview {
-                Text(PreviewCopy.pdfPageDisclosure(
-                    pageNumber: pdf.pageNumber, pageCount: pdf.pageCount,
-                    bundle: copyBundle, locale: locale
-                ))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("clipy.details.pdf-page-notice." + representation.identity.accessibilitySuffix)
-            }
             if case .some(.image(let raster)) = preview, raster.sourceImageCount > 1 {
                 Text(PreviewCopy.multiImageDisclosure(bundle: copyBundle))
                     .font(.caption)
@@ -1283,21 +1273,19 @@ internal enum ContentBasis: String, Hashable {
 
 /// Details' bounded preview for one explicitly selected representation.
 /// Exact UTF-8/UTF-16 text keeps the editor's strict codec; rich text, images,
-/// PDF and inert references retain ContentPreview's artifacts and disclosure
+/// and inert references retain ContentPreview's artifacts and disclosure
 /// facts. Other identifiers never acquire semantics merely from UTF-8-looking
 /// bytes. Each row addresses its own Canonical/Effective source (V2-09 §5;
 /// review TYPE-2), independently of sibling formats and the item's thumbnail.
 enum DetailsRepresentationPresentation: Equatable, Sendable {
     case plainText(String, wasTruncated: Bool = false)
     case image(PreviewRaster)
-    case pdf(PreviewPDF)
     case reference(PreviewReference)
     case metadataOnly
 
     var raster: PreviewRaster? {
         switch self {
         case .image(let raster): raster
-        case .pdf(let pdf): pdf.raster
         case .plainText, .reference, .metadataOnly: nil
         }
     }
@@ -1338,7 +1326,6 @@ enum DetailsRepresentationPresentation: Equatable, Sendable {
         switch outcome {
         case .content(.text(let text)): return excerpt(text.text, wasTruncated: text.wasTruncated)
         case .content(.raster(let raster)): return .image(raster)
-        case .content(.pdf(let pdf)): return .pdf(pdf)
         case .content(.reference(let reference)): return .reference(reference)
         default: return .metadataOnly
         }

@@ -22,42 +22,50 @@ struct BoundedJSONWriter {
             exceeded = true
             return
         }
-        let needsEscaping = value.unicodeScalars.contains {
-            $0.value <= 0x1F || $0.value == 0x22 || $0.value == 0x5C
-        }
-        if !needsEscaping {
-            appendByte(0x22)
-            append(value.utf8)
-            appendByte(0x22)
-            return
-        }
+        // JSON escapes only ASCII bytes; all other UTF-8 bytes can be copied
+        // unchanged. Emit contiguous runs without allocating a String for
+        // each Unicode scalar (V2-05 §0.1.2 exact UTF-8 emission).
+        let bytes = value.utf8
         appendByte(0x22)
-        for scalar in value.unicodeScalars where !exceeded {
-            switch scalar.value {
-            case 0x22:
-                appendASCII("\\\"")
-            case 0x5C:
-                appendASCII("\\\\")
-            case 0x08:
-                appendASCII("\\b")
-            case 0x0C:
-                appendASCII("\\f")
-            case 0x0A:
-                appendASCII("\\n")
-            case 0x0D:
-                appendASCII("\\r")
-            case 0x09:
-                appendASCII("\\t")
-            case 0x00...0x1F:
-                let digits = Array("0123456789abcdef".utf8)
-                appendASCII("\\u00")
-                appendByte(digits[Int(scalar.value >> 4)])
-                appendByte(digits[Int(scalar.value & 0x0F)])
-            default:
-                append(String(scalar).utf8)
+        var runStart = bytes.startIndex
+        var index = runStart
+        while index != bytes.endIndex {
+            let byte = bytes[index]
+            let next = bytes.index(after: index)
+            if byte <= 0x1F || byte == 0x22 || byte == 0x5C {
+                append(bytes[runStart..<index])
+                guard !exceeded else { return }
+                switch byte {
+                case 0x22:
+                    appendASCII("\\\"")
+                case 0x5C:
+                    appendASCII("\\\\")
+                case 0x08:
+                    appendASCII("\\b")
+                case 0x0C:
+                    appendASCII("\\f")
+                case 0x0A:
+                    appendASCII("\\n")
+                case 0x0D:
+                    appendASCII("\\r")
+                case 0x09:
+                    appendASCII("\\t")
+                default:
+                    appendASCII("\\u00")
+                    appendByte(Self.hexDigit(byte >> 4))
+                    appendByte(Self.hexDigit(byte & 0x0F))
+                }
+                guard !exceeded else { return }
+                runStart = next
             }
+            index = next
         }
+        append(bytes[runStart..<bytes.endIndex])
         appendByte(0x22)
+    }
+
+    private static func hexDigit(_ value: UInt8) -> UInt8 {
+        value < 10 ? 0x30 + value : 0x61 + value - 10
     }
 
     mutating func appendByte(_ byte: UInt8) {

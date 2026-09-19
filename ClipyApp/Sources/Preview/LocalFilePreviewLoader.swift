@@ -11,8 +11,8 @@ enum LocalFilePreviewDebugInstrumentation {
 #endif
 
 /// Explicit file-preview I/O lives in the app, apart from the inert copied
-/// URL renderer. Constructing this actor reads nothing. A visible PDF preview
-/// or an explicitly confirmed file action calls load; the result never enters
+/// URL renderer. Constructing this actor reads nothing. An explicitly
+/// confirmed file action calls load; the result never enters
 /// History storage.
 actor LocalFilePreviewLoader {
     static let maximumBytes = 64 * 1_048_576
@@ -150,7 +150,6 @@ actor LocalFilePreviewLoader {
         case "heif": "public.heif"
         case "gif": "com.compuserve.gif"
         case "bmp": "com.microsoft.bmp"
-        case "pdf": "com.adobe.pdf"
         case "rtf": "public.rtf"
         case "html", "htm": "public.html"
         default: throw FilePreviewFailure.unsupported

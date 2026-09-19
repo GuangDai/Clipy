@@ -52,12 +52,17 @@ struct HistoryRowView: View {
     private let isSelected: Bool
     private let thumbnails: ThumbnailStore
     private let dragSource: HistoryListDraggingView?
+    private let externalOpener: HistoryExternalOpener?
     private let onCopy: (HistoryItemReference) -> Void
     private let onPin: (HistoryItemID, PinnedPlacement) -> Void
     private let onUnpin: (HistoryItemID) -> Void
     private let onRemove: (HistoryItemID) -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
+    @State private var openFailure: HistoryOpenFailure?
+    @State private var openOptions: [HistoryOpenOption] = []
+    @State private var openOptionsFailure: HistoryOpenFailure?
+    @State private var isPreparingOpenOptions = true
     @State private var dragRegion = HistoryRowDragRegionView()
 
     @Environment(\.locale) private var locale
@@ -75,6 +80,7 @@ struct HistoryRowView: View {
         areShortcutsEnabled: Bool = true,
         thumbnails: ThumbnailStore,
         dragSource: HistoryListDraggingView? = nil,
+        externalOpener: HistoryExternalOpener? = nil,
         onCopy: @escaping (HistoryItemReference) -> Void,
         onPin: @escaping (HistoryItemID, PinnedPlacement) -> Void,
         onUnpin: @escaping (HistoryItemID) -> Void,
@@ -92,6 +98,7 @@ struct HistoryRowView: View {
         self.areShortcutsEnabled = areShortcutsEnabled
         self.thumbnails = thumbnails
         self.dragSource = dragSource
+        self.externalOpener = externalOpener
         self.onCopy = onCopy
         self.onPin = onPin
         self.onUnpin = onUnpin
@@ -164,7 +171,32 @@ struct HistoryRowView: View {
         }
         .onDisappear { dragSource?.retire(row.item) }
         .onTapGesture() { onCopy(row.item) }
+        .task(id: row.item) {
+            guard let externalOpener, HistoryExternalOpener.supports(row.typeIdentifiers) else { return }
+            let reference = row.item
+            openOptions = []
+            openOptionsFailure = nil
+            isPreparingOpenOptions = true
+            do {
+                let prepared = try await externalOpener.options(for: reference)
+                try Task.checkCancellation()
+                openOptions = prepared
+                isPreparingOpenOptions = false
+            } catch is CancellationError { }
+            catch {
+                guard !Task.isCancelled else { return }
+                openOptionsFailure = (error as? HistoryOpenFailure) ?? .unavailable
+                isPreparingOpenOptions = false
+            }
+        }
         .contextMenu { contextMenu }
+        .alert(PanelActionsCopy.text("Cannot Open Item", bundle: copyBundle), isPresented: Binding(
+            get: { openFailure != nil }, set: { if !$0 { openFailure = nil } }
+        )) {
+            Button(PanelActionsCopy.text("OK", bundle: copyBundle), role: .cancel) { openFailure = nil }
+        } message: {
+            if let openFailure { Text(PanelActionsCopy.text(openFailure.message, bundle: copyBundle)) }
+        }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(verbatim: rowAccessibilityLabel))
         .accessibilityIdentifier("clipy.history.row.\(row.item.id.description)")
@@ -467,6 +499,12 @@ struct HistoryRowView: View {
 
     @ViewBuilder
     private var contextMenu: some View {
+        if let externalOpener, HistoryExternalOpener.supports(row.typeIdentifiers) {
+            HistoryOpenMenu(item: row.item, opener: externalOpener,
+                onFailure: { openFailure = $0 }, options: openOptions,
+                isLoading: isPreparingOpenOptions, failure: openOptionsFailure)
+            Divider()
+        }
         Button {
             onCopy(row.item)
         } label: {

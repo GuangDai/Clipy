@@ -28,6 +28,7 @@ package extension ClipyCLIContract {
             output.appendJSON(requestID.rawValue)
             output.appendASCII(",\"result\":{\"items\":[")
             for (index, item) in result.items.enumerated() {
+                guard !output.exceeded else { return nil }
                 if index != 0 { output.appendASCII(",") }
                 output.appendASCII("{\"lastCopiedAt\":")
                 output.appendJSON(item.lastCopiedAt)
@@ -45,6 +46,7 @@ package extension ClipyCLIContract {
                 output.appendJSON(item.title)
                 output.appendASCII(",\"typeIdentifiers\":[")
                 for (typeIndex, identifier) in item.typeIdentifiers.enumerated() {
+                    guard !output.exceeded else { return nil }
                     if typeIndex != 0 { output.appendASCII(",") }
                     output.appendJSON(identifier)
                 }
@@ -66,6 +68,7 @@ package extension ClipyCLIContract {
             output.appendJSON(result.locator)
             output.appendASCII(",\"representations\":[")
             for (index, representation) in result.representations.enumerated() {
+                guard !output.exceeded else { return nil }
                 if index != 0 { output.appendASCII(",") }
                 output.appendASCII("{\"bytesBase64\":")
                 output.appendJSON(representation.bytes.base64EncodedString())

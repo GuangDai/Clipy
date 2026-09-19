@@ -33,45 +33,6 @@ internal enum PreviewCopy {
         text("Showing one image from a multi-image item. Copying the item keeps its complete content.", bundle: bundle)
     }
 
-    static func pdfPageDisclosure(
-        pageNumber: Int = 1,
-        pageCount: Int,
-        bundle: Bundle = .main,
-        locale: Locale = .current
-    ) -> String {
-        String(
-            format: text("Showing PDF page %@ of %@. Copying the item keeps its complete content.", bundle: bundle),
-            LocalizedCountPresentation.number(pageNumber, locale: locale),
-            LocalizedCountPresentation.number(pageCount, locale: locale)
-        )
-    }
-
-    static func pdfPageAccessibilityLabel(
-        pageNumber: Int = 1,
-        pageCount: Int,
-        bundle: Bundle = .main,
-        locale: Locale = .current
-    ) -> String {
-        String(
-            format: text("PDF preview, page %@ of %@", bundle: bundle),
-            LocalizedCountPresentation.number(pageNumber, locale: locale),
-            LocalizedCountPresentation.number(pageCount, locale: locale)
-        )
-    }
-
-    static func pdfPageCaption(
-        pageNumber: Int,
-        pageCount: Int,
-        bundle: Bundle = .main,
-        locale: Locale = .current
-    ) -> String {
-        String(
-            format: text("Page %@ of %@", bundle: bundle),
-            LocalizedCountPresentation.number(pageNumber, locale: locale),
-            LocalizedCountPresentation.number(pageCount, locale: locale)
-        )
-    }
-
     static func copyCount(
         _ count: UInt64,
         bundle: Bundle = .main,

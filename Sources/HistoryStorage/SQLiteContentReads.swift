@@ -49,6 +49,7 @@ internal struct SQLiteContentReads {
         )
         defer { statement.finalize() }
         guard try statement.step() else { throw HistoryFailure.notFound(id) }
+        guard try statement.blobByteCount(at: 0) == 8 else { throw corrupt }
         let version = try mapCodecFailure {
             try RevisionStateBlobCodec.decodeContentVersion(sqliteUInt64(statement.blob(at: 0)))
         }
@@ -71,6 +72,18 @@ internal struct SQLiteContentReads {
             """, bindings: [.text(id.rawValue.uuidString)])
         defer { statement.finalize() }
         guard try statement.step() else { throw HistoryFailure.notFound(id) }
+        // V2-09 §§4/5: reject malformed lengths before copying SQLite values
+        // into Swift. A metadata-only read must not allocate an arbitrarily
+        // large corrupt title/source merely to discover its bound afterward.
+        guard try statement.blobByteCount(at: 0) == 8,
+              try statement.textByteCount(at: 1) == 36,
+              try statement.blobByteCount(at: 2) <= limits.maximumStoredTitleUTF8Bytes,
+              try statement.blobByteCount(at: 5) == 8,
+              try statement.isNull(at: 6)
+                || statement.textByteCount(at: 6) <= limits.maximumSourceApplicationObservationUTF8Bytes,
+              try statement.isNull(at: 7)
+                || statement.textByteCount(at: 7) <= limits.maximumSourceApplicationObservationUTF8Bytes
+        else { throw corrupt }
         let currentContentID = try uuid(statement.text(at: 1))
         let title = try title(statement.blob(at: 2))
         let first = try Date(timeIntervalSinceReferenceDate: statement.real(at: 3))
@@ -174,6 +187,7 @@ internal struct SQLiteContentReads {
         var byteCount = 0
         while try statement.step() {
             guard values.count < limits.maximumRepresentationsPerCaptureOrRevision else { throw corrupt }
+            guard try statement.textByteCount(at: 1) <= limits.maximumTypeIdentifierUTF8Bytes else { throw corrupt }
             let ordinal = try nonnegativeInt(statement.integer(at: 0))
             let identifier = try statement.text(at: 1)
             let count = try nonnegativeInt(statement.integer(at: 2))
@@ -212,15 +226,17 @@ internal struct SQLiteContentReads {
             """, bindings: [.text(source.contentID.uuidString), .integer(Int64(source.ordinal))])
         defer { statement.finalize() }
         guard try statement.step() else { throw corrupt }
-        let inline = try statement.optionalBlob(at: 0)
-        let blob = try statement.optionalText(at: 1)
         let bytes: Data
-        switch (inline, blob) {
-        case (.some(let value), .none):
-            guard value.count == source.byteCount else { throw corrupt }
-            bytes = value
-        case (.none, .some(let id)):
-            bytes = try blobStore.read(id: uuid(id), expectedByteCount: source.byteCount)
+        switch (try statement.isNull(at: 0), try statement.isNull(at: 1)) {
+        case (false, true):
+            // The descriptor was validated independently. Check the stored
+            // payload length before making its Data copy, including when a
+            // corrupt inline value is far larger than the requested source.
+            guard try statement.blobByteCount(at: 0) == source.byteCount else { throw corrupt }
+            bytes = try statement.blob(at: 0)
+        case (true, false):
+            guard try statement.textByteCount(at: 1) == 36 else { throw corrupt }
+            bytes = try blobStore.read(id: uuid(statement.text(at: 1)), expectedByteCount: source.byteCount)
         default: throw corrupt
         }
         try Task.checkCancellation()
@@ -239,6 +255,8 @@ internal struct SQLiteContentReads {
     }
 
     private func decodeContent(_ row: SQLiteStatement) throws -> SQLiteStoredContent {
+        guard try row.textByteCount(at: 0) == 36,
+              try row.blobByteCount(at: 3) <= limits.maximumStoredTitleUTF8Bytes else { throw corrupt }
         let id = try uuid(row.text(at: 0))
         let ordinal = try nonnegativeInt(row.integer(at: 1))
         let createdAt = try row.real(at: 2)

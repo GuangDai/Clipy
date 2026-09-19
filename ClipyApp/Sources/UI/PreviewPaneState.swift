@@ -317,28 +317,6 @@ final class PreviewPaneState {
         previewRetryRequestGeneration += 1
     }
 
-    /// The floating preview's page-step direction (the PDF pager).
-    enum PreviewPagerDirection: Equatable, Sendable {
-        case previous
-        case next
-    }
-
-    /// Monotonic republished ⌥⌘←/→ pager requests, the exact twin of the
-    /// ⌘R retry channel above: while the main panel has keyboard focus,
-    /// its hidden shortcuts capture the chords and republish them
-    /// here, and the pane's `HistoryPreviewView` applies each request
-    /// exactly like its pager buttons (the same `selectPDFPage` guards
-    /// keep out-of-range steps inert). The quick-look overlay keeps its
-    /// in-view shortcuts: the panel's copies are gated off while it is
-    /// open, so a chord never double-handles.
-    private(set) var previewPagerRequestGeneration = 0
-    private(set) var previewPagerRequestDirection: PreviewPagerDirection = .next
-
-    func requestPreviewPage(_ direction: PreviewPagerDirection) {
-        previewPagerRequestDirection = direction
-        previewPagerRequestGeneration += 1
-    }
-
     // MARK: - Panel lifecycle (Maccy FloatingPanel ⇄ SlideoutController)
 
     /// The panel became key: arm dwell auto-open, then re-dwell the CURRENT

@@ -6,7 +6,7 @@ import SwiftUI
 enum PanelShortcutAction: String, CaseIterable, Sendable, Codable, CodingKey {
     case focusSearch, exactSearch, fuzzySearch, regexpSearch, clearSearch, clearFilters
     case remove, togglePin, pinToTop, pinToBottom, showDetails
-    case quickLook, togglePreview, retryPreview, previousPDFPage, nextPDFPage
+    case quickLook, togglePreview, retryPreview
     case keepOpen, pauseCapture
 
     enum Group: Sendable { case browsing, selection, preview }
@@ -16,7 +16,7 @@ enum PanelShortcutAction: String, CaseIterable, Sendable, Codable, CodingKey {
         case .focusSearch, .exactSearch, .fuzzySearch, .regexpSearch, .clearSearch, .clearFilters,
              .keepOpen, .pauseCapture: .browsing
         case .remove, .togglePin, .pinToTop, .pinToBottom, .showDetails: .selection
-        case .quickLook, .togglePreview, .retryPreview, .previousPDFPage, .nextPDFPage: .preview
+        case .quickLook, .togglePreview, .retryPreview: .preview
         }
     }
 
@@ -36,8 +36,6 @@ enum PanelShortcutAction: String, CaseIterable, Sendable, Codable, CodingKey {
         case .quickLook: "Quick Look"
         case .togglePreview: "Show or hide preview"
         case .retryPreview: "Retry preview"
-        case .previousPDFPage: "Previous PDF page"
-        case .nextPDFPage: "Next PDF page"
         case .keepOpen: "Keep panel open"
         case .pauseCapture: "Pause capture for 5 minutes"
         }
@@ -57,8 +55,6 @@ enum PanelShortcutAction: String, CaseIterable, Sendable, Codable, CodingKey {
         case .quickLook: PanelShortcutChord(key: "space", modifiers: [])
         case .togglePreview: PanelShortcutChord(key: "p", modifiers: [.shift, .command])
         case .retryPreview: PanelShortcutChord(key: "r", modifiers: .command)
-        case .previousPDFPage: PanelShortcutChord(key: "leftArrow", modifiers: [.option, .command])
-        case .nextPDFPage: PanelShortcutChord(key: "rightArrow", modifiers: [.option, .command])
         case .clearSearch, .clearFilters, .keepOpen, .pauseCapture: nil
         }
     }

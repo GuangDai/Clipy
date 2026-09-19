@@ -62,6 +62,7 @@ final class HistoryViewState {
     /// passes `SQLiteHistory`; SwiftUI previews pass the scripted
     /// `PreviewClipboardHistory`.
     let history: any ClipboardHistory
+    let externalOpener: HistoryExternalOpener
     /// One native raster slot for this browsing session, shared by floating
     /// and Quick Look loaders. Retargeting cannot create a new decoder pool.
     let previewRenderer = ContentPreview()
@@ -280,6 +281,7 @@ final class HistoryViewState {
 
     init(history: any ClipboardHistory, pageLimit: Int = 50) {
         self.history = history
+        self.externalOpener = HistoryExternalOpener(history: history)
         self.pageLimit = pageLimit
     }
 

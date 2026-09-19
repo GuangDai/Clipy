@@ -1085,38 +1085,4 @@ struct PreviewPaneStateTests {
         #expect(state.isOpen)
         #expect(state.previewedItem == visible)
     }
-
-    /// The republished pager channel (the floating pane's ⌥⌘←/→ chords
-    /// arrive through the key main panel): direction sticks, the generation
-    /// advances monotonically, and pane visibility/lifecycle never touches
-    /// it — like the ⌘R retry generation, it is a pure request counter the
-    /// consuming view gates.
-    @Test func pagerRequestsRepublishDirectionAndAdvanceMonotonically() {
-        let state = makeState()
-        #expect(state.previewPagerRequestGeneration == 0)
-
-        state.requestPreviewPage(.previous)
-        #expect(state.previewPagerRequestGeneration == 1)
-        #expect(state.previewPagerRequestDirection == .previous)
-
-        state.requestPreviewPage(.next)
-        #expect(state.previewPagerRequestGeneration == 2)
-        #expect(state.previewPagerRequestDirection == .next)
-
-        // Pane lifecycle does not consume or reset the channel.
-        state.panelClosed()
-        #expect(state.previewPagerRequestGeneration == 2)
-        #expect(state.previewPagerRequestDirection == .next)
-    }
-
-    /// The retry and pager channels are independent republish counters.
-    @Test func pagerAndRetryRequestsAreIndependentChannels() {
-        let state = makeState()
-        state.requestPreviewRetry()
-        #expect(state.previewRetryRequestGeneration == 1)
-        #expect(state.previewPagerRequestGeneration == 0)
-        state.requestPreviewPage(.previous)
-        #expect(state.previewRetryRequestGeneration == 1)
-        #expect(state.previewPagerRequestGeneration == 1)
-    }
 }

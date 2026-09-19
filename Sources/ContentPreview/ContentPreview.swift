@@ -2,7 +2,7 @@
 /// artifacts. Its small interface accepts immutable representation bytes plus
 /// a closed product purpose and returns only bounded `Sendable` values.
 ///
-/// Ownership: source priority, exact text codecs, ImageIO/PDF decode, eager pixel
+/// Ownership: source priority, exact text codecs, ImageIO decode, eager pixel
 /// materialization, resource profiles, and typed renderer outcomes. It never
 /// reads History, observes selection, owns panel lifecycle, performs external
 /// I/O, or exposes a framework object. `PreviewContentLoader` remains the sole
@@ -43,7 +43,7 @@ public struct PreviewSource: Sendable {
     fileprivate let kind: Kind
 
     fileprivate enum Kind: Sendable {
-        case image, text(PreviewTextCodec), rtf, rtfd, html, pdf, reference
+        case image, text(PreviewTextCodec), rtf, rtfd, html, reference
     }
 
     public var preflightFailure: PreviewOutcome? {
@@ -76,30 +76,14 @@ public struct PreviewRaster: Equatable, Sendable {
     }
 }
 
-/// One requested PDF page, rasterized for display. Copying the item retains
-/// the original document; this artifact never carries interactive PDF actions.
-public struct PreviewPDF: Equatable, Sendable {
-    public let raster: PreviewRaster
-    public let pageCount: Int
-    public let pageNumber: Int
-
-    internal init(raster: PreviewRaster, pageCount: Int, pageNumber: Int) {
-        self.raster = raster
-        self.pageCount = pageCount
-        self.pageNumber = pageNumber
-    }
-}
-
 public enum PreviewArtifact: Equatable, Sendable {
     case text(PreviewText)
     case raster(PreviewRaster)
     case reference(PreviewReference)
-    case pdf(PreviewPDF)
 }
 
 public enum PreviewUnavailability: Equatable, Sendable {
     case unsupported
-    case pageUnavailable
 }
 
 public enum PreviewFailure: Equatable, Sendable {
@@ -155,7 +139,7 @@ public actor ContentPreview {
     public init() {}
 
     /// Metadata-only preparation. An image is authoritative; otherwise exact
-    /// text candidates may fail decoding before one rich/PDF/reference source
+    /// text candidates may fail decoding before one rich/reference source
     /// applies. Unrelated representation bytes never enter the preview job.
     public static func prepareHistoryPane(
         _ representations: [PreviewRepresentationMetadata]
@@ -181,8 +165,6 @@ public actor ContentPreview {
             candidates.append(source(index, .rtfd, maximum: 1_048_576))
         } else if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.html.rawValue }) {
             candidates.append(source(index, .html, maximum: 1_048_576))
-        } else if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.pdf.rawValue }) {
-            candidates.append(source(index, .pdf))
         } else if let index = representations.firstIndex(where: {
             $0.typeIdentifier == ClipboardFormatIdentifier.url.rawValue
                 || $0.typeIdentifier == ClipboardFormatIdentifier.fileURL.rawValue
@@ -196,7 +178,7 @@ public actor ContentPreview {
     /// It uses exactly the same metadata preparation and selected renderer as
     /// History's lazy representation reader; it owns no second source policy.
     public func renderHistoryPane(
-        _ representations: [PreviewRepresentation], pdfPage: Int = 1,
+        _ representations: [PreviewRepresentation],
         textConfiguration: PreviewTextConfiguration = .init()
     ) async -> PreviewOutcome {
         guard !Task.isCancelled else { return .failed(.cancelled) }
@@ -222,7 +204,7 @@ public actor ContentPreview {
             defer { debugRetainedSourceBytes -= siblingBytes }
             #endif
             outcome = await renderSelectedHistoryPane(
-                source, representation: representations[source.representationIndex], pdfPage: pdfPage,
+                source, representation: representations[source.representationIndex],
                 textConfiguration: textConfiguration
             )
             if !source.permitsFallback(after: outcome) { return outcome }
@@ -231,7 +213,7 @@ public actor ContentPreview {
     }
 
     public func renderSelectedHistoryPane(
-        _ source: PreviewSource, representation: PreviewRepresentation, pdfPage: Int = 1,
+        _ source: PreviewSource, representation: PreviewRepresentation,
         textConfiguration: PreviewTextConfiguration = .init()
     ) async -> PreviewOutcome {
         if let failure = source.preflightFailure { return failure }
@@ -239,7 +221,7 @@ public actor ContentPreview {
               representation.bytes.count == source.byteCount else { return .failed(.malformedRepresentation) }
         let outcome = await renderRepresentation(
             representation, kind: source.kind, maximumInputBytes: source.maximumInputBytes,
-            profile: .historyPane, pdfPage: pdfPage, textConfiguration: textConfiguration
+            profile: .historyPane, textConfiguration: textConfiguration
         )
         guard !Task.isCancelled else { return .failed(.cancelled) }
         if case .content(.text(let text)) = outcome {
@@ -259,7 +241,7 @@ public actor ContentPreview {
 
     private func renderRepresentation(
         _ representation: PreviewRepresentation, kind: PreviewSource.Kind,
-        maximumInputBytes: Int, profile: ResourceProfile, pdfPage: Int = 1,
+        maximumInputBytes: Int, profile: ResourceProfile,
         textConfiguration: PreviewTextConfiguration = .init()
     ) async -> PreviewOutcome {
         guard representation.bytes.count <= maximumInputBytes else { return .failed(.resourceLimit) }
@@ -273,8 +255,8 @@ public actor ContentPreview {
         #endif
         guard !Task.isCancelled else { return .failed(.cancelled) }
         switch kind {
-        case .image, .pdf:
-            return await renderRasterOffActor(representation, profile: profile, pdfPage: pdfPage)
+        case .image:
+            return await renderRasterOffActor(representation, profile: profile)
         case .text(let codec):
             guard let decoded = codec.decode(representation.bytes), !decoded.isEmpty else {
                 return .failed(.malformedRepresentation)
@@ -308,7 +290,7 @@ public actor ContentPreview {
     /// while a single native slot preserves bounded decode concurrency.
     private func renderRasterOffActor(
         _ representation: PreviewRepresentation,
-        profile: ResourceProfile, pdfPage: Int
+        profile: ResourceProfile
     ) async -> PreviewOutcome {
         if let failure = await acquireRasterizationSlot() {
             return .failed(Task.isCancelled ? .cancelled : failure)
@@ -327,18 +309,7 @@ public actor ContentPreview {
             }
             #endif
             guard !Task.isCancelled else { return PreviewOutcome.failed(.cancelled) }
-            let outcome: PreviewOutcome
-            if representation.typeIdentifier == ClipboardFormatIdentifier.pdf.rawValue {
-                outcome = PreviewPDFRenderer.render(
-                    representation.bytes,
-                    maximumInputBytes: profile.maximumInputBytes,
-                    maximumPixelExtent: profile.maximumPixelExtent,
-                    maximumOutputBytes: profile.maximumOutputBytes,
-                    pdfPage: pdfPage
-                )
-            } else {
-                outcome = Self.renderRaster(representation, profile: profile)
-            }
+            let outcome = Self.renderRaster(representation, profile: profile)
             return Task.isCancelled ? .failed(.cancelled) : outcome
         }
         return await withTaskCancellationHandler(
@@ -354,7 +325,7 @@ public actor ContentPreview {
             return nil
         }
         let id = UUID()
-        // A pathological PDF can keep Quartz busy after cancellation. Keep
+        // A native image decoder can remain busy after cancellation. Keep
         // the native concurrency ceiling, but let subsequent requests reach
         // the existing retryable renderer failure (01 §6; review PRV-1).
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))

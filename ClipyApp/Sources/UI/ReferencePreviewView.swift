@@ -76,9 +76,6 @@ struct ReferencePreviewView: View {
         guard reference.kind == .file, requestFileLoad != nil else {
             return PreviewCopy.referenceDisclosure()
         }
-        if reference.displayName.lowercased().hasSuffix(".pdf") {
-            return PreviewCopy.text("Copying keeps the original file reference.")
-        }
         return PreviewCopy.text("Only the reference is shown. Loading its contents requires confirmation.")
     }
 

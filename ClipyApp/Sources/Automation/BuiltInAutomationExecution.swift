@@ -12,8 +12,8 @@ extension BuiltInAutomation {
         return groups.keys.sorted().compactMap { index in
             let values = groups[index] ?? []
             let image = values.first { ["public.png", "public.jpeg", "public.tiff", "public.heic"].contains($0.typeIdentifier) }
-            let text = values.lazy.compactMap { EditorTextCodec.decode($0)?.text }.first
             if imageFirst, let image { return .image(image.bytes) }
+            let text = values.lazy.compactMap { EditorTextCodec.decode($0)?.text }.first
             if let text { return .text(text) }
             return image.map { .image($0.bytes) }
         }

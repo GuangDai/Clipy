@@ -63,7 +63,7 @@ struct KeyboardShortcutsSettingsView: View {
             }
             shortcutSection("Browsing", actions: [.focusSearch, .keepOpen, .pauseCapture])
             shortcutSection("Selected item", actions: [.remove, .togglePin, .pinToTop, .pinToBottom, .showDetails])
-            shortcutSection("Preview", actions: [.quickLook, .togglePreview, .retryPreview, .previousPDFPage, .nextPDFPage])
+            shortcutSection("Preview", actions: [.quickLook, .togglePreview, .retryPreview])
             shortcutSection("Search", actions: [.exactSearch, .fuzzySearch, .regexpSearch, .clearSearch, .clearFilters])
             Section {
                 if failureAction == nil, let failure {

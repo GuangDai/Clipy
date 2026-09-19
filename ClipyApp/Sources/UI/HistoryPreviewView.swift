@@ -42,7 +42,6 @@ struct HistoryPreviewView: View {
     @State private var loader: PreviewContentLoader
     @State private var retryGeneration = 0
     @State private var fileConfirmationPresented = false
-    @State private var pdfPageSelection: PDFPageSelection?
     @State private var pinRequest: PinRequest?
     @State private var pinFailure: (item: HistoryItemReference, message: String)?
     @State private var informationItem: HistoryItemReference?
@@ -53,21 +52,11 @@ struct HistoryPreviewView: View {
     @AppStorage(PanelShortcutSettings.defaultsKey) private var shortcutData = Data()
     private var shortcuts: PanelShortcutSettings { PanelShortcutSettings.load(data: shortcutData) }
 
-    /// Page selection belongs to this exact content version, including when
-    /// the observed target changes before SwiftUI invokes onChange.
-    private struct PDFPageSelection {
-        let item: HistoryItemReference
-        let number: Int
-    }
-
     private struct PinRequest: Equatable {
         let item: HistoryItemReference
         let isPinned: Bool
     }
 
-    private var requestedPDFPage: Int {
-        pdfPageSelection?.item == targetItem ? (pdfPageSelection?.number ?? 1) : 1
-    }
     @Environment(\.locale) private var locale
 
     /// Retargets and retries share SwiftUI's view-owned task, so either a
@@ -75,7 +64,6 @@ struct HistoryPreviewView: View {
     private struct LoadRequest: Equatable {
         let item: HistoryItemReference?
         let retryGeneration: Int
-        let pdfPage: Int
         let maximumTextCharacters: Int
         let isTextLengthLimited: Bool
     }
@@ -245,22 +233,16 @@ struct HistoryPreviewView: View {
             }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
-        // One load per exact reference, explicit page choice, or retry; the loader's fence
+        // One load per exact reference or retry; the loader's fence
         // discards a late result, so a superseded selection never renders
         // another item's content (SPEC-IMPL-007 / PREVIEW-FENCE-1).
-        .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration, pdfPage: requestedPDFPage,
+        .task(id: LoadRequest(item: targetItem, retryGeneration: retryGeneration,
                               maximumTextCharacters: maximumTextCharacters, isTextLengthLimited: isTextLengthLimited)) {
             let item = targetItem
-            await loader.loadForDisplay(item: item, pdfPage: requestedPDFPage,
+            await loader.loadForDisplay(item: item,
                 textConfiguration: PreviewTextSettings.configuration(
                     maximumCharacters: maximumTextCharacters, isLengthLimited: isTextLengthLimited),
                 isRetry: retryGeneration > 0)
-            // A displayed local PDF opens its first page directly. Preparing
-            // a potential hover target still renders only the copied URL.
-            guard !Task.isCancelled, let item else { return }
-            if let fileTask = loader.loadPDFFileForDisplay(item: item) {
-                await fileTask.value
-            }
         }
         .task(id: pinRequest) {
             guard let request = pinRequest, !Task.isCancelled else { return }
@@ -272,7 +254,6 @@ struct HistoryPreviewView: View {
                 self.informationItem = nil
             }
             fileConfirmationPresented = false
-            pdfPageSelection = nil
             pinRequest = nil
             pinFailure = nil
             if loader.requestedItem != target { loader.clear() }
@@ -311,27 +292,11 @@ struct HistoryPreviewView: View {
                 retryGeneration += 1
             }
         }
-        // The same republish covers the PDF pager's ⌥⌘←/→ chords; the
-        // request is applied exactly like the pager buttons, so
-        // `selectPDFPage`'s own bounds/file guards keep an out-of-range
-        // step inert.
-        .onChange(of: previewState.previewPagerRequestGeneration) { _, _ in
-            guard let page = loader.pdfPageNumber,
-                  loader.pdfPageCount != nil
-            else { return }
-            switch previewState.previewPagerRequestDirection {
-            case .previous:
-                selectPDFPage(page - 1)
-            case .next:
-                selectPDFPage(page + 1)
-            }
-        }
         .onDisappear {
             if informationItem != nil {
                 previewState.isInformationPresented = false
                 informationItem = nil
             }
-            pdfPageSelection = nil
             fileConfirmationPresented = false
             pinRequest = nil
             pinFailure = nil
@@ -373,80 +338,13 @@ struct HistoryPreviewView: View {
         viewState.requestPasteFromDisplayedRow(row.item)
     }
 
-    /// Captured documents use the view-owned History task; confirmed local
-    /// files reuse their immutable source under the loader's file task.
-    /// Both retire the old raster before starting one requested page.
-    private func selectPDFPage(_ page: Int) {
-        guard let item = targetItem, loader.requestedItem == item,
-              let count = loader.pdfPageCount, (1...count).contains(page),
-              page != loader.pdfPageNumber else { return }
-        if loader.loadedFileReference != nil {
-            loader.loadFilePDFPage(page)
-            return
-        }
-        pdfPageSelection = PDFPageSelection(item: item, number: page)
-        loader.clear()
-    }
-
-    private func pdfNavigation(page: Int, count: Int) -> some View {
-        HStack(spacing: 10) {
-            Button {
-                selectPDFPage(page - 1)
-            } label: {
-                Image(systemName: "chevron.backward")
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
-            }
-            .disabled(page <= 1)
-            .keyboardShortcut(shortcuts.keyboardShortcut(for: .previousPDFPage))
-            .help(PreviewCopy.text("Previous PDF Page"))
-            .accessibilityLabel(PreviewCopy.text("Previous PDF Page"))
-            .accessibilityIdentifier("clipy.preview.pdf.previous")
-
-            // Keep the full phrase when it fits; a narrow Quick Look uses
-            // the same localized numbers without squeezing the hit targets.
-            ViewThatFits(in: .horizontal) {
-                Text(PreviewCopy.pdfPageCaption(pageNumber: page, pageCount: count, locale: locale))
-                    .fixedSize()
-                Text(verbatim: LocalizedCountPresentation.number(page, locale: locale)
-                    + " / " + LocalizedCountPresentation.number(count, locale: locale))
-                    .fixedSize()
-            }
-            .font(.caption)
-            .monospacedDigit()
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(PreviewCopy.pdfPageCaption(pageNumber: page, pageCount: count, locale: locale))
-            .accessibilityIdentifier("clipy.preview.pdf.page")
-
-            Button {
-                selectPDFPage(page + 1)
-            } label: {
-                Image(systemName: "chevron.forward")
-                    .frame(width: 24, height: 24)
-                    .contentShape(Rectangle())
-            }
-            .disabled(page >= count)
-            .keyboardShortcut(shortcuts.keyboardShortcut(for: .nextPDFPage))
-            .help(PreviewCopy.text("Next PDF Page"))
-            .accessibilityLabel(PreviewCopy.text("Next PDF Page"))
-            .accessibilityIdentifier("clipy.preview.pdf.next")
-        }
-        .buttonStyle(.borderless)
-        .controlSize(.mini)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(.regularMaterial, in: Capsule())
-        .padding(.top, 4)
-    }
-
     // MARK: - Content
 
     @ViewBuilder
     private var previewBody: some View {
         if targetItem == nil {
             unavailableBody
-        } else if loader.requestedItem != targetItem
-            || (loader.loadedFileReference == nil && loader.requestedPDFPage != requestedPDFPage) {
+        } else if loader.requestedItem != targetItem {
             loadingBody
         } else {
             switch loader.phase {
@@ -479,10 +377,7 @@ struct HistoryPreviewView: View {
                             .frame(maxWidth: .infinity, maxHeight: flexibleHeight)
                             .accessibilityIdentifier("clipy.preview.image")
                         VStack(spacing: 0) {
-                            if let page = loader.pdfPageNumber, let count = loader.pdfPageCount {
-                                pdfNavigation(page: page, count: count)
-                            }
-                            if let notice = loader.appliedRasterNotice(locale: locale) {
+                            if let notice = loader.appliedRasterNotice() {
                                 Text(notice)
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
@@ -491,9 +386,7 @@ struct HistoryPreviewView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
-                                .accessibilityIdentifier(loader.pdfPageCount == nil
-                                    ? "clipy.preview.multi-image-notice"
-                                    : "clipy.preview.pdf-page-notice")
+                                .accessibilityIdentifier("clipy.preview.multi-image-notice")
                             }
                         }
                         .fixedSize(horizontal: false, vertical: true)

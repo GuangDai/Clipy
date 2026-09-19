@@ -123,6 +123,65 @@ final class LocalAutomationDeadlineTests: XCTestCase {
         }
     }
 
+    func testExpiredConnectDoesNotReachTheListener() async throws {
+        try await withListener { endpoint, listener in
+            let descriptor = try LocalAutomationSocket.make()
+            defer { _ = Darwin.close(descriptor) }
+            do {
+                try await LocalAutomationSocket.connect(
+                    descriptor, to: endpoint,
+                    deadline: .now.advanced(by: .seconds(-1))
+                )
+                XCTFail("an expired deadline must not establish a connection")
+            } catch let failure as LocalAutomationSocket.Failure {
+                XCTAssertEqual(failure, .timeout)
+            }
+            Self.expectNoPendingConnection(listener)
+        }
+    }
+
+    func testCancelledClientConnectDoesNotReachTheListener() async throws {
+        try await withListener { endpoint, listener in
+            let invocation = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                do {
+                    let client = try await LocalAutomationClient.connect(endpointURL: endpoint)
+                    await client.close()
+                    XCTFail("a cancelled task must not establish a connection")
+                } catch LocalAutomationClientFailure.cancelled {
+                    // The public client preserves cancellation from the socket.
+                } catch {
+                    XCTFail("expected cancellation, got \(error)")
+                }
+            }
+            await invocation.value
+            Self.expectNoPendingConnection(listener)
+        }
+    }
+
+    private static func expectNoPendingConnection(_ listener: Int32) {
+        let accepted = Darwin.accept(listener, nil, nil)
+        let acceptError = errno
+        if accepted >= 0 { _ = Darwin.close(accepted) }
+        XCTAssertEqual(accepted, -1)
+        XCTAssertTrue(acceptError == EAGAIN || acceptError == EWOULDBLOCK)
+    }
+
+    private func withListener(
+        _ body: @MainActor @Sendable (URL, Int32) async throws -> Void
+    ) async throws {
+        let directory = URL(fileURLWithPath: "/tmp/clipy-deadline-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let endpoint = directory.appendingPathComponent("automation.sock")
+        let listener = try LocalAutomationSocket.make()
+        defer { _ = Darwin.close(listener) }
+        let bound = try LocalAutomationSocket.withAddress(endpoint) { Darwin.bind(listener, $0, $1) }
+        XCTAssertEqual(bound, 0)
+        XCTAssertEqual(Darwin.listen(listener, 1), 0)
+        try await body(endpoint, listener)
+    }
+
     private func withSocketPair(
         _ body: @MainActor @Sendable (Int32, Int32) async throws -> Void
     ) async throws {
