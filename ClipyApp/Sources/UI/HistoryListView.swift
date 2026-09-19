@@ -104,23 +104,27 @@ struct HistoryListView: View {
 
     @ViewBuilder
     private func content(now: Date) -> some View {
+        let rows = viewState.displayedRows
         if viewState.rows.isEmpty {
             emptyState
-        } else if viewState.displayedPinnedRows.isEmpty,
-                  viewState.displayedUnpinnedRows.isEmpty {
+        } else if rows.isEmpty {
             // Keep the displayed-row fallback consistent with the current
             // query while presentation reconciles its loaded lanes.
             filteredEmptyState
         } else {
-            list(now: now)
+            list(rows: rows, now: now)
         }
     }
 
     // MARK: List
 
-    private func list(now: Date) -> some View {
-        let rows = viewState.displayedRows
-        let separatorID = showsGroupSeparator ? viewState.displayedUnpinnedRows.first?.item.id : nil
+    private func list(rows: [HistoryRow], now: Date) -> some View {
+        // Reuse this render's displayed rows for the lane boundary instead
+        // of materializing both filtered lanes several times (03b §8).
+        let firstUnpinnedID = rows.first { $0.pinnedPosition == nil }?.item.id
+        let showsGroupSeparator = rows.first?.pinnedPosition != nil
+            && (firstUnpinnedID != nil || viewState.hasNextPage || viewState.isLoadingPage)
+        let separatorID = showsGroupSeparator ? firstUnpinnedID : nil
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(spacing: 0) {
@@ -199,11 +203,6 @@ struct HistoryListView: View {
             distance += PanelContentFit.rowHeight(descriptor, density: density, fontSize: fontSize)
         } while distance < viewportHeight
         return rows[target].item.id
-    }
-
-    private var showsGroupSeparator: Bool {
-        !viewState.displayedPinnedRows.isEmpty
-            && (!viewState.displayedUnpinnedRows.isEmpty || viewState.hasNextPage || viewState.isLoadingPage)
     }
 
     private func rowContent(
@@ -337,21 +336,22 @@ struct HistoryListView: View {
 
     private var selectedRow: HistoryRow? {
         guard let id = selection.wrappedValue else { return nil }
-        return viewState.displayedRows.first { $0.item.id == id }
+        return viewState.displayedRow(for: id)
     }
 
     /// Invisible buttons carrying the selection-keyed shortcuts. The ⌫
     /// shortcut is disabled while the search field has focus so Backspace
     /// keeps editing the query instead of removing the selected item.
     private var selectionShortcuts: some View {
-        Group {
+        let hasSelection = selectedRow != nil
+        return Group {
             Button(PanelActionsCopy.text("Copy to Clipboard")) {
                 if let row = selectedRow {
                     viewState.requestPasteFromDisplayedRow(row.item)
                 }
             }
             .keyboardShortcut(.return, modifiers: [])
-            .disabled(selectedRow == nil)
+            .disabled(!hasSelection)
 
             Button(PanelActionsCopy.text("Remove")) {
                 if let row = selectedRow {
@@ -359,7 +359,7 @@ struct HistoryListView: View {
                 }
             }
             .keyboardShortcut(shortcuts.keyboardShortcut(for: .remove, whileEditingText: isSearchFieldFocused))
-            .disabled(selectedRow == nil)
+            .disabled(!hasSelection)
 
             Button(HistoryListCopy.text("Toggle Pin")) {
                 if let row = selectedRow {
@@ -371,7 +371,7 @@ struct HistoryListView: View {
                 }
             }
             .keyboardShortcut(shortcuts.keyboardShortcut(for: .togglePin, whileEditingText: isSearchFieldFocused))
-            .disabled(selectedRow == nil)
+            .disabled(!hasSelection)
 
             // Context-menu semantics: placePinned reorders an already-pinned item.
             Button(PanelActionsCopy.text("Pin to Top")) {
@@ -380,7 +380,7 @@ struct HistoryListView: View {
                 }
             }
             .keyboardShortcut(shortcuts.keyboardShortcut(for: .pinToTop, whileEditingText: isSearchFieldFocused))
-            .disabled(selectedRow == nil)
+            .disabled(!hasSelection)
 
             Button(PanelActionsCopy.text("Pin to Bottom")) {
                 if let row = selectedRow {
@@ -388,7 +388,7 @@ struct HistoryListView: View {
                 }
             }
             .keyboardShortcut(shortcuts.keyboardShortcut(for: .pinToBottom, whileEditingText: isSearchFieldFocused))
-            .disabled(selectedRow == nil)
+            .disabled(!hasSelection)
 
             Button(PanelActionsCopy.text("Show Details")) {
                 if let row = selectedRow {
@@ -396,7 +396,7 @@ struct HistoryListView: View {
                 }
             }
             .keyboardShortcut(shortcuts.keyboardShortcut(for: .showDetails, whileEditingText: isSearchFieldFocused))
-            .disabled(selectedRow == nil)
+            .disabled(!hasSelection)
         }
         .disabled(!areShortcutsEnabled)
         .opacity(0)

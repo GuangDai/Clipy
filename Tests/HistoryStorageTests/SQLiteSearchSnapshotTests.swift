@@ -251,6 +251,53 @@ struct SQLiteSearchSnapshotTests {
         })
     }
 
+    @Test(arguments: [SearchMode.exact, .regexp, .fuzzy])
+    func sparseLargeBodyLookupsKeepByteBoundariesAndBidirectionalOrder(mode: SearchMode) async throws {
+        let fixture = try await makeFixture((0..<10).map {
+            "\($0)\nneedle " + String(repeating: "x", count: 262_000)
+        })
+        let worker = SearchWorker()
+        let marker = UUID()
+        let kind = HistoryBrowseKind.search(text: "needle", mode: mode)
+        let (events, continuation) = AsyncStream<SearchDebugEvent>.makeStream()
+        await worker.setSearchDebugProbe(SearchDebugProbe(isEnabled: true) {
+            _ = continuation.yield($0)
+        })
+        var pages: [HistoryPage] = []
+        var cursor: HistoryPageCursor?
+        repeat {
+            let result = try await worker.searchPage(
+                HistoryBrowseRequest(kind: kind, limit: 3, cursor: cursor),
+                store: fixture.location, processMarker: marker
+            )
+            #expect(result.revisionCounts.count == result.page.rows.count)
+            #expect(result.page.rows.allSatisfy { $0.search?.snippet?.contains("needle") == true })
+            pages.append(result.page)
+            cursor = result.page.next
+        } while cursor != nil && pages.count < 5
+        #expect(cursor == nil)
+        #expect(pages.flatMap(\.rows).map(\.item) == fixture.recent.rows.map(\.item))
+        var current = try #require(pages.last)
+        for index in stride(from: pages.count - 2, through: 0, by: -1) {
+            let previous = try #require(current.previous)
+            current = try await worker.page(
+                HistoryBrowseRequest(kind: kind, limit: 3, cursor: previous),
+                store: fixture.location, processMarker: marker
+            )
+            #expect(current.rows == pages[index].rows)
+        }
+        continuation.finish()
+        var batchCount = 0
+        for await event in events where event.phase == "sqlite-batch" {
+            batchCount += 1
+            // Body lookups resume the same pending sorted row when the
+            // prior batch reaches its byte ceiling, including pin/date ties.
+            #expect(event.rowsProcessed <= 4)
+            #expect(event.sourceUTF8Bytes <= SearchWorker.maximumBatchUTF8Bytes)
+        }
+        #expect(batchCount > pages.count)
+    }
+
     @Test(arguments: [HistoryPageDirection.forward, .backward])
     func cancellationAndDeadlineReleaseTheWALSnapshot(direction: HistoryPageDirection) async throws {
         let fixture = try await makeFixture((0..<40).map { "\($0)\nneedle cancellation \($0)" })

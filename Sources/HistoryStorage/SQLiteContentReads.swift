@@ -63,7 +63,7 @@ internal struct SQLiteContentReads {
         }
     }
 
-    func item(for id: HistoryItemID) throws -> SQLiteContentItem {
+    func item(for id: HistoryItemID, expectedVersion: ContentVersion? = nil) throws -> SQLiteContentItem {
         let statement = try database.prepare("""
             SELECT contentVersion, currentContentID, titleUTF8, firstCopiedAt, lastCopiedAt,
                    copyCount, firstSource, lastSource, pinOrdinal, canonicalBytes, revisionCount, revisionBytes,
@@ -72,11 +72,19 @@ internal struct SQLiteContentReads {
             """, bindings: [.text(id.rawValue.uuidString)])
         defer { statement.finalize() }
         guard try statement.step() else { throw HistoryFailure.notFound(id) }
+        guard try statement.blobByteCount(at: 0) == 8 else { throw corrupt }
+        let version = try mapCodecFailure {
+            try RevisionStateBlobCodec.decodeContentVersion(sqliteUInt64(statement.blob(at: 0)))
+        }
+        // Exact-reference readers fence this same row before decoding its
+        // other fields or opening payloads; no second item SELECT is needed.
+        if let expectedVersion, expectedVersion != version {
+            throw HistoryFailure.staleContent(expected: expectedVersion, current: version)
+        }
         // V2-09 §§4/5: reject malformed lengths before copying SQLite values
         // into Swift. A metadata-only read must not allocate an arbitrarily
         // large corrupt title/source merely to discover its bound afterward.
-        guard try statement.blobByteCount(at: 0) == 8,
-              try statement.textByteCount(at: 1) == 36,
+        guard try statement.textByteCount(at: 1) == 36,
               try statement.blobByteCount(at: 2) <= limits.maximumStoredTitleUTF8Bytes,
               try statement.blobByteCount(at: 5) == 8,
               try statement.isNull(at: 6)
@@ -102,9 +110,6 @@ internal struct SQLiteContentReads {
               (revisionCount == 0) == (revisionBytes == 0),
               matchesCanonical == 0 || matchesCanonical == 1,
               revisionCount > 0 || matchesCanonical == 1 else { throw corrupt }
-        let version = try mapCodecFailure {
-            try RevisionStateBlobCodec.decodeContentVersion(sqliteUInt64(statement.blob(at: 0)))
-        }
         let occurrence = try mapCodecFailure {
             try RevisionStateBlobCodec.decodeOccurrence(
                 firstCopiedAt: first, lastCopiedAt: last, copyCount: count,

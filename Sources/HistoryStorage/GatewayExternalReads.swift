@@ -269,14 +269,27 @@ extension HistoryAuthority {
                 expectedConnectionKind: .localAutomation,
                 requestedAt: requestedAt, operation: .readPastePayload
             ) { context in
-                let payload = try pastePayloadInCurrentTransaction(for: itemID)
-                let representations = payload.representations
-                let totalBytes = representations.reduce(0) { $0 + $1.bytes.count }
+                // V2-09 §5: reject an oversized reply using current metadata
+                // before the paste projection opens any representation bytes.
                 // 24,000,000 raw bytes fit below the existing 32 MiB JSON
                 // reply cap after base64 and bounded representation metadata.
-                guard totalBytes <= 24_000_000 else {
-                    throw HistoryFailure.capacityExceeded(.storageBytes)
+                let totalBytes: Int
+                do {
+                    let reads = SQLiteContentReads(database: context, blobStore: blobStore, limits: limits)
+                    let item = try reads.item(for: itemID)
+                    let sources = try reads.currentRepresentations(for: item)
+                    totalBytes = try sources.reduce(0) { total, source in
+                        let (sum, overflow) = total.addingReportingOverflow(source.byteCount)
+                        guard !overflow, sum <= 24_000_000 else {
+                            throw HistoryFailure.capacityExceeded(.storageBytes)
+                        }
+                        return sum
+                    }
+                } catch let failure as SQLiteFailure {
+                    throw failure.historyFailure
                 }
+                let payload = try pastePayloadInCurrentTransaction(for: itemID)
+                let representations = payload.representations
                 return ((payload.item.contentVersion.rawValue, representations), .effectiveContent(
                     representationCount: UInt16(representations.count),
                     totalBytes: UInt64(totalBytes)

@@ -4,6 +4,28 @@ import Foundation
 import Testing
 
 struct BoundedJSONWriterTests {
+    @Test func base64PreservesEveryByteAndPaddingWithinTheRemainingBudget() {
+        // Exercise all byte values and every padding length after an existing
+        // prefix, including rejection one byte below the complete JSON string.
+        for count in 0...258 {
+            let bytes = Data((0..<count).map { UInt8(truncatingIfNeeded: $0) })
+            let prefix = Data("[".utf8)
+            let expected = prefix + Data(("\"" + bytes.base64EncodedString() + "\"").utf8)
+            for capacity in [expected.count - 1, expected.count] {
+                var writer = BoundedJSONWriter(maximumBytes: capacity)
+                writer.appendASCII("[")
+                writer.appendBase64(bytes)
+
+                #expect(writer.exceeded == (capacity < expected.count))
+                #expect(writer.data == (writer.exceeded ? prefix : expected))
+                if writer.exceeded {
+                    writer.appendBase64(Data([1]))
+                    #expect(writer.data == prefix)
+                }
+            }
+        }
+    }
+
     @Test func allASCIIControlsUseTheStableJSONEscapes() {
         let controls = String(decoding: Array(UInt8(0)...UInt8(31)), as: UTF8.self)
         let expected = #""\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f""#

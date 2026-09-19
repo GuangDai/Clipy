@@ -6,6 +6,33 @@ import Foundation
 import Testing
 
 struct HistoryDetailsPurgeTests {
+    @Test func disappearanceRejectsOutstandingAndDelayedReadbacksUntilReappearance() throws {
+        let item = HistoryItemReference(
+            id: HistoryItemID(rawValue: UUID()), contentVersion: .initial
+        )
+        var fence = HistoryDetailsLoadFence()
+        let pendingToken = fence.begin()
+        let pending = try #require(pendingToken)
+
+        fence.suspend()
+
+        #expect(!fence.accepts(pending, returned: item, expected: item, isCancelled: false))
+        #expect(!fence.owns(pending))
+        #expect(fence.begin() == nil, "A completed Pin cannot reload a disappeared Details view")
+        #expect(!fence.isPurged, "Disappearance does not remove or permanently retire History content")
+
+        fence.resume()
+        let returnedToken = fence.begin()
+        let returned = try #require(returnedToken)
+        #expect(fence.accepts(returned, returned: item, expected: item, isCancelled: false))
+        #expect(!fence.owns(pending))
+
+        _ = fence.purge(.all, item: item)
+        fence.suspend()
+        fence.resume()
+        #expect(fence.begin() == nil, "Reappearance cannot undo an authoritative purge")
+    }
+
     private func reference(
         _ rawID: String,
         version: UInt64

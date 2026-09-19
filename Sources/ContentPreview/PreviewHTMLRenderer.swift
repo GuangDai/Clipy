@@ -242,6 +242,11 @@ internal enum PreviewHTMLRenderer {
             let closing: Bool
         }
 
+        enum AttributeState {
+            case beforeName, name, afterName, beforeValue, unquotedValue
+            case quotedValue(Unicode.Scalar)
+        }
+
         mutating func consumeTag() throws -> Tag? {
             guard index != scalars.endIndex else { return nil }
             var closing = false
@@ -258,19 +263,51 @@ internal enum PreviewHTMLRenderer {
                 if Self.isWhitespace(scalar) || scalar == "/" || scalar == ">" { break }
                 // Names beyond this length cannot be one of the structural
                 // HTML tags below. Consume them without retaining attributes.
-                if name.utf8.count < 32 { name.unicodeScalars.append(scalar) }
+                if name.utf8.count < 32 {
+                    // HTML tag names fold ASCII uppercase only (§13.2.5.8).
+                    // Unicode lowercasing would turn <blocKquote> into a
+                    // structural blockquote and invent visible line breaks.
+                    let folded = (65...90).contains(scalar.value)
+                        ? Unicode.Scalar(UInt8(scalar.value) + 32) : scalar
+                    name.unicodeScalars.append(folded)
+                }
                 try advance()
             }
-            var quote: Unicode.Scalar?
+            var attributeState = AttributeState.beforeName
             while index != scalars.endIndex {
                 let scalar = scalars[index]
                 try advance()
-                if let delimiter = quote {
-                    if scalar == delimiter { quote = nil }
-                } else if scalar == "\"" || scalar == "'" {
-                    quote = scalar
-                } else if scalar == ">" {
-                    return Tag(name: declaration ? "" : name.lowercased(), closing: closing)
+                if case .quotedValue(let delimiter) = attributeState {
+                    if scalar == delimiter { attributeState = .beforeName }
+                    continue
+                }
+                if scalar == ">" {
+                    return Tag(name: declaration ? "" : name, closing: closing)
+                }
+                // WHATWG §13.2.5.32–39: only the beginning of an attribute
+                // value can open a quote. An apostrophe in an unquoted value
+                // (title=don't), or in an attribute name, must not swallow
+                // the closing > and all subsequent document text. Attribute
+                // bytes remain discarded, with constant parser storage.
+                if declaration {
+                    if scalar == "\"" || scalar == "'" { attributeState = .quotedValue(scalar) }
+                    continue
+                }
+                switch attributeState {
+                case .beforeName:
+                    if !Self.isWhitespace(scalar), scalar != "/" { attributeState = .name }
+                case .name, .afterName:
+                    if scalar == "=" { attributeState = .beforeValue }
+                    else if scalar == "/" { attributeState = .beforeName }
+                    else if Self.isWhitespace(scalar) { attributeState = .afterName }
+                    else { attributeState = .name }
+                case .beforeValue:
+                    if scalar == "\"" || scalar == "'" { attributeState = .quotedValue(scalar) }
+                    else if !Self.isWhitespace(scalar) { attributeState = .unquotedValue }
+                case .unquotedValue:
+                    if Self.isWhitespace(scalar) { attributeState = .beforeName }
+                case .quotedValue:
+                    break // Consumed above, including literal > characters.
                 }
             }
             return Tag(name: "", closing: false)

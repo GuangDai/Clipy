@@ -16,6 +16,21 @@ struct BoundedJSONWriter {
         append(value.utf8)
     }
 
+    /// RFC 4648's standard alphabet needs no JSON escaping. Admit its padded
+    /// size before encoding, then copy the encoded bytes directly instead of
+    /// constructing and scanning a potentially 32 MB Swift string (V2-05 §0.1.2).
+    mutating func appendBase64(_ bytes: Data) {
+        guard !exceeded else { return }
+        let available = maximumBytes - data.count
+        guard available >= 2, bytes.count <= ((available - 2) / 4) * 3 else {
+            exceeded = true
+            return
+        }
+        data.append(0x22)
+        data.append(bytes.base64EncodedData())
+        data.append(0x22)
+    }
+
     mutating func appendJSON(_ value: String) {
         guard !exceeded else { return }
         guard value.utf8.count <= maximumBytes - data.count - 2 else {

@@ -47,6 +47,7 @@ internal final class ImmutableBlobStore {
     internal func write(
         _ bytes: Data, id: UUID = UUID(), didPublish: () -> Void = {}
     ) throws -> ImmutableBlobReference {
+        try Task.checkCancellation()
         let temporary = root.appendingPathComponent("staging/\(id.uuidString).partial")
         let destination = blobURL(id)
         let descriptor = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode_t(0o600))
@@ -59,19 +60,29 @@ internal final class ImmutableBlobStore {
         }
         do {
             try handle.write(contentsOf: bytes)
+            // V2-09 §6: synchronous writes/flushes cannot be preempted, but
+            // cancellation must stop the next expensive durability step.
+            try Task.checkCancellation()
             try handle.synchronize()
+            try Task.checkCancellation()
             try files.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             // Persist the shard's directory entry before publishing inside it.
             try synchronizeDirectory(root.appendingPathComponent("blobs"))
+            try Task.checkCancellation()
             guard Darwin.link(temporary.path, destination.path) == 0 else {
                 throw posixFailure()
             }
             didPublish()
+            try Task.checkCancellation()
             try synchronizeDirectory(destination.deletingLastPathComponent())
+            try Task.checkCancellation()
             // fsync moves data to the drive; F_FULLFSYNC also flushes its
             // buffered writes. Neither failure permits a database reference.
             try synchronize(descriptor, true)
+            try Task.checkCancellation()
             return ImmutableBlobReference(id: id, byteCount: bytes.count)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let failure as HistoryFailure {
             throw failure
         } catch {

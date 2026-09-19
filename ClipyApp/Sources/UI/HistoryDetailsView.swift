@@ -22,6 +22,7 @@ import SwiftUI
 struct HistoryDetailsLoadFence {
     private(set) var generation = 0
     private(set) var isPurged = false
+    private(set) var isActive = true
     private(set) var observedSurfacePurgeGeneration: Int
 
     /// A newly constructed details surface starts after the purge currently
@@ -32,7 +33,7 @@ struct HistoryDetailsLoadFence {
     }
 
     mutating func begin() -> Int? {
-        guard !isPurged else { return nil }
+        guard isActive, !isPurged else { return nil }
         generation += 1
         return generation
     }
@@ -41,6 +42,17 @@ struct HistoryDetailsLoadFence {
     /// purging the item or cancelling an already-submitted History mutation.
     mutating func invalidateReads() {
         generation += 1
+    }
+
+    /// A retained SwiftUI navigation value must neither accept an outstanding
+    /// read nor start a mutation's delayed readback after it disappears.
+    mutating func suspend() {
+        isActive = false
+        invalidateReads()
+    }
+
+    mutating func resume() {
+        isActive = true
     }
 
     mutating func purge(
@@ -235,7 +247,11 @@ struct HistoryDetailsView: View {
         .accessibilityIdentifier("clipy.details.root")
         .navigationTitle(PanelActionsCopy.text("Details", bundle: copyBundle))
         .navigationBarBackButtonHidden(true)
-        .task { await load() }
+        .task {
+            guard !Task.isCancelled else { return }
+            loadFence.resume()
+            await load()
+        }
         .confirmationDialog(
             PanelActionsCopy.text("Remove this item from your clipboard history?", bundle: copyBundle),
             isPresented: $showsRemoveConfirmation,
@@ -248,8 +264,11 @@ struct HistoryDetailsView: View {
             Button(PanelActionsCopy.text("Cancel", bundle: copyBundle), role: .cancel) {}
         }
         .onDisappear {
+            loadFence.suspend()
             cancelExport()
             cancelRepresentationPreview()
+            showsEditor = false
+            phase = .loading
         }
         .onChange(of: basis) { _, _ in
             cancelExport()
@@ -641,7 +660,7 @@ struct HistoryDetailsView: View {
         // A previously submitted Pin still commits normally. Its subsequent
         // metadata readback waits for the editor's own dismissal instead of
         // replacing a live authored draft (V2-09 §5).
-        guard !showsEditor else { return }
+        guard loadFence.isActive, !showsEditor else { return }
         cancelRepresentationPreview()
         cancelExport()
         guard reconcileSurfacePurge(viewState.surfacePurge) else { return }

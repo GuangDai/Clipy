@@ -16,6 +16,7 @@ internal enum SQLiteCaptureConfirmation {
         )
         defer { query.finalize() }
         guard try query.step() else { throw corrupt }
+        guard try query.textByteCount(at: 0) == 36 else { throw corrupt }
         let content = try HistoryItemRowHydration.contentMetadata(
             id: HistoryItemRowHydration.uuid(query.text(at: 0)), itemID: item.id, in: database
         )

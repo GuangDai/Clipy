@@ -42,6 +42,119 @@ struct ThumbnailSourceSingleFlightTests {
         contentVersion: .initial
     )
 
+    @Test func alreadyCancelledCallerDoesNotLoadOrValidateSource() async throws {
+        let service = ThumbnailService()
+        let probe = ThumbnailFlightProbe()
+        let entryGate = SuspensionGate()
+        let request = Task {
+            await entryGate.park(at: "cancelled.before-admission")
+            return try await service.thumbnail(
+                for: Self.reference,
+                pixels: PixelSize(width: 32, height: 32),
+                loadSource: {
+                    _ = await probe.recordSourceLoad()
+                    return nil
+                },
+                validateJoin: { await probe.recordJoinValidation() }
+            )
+        }
+        await entryGate.waitForPark("cancelled.before-admission")
+        request.cancel()
+        await entryGate.resume("cancelled.before-admission")
+        await #expect(throws: CancellationError.self) { try await request.value }
+        let counts = await probe.counts()
+        #expect(counts.sourceLoads == 0)
+        #expect(counts.joinValidations == 0)
+        #expect(await service.inFlightCount == 0)
+    }
+
+    @Test func cancelledJoinerLeavesTheCreatorsSourceFlightIntact() async throws {
+        let service = ThumbnailService()
+        let sourceGate = SuspensionGate()
+        let joinGate = SuspensionGate()
+        let png = try #require(Data(base64Encoded: Self.png1x1TransparentBase64))
+        let first = Task {
+            try await service.thumbnail(
+                for: Self.reference, pixels: PixelSize(width: 32, height: 32),
+                loadSource: {
+                    await sourceGate.park(at: "creator.source")
+                    return png
+                },
+                validateJoin: {}
+            )
+        }
+        await sourceGate.waitForPark("creator.source")
+        let joined = Task {
+            try await service.thumbnail(
+                for: Self.reference, pixels: PixelSize(width: 32, height: 32),
+                loadSource: { nil },
+                validateJoin: { await joinGate.park(at: "join.validation") }
+            )
+        }
+        await joinGate.waitForPark("join.validation")
+        joined.cancel()
+        await joinGate.resume("join.validation")
+        // Retiring the joiner must leave the creator available to finish.
+        #expect(await service.inFlightCount == 1)
+        await sourceGate.resume("creator.source")
+        await #expect(throws: CancellationError.self) { try await joined.value }
+        #expect(try await first.value?.item == Self.reference)
+        #expect(await service.inFlightCount == 0)
+    }
+
+    @Test func cancelledConsumersDiscardSharedDecodeWhileAnotherConsumerSucceeds() async throws {
+        let service = ThumbnailService()
+        let probe = ThumbnailFlightProbe()
+        let decodeGate = SuspensionGate()
+        let joinGate = SuspensionGate()
+        let png = try #require(Data(base64Encoded: Self.png1x1TransparentBase64))
+        await service.setSuspensionHandler { _ in
+            await decodeGate.park(at: "shared.decode")
+        }
+        let creator = Task {
+            try await service.thumbnail(
+                for: Self.reference, pixels: PixelSize(width: 32, height: 32),
+                loadSource: {
+                    _ = await probe.recordSourceLoad()
+                    return png
+                },
+                validateJoin: {}
+            )
+        }
+        await decodeGate.waitForPark("shared.decode")
+        let join: @Sendable (String) async throws -> ThumbnailPayload? = { point in
+            try await service.thumbnail(
+                for: Self.reference, pixels: PixelSize(width: 32, height: 32),
+                loadSource: {
+                    _ = await probe.recordSourceLoad()
+                    return png
+                },
+                validateJoin: {
+                    await probe.recordJoinValidation()
+                    await joinGate.park(at: point)
+                }
+            )
+        }
+        let cancelledJoiner = Task { try await join("cancelled.join") }
+        let survivingJoiner = Task { try await join("surviving.join") }
+        await joinGate.waitForPark("cancelled.join")
+        await joinGate.waitForPark("surviving.join")
+        await joinGate.resumeAll()
+        creator.cancel()
+        cancelledJoiner.cancel()
+        #expect(await service.inFlightCount == 1)
+        await decodeGate.resume("shared.decode")
+
+        await #expect(throws: CancellationError.self) { try await creator.value }
+        await #expect(throws: CancellationError.self) { try await cancelledJoiner.value }
+        let payload = try #require(try await survivingJoiner.value)
+        #expect(payload.item == Self.reference)
+        let counts = await probe.counts()
+        #expect(counts.sourceLoads == 1)
+        #expect(counts.joinValidations == 2)
+        #expect(await service.inFlightCount == 0)
+    }
+
     @Test func concurrentIdenticalCallsLoadSourceOnceAndValidateTheJoiner() async throws {
         let png = try #require(Data(base64Encoded: Self.png1x1TransparentBase64))
         let service = ThumbnailService()

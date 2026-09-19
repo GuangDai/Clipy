@@ -109,7 +109,7 @@ final class ThumbnailStore {
                     activeRasters[item] = raster
                     coldPixels.removeObject(forKey: cacheKey(item))
                 } else {
-                    removeEntries { $0 == item }
+                    removeEntry(item)
                     prefetch(item)
                 }
             }
@@ -301,13 +301,18 @@ final class ThumbnailStore {
         // It no longer expresses demand: neither start independent work nor
         // promote a retained entry on behalf of that retired caller.
         guard !Task.isCancelled, !isPrefetchSuspended, isSurfaceActive else { return }
-        removeEntries { !hasRetainedEntry($0) }
+        // Repeated row demand is an exact-key lookup. Reconcile unrelated
+        // system-evicted cold entries only when admitting a result needs
+        // their reserved capacity, not on every retained/in-flight request.
+        if entries[item] != nil, !hasRetainedEntry(item) {
+            removeEntry(item)
+        }
         if displayedItemCounts[item] != nil, entries[item]?.width != nil, activeRasters[item] == nil {
             if let raster = readColdRaster(for: item) {
                 activeRasters[item] = raster
                 coldPixels.removeObject(forKey: cacheKey(item))
             } else {
-                removeEntries { $0 == item }
+                removeEntry(item)
             }
         }
         if entries[item] != nil {
@@ -379,9 +384,25 @@ final class ThumbnailStore {
                     #if DEBUG
                     rasterMs = Self.elapsedMilliseconds(since: rasterStart)
                     #endif
-                    if case let .content(.raster(value)) = outcome {
+                    switch outcome {
+                    case let .content(.raster(value)):
                         raster = value
-                    } else {
+                    case .failed(.renderer), .failed(.cancelled):
+                        // Native-slot timeout/resource contention is retryable
+                        // (01 §6). It says nothing about these PNG bytes and
+                        // must not become a retained unavailable thumbnail.
+                        guard let self else { return }
+                        #if DEBUG
+                        let boundary = self.finishWithoutEntry(item: item, requestToken: requestToken)
+                        self.recordMeasurement(
+                            .completed, item: item, fetchMs: fetchMs, rasterMs: rasterMs,
+                            outcome: boundary == .discarded ? .discarded : .failure
+                        )
+                        #else
+                        self.finishWithoutEntry(item: item, requestToken: requestToken)
+                        #endif
+                        return
+                    default:
                         raster = nil
                     }
                 } else {
@@ -610,7 +631,11 @@ final class ThumbnailStore {
         guard maximumEntries > 0, cost <= maximumDecodedBytes else {
             return .accepted
         }
-        removeEntries { !hasRetainedEntry($0) }
+        // Until capacity is needed, stale cold metadata only over-reserves
+        // bytes; it never understates the hard bound (V2-09 §7).
+        if entries.count >= maximumEntries || cost > maximumDecodedBytes - retainedDecodedBytes {
+            removeEntries { !hasRetainedEntry($0) }
+        }
         // A same-key overwrite cannot happen (`prefetch` refuses to start
         // when an entry exists), but keep the byte total exact even so.
         if let replaced = entries[item] {
@@ -689,12 +714,15 @@ final class ThumbnailStore {
     ) {
         let removedKeys = entries.keys.filter(shouldRemove)
         for key in removedKeys {
-            if let removed = entries.removeValue(forKey: key) {
-                activeRasters.removeValue(forKey: key)
-                coldPixels.removeObject(forKey: cacheKey(key))
-                retainedDecodedBytes -= removed.decodedBytes
-            }
+            removeEntry(key)
         }
+    }
+
+    private func removeEntry(_ item: HistoryItemReference) {
+        guard let removed = entries.removeValue(forKey: item) else { return }
+        activeRasters.removeValue(forKey: item)
+        coldPixels.removeObject(forKey: cacheKey(item))
+        retainedDecodedBytes -= removed.decodedBytes
     }
 
     private func configureColdCache() {

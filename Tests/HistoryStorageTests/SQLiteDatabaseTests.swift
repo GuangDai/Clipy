@@ -7,6 +7,16 @@ import Testing
 /// Real SQLite exercises the storage primitive: byte fidelity, durability,
 /// transaction failure and snapshot isolation, without a fake SQL writer.
 struct SQLiteDatabaseTests {
+    @Test func embeddedNULPathCannotOpenAnUnintendedDatabase() throws {
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.sqlite\0-other.sqlite")
+        #expect(throws: HistoryFailure.persistence(.openStore)) {
+            try SQLiteDatabase(url: url)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path).isEmpty)
+    }
+
     @Test func bindingsPreserveEmptyValuesNULAndLeadingBOM() throws {
         let database = try SQLiteDatabase(url: nil)
         try database.execute("CREATE TABLE values_test (n, i, r, t, b, e, z)")

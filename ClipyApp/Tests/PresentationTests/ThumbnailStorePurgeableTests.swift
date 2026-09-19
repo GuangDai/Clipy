@@ -69,6 +69,36 @@ struct ThumbnailStorePurgeableTests {
         store.prefetch(item)
         #expect(await history.requestCount == 1, "A closed surface does not restart a discarded fetch")
     }
+
+    @Test(arguments: [false, true])
+    func coldLossReleasesReservedCapacityBeforeEvictingRetainedPixels(removeCacheEntry: Bool) async throws {
+        let visible = reference()
+        let lost = reference()
+        let newcomer = reference()
+        let history = ThumbnailScriptHistory(pngByReference: [
+            visible: fixturePNGData, lost: fixturePNGData, newcomer: fixturePNGData,
+        ])
+        let store = ThumbnailStore(history: history, maximumEntries: 2, maximumDecodedBytes: 8)
+        store.setDisplayed(visible, true)
+        store.prefetch(visible)
+        store.prefetch(lost)
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        let original = try #require(store.raster(for: visible))
+        if removeCacheEntry { store.removeColdEntryForTesting(lost) }
+        else { store.discardColdPixelsForTesting(lost) }
+
+        // Exact-key reuse need not sweep unrelated metadata. The next new
+        // completion must reclaim that reservation before capacity eviction.
+        store.prefetch(visible)
+        store.prefetch(newcomer)
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        #expect(store.raster(for: visible) == original)
+        #expect(store.imagePixelSize(for: newcomer) != nil)
+        #expect(store.imagePixelSize(for: lost) == nil)
+        #expect(store.cachedEntryCount == 2)
+        #expect(store.cachedDecodedBytes == 8)
+        #expect(await history.requestCount(for: visible) == 1)
+    }
     #endif
 
     @Test func visiblePixelsRemainIndependentOfColdEvictionAndMemoryPressure() async throws {

@@ -7,6 +7,50 @@ import Testing
 /// Real files exercise the same concrete implementation used by Authority.
 /// V2-09 §§5/6: immutable publication, corruption rejection and bounded GC.
 struct ImmutableBlobStoreTests {
+    @Test(arguments: [0, 1, 2, 3])
+    func cancelledWritesStopDurabilityWorkAndCleanOnlyTheirStagingFile(stage: Int) async throws {
+        let task = Task {
+            try withStore { _, root in
+                var directorySyncs = 0
+                var fullSyncs = 0
+                let store = try ImmutableBlobStore(root: root) { descriptor, full in
+                    let result = full ? Darwin.fcntl(descriptor, F_FULLFSYNC) : Darwin.fsync(descriptor)
+                    guard result == 0 else {
+                        throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+                    }
+                    if full { fullSyncs += 1 } else { directorySyncs += 1 }
+                    // The third directory sync persists the shard's parent,
+                    // immediately before publishing the immutable file.
+                    if (stage == 1 && directorySyncs == 3) || (stage == 3 && full) {
+                        withUnsafeCurrentTask { $0?.cancel() }
+                    }
+                }
+                let id = UUID()
+                var published = false
+                if stage == 0 { withUnsafeCurrentTask { $0?.cancel() } }
+                #expect(throws: CancellationError.self) {
+                    try store.write(Data(repeating: 83, count: 256 * 1_024), id: id) {
+                        published = true
+                        if stage == 2 { withUnsafeCurrentTask { $0?.cancel() } }
+                    }
+                }
+                #expect(!FileManager.default.fileExists(atPath: stagingURL(root, id).path))
+                #expect(published == (stage >= 2))
+                #expect(FileManager.default.fileExists(atPath: blobURL(root, id).path) == published)
+                #expect(directorySyncs == (stage == 0 ? 2 : stage == 3 ? 4 : 3))
+                #expect(fullSyncs == (stage == 3 ? 1 : 0))
+                // A canceled post-publication write has no SQL reference;
+                // its file remains available to the normal orphan cleanup.
+                var removed = 0
+                for _ in 0..<4 {
+                    removed += try store.cleanupBatch(limit: 8) { _ in false }.removedCount
+                }
+                #expect(removed == (published ? 1 : 0))
+            }
+        }
+        try await task.value
+    }
+
     @Test(arguments: [false, true])
     func cancelledReadsDiscardBytesAndPreserveStoredContent(ranged: Bool) async throws {
         let task = Task {

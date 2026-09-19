@@ -18,7 +18,9 @@ internal final class HistoryStoreLocation: Sendable {
     internal init(persistence: HistoryPersistence) throws {
         switch persistence {
         case .persistent(let storeURL):
-            guard storeURL.isFileURL else {
+            // Native file/SQLite APIs consume NUL-terminated paths. Reject a
+            // path they would truncate before deriving its blob namespace.
+            guard storeURL.isFileURL, !storeURL.path.utf8.contains(0) else {
                 throw HistoryFailure.persistence(.openStore)
             }
             databaseURL = storeURL.standardizedFileURL

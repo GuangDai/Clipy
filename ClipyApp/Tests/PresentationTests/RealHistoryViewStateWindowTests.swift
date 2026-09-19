@@ -121,6 +121,8 @@ struct RealHistoryViewStateWindowTests {
                 try #require(await pollUntil { !state.isLoadingPage })
                 let end = min((endPage + 1) * 2, expected.rows.count)
                 #expect(state.rows == Array(expected.rows[(max(0, endPage - 2) * 2)..<end]))
+                #expect(state.displayedRows == state.rows,
+                        "Display preserves History ordering across the pinned/recency boundary")
                 #expect(state.loadedPageCount <= 3)
                 #expect(state.rows.count <= 6)
                 #expect(state.traversedRowCount == end)
@@ -133,6 +135,8 @@ struct RealHistoryViewStateWindowTests {
                 state.loadPreviousPage()
                 try #require(await pollUntil { !state.isLoadingPage })
                 #expect(state.rows == Array(expected.rows[(firstPage * 2)..<((firstPage + 3) * 2)]))
+                #expect(state.displayedRows == state.rows,
+                        "Backward navigation preserves the same display order")
                 #expect(state.loadedPageCount == 3)
                 #expect(state.traversedRowCount == (firstPage + 3) * 2)
                 #expect(state.hasNextPage)

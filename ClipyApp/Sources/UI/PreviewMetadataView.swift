@@ -10,7 +10,7 @@ struct PreviewMetadataView: View {
     let row: HistoryRow
     let sourceIcons: SourceIconStore?
     @Environment(\.locale) private var locale
-    @State private var details: HistoryDetails?
+    @State private var occurrence: (item: HistoryItemReference, value: CopyOccurrenceSummary)?
     @State private var expanded = false
     @State private var failed = false
     @State private var retry = 0
@@ -22,11 +22,11 @@ struct PreviewMetadataView: View {
         let retry: Int
     }
 
-    private var currentDetails: HistoryDetails? {
-        guard let details, details.item == row.item,
-              details.occurrence.count == row.copyCount,
-              details.occurrence.lastCopiedAt == row.lastCopiedAt else { return nil }
-        return details
+    private var currentOccurrence: CopyOccurrenceSummary? {
+        guard let occurrence, occurrence.item == row.item,
+              occurrence.value.count == row.copyCount,
+              occurrence.value.lastCopiedAt == row.lastCopiedAt else { return nil }
+        return occurrence.value
     }
 
     var body: some View {
@@ -42,8 +42,8 @@ struct PreviewMetadataView: View {
                 }
             }
             CopyTimeRow(label: "Last Copied", date: row.lastCopiedAt)
-            if let details = currentDetails, row.copyCount > 1 {
-                CopyTimeRow(label: "First Copied", date: details.occurrence.firstCopiedAt)
+            if let occurrence = currentOccurrence, row.copyCount > 1 {
+                CopyTimeRow(label: "First Copied", date: occurrence.firstCopiedAt)
             }
             if row.sourceCount > 1 {
                 DisclosureGroup(isExpanded: $expanded) {
@@ -68,10 +68,10 @@ struct PreviewMetadataView: View {
         .task(id: Request(item: row.item, copyCount: row.copyCount,
                           lastCopiedAt: row.lastCopiedAt, retry: retry)) {
             failed = false
+            occurrence = nil
             // A single copy needs only the row's last-copy facts. Details
             // supplies the first-copy time only when repeats are visible.
             guard row.copyCount > 1 else {
-                details = nil
                 return
             }
             do {
@@ -80,7 +80,10 @@ struct PreviewMetadataView: View {
                 guard value.item == row.item,
                       value.occurrence.count == row.copyCount,
                       value.occurrence.lastCopiedAt == row.lastCopiedAt else { return }
-                details = value
+                // Only the occurrence facts are displayed here. Release the
+                // overview's full revision/representation metadata after the
+                // read instead of retaining it for this information popover.
+                occurrence = (value.item, value.occurrence)
             } catch is CancellationError {
                 return
             } catch {

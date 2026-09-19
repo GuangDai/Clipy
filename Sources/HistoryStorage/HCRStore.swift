@@ -113,7 +113,7 @@ internal enum HCRStore {
             limits: limits
         )
 
-        if let newFloor = trim.rows.last?.sequence {
+        if let newFloor = trim.newFloor {
             try database.execute(
                 "DELETE FROM history_change_records WHERE sequence <= ?",
                 bindings: [.blob(sqliteUInt64(newFloor))]
@@ -128,7 +128,7 @@ internal enum HCRStore {
         try database.execute("""
             UPDATE journal_config SET compactionFloorRaw = ?, journalBytes = ? WHERE key = ?
             """, bindings: [
-                .blob(sqliteUInt64(trim.rows.last?.sequence ?? config.compactionFloorRaw)),
+                .blob(sqliteUInt64(trim.newFloor ?? config.compactionFloorRaw)),
                 .blob(sqliteUInt64(retainedBytes)), .text(config.key)
             ])
         try database.execute("""
@@ -146,8 +146,50 @@ internal enum HCRStore {
 
 private extension HCRStore {
     struct PrefixTrim {
-        let rows: [HistoryChangeRecordRow]
+        let newFloor: UInt64?
         let deletedBytes: UInt64
+    }
+
+    /// V2-09 §4/§5: retention needs byte lengths, not affected-item payloads.
+    /// Startup still validates the complete codec in HCRBootstrap; append-time
+    /// scans retain the same scalar/type checks without copying up to 80 MiB
+    /// of already validated payloads every age-compaction cadence.
+    struct PrefixRow {
+        let sequence: UInt64
+        let changePositionRaw: UInt64
+        let affectedItemsByteCount: UInt64
+        let createdAt: Date
+    }
+
+    static func loadPrefixRows(
+        in database: SQLiteDatabase,
+        limit: Int
+    ) throws -> [PrefixRow] {
+        let statement = try database.prepare("""
+            SELECT sequence, changePositionRaw, changeKindRaw,
+                typeof(affectedItemsBlob), length(affectedItemsBlob), createdAt
+            FROM history_change_records ORDER BY sequence LIMIT ?
+            """, bindings: [.integer(Int64(limit))])
+        defer { statement.finalize() }
+        var rows: [PrefixRow] = []
+        while try statement.step() {
+            // length() also accepts TEXT. Keep the prior BLOB storage-class
+            // rejection instead of silently treating corrupt text as bytes.
+            guard try statement.blobByteCount(at: 0) == 8,
+                  try statement.blobByteCount(at: 1) == 8,
+                  Int16(exactly: try statement.integer(at: 2)) != nil,
+                  try statement.text(at: 3) == "blob",
+                  let bytes = UInt64(exactly: try statement.integer(at: 4)) else {
+                throw HistoryFailure.persistence(.corruptStoredValue)
+            }
+            rows.append(PrefixRow(
+                sequence: try sqliteUInt64(statement.blob(at: 0)),
+                changePositionRaw: try sqliteUInt64(statement.blob(at: 1)),
+                affectedItemsByteCount: bytes,
+                createdAt: Date(timeIntervalSinceReferenceDate: try statement.real(at: 5))
+            ))
+        }
+        return rows
     }
 
     static func loadConfig(in database: SQLiteDatabase) throws -> JournalConfigRow {
@@ -185,7 +227,7 @@ private extension HCRStore {
         let expectedFetchedCount: Int
         switch readScope {
         case .none:
-            return PrefixTrim(rows: [], deletedBytes: 0)
+            return PrefixTrim(newFloor: nil, deletedBytes: 0)
         case .oldestPrefix(let count):
             fetchLimit = count
             expectedFetchedCount = count
@@ -198,9 +240,9 @@ private extension HCRStore {
             fetchLimit = fullFetchLimit
             expectedFetchedCount = existingCount
         }
-        let rows: [HistoryChangeRecordRow]
+        let rows: [PrefixRow]
         do {
-            rows = try HCRBootstrap.loadRecords(in: database, limit: fetchLimit)
+            rows = try loadPrefixRows(in: database, limit: fetchLimit)
         } catch let failure as HistoryFailure {
             throw failure
         } catch {
@@ -245,12 +287,8 @@ private extension HCRStore {
             guard deleteCount < requiredDeleteCount || bytePressure else {
                 break
             }
-            guard let rowBytes = UInt64(exactly: row.affectedItemsBlob.count)
-            else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
             let (sum, byteOverflow) = deletedBytes
-                .addingReportingOverflow(rowBytes)
+                .addingReportingOverflow(row.affectedItemsByteCount)
             guard !byteOverflow, sum <= config.journalBytes else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
@@ -273,7 +311,7 @@ private extension HCRStore {
             throw HistoryFailure.persistence(.invariantViolation)
         }
         return PrefixTrim(
-            rows: Array(rows.prefix(deleteCount)),
+            newFloor: deleteCount > 0 ? rows[deleteCount - 1].sequence : nil,
             deletedBytes: deletedBytes
         )
     }

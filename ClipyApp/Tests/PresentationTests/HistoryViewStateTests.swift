@@ -574,6 +574,7 @@ struct HistoryViewStateTests {
         }
         state.activate()
         #expect(await pollUntil { state.rows == [currentRow] })
+        #expect(state.displayedRow(for: staleReference.id) == currentRow)
 
         state.requestPasteFromDisplayedRow(staleReference)
         #expect(recorder.received.isEmpty)
@@ -582,6 +583,7 @@ struct HistoryViewStateTests {
         #expect(recorder.received == [currentRow.item])
 
         state.deactivate()
+        #expect(state.displayedRow(for: currentRow.item.id) == nil)
         await history.finishObservation()
     }
 

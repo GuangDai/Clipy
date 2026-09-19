@@ -71,7 +71,7 @@ package extension ClipyCLIContract {
                 guard !output.exceeded else { return nil }
                 if index != 0 { output.appendASCII(",") }
                 output.appendASCII("{\"bytesBase64\":")
-                output.appendJSON(representation.bytes.base64EncodedString())
+                output.appendBase64(representation.bytes)
                 output.appendASCII(",\"pasteboardItemIndex\":")
                 output.appendASCII(String(representation.pasteboardItemIndex))
                 output.appendASCII(",\"typeIdentifier\":")

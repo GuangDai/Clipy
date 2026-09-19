@@ -55,6 +55,46 @@ struct HistoryExternalOpenerTests {
         #expect(options.first?.file?.path == "/tmp/valid.txt")
     }
 
+    @Test func unavailableImageApplicationDoesNotHideAnOpenableRepresentation() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let item = try await capture([
+            .init(typeIdentifier: "public.png", bytes: Data([1, 2])),
+            .init(typeIdentifier: "public.jpeg", bytes: Data([3, 4]))
+        ], in: history)
+        let metadata = try await history.representationMetadata(for: item)
+        let unavailableType = try #require(metadata.first).typeIdentifier
+        let supportedType = try #require(metadata.last).typeIdentifier
+        var resolvedTypes: [String] = []
+        let opener = HistoryExternalOpener(history: history, applicationFor: { _, identifier in
+            resolvedTypes.append(identifier)
+            return identifier == unavailableType ? nil : URL(filePath: "/Applications/Viewer.app")
+        })
+
+        let options = try await opener.options(for: item)
+
+        #expect(resolvedTypes == [unavailableType, supportedType])
+        #expect(options.count == 1)
+        #expect(options.first?.request.typeIdentifier == supportedType)
+        #expect(options.first?.imageExtension == HistoryExternalOpener.imageExtension(for: supportedType))
+        #expect(options.first?.applicationName == "Viewer")
+    }
+
+    @Test func fileWithoutAnApplicationDoesNotOpenItsIconInstead() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let item = try await capture([
+            .init(typeIdentifier: "public.file-url", bytes: Data("file:///tmp/document.unknown".utf8)),
+            .init(typeIdentifier: "public.png", bytes: Data([1, 2]))
+        ], in: history)
+        var resolvedTypes: [String] = []
+        let opener = HistoryExternalOpener(history: history, applicationFor: { _, identifier in
+            resolvedTypes.append(identifier)
+            return identifier == "public.png" ? URL(filePath: "/Applications/Viewer.app") : nil
+        })
+
+        await #expect(throws: HistoryOpenFailure.noApplication) { try await opener.options(for: item) }
+        #expect(resolvedTypes == ["public.file-url"])
+    }
+
     @Test func revisionInvalidatesPreparedOpenWithoutExportingOldBytes() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture([.init(typeIdentifier: "public.png", bytes: Data([1]))], in: history)

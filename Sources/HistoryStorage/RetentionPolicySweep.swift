@@ -45,9 +45,8 @@ extension HistoryAuthority {
                    projectedPrunedCount > 0 || hasUnsatisfiableRevision {
                     var after = ""
                     while true {
-                        let batch = try sweepRevisionCandidates(after: after, policy: policy)
-                        guard !batch.isEmpty else { break }
-                        for itemID in batch {
+                        guard let batch = try sweepRevisionCandidates(after: after, policy: policy) else { break }
+                        for itemID in batch.itemIDs {
                             try Task.checkCancellation()
                             let projection = try sweepRevisionProjection(itemID, policies: newPolicies)
                             guard !projection.unsatisfiable else {
@@ -61,7 +60,7 @@ extension HistoryAuthority {
                                 prunedCount = try RetentionConfigLoading.checkedAdd(prunedCount, projection.removed.count)
                             }
                         }
-                        after = batch[batch.count - 1].rawValue.uuidString
+                        after = batch.after
                     }
                 }
                 try apply(.setRetentionPolicies(policies: newPolicies), published: nil, in: database)
@@ -108,9 +107,8 @@ extension HistoryAuthority {
         if let policy = policies.revisions {
             var after = ""
             while true {
-                let batch = try sweepRevisionCandidates(after: after, policy: policy)
-                guard !batch.isEmpty else { break }
-                for itemID in batch {
+                guard let batch = try sweepRevisionCandidates(after: after, policy: policy) else { break }
+                for itemID in batch.itemIDs {
                     try Task.checkCancellation()
                     let projection = try sweepRevisionProjection(itemID, policies: policies)
                     total = try RetentionConfigLoading.checkedSubtract(
@@ -119,7 +117,7 @@ extension HistoryAuthority {
                     prunedCount = try RetentionConfigLoading.checkedAdd(prunedCount, projection.removed.count)
                     unsatisfiable = unsatisfiable || projection.unsatisfiable
                 }
-                after = batch[batch.count - 1].rawValue.uuidString
+                after = batch.after
                 try await yieldRetentionPreparation(at: position)
             }
         }
@@ -200,30 +198,33 @@ extension HistoryAuthority {
             || (policy.maxRevisionBytesPerItem.map { bytes > $0 } ?? false)
     }
 
-    private func sweepRevisionCandidates(after: String, policy: RevisionRetention) throws -> [HistoryItemID] {
-        var predicates: [String] = []
-        var bindings: [SQLiteValue] = [.text(after)]
-        if let maximum = policy.maxRevisionsPerItem {
-            predicates.append("revisionCount > ?")
-            bindings.append(.integer(Int64(maximum)))
-        }
-        if let maximum = policy.maxRevisionBytesPerItem {
-            predicates.append("revisionBytes > ?")
-            bindings.append(.integer(Int64(maximum)))
-        }
-        guard !predicates.isEmpty else { return [] }
+    /// Bound visited index entries, not just threshold matches: a satisfied
+    /// policy must still release the Authority between pages (V2-09 §4).
+    /// The covering index supplies only scalars; content lineage is loaded
+    /// for threshold violations. An empty match page still advances its key.
+    private func sweepRevisionCandidates(
+        after: String, policy: RevisionRetention
+    ) throws -> (after: String, itemIDs: [HistoryItemID])? {
         let rows = try database.prepare("""
-            SELECT id FROM history_items WHERE id > ? AND (revisionCount > 0 OR revisionBytes > 0)
-                AND (\(predicates.joined(separator: " OR ")))
+            SELECT id,revisionCount,revisionBytes FROM history_items
+            WHERE id > ? AND (revisionCount > 0 OR revisionBytes > 0)
             ORDER BY id LIMIT 32
-            """, bindings: bindings)
+            """, bindings: [.text(after)])
         defer { rows.finalize() }
         var result: [HistoryItemID] = []
+        var lastID: String?
         while try rows.step() {
             try Task.checkCancellation()
-            result.append(HistoryItemID(rawValue: try HistoryItemRowHydration.uuid(rows.text(at: 0))))
+            let id = try rows.text(at: 0)
+            let itemID = HistoryItemID(rawValue: try HistoryItemRowHydration.uuid(id))
+            let count = try HistoryItemRowHydration.integer(rows, 1)
+            let bytes = try HistoryItemRowHydration.integer(rows, 2)
+            if Self.requiresRevisionPrune(count: count, bytes: bytes, policy: policy) {
+                result.append(itemID)
+            }
+            lastID = id
         }
-        return result
+        return lastID.map { (after: $0, itemIDs: result) }
     }
 
     private func sweepRevisionProjection(

@@ -533,8 +533,15 @@ private final class SQLiteSearchRows {
                     candidateSQL = "EXISTS (SELECT 1 FROM history_search WHERE rowid = history_items.rowid AND history_search MATCH ?)"
                 }
                 let candidateBindings = candidateExpression.map { [SQLiteValue.text($0)] } ?? []
+                // V2-09 §4: sparse candidates need a temporary ordering
+                // sort. Keep full bodies out of its records: otherwise up
+                // to 4,096 bodies are copied before the first bounded batch
+                // can be admitted. Resolve each yielded rowid below, inside
+                // this same read transaction. Dense indexed walks keep their
+                // single projection because they do not sort the candidates.
+                let bodyProjection = prefersSparseCandidates ? "rowid" : "searchBodyUTF8"
                 statement = try database.prepare("""
-                    SELECT id,contentVersion,titleUTF8,searchBodyUTF8,effectiveTypeIdentifiersBlob,
+                    SELECT id,contentVersion,titleUTF8,\(bodyProjection),effectiveTypeIdentifiersBlob,
                            lastCopiedAt,copyCount,lastSource,pinOrdinal,revisionCount,
                            sourceCount
                     FROM history_items WHERE (\(range.condition)) AND (\(predicate.sql)) AND (\(candidateSQL))
@@ -553,8 +560,21 @@ private final class SQLiteSearchRows {
                 }
                 pendingRow = true
             }
+            let deferredBody: SQLiteStatement?
+            if prefersSparseCandidates {
+                deferredBody = try database.prepare(
+                    "SELECT searchBodyUTF8 FROM history_items WHERE rowid = ?",
+                    bindings: [.integer(try statement.integer(at: 3))]
+                )
+            } else { deferredBody = nil }
+            defer { deferredBody?.finalize() }
+            if let deferredBody, try !deferredBody.step() {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
+            let bodyStatement = deferredBody ?? statement
+            let bodyColumn: Int32 = deferredBody == nil ? 3 : 0
             let titleBytes = try statement.blobByteCount(at: 2)
-            let bodyBytes = try statement.blobByteCount(at: 3)
+            let bodyBytes = try bodyStatement.blobByteCount(at: bodyColumn)
             let typeBytes = try statement.blobByteCount(at: 4)
             let sourceBytes = try statement.isNull(at: 7) ? 0 : statement.textByteCount(at: 7)
             guard titleBytes <= limits.maximumStoredTitleUTF8Bytes,
@@ -577,7 +597,7 @@ private final class SQLiteSearchRows {
             }
             let row = try mapCodecFailure {
                 let title = try ContentProjector.decodeStoredTitle(statement.blob(at: 2), limits: limits)
-                let body = try ContentProjector.decodeStoredSearchBody(statement.blob(at: 3), limits: limits)
+                let body = try ContentProjector.decodeStoredSearchBody(bodyStatement.blob(at: bodyColumn), limits: limits)
                 let version = try RevisionStateBlobCodec.decodeContentVersion(sqliteUInt64(statement.blob(at: 1)))
                 let types = try EffectiveTypeIdentifiersBlobCodec.decode(statement.blob(at: 4), limits: limits)
                 let copiedAt = Date(timeIntervalSinceReferenceDate: try statement.real(at: 5))

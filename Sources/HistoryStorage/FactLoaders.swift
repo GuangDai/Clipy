@@ -39,6 +39,16 @@ internal enum HistoryItemRowHydration {
             """, bindings: [.text(itemID.rawValue.uuidString)])
         defer { row.finalize() }
         guard try row.step() else { return nil }
+        // V2-09 §4: reject corrupt variable-sized fields before copying
+        // them, including on capture/revision paths that do not use DTO reads.
+        guard try row.blobByteCount(at: 0) == 8,
+              try row.textByteCount(at: 1) == 36,
+              try row.blobByteCount(at: 4) == 8,
+              try row.isNull(at: 5)
+                || row.textByteCount(at: 5) <= limits.maximumSourceApplicationObservationUTF8Bytes,
+              try row.isNull(at: 6)
+                || row.textByteCount(at: 6) <= limits.maximumSourceApplicationObservationUTF8Bytes
+        else { throw corrupt }
         let first = try Date(timeIntervalSinceReferenceDate: row.real(at: 2))
         let last = try Date(timeIntervalSinceReferenceDate: row.real(at: 3))
         let count = try sqliteUInt64(row.blob(at: 4))
@@ -53,8 +63,7 @@ internal enum HistoryItemRowHydration {
               canonicalBytes <= limits.maximumCaptureBytes,
               revisionCount >= 0, revisionCount <= limits.maximumRevisionsPerItem,
               revisionBytes >= 0, revisionBytes <= limits.maximumTotalRevisionBytesPerItem,
-              (revisionCount == 0 ? revisionBytes == 0 : revisionBytes >= revisionCount),
-              [firstSource, lastSource].allSatisfy({ ($0?.utf8.count ?? 0) <= limits.maximumSourceApplicationObservationUTF8Bytes })
+              (revisionCount == 0 ? revisionBytes == 0 : revisionBytes >= revisionCount)
         else { throw corrupt }
         return HistoryItemMetadata(id: itemID, contentVersion: ContentVersion(rawValue: version),
             currentContentID: try uuid(row.text(at: 1)),
@@ -70,6 +79,7 @@ internal enum HistoryItemRowHydration {
                                          bindings: [.text(itemID.rawValue.uuidString)])
         defer { query.finalize() }
         guard try query.step() else { throw corrupt }
+        guard try query.textByteCount(at: 0) == 36 else { throw corrupt }
         let loaded = try content(id: uuid(query.text(at: 0)), itemID: itemID,
                                  in: database, blobStore: blobStore, limits: limits)
         var representations: [CanonicalRepresentation] = []
@@ -135,6 +145,7 @@ internal enum HistoryItemRowHydration {
         blobStore: ImmutableBlobStore, limits: HistoryLimits,
         visit: (ContentRepresentation, ContentFingerprint?) -> Void
     ) throws {
+        try Task.checkCancellation()
         guard metadata.representationCount <= limits.maximumRepresentationsPerCaptureOrRevision,
               metadata.byteCount <= (metadata.ordinal == 0 ? limits.maximumCaptureBytes : limits.maximumProposedRevisionBytes)
         else { throw corrupt }
@@ -148,47 +159,64 @@ internal enum HistoryItemRowHydration {
         var representationCount = 0
         while try rows.step() {
             try autoreleasepool {
+                try Task.checkCancellation()
+                guard representationCount < metadata.representationCount,
+                      try rows.textByteCount(at: 1) <= limits.maximumTypeIdentifierUTF8Bytes else { throw corrupt }
                 let type = try rows.text(at: 1)
+                let normalizedType = type.precomposedStringWithCanonicalMapping
                 let count = try integer(rows, 3)
                 let itemIndex = try integer(rows, 7)
                 guard try integer(rows, 0) == representationCount,
-                      !type.isEmpty, type.utf8.count <= limits.maximumTypeIdentifierUTF8Bytes,
-                      try rows.text(at: 2) == type.precomposedStringWithCanonicalMapping,
-                      itemIndex >= 0, count > 0, count <= limits.maximumRepresentationBytes,
-                      representationCount < metadata.representationCount else { throw corrupt }
+                      !type.isEmpty,
+                      try rows.textByteCount(at: 2) == normalizedType.utf8.count,
+                      try rows.text(at: 2).utf8.elementsEqual(normalizedType.utf8),
+                      itemIndex >= 0, count > 0, count <= limits.maximumRepresentationBytes else { throw corrupt }
+                let (nextTotal, overflow) = total.addingReportingOverflow(count)
+                guard !overflow, nextTotal <= metadata.byteCount else { throw corrupt }
                 keys.append(ContentRepresentationKey(pasteboardItemIndex: itemIndex, typeIdentifier: type))
-                let inline = try rows.optionalBlob(at: 5)
-                let blobID = try rows.optionalText(at: 6)
-                let bytes: Data
-                switch (inline, blobID) {
-                case (.some(let value), .none): bytes = value
-                case (.none, .some(let value)): bytes = try blobStore.read(id: uuid(value), expectedByteCount: count)
-                default: throw corrupt
-                }
-                guard bytes.count == count else { throw corrupt }
+                guard try rows.isNull(at: 4) || rows.blobByteCount(at: 4) == 8 else { throw corrupt }
                 let fingerprint = try rows.optionalBlob(at: 4).map { ContentFingerprint(rawValue: try sqliteUInt64($0)) }
                 guard (metadata.ordinal == 0) == (fingerprint != nil) else { throw corrupt }
+                let bytes: Data
+                switch (try rows.isNull(at: 5), try rows.isNull(at: 6)) {
+                case (false, true):
+                    guard try rows.blobByteCount(at: 5) == count else { throw corrupt }
+                    bytes = try rows.blob(at: 5)
+                case (true, false):
+                    guard try rows.textByteCount(at: 6) == 36 else { throw corrupt }
+                    bytes = try blobStore.read(id: uuid(rows.text(at: 6)), expectedByteCount: count)
+                default: throw corrupt
+                }
                 visit(ContentRepresentation(typeIdentifier: type, bytes: bytes, pasteboardItemIndex: itemIndex), fingerprint)
                 representationCount += 1
-                total += count
+                total = nextTotal
             }
         }
         guard representationCount == metadata.representationCount, total == metadata.byteCount else { throw corrupt }
         try mapCodecFailure { try CodecValidation.requireNormalizedRepresentationOrder(keys) }
         if metadata.ordinal > 0 {
             let canonicalTypes = try database.prepare("""
-                SELECT r.pasteboardItemIndex,r.typeKey FROM representations r JOIN contents c ON c.id=r.contentID
-                WHERE c.itemID=? AND c.revisionOrdinal=0
+                SELECT r.pasteboardItemIndex,r.exactType,r.typeKey FROM representations r JOIN contents c ON c.id=r.contentID
+                WHERE c.itemID=? AND c.revisionOrdinal=0 ORDER BY r.ordinal
                 """, bindings: [.text(itemID.rawValue.uuidString)])
             defer { canonicalTypes.finalize() }
-            var allowed = Set<ContentRepresentationKey>()
+            var canonicalKeys: [ContentRepresentationKey] = []
             while try canonicalTypes.step() {
-                allowed.insert(ContentRepresentationKey(
-                    pasteboardItemIndex: try integer(canonicalTypes, 0), typeIdentifier: try canonicalTypes.text(at: 1)
+                try Task.checkCancellation()
+                guard canonicalKeys.count < limits.maximumRepresentationsPerCaptureOrRevision,
+                      try canonicalTypes.textByteCount(at: 1) <= limits.maximumTypeIdentifierUTF8Bytes else { throw corrupt }
+                let type = try canonicalTypes.text(at: 1)
+                let normalizedType = type.precomposedStringWithCanonicalMapping
+                guard !type.isEmpty,
+                      try canonicalTypes.textByteCount(at: 2) == normalizedType.utf8.count,
+                      try canonicalTypes.text(at: 2).utf8.elementsEqual(normalizedType.utf8) else { throw corrupt }
+                canonicalKeys.append(ContentRepresentationKey(
+                    pasteboardItemIndex: try integer(canonicalTypes, 0), typeIdentifier: type
                 ))
             }
-            guard Set(keys).isSubset(of: allowed),
-                  keys.last?.pasteboardItemIndex == allowed.map(\.pasteboardItemIndex).max() else { throw corrupt }
+            try mapCodecFailure { try CodecValidation.requireNormalizedRepresentationOrder(canonicalKeys) }
+            guard Set(keys).isSubset(of: Set(canonicalKeys)),
+                  keys.last?.pasteboardItemIndex == canonicalKeys.last?.pasteboardItemIndex else { throw corrupt }
         }
     }
 
@@ -218,6 +246,7 @@ internal enum IngestFactLoader {
     internal static func loadFacts(in database: SQLiteDatabase, blobStore: ImmutableBlobStore,
                                    prepared: PreparedCapture, retention: RetentionPolicy,
                                    limits: HistoryLimits = .standard) throws -> IngestFacts {
+        try Task.checkCancellation()
         var match: CaptureMatch?
         if let hintedID = prepared.origin.lineageHint,
            let metadata = try HistoryItemRowHydration.metadata(itemID: hintedID, in: database, limits: limits) {
@@ -243,6 +272,10 @@ internal enum IngestFactLoader {
             defer { candidates.finalize() }
             var winner: CanonicalCaptureMatch?
             while try candidates.step() {
+                try Task.checkCancellation()
+                guard try candidates.textByteCount(at: 0) == 36 else {
+                    throw HistoryFailure.persistence(.corruptStoredValue)
+                }
                 let itemID = HistoryItemID(rawValue: try HistoryItemRowHydration.uuid(candidates.text(at: 0)))
                 let confirmed = try autoreleasepool {
                     guard let metadata = try HistoryItemRowHydration.metadata(itemID: itemID, in: database, limits: limits) else {

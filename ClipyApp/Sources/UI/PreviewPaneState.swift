@@ -288,6 +288,12 @@ final class PreviewPaneState {
         if pendingAutoOpenItem?.id == item.id {
             cancelPendingAutoOpen()
         }
+        // Pointer-exit hides retain the selection for a later re-entry dwell
+        // (04 §9). Advance that target as well, or re-entry reopens the old
+        // ContentVersion after this authoritative visible-content refresh.
+        if currentSelectionReference?.id == item.id {
+            currentSelectionReference = item
+        }
         self.previewedItem = item
         onFloatingPreviewTransition?(.update(item))
     }

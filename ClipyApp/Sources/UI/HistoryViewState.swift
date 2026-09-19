@@ -337,13 +337,18 @@ final class HistoryViewState {
     /// old selection cannot paste a hidden row while SwiftUI is still
     /// reconciling the filter change (01 §5.6; review Card 14A).
     var displayedRows: [HistoryRow] {
-        var displayed = displayedPinnedRows
-        if !showsPinnedOnly {
-            for row in rows where row.pinnedPosition == nil && isDisplayed(row) {
-                displayed.append(row)
-            }
-        }
-        return displayed
+        // History already orders both recent and search pages pinned-first
+        // (03b §8), including backward pagination. Preserve that order and
+        // share the held array for the common unfiltered display.
+        guard showsPinnedOnly || typeFilter != .all else { return rows }
+        return rows.filter { isDisplayed($0) }
+    }
+
+    /// Keyboard actions resolve the current row without allocating the
+    /// complete displayed array. Query invalidation still retires it in the
+    /// same MainActor turn, before SwiftUI reconciles its old selection.
+    func displayedRow(for id: HistoryItemID) -> HistoryRow? {
+        rows.first { $0.item.id == id && isDisplayed($0) }
     }
 
     private func isDisplayed(_ row: HistoryRow) -> Bool {

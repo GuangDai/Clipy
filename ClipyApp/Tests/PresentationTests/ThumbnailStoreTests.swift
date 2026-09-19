@@ -439,6 +439,49 @@ struct ThumbnailStoreTests {
         }
     }
 
+    @Test func nativeSlotTimeoutDoesNotRetainAnUnavailableResult() async throws {
+        let first = reference("00000000-0000-0000-0000-0000000000DE", version: 1)
+        let second = reference("00000000-0000-0000-0000-0000000000DF", version: 1)
+        let history = ThumbnailScriptHistory(pngByReference: [first: fixturePNGData, second: fixturePNGData])
+        let store = ThumbnailStore(history: history)
+        let probe = ThumbnailDisplayCancellationProbe()
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue({
+            await probe.parkFirst()
+        }) {
+            try await exerciseNativeSlotTimeout(
+                first: first, second: second, history: history, store: store, probe: probe
+            )
+        }
+    }
+
+    private func exerciseNativeSlotTimeout(
+        first: HistoryItemReference,
+        second: HistoryItemReference,
+        history: ThumbnailScriptHistory,
+        store: ThumbnailStore,
+        probe: ThumbnailDisplayCancellationProbe
+    ) async throws {
+        store.prefetch(first)
+        let started = await probe.waitUntilFirstRenderStarts()
+        if !started { await probe.resume() }
+        try #require(started)
+
+        // The first native slot remains occupied until the second request's
+        // real acquisition deadline expires. Its valid PNG must stay retryable.
+        store.prefetch(second)
+        let timedOut = await pollUntil { store.debugFetchCompletionCount == 1 }
+        await probe.resume()
+        try #require(timedOut)
+        #expect(!store.isUnavailable(for: second))
+        #expect(store.imagePixelSize(for: second) == nil)
+        try #require(await pollUntil { store.inFlightCount == 0 })
+
+        store.prefetch(second)
+        try #require(await pollUntil { store.imagePixelSize(for: second) != nil })
+        #expect(await history.requestCount(for: second) == 2)
+        #expect(await probe.starts == 2)
+    }
+
     /// Keep the assertion scenario outside TaskLocal's generic operation
     /// closure; the injected hook still propagates to every prefetch task.
     private func exerciseDisplayCancellation(

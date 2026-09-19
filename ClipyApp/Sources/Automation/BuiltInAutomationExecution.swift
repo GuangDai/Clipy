@@ -112,6 +112,7 @@ final class BuiltInAutomationAutomaticRunner {
     private var generation = UUID()
     private let notify: @Sendable (String) async throws -> Void
     private let defaults: UserDefaults
+    private var savedDefinitions: (data: Data, workflows: [BuiltInAutomationWorkflow])?
     private(set) var lastFailure: BuiltInAutomationFailure? {
         didSet { if oldValue != lastFailure { onFailureChanged?(lastFailure) } }
     }
@@ -129,7 +130,7 @@ final class BuiltInAutomationAutomaticRunner {
 
     func submit(_ capture: ClipboardCapture) {
         guard !capture.isConcealed else { return }
-        guard BuiltInAutomationLibrary(defaults: defaults).workflows.contains(where: { $0.trigger.includesAutomatic }) else { return }
+        guard currentWorkflows().contains(where: { $0.trigger.includesAutomatic }) else { return }
         let bytes = Self.byteCount(capture)
         guard pending.count < Self.maximumPendingCaptures,
               bytes <= Self.maximumPendingBytes - pendingBytes else {
@@ -151,7 +152,7 @@ final class BuiltInAutomationAutomaticRunner {
                 pendingBytes -= Self.byteCount(capture)
                 // Saved list order is the priority. Freeze it for this copy;
                 // later reorder operations affect subsequent captures only.
-                let definitions = BuiltInAutomationLibrary(defaults: defaults).workflows
+                let definitions = currentWorkflows()
                 let representations = capture.representations.map {
                     HistoryRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes, pasteboardItemIndex: $0.pasteboardItemIndex)
                 }
@@ -166,10 +167,10 @@ final class BuiltInAutomationAutomaticRunner {
                                 BuiltInAutomation.inputs(from: representations, workflow: workflow), workflow: workflow
                             )
                             try Task.checkCancellation()
-                            // An edited or removed definition cannot send a
-                            // stale notification after its computation finishes.
-                            guard await self.isSaved(workflow, generation: requestGeneration) else { return result }
                             if result.matchedConditions && result.requestsNotification {
+                                // Only an effect needs this recheck. An edited
+                                // definition cannot send a stale notification.
+                                guard await self.isSaved(workflow, generation: requestGeneration) else { return result }
                                 try await sendNotification(workflow.name)
                                 try Task.checkCancellation()
                             }
@@ -185,7 +186,23 @@ final class BuiltInAutomationAutomaticRunner {
     }
 
     private func isSaved(_ workflow: BuiltInAutomationWorkflow, generation request: UUID) -> Bool {
-        generation == request && BuiltInAutomationLibrary(defaults: defaults).workflows.contains(workflow)
+        generation == request && currentWorkflows().contains(workflow)
+    }
+
+    /// Captures and notification completions repeatedly inspect the same
+    /// saved definitions. Reuse their decoded values until the exact defaults
+    /// bytes change; edits from any window still take effect at the next read.
+    /// Cache invalid definitions as empty, and never retain oversized data.
+    private func currentWorkflows() -> [BuiltInAutomationWorkflow] {
+        guard let data = defaults.object(forKey: BuiltInAutomationLibrary.defaultsKey) as? Data,
+              data.count <= 4 * BuiltInAutomation.maximumBytes else {
+            savedDefinitions = nil
+            return []
+        }
+        if let savedDefinitions, savedDefinitions.data == data { return savedDefinitions.workflows }
+        let workflows = (try? BuiltInAutomationLibrary.decodeDefinitions(data)) ?? []
+        savedDefinitions = (data, workflows)
+        return workflows
     }
 
     private static func byteCount(_ capture: ClipboardCapture) -> Int {
