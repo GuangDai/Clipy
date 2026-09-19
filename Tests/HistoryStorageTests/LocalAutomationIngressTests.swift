@@ -92,7 +92,7 @@ struct LocalAutomationIngressTests {
         // exact cap, admission proceeds and the corrupt payload is detected;
         // one byte above it, the size rejection wins before payload hydration.
         let expected: ExternalFailure = byteCount > 24_000_000
-            ? .persistence(.invariantViolation) : .persistence(.corruptStoredValue)
+            ? .history(.capacityExceeded(.storageBytes)) : .persistence(.corruptStoredValue)
         for request in [
             LocalAutomationRequest.detailsEffective(locator: row.locator),
             .pasteEffective(locator: row.locator),
