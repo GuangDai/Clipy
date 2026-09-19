@@ -60,6 +60,46 @@ struct PanelSessionSelectionTests {
         surface.endSession()
     }
 
+    @Test func detailsPushRetiresPreviewBeforeFocusRestorationCanReopenIt() {
+        let preview = PreviewPaneState(autoOpenDelay: .seconds(3_600))
+        let surface = HistoryPanelSurfaceState(history: ScriptedHistory(), previewState: preview)
+        surface.beginSession(rows: rows)
+        defer { surface.endSession() }
+        preview.handleSelectionChange(rows[0].item)
+        preview.togglePreview(for: rows[0].item)
+        #expect(preview.isOpen)
+        var preparationRequests = 0
+        preview.onPreparationTargetChanged = { item in
+            if item != nil { preparationRequests += 1 }
+        }
+        var closed = false
+        preview.onFloatingPreviewTransition = { [weak preview] transition in
+            if transition == .hide {
+                closed = true
+                // FloatingPreviewPanel.dismiss returns key focus to the
+                // still-present main panel synchronously.
+                preview?.panelBecameKey()
+            }
+        }
+        surface.detailsPath.append(rows[0].item)
+        #expect(closed)
+        #expect(!preview.isOpen)
+        #expect(!preview.isBrowsingHistory)
+        #expect(preparationRequests == 0)
+        preview.handleSelectionChange(rows[1].item)
+        preview.togglePreview(for: rows[1].item)
+        preview.respondToMemoryPressure(.critical)
+        preview.respondToMemoryPressure(.normal)
+        #expect(!preview.isOpen)
+        #expect(preparationRequests == 0)
+
+        surface.detailsPath.removeAll()
+        #expect(preview.isBrowsingHistory)
+        #expect(!preview.isOpen, "Back does not manufacture a new preview intent")
+        preview.togglePreview(for: rows[1].item)
+        #expect(preview.previewedItem == rows[1].item)
+    }
+
     @Test func arrowsMoveAndClampInAuthoritativeDisplayOrder() {
         let newest = rows[0].item.id
         let middle = rows[1].item.id

@@ -352,6 +352,14 @@ screen facts. Hosted synthetic-frame evidence may prove this owner transition,
 but it does not prove physical display hot-plug, Spaces, Stage Manager, or a
 real multi-display matrix.
 
+Pushing the panel's Details navigation destination synchronously cancels
+pending floating-preview preparation and closes its window. Floating preview
+opening stays disabled while Details is present, including native focus-return
+callbacks and manual toggles; Escape therefore reaches the Details Back action.
+Returning to the list reallows preview opening for the next interaction without
+forcing it open. The Space Quick Look and preview-information popover retain
+their existing behavior.
+
 #### Background isolation
 
 - `ContentPreview` owns transient preview source selection, text/image

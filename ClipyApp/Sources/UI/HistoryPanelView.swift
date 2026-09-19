@@ -153,7 +153,13 @@ enum PanelFooterShortcutHints {
 /// all have the same lifetime and one monotonic applied generation.
 @MainActor @Observable
 final class HistoryPanelSurfaceState {
-    var detailsPath: [HistoryItemReference] = []
+    var detailsPath: [HistoryItemReference] = [] {
+        didSet {
+            // Retire the browsing pane synchronously before navigation or
+            // preview dismissal can transfer keyboard focus (UI-7).
+            previewState.setBrowsingHistory(detailsPath.isEmpty)
+        }
+    }
     var selection: HistoryItemID?
     /// The exact item the Space-triggered quick-look overlay renders.
     /// Reference-exact like the preview target and retired by the same

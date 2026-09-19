@@ -145,7 +145,8 @@ struct PreviewSelectionReconciliationTests {
     /// A revise commit evicts only the old exact reference. The ID-only list
     /// selection survives so the next authoritative row can retarget it to
     /// the new version, while stale details and preview content disappear.
-    @Test func receiptFirstRevisionRetargetsPreviewAndPurgesOldExactState() {
+    @Test(arguments: [false, true])
+    func receiptFirstRevisionRetargetsPreviewAndPurgesOldExactState(showingDetails: Bool) {
         let history = ScriptedHistory()
         let preview = PreviewPaneState(autoOpenDelay: .zero)
         let surface = HistoryPanelSurfaceState(
@@ -162,9 +163,13 @@ struct PreviewSelectionReconciliationTests {
             ),
             version: 1
         ).item
-        surface.detailsPath = [old, current, other]
         surface.selection = selectedID
-        preview.togglePreview(for: old)
+        if showingDetails {
+            surface.detailsPath = [old, current, other]
+        } else {
+            preview.togglePreview(for: old)
+        }
+        #expect(preview.isOpen == !showingDetails)
 
         let purge = HistorySurfacePurge(
             generation: 1,
@@ -172,27 +177,28 @@ struct PreviewSelectionReconciliationTests {
         )
         surface.apply(purge)
 
-        #expect(surface.detailsPath == [current, other])
+        #expect(surface.detailsPath == (showingDetails ? [current, other] : []))
         #expect(surface.selection == selectedID)
-        #expect(preview.isOpen)
-        #expect(preview.previewedItem == current)
+        #expect(preview.isOpen == !showingDetails)
+        #expect(preview.previewedItem == (showingDetails ? nil : current))
         #expect(surface.appliedPurgeGeneration == 1)
-        #expect(surface.detailsPurgeGeneration == 1)
-        #expect(preview.purgeGeneration == 1)
+        #expect(surface.detailsPurgeGeneration == (showingDetails ? 1 : 0))
+        #expect(preview.purgeGeneration == (showingDetails ? 0 : 1))
         #expect(surface.thumbnails.purgeGeneration == 1)
 
         // The same observation firing twice cannot advance any owner again.
         surface.apply(purge)
         #expect(surface.appliedPurgeGeneration == 1)
-        #expect(surface.detailsPurgeGeneration == 1)
-        #expect(preview.purgeGeneration == 1)
+        #expect(surface.detailsPurgeGeneration == (showingDetails ? 1 : 0))
+        #expect(preview.purgeGeneration == (showingDetails ? 0 : 1))
         #expect(surface.thumbnails.purgeGeneration == 1)
     }
 
     /// If authoritative observation advances the visible preview before the
     /// revise receipt arrives, applying that receipt must produce the same
     /// visible new reference rather than closing or rolling it back.
-    @Test func observationFirstRevisionKeepsTheSameNewPreviewResult() {
+    @Test(arguments: [false, true])
+    func observationFirstRevisionKeepsTheSameNewPreviewResult(showingDetails: Bool) {
         let history = ScriptedHistory()
         let preview = PreviewPaneState(autoOpenDelay: .zero)
         let surface = HistoryPanelSurfaceState(
@@ -201,12 +207,16 @@ struct PreviewSelectionReconciliationTests {
         )
         let old = row(version: 1).item
         let current = row(version: 2).item
-        surface.detailsPath = [old]
         surface.selection = selectedID
-        preview.togglePreview(for: old)
+        if showingDetails {
+            surface.detailsPath = [old]
+        } else {
+            preview.togglePreview(for: old)
+        }
+        #expect(preview.isOpen == !showingDetails)
 
         // This is the production Card 9A observation-before-receipt path.
-        preview.refreshOpenPreview(current)
+        if !showingDetails { preview.refreshOpenPreview(current) }
         surface.apply(
             HistorySurfacePurge(
                 generation: 1,
@@ -216,8 +226,8 @@ struct PreviewSelectionReconciliationTests {
 
         #expect(surface.detailsPath.isEmpty)
         #expect(surface.selection == selectedID)
-        #expect(preview.isOpen)
-        #expect(preview.previewedItem == current)
+        #expect(preview.isOpen == !showingDetails)
+        #expect(preview.previewedItem == (showingDetails ? nil : current))
     }
 
     /// An editor-owned authoritative advance replaces only the active path
@@ -288,7 +298,8 @@ struct PreviewSelectionReconciliationTests {
     /// `onChange` is latest-value observation, so two remove receipts can
     /// coalesce. A generation gap must reset this surface rather than leave
     /// sensitive state belonging to the skipped first purge.
-    @Test func skippedPurgeGenerationFailsClosedToWholeSurfaceReset() {
+    @Test(arguments: [false, true])
+    func skippedPurgeGenerationFailsClosedToWholeSurfaceReset(showingDetails: Bool) {
         let history = ScriptedHistory()
         let preview = PreviewPaneState(autoOpenDelay: .zero)
         let surface = HistoryPanelSurfaceState(
@@ -304,9 +315,13 @@ struct PreviewSelectionReconciliationTests {
             ),
             version: 1
         ).item
-        surface.detailsPath = [skippedItem, latestItem]
         surface.selection = skippedItem.id
-        preview.togglePreview(for: skippedItem)
+        if showingDetails {
+            surface.detailsPath = [skippedItem, latestItem]
+        } else {
+            preview.togglePreview(for: skippedItem)
+        }
+        #expect(preview.isOpen == !showingDetails)
 
         surface.apply(
             HistorySurfacePurge(
@@ -325,7 +340,8 @@ struct PreviewSelectionReconciliationTests {
     /// Request-time rows cannot prove whether off-query/page derived state is
     /// pinned. Clear Unpinned therefore retires navigation/preview/cache state
     /// owner-locally; the authoritative pinned row remains and can be reopened.
-    @Test func clearUnpinnedFailsClosedForRebuildableDerivedSurfaceState() {
+    @Test(arguments: [false, true])
+    func clearUnpinnedFailsClosedForRebuildableDerivedSurfaceState(showingDetails: Bool) {
         let history = ScriptedHistory()
         let preview = PreviewPaneState(autoOpenDelay: .zero)
         let surface = HistoryPanelSurfaceState(
@@ -341,9 +357,13 @@ struct PreviewSelectionReconciliationTests {
             ),
             version: 1
         ).item
-        surface.detailsPath = [pinned, unpinned]
         surface.selection = pinned.id
-        preview.togglePreview(for: pinned)
+        if showingDetails {
+            surface.detailsPath = [pinned, unpinned]
+        } else {
+            preview.togglePreview(for: pinned)
+        }
+        #expect(preview.isOpen == !showingDetails)
 
         surface.apply(
             HistorySurfacePurge(
@@ -357,14 +377,15 @@ struct PreviewSelectionReconciliationTests {
         #expect(!preview.isOpen)
         #expect(preview.previewedItem == nil)
         #expect(surface.detailsPurgeGeneration == 1)
-        #expect(preview.purgeGeneration == 1)
+        #expect(preview.purgeGeneration == (showingDetails ? 0 : 1))
         #expect(surface.thumbnails.purgeGeneration == 1)
     }
 
     /// Like a newly constructed details view, a newly constructed panel
     /// surface treats the owner's retained purge generation as history. The
     /// old Clear All is not replayed over navigation created afterward.
-    @Test func newPanelSurfaceDoesNotReplayItsBaselineClear() {
+    @Test(arguments: [false, true])
+    func newPanelSurfaceDoesNotReplayItsBaselineClear(showingDetails: Bool) {
         let history = ScriptedHistory()
         let preview = PreviewPaneState(autoOpenDelay: .zero)
         let surface = HistoryPanelSurfaceState(
@@ -373,24 +394,29 @@ struct PreviewSelectionReconciliationTests {
             baselinePurgeGeneration: 4
         )
         let laterItem = row(version: 1).item
-        surface.detailsPath = [laterItem]
         surface.selection = laterItem.id
-        preview.togglePreview(for: laterItem)
+        if showingDetails {
+            surface.detailsPath = [laterItem]
+        } else {
+            preview.togglePreview(for: laterItem)
+        }
+        #expect(preview.isOpen == !showingDetails)
 
         surface.apply(
             HistorySurfacePurge(generation: 4, scope: .all)
         )
 
-        #expect(surface.detailsPath == [laterItem])
+        #expect(surface.detailsPath == (showingDetails ? [laterItem] : []))
         #expect(surface.selection == laterItem.id)
-        #expect(preview.previewedItem == laterItem)
+        #expect(preview.previewedItem == (showingDetails ? nil : laterItem))
         #expect(surface.detailsPurgeGeneration == 0)
         #expect(surface.thumbnails.purgeGeneration == 0)
     }
 
     /// Remove scopes to one item; Clear resets the entire surface and fences
     /// a dwell task scheduled before the receipt-confirmed generation.
-    @Test func surfaceRemoveAndClearPurgeOnlyAfterAppliedGeneration() async {
+    @Test(arguments: [false, true])
+    func surfaceRemoveAndClearPurgeOnlyAfterAppliedGeneration(showingDetails: Bool) async {
         let history = ScriptedHistory()
         let preview = PreviewPaneState(autoOpenDelay: .zero)
         let surface = HistoryPanelSurfaceState(
@@ -407,21 +433,28 @@ struct PreviewSelectionReconciliationTests {
             version: 1
         ).item
 
-        surface.detailsPath = [removed, other]
         surface.selection = removed.id
-        preview.togglePreview(for: removed)
+        if showingDetails {
+            surface.detailsPath = [removed, other]
+        } else {
+            preview.togglePreview(for: removed)
+        }
+        #expect(preview.isOpen == !showingDetails)
         surface.apply(
             HistorySurfacePurge(generation: 1, scope: .item(removed.id))
         )
 
-        #expect(surface.detailsPath == [other])
+        #expect(surface.detailsPath == (showingDetails ? [other] : []))
         #expect(surface.selection == nil)
         #expect(!preview.isOpen)
-        #expect(surface.detailsPurgeGeneration == 1)
+        #expect(surface.detailsPurgeGeneration == (showingDetails ? 1 : 0))
 
-        surface.detailsPath = [other]
         surface.selection = other.id
-        preview.handleSelectionChange(other)
+        if showingDetails {
+            surface.detailsPath = [other]
+        } else {
+            preview.handleSelectionChange(other)
+        }
         surface.apply(HistorySurfacePurge(generation: 2, scope: .all))
         await Task.yield()
         await Task.yield()
@@ -431,8 +464,8 @@ struct PreviewSelectionReconciliationTests {
         #expect(!preview.isOpen)
         #expect(preview.previewedItem == nil)
         #expect(surface.appliedPurgeGeneration == 2)
-        #expect(surface.detailsPurgeGeneration == 2)
-        #expect(preview.purgeGeneration == 2)
+        #expect(surface.detailsPurgeGeneration == (showingDetails ? 2 : 1))
+        #expect(preview.purgeGeneration == (showingDetails ? 1 : 2))
         #expect(surface.thumbnails.purgeGeneration == 2)
     }
 }

@@ -15,7 +15,8 @@ struct SettingsClearSurfacePurgeTests {
     /// must still cross `HistoryViewState.clearAwaitingReceipt` so only a
     /// committed Clear can retire owner-local navigation, preview, thumbnail,
     /// and details state (review Card 9B).
-    @Test func clearIntentPurgesTheSharedSurfaceOnlyAfterACommittedReceipt() async throws {
+    @Test(arguments: [false, true])
+    func clearIntentPurgesTheSharedSurfaceOnlyAfterACommittedReceipt(showingDetails: Bool) async throws {
         let row = fixtureRow(
             id: "00000000-0000-0000-0000-000000009B90",
             title: "sensitive"
@@ -43,8 +44,12 @@ struct SettingsClearSurfacePurgeTests {
             previewState: preview
         )
         surface.selection = row.item.id
-        surface.detailsPath = [row.item]
-        preview.togglePreview(for: row.item)
+        if showingDetails {
+            surface.detailsPath = [row.item]
+        } else {
+            preview.togglePreview(for: row.item)
+        }
+        #expect(preview.isOpen == !showingDetails)
 
         state.activate()
         // Join the scripted public boundary before starting the wall-clock
@@ -60,8 +65,8 @@ struct SettingsClearSurfacePurgeTests {
         }
         #expect(state.surfacePurge == nil)
         #expect(surface.selection == row.item.id)
-        #expect(surface.detailsPath == [row.item])
-        #expect(preview.previewedItem == row.item)
+        #expect(surface.detailsPath == (showingDetails ? [row.item] : []))
+        #expect(preview.previewedItem == (showingDetails ? nil : row.item))
 
         do {
             _ = try await state.clearAwaitingReceipt(.all)
@@ -71,8 +76,8 @@ struct SettingsClearSurfacePurgeTests {
         }
         #expect(state.surfacePurge == nil)
         #expect(surface.selection == row.item.id)
-        #expect(surface.detailsPath == [row.item])
-        #expect(preview.previewedItem == row.item)
+        #expect(surface.detailsPath == (showingDetails ? [row.item] : []))
+        #expect(preview.previewedItem == (showingDetails ? nil : row.item))
 
         let committed = try await state.clearAwaitingReceipt(.all)
         guard case .committed(let commit) = committed else {

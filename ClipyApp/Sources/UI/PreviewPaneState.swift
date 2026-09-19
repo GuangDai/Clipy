@@ -112,6 +112,21 @@ final class PreviewPaneState {
     /// in-module panel lifecycle methods.
     private(set) var isAutoOpenEnabled = true
 
+    /// Details and its inline editor own focus and their own previews. This
+    /// eligibility is independent of AppKit key status: hiding a key side
+    /// pane returns focus to the main window and can synchronously re-arm it.
+    private(set) var isBrowsingHistory = true
+
+    func setBrowsingHistory(_ isBrowsing: Bool) {
+        guard isBrowsingHistory != isBrowsing else { return }
+        isBrowsingHistory = isBrowsing
+        guard !isBrowsing else { return }
+        cancelPendingAutoOpen()
+        cancelPendingPointerExit()
+        isInformationPresented = false
+        if isOpen { closePreview() }
+    }
+
     /// The user-preference half of the auto-open gate
     /// (`PanelAppearanceSettings.isPreviewAutoOpenEnabled`, pushed in by
     /// `HistoryPanelView`). Unlike `isAutoOpenEnabled` — the transient
@@ -283,6 +298,7 @@ final class PreviewPaneState {
     /// selection immediately; an open preview closes and stays closed
     /// (auto-open suppressed) until the selection changes.
     func togglePreview(for item: HistoryItemReference?) {
+        guard isBrowsingHistory else { return }
         cancelPendingAutoOpen(retainingPreparationFor: isOpen ? nil : item)
         if isOpen {
             closePreview()
@@ -510,6 +526,7 @@ final class PreviewPaneState {
     }
 
     private func scheduleAutoOpen(for item: HistoryItemReference) {
+        guard isBrowsingHistory else { return }
         // Selection observation can arrive after the native exit event. Keep
         // its current target for re-entry, without starting new work outside
         // the list or retargeting while preview controls are under the pointer.
@@ -526,6 +543,7 @@ final class PreviewPaneState {
             }
             guard !Task.isCancelled else { return }
             guard let self,
+                  self.isBrowsingHistory,
                   self.pendingAutoOpenItem == item,
                   !self.isPointerInteractionActive || self.pointerPresence.contains(.mainPanel),
                   self.isAutoOpenEnabled,

@@ -42,6 +42,25 @@ struct PreviewPaneStateTests {
         PreviewPaneState(autoOpenDelay: .zero)
     }
 
+    @Test func leavingBrowsingCancelsAlreadyQueuedDwell() async {
+        let state = makeState()
+        defer { state.panelClosed() }
+        let item = reference()
+        var transitions: [PreviewPaneState.FloatingPreviewTransition] = []
+        state.onFloatingPreviewTransition = { transitions.append($0) }
+        state.handleSelectionChange(item)
+        state.setBrowsingHistory(false)
+        state.panelBecameKey()
+        await Task.yield()
+        await Task.yield()
+        #expect(!state.isOpen)
+        #expect(transitions.isEmpty)
+        state.setBrowsingHistory(true)
+        state.handleSelectionChange(item, isExplicit: true)
+        await waitForScheduledDwell { state.isOpen }
+        #expect(state.previewedItem == item)
+    }
+
     @Test func crossingAnotherRowToReachPreviewControlsKeepsTheVisibleItem() {
         let state = PreviewPaneState(autoOpenDelay: .seconds(3_600))
         defer { state.panelClosed() }

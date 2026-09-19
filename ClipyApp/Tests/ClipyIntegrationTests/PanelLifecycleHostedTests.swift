@@ -21,6 +21,46 @@ import Testing
 @MainActor
 struct PanelLifecycleHostedTests {
 
+    @Test("Details retires a key floating preview and restores main-panel focus")
+    func detailsPushRetiresKeyPreviewWithoutEndingSession() async throws {
+        let source = try await ComposedSupport.openMemoryHistory()
+        _ = try await source.perform(.capture(ComposedSupport.textCapture(
+            "details-preview-focus", observedAt: Date(), source: nil
+        )))
+        let page = try await source.browse(.init(kind: .recent, limit: 1))
+        let item = try #require(page.rows.first).item
+        let composition = AppComposition.makeForTesting(
+            history: source,
+            adapter: PasteboardAdapter(pasteboard: ComposedSupport.makePasteboard()),
+            observerPollInterval: 60,
+            initialCaptureAccessBehavior: .allowed,
+            captureAccessBehaviorProvider: { .allowed }
+        )
+        let appDelegate = AppDelegate()
+        appDelegate.installCompositionForTesting(composition)
+        defer { appDelegate.closePanel(); composition.stop() }
+        appDelegate.openPanelForTesting()
+        let panel = try #require(appDelegate.panelForTesting)
+        let surface = try #require(appDelegate.panelSurfaceState)
+        let generation = surface.sessionGeneration
+        appDelegate.previewState.handleSelectionChange(item)
+        appDelegate.previewState.togglePreview(for: item)
+        let previewPanel = try #require(panel.childWindows?.compactMap { $0 as? FloatingPreviewPanel }.first)
+        previewPanel.makeKey()
+        try #require(previewPanel.isKeyWindow)
+
+        surface.detailsPath.append(item)
+        #expect(!previewPanel.isPresented)
+        #expect(!previewPanel.isVisible)
+        #expect(panel.isKeyWindow)
+        #expect(panel.isPresented)
+        #expect(!appDelegate.previewState.isOpen)
+        await panel.waitForDeferredFocusLossCloseForTesting()
+        #expect(surface.isSessionActive)
+        #expect(surface.sessionGeneration == generation)
+        #expect(surface.detailsPath == [item])
+    }
+
     /// One settled Escape closes browsing even with a nonempty query.
     /// Editor/Details retain their own dismissal and dirty-draft confirmation.
     @Test("settled list-root Escape closes immediately with active search")
