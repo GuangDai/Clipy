@@ -42,7 +42,7 @@ struct MultiItemPresentationTests {
         let preview = try await DetailsRepresentationPresentation.load(
             second, metadata: secondMetadata, history: history, renderer: ContentPreview()
         )
-        #expect(preview == .plainText("second edited"))
+        #expect(preview.text?.text == "second edited")
     }
 
     @Test func editorCannotHideTheLastFormatOfOneItemWhileAnotherRemainsVisible() async throws {

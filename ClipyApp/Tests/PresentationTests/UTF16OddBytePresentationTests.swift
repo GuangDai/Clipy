@@ -22,7 +22,8 @@ struct UTF16OddBytePresentationTests {
         let valid = HistoryRepresentation(typeIdentifier: fixture.type, bytes: fixture.valid)
         let codec = try #require(EditorTextCodec.matching(valid))
         #expect(codec.decode(valid.bytes) == "A")
-        #expect(DetailsRepresentationPresentation.resolve(valid) == .plainText("A"))
+        let detailsPreview = await renderDetailsRepresentationForTest(valid)
+        #expect(detailsPreview.text?.text == "A")
         let renderer = ContentPreview()
         let validPreview = await renderer.renderHistoryPane([
             PreviewRepresentation(typeIdentifier: fixture.type, bytes: fixture.valid),
@@ -38,7 +39,7 @@ struct UTF16OddBytePresentationTests {
         )
         #expect(EditorTextCodec.matching(malformed) == nil)
         #expect(codec.decode(malformed.bytes) == nil)
-        #expect(DetailsRepresentationPresentation.resolve(malformed) == .metadataOnly)
+        #expect(await renderDetailsRepresentationForTest(malformed) == .metadataOnly)
         let malformedPreview = await renderer.renderHistoryPane([
             PreviewRepresentation(typeIdentifier: fixture.type, bytes: malformed.bytes),
         ])

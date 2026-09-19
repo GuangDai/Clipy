@@ -28,7 +28,7 @@ struct DetailsLazyRepresentationTests {
     }
 
     @Test(arguments: ["public.utf8-plain-text", "public.utf16-plain-text", "public.utf16-external-plain-text"])
-    func oversizedPlainTextMetadataRejectsBeforeTheEditorCodecReadsBytes(type: String) async throws {
+    func oversizedPlainTextMetadataRejectsBeforeTheRendererReadsBytes(type: String) async throws {
         // Metadata demand is a UI decision. An unscripted read would fail;
         // no 64 MiB payload allocation is needed to prove zero read demand.
         let history = ScriptedHistory()
@@ -63,7 +63,8 @@ struct DetailsLazyRepresentationTests {
             let presentation = try await DetailsRepresentationPresentation.load(
                 request, metadata: metadata, history: history, renderer: ContentPreview()
             )
-            #expect(presentation == .plainText(expected, wasTruncated: basis == .canonical))
+            #expect(presentation.text?.text.utf8.elementsEqual(expected.utf8) == true)
+            #expect(presentation.text?.wasTruncated == (basis == .canonical))
         }
         #expect(await history.requests.map(\.basis) == [.canonical, .effective])
         let original = try await history.representation(HistoryRepresentationRequest(
@@ -121,7 +122,7 @@ struct DetailsLazyRepresentationTests {
             HistoryRepresentationRequest(item: latest.item, basis: .effective, typeIdentifier: type),
             metadata: latest.effective[0], history: store, renderer: ContentPreview()
         )
-        #expect(retried == .plainText("latest"))
+        #expect(retried.text?.text == "latest")
     }
 
     private func capture(type: String, bytes: Data) async throws -> (SQLiteHistory, HistoryItemReference) {

@@ -70,6 +70,10 @@ struct LocalAutomationIngressTests {
         let row = try #require(try await page(fixture).rows.first)
         try await fixture.history.grantCapability(.readEffectiveContent, to: credential.connection)
         try await fixture.history.authority.withTestDatabase { authority in
+            // This owner test deliberately creates an inline-length mismatch;
+            // production SQL rejects it before a read could exercise the cap.
+            try authority.database.execute("PRAGMA ignore_check_constraints = ON")
+            defer { try? authority.database.execute("PRAGMA ignore_check_constraints = OFF") }
             try authority.database.writeTransaction {
                 // Keep current scalar descriptors coherent, but leave the
                 // original tiny inline payload: hydrating it must fail.

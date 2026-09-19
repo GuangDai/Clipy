@@ -10,7 +10,11 @@ struct SQLiteDatabaseTests {
     @Test func embeddedNULPathCannotOpenAnUnintendedDatabase() throws {
         let directory = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
-        let url = directory.appendingPathComponent("history.sqlite\0-other.sqlite")
+        let url = try #require(URL(
+            string: directory.appendingPathComponent("history.sqlite").absoluteString + "%00-other.sqlite",
+            encodingInvalidCharacters: false
+        ))
+        #expect(url.path(percentEncoded: false).utf8.contains(0))
         #expect(throws: HistoryFailure.persistence(.openStore)) {
             try SQLiteDatabase(url: url)
         }

@@ -2,12 +2,66 @@ import AppKit
 import ContentPreview
 import Darwin
 import SwiftUI
+@testable import HistoryCore
 @testable import ClipyApp
 import Testing
 
 @MainActor
 @Suite(.serialized)
 struct PreviewTextLayoutTests {
+    @Test func detailsLaysOutHugeCharacterAsLazyBoundedTextLeaves() async throws {
+        let source = "e" + String(repeating: "\u{301}", count: 100_000)
+        let presentation = await renderDetailsRepresentationForTest(
+            HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(source.utf8))
+        )
+        let text = try #require(presentation.text)
+        #expect(source.count == 1)
+        #expect(!text.wasTruncated, "The 500-Character contract must preserve this complete Character")
+        #expect(text.displaySegments.joined().utf8.elementsEqual(source.utf8))
+        #expect(text.displaySegments.allSatisfy { $0.utf16.count <= 64 })
+
+        #if DEBUG
+        var preview = DetailsTextPreview(text: text, accessibilityID: "clipy.details.text-preview.fixture")
+        var materialized: Set<Int> = []
+        var materializedGroups: Set<Int> = []
+        preview.onSegmentMaterialized = { materialized.insert($0) }
+        preview.onGroupMaterialized = { materializedGroups.insert($0) }
+        #else
+        let preview = DetailsTextPreview(text: text, accessibilityID: "clipy.details.text-preview.fixture")
+        #endif
+        // Match Details' outer scroll and nested content/representation
+        // stacks. A renderer-only test cannot catch accidentally joining the
+        // segments into one native Text, or eagerly materializing every group.
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 480),
+            styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let host = NSHostingView(rootView: ScrollView {
+            VStack(alignment: .leading, spacing: PanelTheme.spacingLarge) {
+                Text("Details")
+                VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
+                    Text("Text representation")
+                    preview.padding(.vertical, PanelTheme.spacingMedium)
+                }
+                .padding(PanelTheme.spacingSmall)
+            }
+            .padding(PanelTheme.spacingLarge)
+        })
+        host.sizingOptions = []
+        window.contentView = host
+        window.orderFront(nil)
+        host.layoutSubtreeIfNeeded()
+        host.displayIfNeeded()
+        #if DEBUG
+        #expect(!materialized.isEmpty)
+        #expect(materialized.count < text.displaySegments.count)
+        #expect(!materializedGroups.isEmpty)
+        #expect(materializedGroups.count < text.displaySegmentGroups.count,
+                "Details' outer scroll must preserve lazy layout for a very large Character")
+        #expect(materialized.allSatisfy { text.displaySegments[$0].utf16.count <= 64 })
+        #endif
+    }
+
     @Test func swiftUITextWrapsAtTheAvailableWidthAndUpdatesWithoutAFieldEditor() async throws {
         let source = String(repeating: "Café e\u{301} selectable words 中文。 ", count: 8)
         let measured = PreviewTextSizeCapture()

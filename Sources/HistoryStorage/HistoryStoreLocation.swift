@@ -20,7 +20,9 @@ internal final class HistoryStoreLocation: Sendable {
         case .persistent(let storeURL):
             // Native file/SQLite APIs consume NUL-terminated paths. Reject a
             // path they would truncate before deriving its blob namespace.
-            guard storeURL.isFileURL, !storeURL.path.utf8.contains(0) else {
+            // The legacy .path property can already truncate a decoded NUL;
+            // inspect the full decoded URL path before filesystem conversion.
+            guard storeURL.isFileURL, !storeURL.path(percentEncoded: false).utf8.contains(0) else {
                 throw HistoryFailure.persistence(.openStore)
             }
             databaseURL = storeURL.standardizedFileURL

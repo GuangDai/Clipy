@@ -337,11 +337,19 @@ final class HistoryViewState {
     /// old selection cannot paste a hidden row while SwiftUI is still
     /// reconciling the filter change (01 §5.6; review Card 14A).
     var displayedRows: [HistoryRow] {
-        // History already orders both recent and search pages pinned-first
-        // (03b §8), including backward pagination. Preserve that order and
-        // share the held array for the common unfiltered display.
-        guard showsPinnedOnly || typeFilter != .all else { return rows }
-        return rows.filter { isDisplayed($0) }
+        // Keep the UI's stable pinned/recency lanes even while supplied rows
+        // are interleaved. HistoryListView reuses this snapshot for a render.
+        var displayed: [HistoryRow] = []
+        displayed.reserveCapacity(rows.count)
+        for row in rows where row.pinnedPosition != nil && isDisplayed(row) {
+            displayed.append(row)
+        }
+        if !showsPinnedOnly {
+            for row in rows where row.pinnedPosition == nil && isDisplayed(row) {
+                displayed.append(row)
+            }
+        }
+        return displayed
     }
 
     /// Keyboard actions resolve the current row without allocating the

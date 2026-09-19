@@ -8,6 +8,23 @@ import Testing
 @testable import ClipyApp
 
 struct DetailsPreviewArtifactTests {
+    @Test func hugeFinalCharacterKeepsEveryScalarWithinTheDetailsExcerpt() async throws {
+        let expected = String(repeating: "x", count: 499) + "e" + String(repeating: "\u{301}", count: 20_000)
+        let bytes = Data((expected + "tail").utf8)
+        let (history, request, metadata) = try await capture(bytes, type: "public.utf8-plain-text")
+        let preview = try await DetailsRepresentationPresentation.load(
+            request, metadata: metadata, history: history, renderer: ContentPreview()
+        )
+        let text = try #require(preview.text)
+        #expect(text.text.count == 500)
+        #expect(text.wasTruncated)
+        #expect(text.text.utf8.elementsEqual(expected.utf8))
+        #expect(text.displaySegments.joined().utf8.elementsEqual(expected.utf8))
+        #expect(text.displaySegments.allSatisfy { $0.utf16.count <= 512 })
+        #expect(text.displaySegmentGroups.allSatisfy { $0.count <= 8 })
+        #expect(try await history.representation(request).bytes == bytes)
+    }
+
     @Test func unsupportedDocumentKeepsMetadataAndOriginalBytes() async throws {
         let bytes = Data("opaque document bytes".utf8)
         let (history, request, metadata) = try await capture(bytes, type: "com.adobe.pdf")
@@ -54,7 +71,8 @@ struct DetailsPreviewArtifactTests {
         let preview = try await DetailsRepresentationPresentation.load(
             request, metadata: metadata, history: history, renderer: ContentPreview()
         )
-        #expect(preview == .plainText(String(repeating: "x", count: 500), wasTruncated: count > 500))
+        #expect(preview.text?.text == String(repeating: "x", count: 500))
+        #expect(preview.text?.wasTruncated == (count > 500))
         let exported = try await history.representation(request)
         #expect(exported.bytes == bytes)
     }
