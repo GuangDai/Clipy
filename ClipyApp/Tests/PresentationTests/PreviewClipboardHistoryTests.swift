@@ -105,14 +105,19 @@ struct PreviewClipboardHistoryTests {
         }
     }
 
-    /// `details` and `pastePayload` throw `.notFound` for any ID — the
+    /// Metadata, details and paste payload reads throw `.notFound` for any ID — the
     /// preview adapter scripts no content lineage.
-    @Test func detailsAndPastePayloadThrowNotFound() async throws {
+    @Test func contentReadsThrowNotFound() async throws {
         let id = HistoryItemID(
             rawValue: UUID(uuidString: "00000000-0000-0000-0000-0000000000F2")!
         )
         await #expect(throws: HistoryFailure.notFound(id)) {
             try await PreviewClipboardHistory.populated.details(for: id)
+        }
+        await #expect(throws: HistoryFailure.notFound(id)) {
+            try await PreviewClipboardHistory.populated.representationMetadata(for: .init(
+                id: id, contentVersion: ContentVersion(rawValue: 1)
+            ))
         }
         await #expect(throws: HistoryFailure.notFound(id)) {
             try await PreviewClipboardHistory.populated.pastePayload(for: id)

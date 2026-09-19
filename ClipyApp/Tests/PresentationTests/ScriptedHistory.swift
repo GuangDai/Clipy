@@ -263,6 +263,16 @@ actor ScriptedHistory: ClipboardHistory {
         throw HistoryFailure.notFound(id)
     }
 
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        let metadata = try await details(for: item.id)
+        guard metadata.item == item else {
+            throw HistoryFailure.staleContent(expected: item.contentVersion, current: metadata.item.contentVersion)
+        }
+        return metadata.effective
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         throw HistoryFailure.notFound(id)
     }
@@ -365,6 +375,16 @@ actor ThumbnailScriptHistory: ClipboardHistory {
         throw HistoryFailure.notFound(id)
     }
 
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        let metadata = try await details(for: item.id)
+        guard metadata.item == item else {
+            throw HistoryFailure.staleContent(expected: item.contentVersion, current: metadata.item.contentVersion)
+        }
+        return metadata.effective
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         throw HistoryFailure.notFound(id)
     }
@@ -409,8 +429,8 @@ actor ThumbnailScriptHistory: ClipboardHistory {
 /// A scripted `ClipboardHistory` for `PreviewContentLoader` fence tests
 /// (audit docs/reviews/2026-08-20-clipy-maccy-audit/
 /// 02-spec-implementation.md §SPEC-IMPL-007;
-/// 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1): `details(for:)`
-/// records the request, then SUSPENDS until the test resumes it. The fixture's
+/// 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1): the exact-version
+/// metadata read reuses `details(for:)`, which records the request, then SUSPENDS until the test resumes it. The fixture's
 /// `PastePayload` supplies metadata and separately requested bytes, but never
 /// crosses the metadata read. Reads complete in REVERSE order, with no sleeps
 /// on the deciding path. One in-flight read per item ID: the pane never
@@ -483,6 +503,16 @@ actor PausablePreviewHistory: ClipboardHistory {
         throw HistoryFailure.notFound(id)
     }
 
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        let metadata = try await details(for: item.id)
+        guard metadata.item == item else {
+            throw HistoryFailure.staleContent(expected: item.contentVersion, current: metadata.item.contentVersion)
+        }
+        return metadata.effective
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         payloadRequests.append(id)
         let payload = try await withCheckedThrowingContinuation { continuation in
@@ -499,7 +529,10 @@ actor PausablePreviewHistory: ClipboardHistory {
     func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
         representationRequests.append(request)
         guard let payload = payloadsByID[request.item.id], payload.item == request.item,
-              let value = payload.representations.first(where: { $0.typeIdentifier == request.typeIdentifier }) else {
+              let value = payload.representations.first(where: {
+                  $0.pasteboardItemIndex == request.pasteboardItemIndex
+                      && $0.typeIdentifier == request.typeIdentifier
+              }) else {
             Issue.record("Preview requested representation bytes absent from its exact fixture")
             throw HistoryFailure.notFound(request.item.id)
         }
@@ -526,7 +559,8 @@ actor PausablePreviewHistory: ClipboardHistory {
 /// fixture; the metadata read returns no representation bytes to the loader.
 func previewMetadata(for payload: PastePayload) -> HistoryDetails {
     let values = payload.representations.map {
-        HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.bytes.count)
+        HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.bytes.count,
+            pasteboardItemIndex: $0.pasteboardItemIndex)
     }
     return HistoryDetails(
         item: payload.item, title: "", canonical: values, effective: values, effectiveMatchesCanonical: true,

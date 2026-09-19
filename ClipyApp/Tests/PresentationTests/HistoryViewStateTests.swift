@@ -1905,6 +1905,16 @@ private actor PausableMutationHistory: ClipboardHistory {
         throw HistoryFailure.notFound(id)
     }
 
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        let metadata = try await details(for: item.id)
+        guard metadata.item == item else {
+            throw HistoryFailure.staleContent(expected: item.contentVersion, current: metadata.item.contentVersion)
+        }
+        return metadata.effective
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         throw HistoryFailure.notFound(id)
     }

@@ -74,6 +74,15 @@ public protocol ClipboardHistory: Sendable {
         for id: HistoryItemID
     ) async throws -> HistoryDetails
 
+    /// Current Effective representation descriptors at exactly the supplied
+    /// Content Version, preserving type spelling and pasteboard item order.
+    /// This purpose-specific read opens no payloads and does not enumerate
+    /// retained revision summaries. A missing item throws `.notFound`; a
+    /// changed Content Version throws `.staleContent`. V2-09 §5.
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata]
+
     /// Up to 32 application copy summaries for one item, read only when
     /// requested. An occurrence-count change expires the page so an offset
     /// cannot silently skip/repeat sources after recency reorders them.

@@ -349,6 +349,12 @@ actor PostInitialObservationSuspendingHistory: ClipboardHistory {
         try await base.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
     }
 
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        try await base.representationMetadata(for: item)
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         try await base.details(for: id)
     }

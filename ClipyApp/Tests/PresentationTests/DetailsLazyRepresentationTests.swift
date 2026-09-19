@@ -178,6 +178,12 @@ private actor DetailsReadRecorder: ClipboardHistory {
         try await history.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
     }
 
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        try await history.representationMetadata(for: item)
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails { try await history.details(for: id) }
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload { try await history.pastePayload(for: id) }
     func thumbnail(for item: HistoryItemReference, pixels: PixelSize) async throws -> ThumbnailPayload? {

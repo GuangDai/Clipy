@@ -3,7 +3,7 @@
 /// 02-spec-implementation.md §SPEC-IMPL-007; 05-recommended-target-design.md
 /// §4.1 PREVIEW-FENCE-1) and its bounded off-MainActor image decode outcome
 /// (01-standards.md §S-2; 02 §SPEC-IMPL-002). Driven through
-/// `PausablePreviewHistory`, which suspends every `pastePayload(for:)` read until
+/// `PausablePreviewHistory`, which suspends every exact-version metadata read until
 /// the test resumes it, so reverse completion order is deterministic — no
 /// sleeps on the deciding path.
 @testable import ContentPreview
@@ -393,10 +393,9 @@ struct PreviewContentLoaderTests {
         #expect(loader.phase == .unsupported)
     }
 
-    /// The version half of the fence: `pastePayload(for:)` reads by ID, so a
-    /// revision that advanced the Content Version mid-load answers with the
-    /// CURRENT reference — the loader must not publish it under the
-    /// requested (now stale) one (04 §9's caller-side fence convention).
+    /// A revision that advances mid-load makes the exact-version metadata
+    /// read reject the stale request. The loader settles without publishing
+    /// the newer content under the old reference (04 §9).
     @Test func revisedPayloadIsNotAppliedUnderTheRequestingReference() async {
         let refV1 = reference("00000000-0000-0000-0000-0000000001D1", version: 1)
         let refV2 = reference("00000000-0000-0000-0000-0000000001D1", version: 2)
@@ -412,6 +411,7 @@ struct PreviewContentLoaderTests {
         _ = await task.value
         #expect(loader.phase == .failed)
         #expect(!loader.canRetryFailure)
+        #expect(await history.representationRequests.isEmpty)
     }
 
     /// When observation advances the selected row from v1 to v2, beginning
@@ -760,6 +760,16 @@ private actor OverlappingPreviewHistory: ClipboardHistory {
         throw HistoryFailure.notFound(id)
     }
 
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        let metadata = try await details(for: item.id)
+        guard metadata.item == item else {
+            throw HistoryFailure.staleContent(expected: item.contentVersion, current: metadata.item.contentVersion)
+        }
+        return metadata.effective
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         let payload: PastePayload = try await withCheckedThrowingContinuation { continuation in
             continuations.append(continuation)
@@ -774,7 +784,10 @@ private actor OverlappingPreviewHistory: ClipboardHistory {
 
     func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
         guard let payload = payloads[request.item],
-              let value = payload.representations.first(where: { $0.typeIdentifier == request.typeIdentifier }) else {
+              let value = payload.representations.first(where: {
+                  $0.pasteboardItemIndex == request.pasteboardItemIndex
+                      && $0.typeIdentifier == request.typeIdentifier
+              }) else {
             throw HistoryFailure.notFound(request.item.id)
         }
         return value

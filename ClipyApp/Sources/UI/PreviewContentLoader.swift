@@ -23,11 +23,11 @@ import Observation
 ///
 /// Fence law: a load captures its `HistoryItemReference` at start; after
 /// EVERY await it re-checks cancellation AND that its reference is still
-/// the requested one. The metadata must also carry that same
-/// reference: `details(for:)` reads by ID, so a concurrent revision that
-/// advanced the Content Version is invisible to the request — the
-/// `details.item == item` check pins the version before an exact representation request (04 §9's caller-side fence
-/// convention). A late or superseded result is DISCARDED without touching
+/// the requested one. `representationMetadata(for:)` and representation reads
+/// both require that exact durable Content Version (04 §9); a concurrent
+/// revision rejects the stale request before payload access. Metadata reads
+/// do not traverse the item's revision history. A late or superseded result
+/// is DISCARDED without touching
 /// any published state (the newer load owns the phase and applied content).
 /// Starting a new exact reference invalidates the previous publication
 /// before the first suspension, so old sensitive content is not retained as
@@ -262,9 +262,8 @@ final class PreviewContentLoader {
                   requestedItem == item
             else { return }
             guard let outcome else {
-                // The ID-based payload read raced a revision. Observation
-                // retargets the current exact reference; this stale episode
-                // must settle instead of retaining a permanent spinner.
+                // Observation retargets the current exact reference; this
+                // superseded request must not retain a permanent spinner.
                 phase = .failed
                 return
             }
@@ -426,14 +425,13 @@ final class PreviewContentLoader {
         textConfiguration: PreviewTextConfiguration,
         isCurrent: @MainActor @Sendable () -> Bool
     ) async throws -> PreviewOutcome? {
-        let details = try await history.details(for: item.id)
+        let metadata = try await history.representationMetadata(for: item)
         try Task.checkCancellation()
-        guard details.item == item else { return nil }
         guard await isCurrent() else { return nil }
         // Select formats within one constituent item at a time. Passing all
         // items together would combine sibling formats and duplicate exact
         // identifiers in the renderer's single-item source selection.
-        let grouped = Dictionary(grouping: details.effective, by: \.pasteboardItemIndex)
+        let grouped = Dictionary(grouping: metadata, by: \.pasteboardItemIndex)
         var outcome = PreviewOutcome.unavailable(.unsupported)
         for index in grouped.keys.sorted() {
             let sources = ContentPreview.prepareHistoryPane((grouped[index] ?? []).map {

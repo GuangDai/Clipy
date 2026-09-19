@@ -153,11 +153,16 @@ SQL 使用唯一的置顶 ordinal 索引；位移先移入不相交的非负临�
 界面继续调用 `load(item)`、Copy、Save As 等用户动作。PreviewContentLoader 隐藏
 表示选择、History 读取与取消；renderer 只接收所需的不可变值。
 
-内部需要的能力形状是：
+菜单与预览使用 `ClipboardHistory.representationMetadata(for: HistoryItemReference)`
+读取当前 Effective 的 `[HistoryRepresentationMetadata]`。它在同一 Authority 只读事务中
+校验精确 ContentVersion，读取当前表示及必要的 Canonical 子集依据，不遍历非活动修订、
+不读取 payload。查询数不随保留的修订数量增长；取消的排队请求在读取前退出。
+完整详情仍由 `details(for:)` 提供。两者不共享常驻 metadata 缓存。
+
+内容读取的能力形状仍是：
 
 ```swift
-// 示意，不是新增已发布 API。
-representationMetadata(for: itemReference) -> [RepresentationDescriptor]
+// 示意，不是新增已发布 range API。
 read(contentReference, range: requestedRange, maximumBytes: limit) -> Data
 pastePayload(for: itemID) -> PastePayload
 ```

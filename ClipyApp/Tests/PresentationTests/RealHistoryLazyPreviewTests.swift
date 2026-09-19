@@ -58,6 +58,8 @@ struct RealHistoryLazyPreviewTests {
         await loader.load(item: item)
         #expect(loader.phase == .content(.text("selected text")))
         let reads = await history.reads()
+        #expect(reads.metadata == [item])
+        #expect(reads.details == 0)
         #expect(reads.paste == 0)
         #expect(reads.representations == [HistoryRepresentationRequest(
             item: item, basis: .effective, typeIdentifier: "public.utf8-plain-text"
@@ -77,6 +79,8 @@ struct RealHistoryLazyPreviewTests {
         #expect(loader.phase == (overBudget ? .failed : .unsupported))
         #expect(!loader.canRetryFailure)
         let reads = await history.reads()
+        #expect(reads.metadata == [item])
+        #expect(reads.details == 0)
         #expect(reads.paste == 0)
         #expect(reads.representations.isEmpty)
     }
@@ -92,6 +96,8 @@ struct RealHistoryLazyPreviewTests {
         await loader.load(item: item)
         #expect(loader.phase == .failed)
         let reads = await history.reads()
+        #expect(reads.metadata == [item])
+        #expect(reads.details == 0)
         #expect(reads.representations.map(\.typeIdentifier) == ["public.png"])
         #expect(reads.paste == 0)
     }
@@ -108,6 +114,8 @@ struct RealHistoryLazyPreviewTests {
         await loader.load(item: item)
         #expect(loader.phase == .content(.text("valid fallback")))
         let reads = await history.reads()
+        #expect(reads.metadata == [item])
+        #expect(reads.details == 0)
         #expect(reads.representations.map(\.typeIdentifier) == ["public.utf16-plain-text", "public.utf8-plain-text"])
         #expect(reads.paste == 0)
     }
@@ -133,11 +141,13 @@ private actor PreviewReadRecorder: ClipboardHistory {
 
     private let history: SQLiteHistory
     private var pasteRequests = 0
+    private var detailsRequests = 0
+    private var metadataRequests: [HistoryItemReference] = []
     private var representationRequests: [HistoryRepresentationRequest] = []
 
     init(_ history: SQLiteHistory) { self.history = history }
-    func reads() -> (paste: Int, representations: [HistoryRepresentationRequest]) {
-        (pasteRequests, representationRequests)
+    func reads() -> (metadata: [HistoryItemReference], details: Int, paste: Int, representations: [HistoryRepresentationRequest]) {
+        (metadataRequests, detailsRequests, pasteRequests, representationRequests)
     }
     func perform(_ action: HistoryAction) async throws -> HistoryReceipt { try await history.perform(action) }
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage { try await history.browse(request) }
@@ -150,7 +160,17 @@ private actor PreviewReadRecorder: ClipboardHistory {
         try await history.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
     }
 
-    func details(for id: HistoryItemID) async throws -> HistoryDetails { try await history.details(for: id) }
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        metadataRequests.append(item)
+        return try await history.representationMetadata(for: item)
+    }
+
+    func details(for id: HistoryItemID) async throws -> HistoryDetails {
+        detailsRequests += 1
+        return try await history.details(for: id)
+    }
     func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
         representationRequests.append(request)
         return try await history.representation(request)

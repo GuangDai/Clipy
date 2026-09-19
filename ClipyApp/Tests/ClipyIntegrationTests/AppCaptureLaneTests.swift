@@ -714,6 +714,12 @@ private actor FirstCaptureLowDiskFailingHistory: ClipboardHistory {
         try await base.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
     }
 
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        try await base.representationMetadata(for: item)
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         try await base.details(for: id)
     }
@@ -887,6 +893,12 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
         for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
     ) async throws -> HistoryCopySourcePage {
         try await base.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
+    }
+
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        try await base.representationMetadata(for: item)
     }
 
     func details(for id: HistoryItemID) async throws -> HistoryDetails {

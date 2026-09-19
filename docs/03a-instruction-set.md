@@ -127,6 +127,10 @@ public protocol ClipboardHistory: Sendable {
         for id: HistoryItemID
     ) async throws -> HistoryDetails
 
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata]
+
     func pastePayload(
         for id: HistoryItemID
     ) async throws -> PastePayload

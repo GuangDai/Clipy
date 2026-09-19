@@ -185,7 +185,14 @@ struct HistoryRowView: View {
             } catch is CancellationError { }
             catch {
                 guard !Task.isCancelled else { return }
-                openOptionsFailure = (error as? HistoryOpenFailure) ?? .unavailable
+                if let failure = error as? HistoryFailure {
+                    switch failure {
+                    case .notFound, .staleContent: openOptionsFailure = .changed
+                    default: openOptionsFailure = .unavailable
+                    }
+                } else {
+                    openOptionsFailure = (error as? HistoryOpenFailure) ?? .unavailable
+                }
                 isPreparingOpenOptions = false
             }
         }

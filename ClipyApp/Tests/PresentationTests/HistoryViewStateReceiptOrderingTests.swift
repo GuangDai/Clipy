@@ -273,6 +273,12 @@ private actor ReceiptOrderedHistory: ClipboardHistory {
         try await backing.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
     }
 
+    func representationMetadata(
+        for item: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        try await backing.representationMetadata(for: item)
+    }
+
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
         try await backing.details(for: id)
     }

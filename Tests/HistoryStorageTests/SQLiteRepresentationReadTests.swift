@@ -6,6 +6,101 @@ import Testing
 @testable import HistoryStorage
 
 struct SQLiteRepresentationReadTests {
+    @Test func effectiveMetadataIgnoresInactiveRevisionMetadataAndAllPayloads() async throws {
+        let fixture = try await makeFixture()
+        let expected = try await fixture.history.details(for: fixture.current.id).effective
+        let before = try await fixture.history.usage()
+        for ordinal in [0, 1, 2] {
+            for type in ["public.png", "public.utf8-plain-text"] {
+                try await fixture.history.authority.makePayloadUnavailable(
+                    itemID: fixture.current.id, revisionOrdinal: ordinal, typeIdentifier: type
+                )
+            }
+        }
+        try await fixture.history.authority.withTestDatabase { authority in
+            // Details must read this retained revision's title. Source
+            // selection has no use for it and must not scan old revisions.
+            try authority.database.execute("""
+                UPDATE contents SET titleUTF8=? WHERE itemID=? AND revisionOrdinal=1
+                """, bindings: [.blob(Data([0xFF])), .text(fixture.current.id.rawValue.uuidString)])
+        }
+        #expect(try await fixture.history.representationMetadata(for: fixture.current) == expected)
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await fixture.history.details(for: fixture.current.id)
+        }
+        #expect(try await fixture.history.usage() == before)
+    }
+
+    @Test func effectiveMetadataRejectsStaleAndRemovedReferences() async throws {
+        let fixture = try await makeFixture()
+        await #expect(throws: HistoryFailure.staleContent(
+            expected: fixture.original.contentVersion, current: fixture.current.contentVersion
+        )) {
+            try await fixture.history.representationMetadata(for: fixture.original)
+        }
+        _ = try await fixture.history.perform(.remove(fixture.current.id))
+        await #expect(throws: HistoryFailure.notFound(fixture.current.id)) {
+            try await fixture.history.representationMetadata(for: fixture.current)
+        }
+    }
+
+    @Test func cancelledMetadataAndDetailsReadsStopBeforeMalformedValues() async throws {
+        let fixture = try await makeFixture()
+        try await fixture.history.authority.withTestDatabase { authority in
+            try authority.database.execute("UPDATE history_items SET titleUTF8=?",
+                                           bindings: [.blob(Data([0xFF]))])
+        }
+        let metadata = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await fixture.history.representationMetadata(for: fixture.current)
+        }
+        await #expect(throws: CancellationError.self) { try await metadata.value }
+        let details = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await fixture.history.details(for: fixture.current.id)
+        }
+        await #expect(throws: CancellationError.self) { try await details.value }
+    }
+
+    @Test func effectiveMetadataKeepsItemOrderAndExactTypeSpelling() async throws {
+        let history = try await WSSupport.makeHistory()
+        let type = "com.example.e\u{301}"
+        let receipt = try await history.perform(.capture(ClipboardCapture(
+            representations: [
+                .init(typeIdentifier: type, bytes: Data([1, 2]), pasteboardItemIndex: 0),
+                .init(typeIdentifier: type, bytes: Data([3]), pasteboardItemIndex: 1),
+            ],
+            origin: .init(sourceApplication: nil, lineageHint: nil),
+            observedAt: Date(timeIntervalSinceReferenceDate: 850_000_000)
+        )))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        let metadata = try await history.representationMetadata(for: item)
+        #expect(metadata.map(\.pasteboardItemIndex) == [0, 1])
+        #expect(metadata.map(\.byteCount) == [2, 1])
+        #expect(metadata.map { Data($0.typeIdentifier.utf8) } == [Data(type.utf8), Data(type.utf8)])
+    }
+
+    @Test func effectiveMetadataStillRejectsRevisionKeysOutsideCanonical() async throws {
+        let fixture = try await makeFixture()
+        try await fixture.history.authority.withTestDatabase { authority in
+            try authority.database.execute("""
+                UPDATE representations SET exactType='public.z-outside-canonical'
+                WHERE contentID=(SELECT currentContentID FROM history_items WHERE id=?)
+                  AND exactType='public.utf8-plain-text'
+                """, bindings: [.text(fixture.current.id.rawValue.uuidString)])
+        }
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await fixture.history.representationMetadata(for: fixture.current)
+        }
+        await #expect(throws: HistoryFailure.staleContent(
+            expected: fixture.original.contentVersion, current: fixture.current.contentVersion
+        )) {
+            try await fixture.history.representationMetadata(for: fixture.original)
+        }
+    }
+
     @Test func detailsReadAllMetadataWhenEveryPayloadIsUnavailable() async throws {
         let fixture = try await makeFixture()
         let position = try await fixture.history.authority.readPositionInLocalContext()

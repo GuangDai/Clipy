@@ -149,6 +149,17 @@ admitted pathological expression.
 
 ### 9. Detail, paste, and thumbnail DTOs
 
+`representationMetadata(for: HistoryItemReference)` returns only the current
+Effective Content's representation descriptors: constituent pasteboard item
+index, exact type identifier, and byte count. It requires the supplied current
+ContentVersion, throwing `notFound` or `staleContent` before payload access.
+One Authority read transaction validates current content and its canonical
+subset without scanning retained revisions, reading payloads, or changing
+History. Preview source selection and row Open menus use this narrow read;
+Details and the revision editor continue to request full `HistoryDetails`.
+Cancellation is checked before the metadata work. There is no default
+protocol implementation that silently falls back to full details.
+
 ```swift
 public struct HistoryRepresentation: Sendable, Hashable {
     public let typeIdentifier: String

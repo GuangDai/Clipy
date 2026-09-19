@@ -31,6 +31,7 @@ struct SQLiteContentReadBoundsTests {
         let before = try await history.usage()
         let details = try await history.details(for: item.id)
         #expect(details.effective.map(\.byteCount) == [3, 4])
+        #expect(try await history.representationMetadata(for: item) == details.effective)
         let good = try await history.representation(.init(
             item: item, basis: .effective, typeIdentifier: "com.example.good"
         ))
@@ -62,6 +63,9 @@ struct SQLiteContentReadBoundsTests {
         }
         await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
             try await history.details(for: item.id)
+        }
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await history.representationMetadata(for: item)
         }
         #expect(try await history.usage() == before)
     }

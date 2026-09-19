@@ -52,9 +52,8 @@ final class HistoryExternalOpener {
     /// Metadata first; image bytes are read only after the explicit click.
     /// Menu choices are bounded independently of the retained payload size.
     func options(for item: HistoryItemReference) async throws -> [HistoryOpenOption] {
-        let details = try await history.details(for: item.id)
-        guard details.item == item else { throw HistoryOpenFailure.changed }
-        let groups = Dictionary(grouping: details.effective, by: \.pasteboardItemIndex)
+        let metadata = try await history.representationMetadata(for: item)
+        let groups = Dictionary(grouping: metadata, by: \.pasteboardItemIndex)
         var result: [HistoryOpenOption] = []
         var firstFailure: HistoryOpenFailure?
         for index in groups.keys.sorted().prefix(32) {

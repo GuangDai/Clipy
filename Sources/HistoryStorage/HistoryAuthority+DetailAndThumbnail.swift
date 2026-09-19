@@ -14,8 +14,35 @@ extension HistoryAuthority {
     }
 
     internal func details(for id: HistoryItemID) async throws -> HistoryDetails {
-        try sqliteContentRead {
+        try Task.checkCancellation()
+        return try sqliteContentRead {
             try database.readTransaction { try detailsInCurrentTransaction(for: id) }
+        }
+    }
+
+    /// V2-09 §§4/5: menu/preview source selection only needs current metadata.
+    /// Read current and Canonical descriptors to preserve revision-subset
+    /// validation, without walking inactive revisions or opening payloads.
+    internal func representationMetadata(
+        for expected: HistoryItemReference
+    ) async throws -> [HistoryRepresentationMetadata] {
+        try Task.checkCancellation()
+        return try sqliteContentRead {
+            try database.readTransaction {
+                let reads = contentReads
+                let item = try reads.item(for: expected.id)
+                guard item.reference == expected else {
+                    throw HistoryFailure.staleContent(
+                        expected: expected.contentVersion, current: item.reference.contentVersion
+                    )
+                }
+                let metadata = try reads.currentRepresentations(for: item).map {
+                    HistoryRepresentationMetadata(typeIdentifier: $0.typeIdentifier, byteCount: $0.byteCount,
+                                                  pasteboardItemIndex: $0.pasteboardItemIndex)
+                }
+                try Task.checkCancellation()
+                return metadata
+            }
         }
     }
 

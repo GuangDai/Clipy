@@ -84,6 +84,10 @@ struct PreviewClipboardHistory: ClipboardHistory, Sendable {
         throw HistoryFailure.notFound(id)
     }
 
+    func representationMetadata(for item: HistoryItemReference) async throws -> [HistoryRepresentationMetadata] {
+        throw HistoryFailure.notFound(item.id)
+    }
+
     func representation(_ request: HistoryRepresentationRequest) async throws -> HistoryRepresentation {
         throw HistoryFailure.notFound(request.item.id)
     }

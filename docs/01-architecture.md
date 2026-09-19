@@ -391,7 +391,8 @@ The label names that application. Multi-item captures expose individual
 choices, preferring each item's actual file reference over an accompanying
 image representation. Merely showing a row or preview never launches an app.
 Visible candidate rows prepare small menu descriptors from bounded reference
-bytes and representation metadata; image bytes are loaded only after the user chooses Open. The action re-reads
+bytes and `representationMetadata(for:)`; this current-version read does not
+traverse retained revisions. Image bytes are loaded only after the user chooses Open. The action re-reads
 its exact `HistoryRepresentationRequest` so a changed or removed item cannot
 silently substitute another content version. Missing files and absent handlers
 produce a user-visible failure.
