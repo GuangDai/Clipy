@@ -34,7 +34,7 @@ struct BuiltInAutomationSyntaxTests {
         #expect(steps[10].find == "([0-9]+)")
         #expect(steps[10].replacement == "$1!")
         #expect(steps[11].find == "[0-9]+")
-        #expect(steps.allSatisfy(\.enabled))
+        #expect(steps.allSatisfy { $0.enabled })
         try expectRoundTrip(steps)
     }
 

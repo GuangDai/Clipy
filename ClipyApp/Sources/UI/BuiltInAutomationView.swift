@@ -128,12 +128,13 @@ struct BuiltInAutomationView: View {
             else if case .failure = result { saveMessage = (BuiltInAutomationTransfer.Failure.unreadable.message) }
         }
         .fileExporter(isPresented: $exportsWorkflow, item: exportDocument, contentTypes: [.json],
-                      defaultFilename: workflow.name.replacingOccurrences(of: "/", with: "-") + ".clipy-workflow") { result in
+                      defaultFilename: workflow.name.replacingOccurrences(of: "/", with: "-") + ".clipy-workflow",
+                      onCompletion: { result in
             switch result {
             case .success: saveMessage = ("Workflow exported. Test input and results were not included.")
             case .failure: saveMessage = ("The workflow could not be exported. Try another location.")
             }
-        }
+        })
         .sheet(item: $importedWorkflow) { imported in
             BuiltInAutomationImportReview(workflow: imported, bundle: copyBundle) {
                 add(imported.duplicated(named: imported.name))
@@ -323,7 +324,7 @@ struct BuiltInAutomationView: View {
                     Button(text("Revert changes")) {
                         let id = workflow.id
                         do {
-                            try workspace.discardSelection()
+                            try workspace.discardSelection(preservingDraftIDs: stepEditorState.unappliedWorkflowIDs)
                             stepEditorState.discard(id)
                             invalidatePreview()
                         }
@@ -679,7 +680,11 @@ struct BuiltInAutomationView: View {
     private func save(all: Bool = false, close: Bool = false) {
         guard all ? !stepEditorState.hasUnappliedChanges : !hasUnappliedRules else { return }
         do {
-            if all { try workspace.saveAll() } else { try workspace.saveSelection() }
+            if all {
+                try workspace.saveAll(preservingDraftIDs: stepEditorState.unappliedWorkflowIDs)
+            } else {
+                try workspace.saveSelection(preservingDraftIDs: stepEditorState.unappliedWorkflowIDs)
+            }
             saveMessage = ("Workflow saved. Source and preview text are never saved with it.")
             if close { finishClosing() }
         } catch {
@@ -710,7 +715,7 @@ struct BuiltInAutomationView: View {
 
     private func remove(_ id: UUID) {
         do {
-            try workspace.remove(id)
+            try workspace.remove(id, preservingDraftIDs: stepEditorState.unappliedWorkflowIDs)
             stepEditorState.forget(id)
             invalidatePreview()
         } catch { saveMessage = (BuiltInAutomationFailure.unreadableWorkflows.message) }
@@ -726,7 +731,10 @@ struct BuiltInAutomationView: View {
         guard workspace.canReorder, let payload, payload.hasPrefix("workflow:"),
               let id = UUID(uuidString: String(payload.dropFirst(9))),
               id != target, drafts.contains(where: { $0.id == id }) else { return false }
-        do { try workspace.move(id, before: target); return true }
+        do {
+            try workspace.move(id, before: target, preservingDraftIDs: stepEditorState.unappliedWorkflowIDs)
+            return true
+        }
         catch { saveMessage = (BuiltInAutomationFailure.unreadableWorkflows.message); return false }
     }
 

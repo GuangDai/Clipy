@@ -92,8 +92,9 @@ final class BuiltInAutomationWorkspace {
         select(value.id)
     }
 
-    func saveSelection() throws {
-        let refresh = Set(drafts.filter { !isDirty($0) }.map(\.id)).union([workflow.id])
+    func saveSelection(preservingDraftIDs: Set<UUID> = []) throws {
+        let refresh = Set(drafts.filter { !isDirty($0) }.map(\.id))
+            .subtracting(preservingDraftIDs).union([workflow.id])
         // Existing rows already persist explicit moves. Editing their content
         // must not undo an unrelated reorder from another open window.
         let order = savedBaseline[workflow.id] == nil ? drafts.map(\.id) : []
@@ -101,9 +102,11 @@ final class BuiltInAutomationWorkspace {
         refreshSavedDrafts(refresh)
     }
 
-    func saveAll() throws {
+    func saveAll(preservingDraftIDs: Set<UUID> = []) throws {
         let changed = changedDrafts
-        let savedIDs = Set(changed.map(\.id)).union(drafts.filter { !isDirty($0) }.map(\.id))
+        let savedIDs = Set(changed.map(\.id)).union(
+            Set(drafts.filter { !isDirty($0) }.map(\.id)).subtracting(preservingDraftIDs)
+        )
         let order = changed.contains { savedBaseline[$0.id] == nil } ? drafts.map(\.id) : []
         try library.saveAll(changed, orderedIDs: order)
         // Refresh saved and untouched drafts. A different window's unrelated
@@ -111,16 +114,17 @@ final class BuiltInAutomationWorkspace {
         refreshSavedDrafts(savedIDs)
     }
 
-    func discardSelection() throws {
-        let refresh = Set(drafts.filter { !isDirty($0) }.map(\.id)).union([workflow.id])
+    func discardSelection(preservingDraftIDs: Set<UUID> = []) throws {
+        let refresh = Set(drafts.filter { !isDirty($0) }.map(\.id))
+            .subtracting(preservingDraftIDs).union([workflow.id])
         // Read before touching drafts: a corrupt external edit must never
         // turn Revert into silent removal of the user's local work.
         try library.refresh()
         refreshSavedDrafts(refresh)
     }
 
-    func remove(_ id: UUID) throws {
-        let refresh = Set(drafts.filter { !isDirty($0) }.map(\.id))
+    func remove(_ id: UUID, preservingDraftIDs: Set<UUID> = []) throws {
+        let refresh = Set(drafts.filter { !isDirty($0) }.map(\.id)).subtracting(preservingDraftIDs)
         try library.refresh()
         if library.workflows.contains(where: { $0.id == id }) { try library.remove(id) }
         drafts.removeAll { $0.id == id }
@@ -134,10 +138,10 @@ final class BuiltInAutomationWorkspace {
         savedBaseline.removeAll()
     }
 
-    func move(_ id: UUID, before target: UUID?) throws {
+    func move(_ id: UUID, before target: UUID?, preservingDraftIDs: Set<UUID> = []) throws {
         guard canReorder, id != target, let index = drafts.firstIndex(where: { $0.id == id }),
               target == nil || drafts.contains(where: { $0.id == target }) else { return }
-        let refresh = Set(drafts.filter { !isDirty($0) }.map(\.id))
+        let refresh = Set(drafts.filter { !isDirty($0) }.map(\.id)).subtracting(preservingDraftIDs)
         try library.refresh()
         var reordered = drafts
         let moved = reordered.remove(at: index)
@@ -158,6 +162,9 @@ final class BuiltInAutomationWorkspace {
 
     private func refreshSavedDrafts(_ ids: Set<UUID>) {
         let selectedID = workflow.id
+        // A visual definition can still own unapplied rule text in the editor.
+        // Its caller excludes that ID from refresh, preserving the selectable
+        // local draft even if another window deleted the saved definition.
         let localDrafts = drafts.enumerated().filter { !ids.contains($0.element.id) }
         let localIDs = Set(localDrafts.map(\.element.id))
         let localByID = Dictionary(uniqueKeysWithValues: localDrafts.map { ($0.element.id, $0.element) })

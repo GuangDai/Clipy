@@ -35,7 +35,9 @@ private struct BuiltInAutomationBranchEditor: View {
     private func text(_ key: String) -> String { BuiltInAutomationCopy.text(key, bundle: bundle) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        // The enclosing definition ScrollView requests cards as they approach
+        // its viewport, including the children of an explicitly opened branch.
+        LazyVStack(alignment: .leading, spacing: 8) {
             ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
                 BuiltInAutomationStepCard(root: $root, snapshot: step, parent: parent,
                                           otherwise: otherwise, index: index, siblingCount: steps.count,

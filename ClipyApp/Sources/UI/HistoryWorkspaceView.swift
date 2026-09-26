@@ -304,14 +304,7 @@ struct HistoryWorkspaceView: View {
                                             compact: compactRows)
                             .tag(row.item.id)
                             .contextMenu {
-                                Button(text("Copy to Clipboard")) { viewState.requestPasteFromDisplayedRow(row.item) }
-                                    .disabled(copyState.isCopying)
-                                Button(text(row.pinnedPosition == nil ? "Pin" : "Unpin")) {
-                                    submit(row.pinnedPosition == nil ? .pin(row.item.id) : .unpin(row.item.id))
-                                }
-                                Button(text("Details and editing…")) { detailsItem = row.item }
-                                Divider()
-                                Button(text("Remove…"), role: .destructive) { removalItem = row.item }
+                                rowContextMenu(for: row).disabled(isMutating)
                             }
                             .disabled(isMutating)
                             .onGeometryChange(for: Bool.self) { proxy in
@@ -339,6 +332,24 @@ struct HistoryWorkspaceView: View {
             }
             Divider()
             pageNavigation.padding(10)
+        }
+    }
+
+    @ViewBuilder
+    private func rowContextMenu(for row: HistoryRow) -> some View {
+        if selectedIDs.count > 1 && selectedIDs.contains(row.item.id) {
+            Button(text("Pin selected items")) { executeBatch(.pin, references: selectedReferences) }
+            Button(text("Unpin selected items")) { executeBatch(.unpin, references: selectedReferences) }
+            Button(text("Remove selected items…"), role: .destructive) { batchRemoval = selectedReferences }
+        } else {
+            Button(text("Copy this item")) { viewState.requestPasteFromDisplayedRow(row.item) }
+                .disabled(copyState.isCopying)
+            Button(text(row.pinnedPosition == nil ? "Pin this item" : "Unpin this item")) {
+                submit(row.pinnedPosition == nil ? .pin(row.item.id) : .unpin(row.item.id))
+            }
+            Button(text("View and edit this item…")) { detailsItem = row.item }
+            Divider()
+            Button(text("Remove this item…"), role: .destructive) { removalItem = row.item }
         }
     }
 

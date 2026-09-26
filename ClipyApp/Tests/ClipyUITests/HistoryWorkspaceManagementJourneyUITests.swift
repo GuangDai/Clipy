@@ -40,6 +40,13 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         assertSelectionCount(2, in: workspace, app: app)
         XCTAssertFalse(workspace.buttons["clipy.history.workspace.copy"].isEnabled,
                        "Multiple selection must not turn the single-item Copy action into bulk copying.")
+        gamma.rightClick()
+        let copyItem = app.menuItems["Copy this item"]
+        XCTAssertTrue(copyItem.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(app.menuItems["View and edit this item…"].exists, app.debugDescription)
+        XCTAssertFalse(app.menuItems["Pin selected items"].exists, app.debugDescription)
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !copyItem.exists }, app.debugDescription)
 
         workspace.buttons["clipy.history.workspace.clear-selection"].click()
         gamma.click()
@@ -51,7 +58,16 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         let selectPage = workspace.buttons["clipy.history.workspace.select-page"]
         selectPage.click()
         assertSelectionCount(3, in: workspace, app: app)
-        workspace.buttons["clipy.history.workspace.batch.pin"].click()
+        gamma.rightClick()
+        let pinSelection = app.menuItems["Pin selected items"]
+        XCTAssertTrue(pinSelection.waitForExistence(timeout: 5), app.debugDescription)
+        assertSelectionCount(3, in: workspace, app: app)
+        XCTAssertTrue(app.menuItems["Unpin selected items"].exists, app.debugDescription)
+        XCTAssertTrue(app.menuItems["Remove selected items…"].exists, app.debugDescription)
+        XCTAssertFalse(app.menuItems["Copy this item"].exists, app.debugDescription)
+        XCTAssertFalse(app.menuItems["View and edit this item…"].exists, app.debugDescription)
+        XCTAssertFalse(app.menuItems["Pin this item"].exists, app.debugDescription)
+        pinSelection.click()
         assertBatchCompleted(3, operation: "Pin", in: workspace, app: app)
         assertPinState("Unpin", for: values, in: workspace, app: app)
         attachScreenshot(app, name: "History workspace after pinning three selected items")

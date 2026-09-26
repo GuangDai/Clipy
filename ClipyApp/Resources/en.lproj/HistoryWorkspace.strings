@@ -64,3 +64,11 @@
 "History list width" = "History list width";
 "Drag or use the arrow keys to resize the history list." = "Drag or use the arrow keys to resize the history list.";
 "Copied %llu times" = "Copied %llu times";
+"Pin selected items" = "Pin selected items";
+"Unpin selected items" = "Unpin selected items";
+"Remove selected items…" = "Remove selected items…";
+"Copy this item" = "Copy this item";
+"Pin this item" = "Pin this item";
+"Unpin this item" = "Unpin this item";
+"View and edit this item…" = "View and edit this item…";
+"Remove this item…" = "Remove this item…";

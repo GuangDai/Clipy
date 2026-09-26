@@ -64,3 +64,11 @@
 "History list width" = "历史列表宽度";
 "Drag or use the arrow keys to resize the history list." = "拖动分隔线或使用方向键调整历史列表宽度。";
 "Copied %llu times" = "已复制 %llu 次";
+"Pin selected items" = "固定选中条目";
+"Unpin selected items" = "取消固定选中条目";
+"Remove selected items…" = "删除选中条目…";
+"Copy this item" = "复制此条目";
+"Pin this item" = "固定此条目";
+"Unpin this item" = "取消固定此条目";
+"View and edit this item…" = "查看并编辑此条目…";
+"Remove this item…" = "删除此条目…";

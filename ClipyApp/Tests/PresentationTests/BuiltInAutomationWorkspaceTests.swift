@@ -524,6 +524,102 @@ struct BuiltInAutomationWorkspaceTests {
         #expect(workspace.source == "Temporary input")
     }
 
+    @Test(arguments: ["saveSelection", "saveAll", "remove", "move", "discard"])
+    func refreshKeepsAnExternallyDeletedWorkflowWithUnappliedRuleTextReachable(_ operation: String) async throws {
+        let suite = "WorkflowWorkspacePendingRules.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let alpha = workflow("Alpha")
+        let beta = workflow("Beta")
+        let gamma = workflow("Gamma")
+        try BuiltInAutomationLibrary(defaults: defaults).saveAll([alpha, beta, gamma])
+        let workspace = BuiltInAutomationWorkspace(defaults: defaults)
+        let editor = WorkflowStepsEditorState()
+        workspace.select(beta.id)
+        workspace.source = "Beta temporary input"
+        editor.prepare(beta.id, steps: beta.steps)
+        let ruleDraft = try #require(editor.draft(for: beta.id))
+        ruleDraft.setMode(.syntax)
+        await ruleDraft.prepareSourceIfNeeded()
+        let pendingText = "# keep this edit\nuppercase()\n"
+        ruleDraft.updateSource(pendingText)
+        #expect(!workspace.isDirty(beta), "The visual definition alone has not changed")
+        workspace.select(alpha.id)
+        workspace.workflow.name = "Alpha edit"
+        try BuiltInAutomationLibrary(defaults: defaults).remove(beta.id)
+        let protected = editor.unappliedWorkflowIDs
+
+        switch operation {
+        case "saveSelection": try workspace.saveSelection(preservingDraftIDs: protected)
+        case "saveAll": try workspace.saveAll(preservingDraftIDs: protected)
+        case "remove": try workspace.remove(gamma.id, preservingDraftIDs: protected)
+        case "move": try workspace.move(gamma.id, before: alpha.id, preservingDraftIDs: protected)
+        case "discard": try workspace.discardSelection(preservingDraftIDs: protected)
+        default: Issue.record("Unexpected fixture operation")
+        }
+
+        #expect(workspace.drafts.contains(beta))
+        #expect(workspace.changedDrafts.contains(beta))
+        #expect(!workspace.library.workflows.contains { $0.id == beta.id })
+        workspace.select(beta.id)
+        editor.prepare(beta.id, steps: workspace.workflow.steps)
+        #expect(workspace.workflow == beta)
+        #expect(workspace.source == "Beta temporary input")
+        #expect(ruleDraft.source.utf8.elementsEqual(pendingText.utf8))
+        #expect(ruleDraft.hasUnappliedChanges)
+
+        // The preserved sidebar entry lets the user apply and explicitly save
+        // the text again, rather than leaving an unreachable pending draft.
+        let parsedResult = await ruleDraft.parseSource()
+        let parsed = try #require(parsedResult)
+        workspace.workflow.steps = parsed
+        ruleDraft.acceptApplied(parsed)
+        try workspace.saveSelection(preservingDraftIDs: editor.unappliedWorkflowIDs)
+        #expect(!editor.hasUnappliedChanges)
+        #expect(!workspace.isDirty(workspace.workflow))
+        #expect(BuiltInAutomationLibrary(defaults: defaults).workflows.first { $0.id == beta.id }?.steps == parsed)
+    }
+
+    @Test(arguments: [false, true])
+    func explicitDiscardOrRemovalStillHandlesItsTargetWhileProtectingOtherRuleDrafts(remove: Bool) async throws {
+        let suite = "WorkflowWorkspaceExplicitPendingAction.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let alpha = workflow("Alpha")
+        let beta = workflow("Beta")
+        let gamma = workflow("Gamma")
+        try BuiltInAutomationLibrary(defaults: defaults).saveAll([alpha, beta, gamma])
+        let workspace = BuiltInAutomationWorkspace(defaults: defaults)
+        let editor = WorkflowStepsEditorState()
+        for definition in [beta, gamma] {
+            editor.prepare(definition.id, steps: definition.steps)
+            let draft = try #require(editor.draft(for: definition.id))
+            draft.setMode(.syntax)
+            await draft.prepareSourceIfNeeded()
+            draft.updateSource("uppercase()\n")
+        }
+        let otherWindow = BuiltInAutomationLibrary(defaults: defaults)
+        try otherWindow.remove(beta.id)
+        try otherWindow.remove(gamma.id)
+        workspace.select(beta.id)
+
+        if remove {
+            try workspace.remove(beta.id, preservingDraftIDs: editor.unappliedWorkflowIDs)
+            editor.forget(beta.id)
+        } else {
+            try workspace.discardSelection(preservingDraftIDs: editor.unappliedWorkflowIDs)
+            editor.discard(beta.id)
+        }
+
+        #expect(!workspace.drafts.contains { $0.id == beta.id })
+        #expect(workspace.drafts.contains(gamma))
+        #expect(workspace.isDirty(gamma))
+        #expect(editor.unappliedWorkflowIDs == [gamma.id])
+        workspace.select(gamma.id)
+        #expect(workspace.workflow == gamma)
+        #expect(editor.draft(for: gamma.id)?.source == "uppercase()\n")
+    }
+
     private func workflow(_ name: String, trigger: BuiltInAutomationTrigger = .manual) -> BuiltInAutomationWorkflow {
         .init(name: name, steps: [.init(operation: .trim)], trigger: trigger)
     }
