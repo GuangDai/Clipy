@@ -33,12 +33,14 @@ final class BuiltInAutomationWorkspace {
     private var savedBaseline: [UUID: BuiltInAutomationWorkflow]
 
     init(source: String = "", editorInput: Bool = false, defaults: UserDefaults = .standard) {
-        library = BuiltInAutomationLibrary(defaults: defaults)
+        let library = BuiltInAutomationLibrary(defaults: defaults)
+        self.library = library
         self.source = source
         self.editorInput = editorInput
-        drafts = library.workflows
-        savedBaseline = Dictionary(uniqueKeysWithValues: library.workflows.map { ($0.id, $0) })
-        if !editorInput, let first = drafts.first {
+        let loaded = library.workflows
+        drafts = loaded
+        savedBaseline = Dictionary(uniqueKeysWithValues: loaded.map { ($0.id, $0) })
+        if !editorInput, let first = loaded.first {
             workflow = first
         } else {
             let blank = Self.blank()
