@@ -57,7 +57,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         clickPreview(in: app)
         XCTAssertTrue(waitUntil { apply.exists && apply.isEnabled }, app.debugDescription)
         apply.click()
-        let keepEditing = app.buttons["Keep editing"]
+        let keepEditing = app.sheets.buttons["Keep editing"].firstMatch
         XCTAssertTrue(keepEditing.waitForExistence(timeout: 5), app.debugDescription)
         keepEditing.click()
         XCTAssertTrue(waitUntil { !keepEditing.exists && apply.isHittable }, app.debugDescription)
@@ -383,7 +383,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         // Close must offer a choice while definitions are unsaved. Keeping
         // the window open preserves both drafts and their separate test text.
         app.typeKey(.escape, modifierFlags: [])
-        let keepEditing = app.buttons["Keep editing"]
+        let keepEditing = app.sheets.buttons["Keep editing"].firstMatch
         XCTAssertTrue(keepEditing.waitForExistence(timeout: 5), app.debugDescription)
         keepEditing.click()
         XCTAssertTrue(waitUntil { !app.buttons["clipy.workflow.discard-close"].exists && source.exists }, app.debugDescription)

@@ -29,7 +29,7 @@ struct SearchSortOracleTests {
         let kind = HistoryBrowseKind.search(text: "alpha", mode: mode)
         let baseline = try await worker.page(
             HistoryBrowseRequest(kind: kind, limit: 100, sortOrder: sortOrder),
-            corpus: corpus, continuationAnchor: nil, processMarker: marker
+            in: corpus, continuationAnchor: nil, processMarker: marker
         )
         #expect(baseline.rows.count == 70)
         for targetIndex in [0, 33, 69] {
@@ -37,7 +37,7 @@ struct SearchSortOracleTests {
                 let target = baseline.rows[targetIndex].item.id
                 let located = try await worker.page(
                     HistoryBrowseRequest(kind: kind, limit: limit, sortOrder: sortOrder, startAround: target),
-                    corpus: corpus, continuationAnchor: nil, processMarker: marker
+                    in: corpus, continuationAnchor: nil, processMarker: marker
                 )
                 #expect(located.rows == Array(baseline.rows.dropFirst(targetIndex).prefix(limit)))
                 #expect((located.previous != nil) == (targetIndex > 0))
@@ -45,7 +45,7 @@ struct SearchSortOracleTests {
                 if let cursor = located.next {
                     let next = try await worker.page(
                         HistoryBrowseRequest(kind: kind, limit: limit, cursor: cursor, sortOrder: sortOrder),
-                        corpus: corpus,
+                        in: corpus,
                         continuationAnchor: PageCursorCodec.decode(cursor, processMarker: marker).anchor,
                         processMarker: marker
                     )
@@ -54,7 +54,7 @@ struct SearchSortOracleTests {
                 if let cursor = located.previous {
                     let previous = try await worker.page(
                         HistoryBrowseRequest(kind: kind, limit: limit, cursor: cursor, sortOrder: sortOrder),
-                        corpus: corpus,
+                        in: corpus,
                         continuationAnchor: PageCursorCodec.decode(cursor, processMarker: marker).anchor,
                         processMarker: marker
                     )

@@ -31,10 +31,10 @@ extension SearchWorker {
             return HistoryBrowseRequest(kind: query.kind, limit: limit, cursor: cursor, filter: query.filter,
                                          sortOrder: query.sortOrder)
         }
-        let before = try await page(adjacentRequest(limit: request.limit, direction: .backward), corpus: corpus,
+        let before = try await page(adjacentRequest(limit: request.limit, direction: .backward), in: corpus,
                                     continuationAnchor: anchor, processMarker: processMarker)
         let after = try await page(adjacentRequest(limit: request.limit, direction: .forward),
-                                   corpus: corpus, continuationAnchor: anchor, processMarker: processMarker)
+                                   in: corpus, continuationAnchor: anchor, processMarker: processMarker)
         let previous = try before.rows.isEmpty ? nil : Self.mintSearchCursor(
             at: anchor, direction: .backward, request: request, position: corpus.position, processMarker: processMarker
         )

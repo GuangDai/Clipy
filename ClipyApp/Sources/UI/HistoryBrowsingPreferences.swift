@@ -77,17 +77,20 @@ final class HistoryBrowsingPreferences {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        panelOpeningPosition = defaults.string(forKey: Self.panelOpeningPositionKey)
+        let panelPosition = defaults.string(forKey: Self.panelOpeningPositionKey)
             .flatMap(HistoryOpeningPosition.init(rawValue:)) ?? .latest
-        workspaceOpeningPosition = defaults.string(forKey: Self.workspaceOpeningPositionKey)
+        let workspacePosition = defaults.string(forKey: Self.workspaceOpeningPositionKey)
             .flatMap(HistoryOpeningPosition.init(rawValue:)) ?? .latest
-        remembersWorkspaceLayout = Self.boolean(
+        let remembersLayout = Self.boolean(
             defaults.object(forKey: Self.remembersWorkspaceLayoutKey), fallback: true
         )
-        workspaceLayout = remembersWorkspaceLayout ? Self.loadWorkspaceLayout(from: defaults) : .init()
-        panelReadingItemID = panelOpeningPosition == .lastRead
+        panelOpeningPosition = panelPosition
+        workspaceOpeningPosition = workspacePosition
+        remembersWorkspaceLayout = remembersLayout
+        workspaceLayout = remembersLayout ? Self.loadWorkspaceLayout(from: defaults) : .init()
+        panelReadingItemID = panelPosition == .lastRead
             ? defaults.string(forKey: Self.panelReadingItemIDKey).flatMap(HistoryItemID.init(uuidString:)) : nil
-        workspaceReadingItemID = workspaceOpeningPosition == .lastRead
+        workspaceReadingItemID = workspacePosition == .lastRead
             ? defaults.string(forKey: Self.workspaceReadingItemIDKey).flatMap(HistoryItemID.init(uuidString:)) : nil
         if panelReadingItemID == nil { defaults.removeObject(forKey: Self.panelReadingItemIDKey) }
         if workspaceReadingItemID == nil { defaults.removeObject(forKey: Self.workspaceReadingItemIDKey) }
