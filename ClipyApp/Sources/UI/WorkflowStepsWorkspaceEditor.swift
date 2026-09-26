@@ -9,11 +9,13 @@ struct WorkflowStepsWorkspaceEditor: View {
     @Binding var steps: [BuiltInAutomationStep]
     let state: WorkflowStepsEditorState
     let bundle: Bundle
+    let isCurrentWorkflow: (UUID) -> Bool
 
     var body: some View {
         Group {
             if let draft = state.draft(for: workflowID) {
-                WorkflowStepsDraftEditor(steps: $steps, draft: draft, bundle: bundle)
+                WorkflowStepsDraftEditor(workflowID: workflowID, steps: $steps, draft: draft,
+                    bundle: bundle, isCurrentWorkflow: isCurrentWorkflow)
                     .id(workflowID)
             } else {
                 ProgressView()
@@ -25,9 +27,11 @@ struct WorkflowStepsWorkspaceEditor: View {
 }
 
 private struct WorkflowStepsDraftEditor: View {
+    let workflowID: UUID
     @Binding var steps: [BuiltInAutomationStep]
     let draft: WorkflowStepsEditorDraft
     let bundle: Bundle
+    let isCurrentWorkflow: (UUID) -> Bool
     @State private var confirmsReload = false
     @State private var confirmsReplacingVisualSteps = false
     @State private var showsReference = false
@@ -64,9 +68,12 @@ private struct WorkflowStepsDraftEditor: View {
         }
         .task(id: draft.renderRequest) { await draft.prepareSourceIfNeeded() }
         .task(id: applyRequest) {
-            guard applyRequest > 0 else { return }
+            guard applyRequest > 0, isCurrentWorkflow(workflowID) else { return }
             let priorSteps = steps
-            if let parsed = await draft.parseSource(), steps == priorSteps {
+            // The steps binding follows the selected workflow. Two workflows
+            // may have equal steps, so equality alone cannot admit a result
+            // after selection changes but before SwiftUI cancels this task.
+            if let parsed = await draft.parseSource(), isCurrentWorkflow(workflowID), steps == priorSteps {
                 steps = parsed
                 draft.acceptApplied(parsed)
             }

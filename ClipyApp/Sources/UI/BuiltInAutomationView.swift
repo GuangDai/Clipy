@@ -377,7 +377,8 @@ struct BuiltInAutomationView: View {
             } else {
                 ScrollView {
                     WorkflowStepsWorkspaceEditor(workflowID: workflow.id, steps: $workspace.workflow.steps,
-                                                 state: stepEditorState, bundle: copyBundle)
+                                                 state: stepEditorState, bundle: copyBundle,
+                                                 isCurrentWorkflow: { $0 == workspace.workflow.id })
                         .padding(2)
                 }
                 Text(text("Drag steps between branches. Conditions choose Then or Otherwise; steps run from top to bottom."))
