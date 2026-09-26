@@ -12,7 +12,7 @@ struct BuiltInAutomationView: View {
     @State private var model = BuiltInAutomationModel()
     @State private var hasAppeared = false
     @State private var editsScope = false
-    @State private var saveMessage: String?
+    @State private var definitionMessage: DefinitionMessage?
     @State private var confirmsReset = false
     @State private var choosesApplications = false
     @State private var inputFailure: BuiltInAutomationFailure?
@@ -25,10 +25,20 @@ struct BuiltInAutomationView: View {
     @State private var lastRunUsedEffects = false
     @State private var pendingApply: String?
     @State private var definitionFailure: BuiltInAutomationFailure?
+    @State private var importsWorkflow = false
+    @State private var exportsWorkflow = false
+    @State private var importedWorkflow: BuiltInAutomationWorkflow?
+    @State private var exportDocument: BuiltInAutomationFileDocument?
+    @State private var importTask: Task<Void, Never>?
+    @State private var stepEditorState = WorkflowStepsEditorState()
     @AppStorage("workflowCompactRows") private var compactRows = false
 
     private enum ComparisonMode: String, CaseIterable {
         case sideBySide = "Compare", input = "Input", result = "Result"
+    }
+    private struct DefinitionMessage {
+        let workflow: BuiltInAutomationWorkflow
+        let text: String
     }
     private let history: (any ClipboardHistory)?
     private let apply: (@MainActor (String) -> Void)?
@@ -42,16 +52,28 @@ struct BuiltInAutomationView: View {
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
     private func text(_ key: String) -> String { BuiltInAutomationCopy.text(key, bundle: copyBundle) }
     private var workflow: BuiltInAutomationWorkflow { workspace.workflow }
+    private var saveMessage: String? {
+        get {
+            guard let definitionMessage, definitionMessage.workflow == workflow else { return nil }
+            return text(definitionMessage.text)
+        }
+        nonmutating set { definitionMessage = newValue.map { DefinitionMessage(workflow: workflow, text: $0) } }
+    }
     private var drafts: [BuiltInAutomationWorkflow] { workspace.drafts }
+    private var visibleDrafts: [BuiltInAutomationWorkflow] {
+        workspace.visibleDrafts(includingUnsavedIDs: stepEditorState.unappliedWorkflowIDs)
+    }
     private var library: BuiltInAutomationLibrary { workspace.library }
     private var input: BuiltInAutomationInput { .text(workspace.source) }
     private var isCurrent: Bool { model.isCurrent(input: input, steps: workflow.steps) }
     private var isBusy: Bool { model.isRunning || model.isQueued }
     private var isDirty: Bool { workspace.isDirty(workflow) }
-    private var canRun: Bool { workflow.steps.contains(where: \.enabled) }
+    private var hasUnappliedRules: Bool { stepEditorState.hasUnappliedChanges(for: workflow.id) }
+    private var hasChangesToKeep: Bool { workspace.hasUnsavedChanges || stepEditorState.hasUnappliedChanges }
+    private var canRun: Bool { !hasUnappliedRules && workflow.steps.contains(where: \.enabled) }
     private var canApply: Bool {
         model.output?.matchedConditions == true && model.result?.isEmpty == false
-            && model.output?.value != input && !isBusy && isCurrent
+            && model.output?.value != input && !isBusy && isCurrent && !hasUnappliedRules
     }
     private var showsManualInput: Bool { apply != nil || workflow.scope.source == .input }
     private var originalInput: BuiltInAutomationInput? {
@@ -62,6 +84,7 @@ struct BuiltInAutomationView: View {
         VStack(spacing: 0) {
             HStack {
                 Text(text("Workflows")).font(.title2.weight(.semibold))
+                    .accessibilityIdentifier("clipy.workflow.title")
                 Spacer()
                 Button(text("Close")) { requestClose() }.keyboardShortcut(.cancelAction)
             }
@@ -99,18 +122,40 @@ struct BuiltInAutomationView: View {
             invalidatePreview()
         }
         .onChange(of: input) { _, _ in invalidatePreview() }
-        .onDisappear { model.invalidate() }
-        .interactiveDismissDisabled(workspace.hasUnsavedChanges)
+        .onDisappear { model.invalidate(); importTask?.cancel() }
+        .fileImporter(isPresented: $importsWorkflow, allowedContentTypes: [.json]) { result in
+            if case let .success(url) = result { importWorkflow(from: url) }
+            else if case .failure = result { saveMessage = (BuiltInAutomationTransfer.Failure.unreadable.message) }
+        }
+        .fileExporter(isPresented: $exportsWorkflow, item: exportDocument, contentTypes: [.json],
+                      defaultFilename: workflow.name.replacingOccurrences(of: "/", with: "-") + ".clipy-workflow") { result in
+            switch result {
+            case .success: saveMessage = ("Workflow exported. Test input and results were not included.")
+            case .failure: saveMessage = ("The workflow could not be exported. Try another location.")
+            }
+        }
+        .sheet(item: $importedWorkflow) { imported in
+            BuiltInAutomationImportReview(workflow: imported, bundle: copyBundle) {
+                add(imported.duplicated(named: imported.name))
+                saveMessage = ("Workflow imported as a manual draft. Review and save it when ready.")
+            }
+        }
+        .interactiveDismissDisabled(hasChangesToKeep)
         .confirmationDialog(text("Save changes before closing?"), isPresented: $confirmsClose) {
             Button(text(pendingApply == nil ? "Save all and close" : "Save all and apply")) { save(all: true, close: true) }
-                .disabled(library.failure != nil)
+                .disabled(library.failure != nil || stepEditorState.hasUnappliedChanges)
             Button(text(pendingApply == nil ? "Discard changes and close" : "Apply without saving workflows"), role: .destructive) { finishClosing() }
                 .accessibilityIdentifier("clipy.workflow.discard-close")
             Button(text("Keep editing"), role: .cancel) { pendingApply = nil }
+                .accessibilityIdentifier("clipy.workflow.keep-editing")
         } message: {
-            Text(text(pendingApply == nil
-                      ? "There are unsaved workflow definitions in this window. Temporary test input is not saved."
-                      : "Apply keeps the result in the content editor. Choose whether to save your workflow definitions as well."))
+            if stepEditorState.hasUnappliedChanges {
+                Text(text("There is unapplied rule text in this window. Apply it before saving, or discard it when closing."))
+            } else {
+                Text(text(pendingApply == nil
+                          ? "There are unsaved workflow definitions in this window. Temporary test input is not saved."
+                          : "Apply keeps the result in the content editor. Choose whether to save your workflow definitions as well."))
+            }
         }
         .confirmationDialog(text("Delete workflow?"), isPresented: $confirmsDeletion) {
             Button(text("Delete workflow"), role: .destructive) {
@@ -138,7 +183,7 @@ struct BuiltInAutomationView: View {
         .confirmationDialog(text("Reset saved workflows?"), isPresented: $confirmsReset) {
             Button(text("Reset saved workflows"), role: .destructive) {
                 invalidatePreview()
-                library.reset()
+                workspace.resetSavedDefinitions()
             }
         } message: { Text(text("This removes saved workflow definitions. Clipboard history is unchanged.")) }
     }
@@ -148,10 +193,15 @@ struct BuiltInAutomationView: View {
             HStack {
                 Text(text("Workflow library")).font(.headline)
                 Spacer()
+                if importTask != nil { ProgressView().controlSize(.small) }
                 Menu {
                     Button(text("New workflow")) {
                         add(BuiltInAutomationWorkflow(name: "", steps: [.init(operation: .trim)]))
                     }
+                    Divider()
+                    Button(text("Import workflow…")) { importsWorkflow = true }
+                        .disabled(importTask != nil)
+                        .accessibilityIdentifier("clipy.workflow.import")
                     Divider()
                     ForEach(BuiltInAutomationWorkflow.presets) { preset in
                         Button(text(preset.name)) {
@@ -180,10 +230,10 @@ struct BuiltInAutomationView: View {
                 .font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 LazyVStack(spacing: 4) {
-                    ForEach(workspace.visibleDrafts) { draft in
+                    ForEach(visibleDrafts) { draft in
                         sidebarRow(draft, index: drafts.firstIndex(where: { $0.id == draft.id }) ?? 0)
                     }
-                    if workspace.visibleDrafts.isEmpty {
+                    if visibleDrafts.isEmpty {
                         Text(text("No matching workflows")).foregroundStyle(.secondary).padding(.vertical)
                         Button(text("Clear filters")) { workspace.query = ""; workspace.filter = .all }
                     }
@@ -212,13 +262,17 @@ struct BuiltInAutomationView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(draft.name.isEmpty ? text("Untitled workflow") : draft.name)
                             .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                        if workspace.isDirty(draft) {
+                        if workspace.isDirty(draft) || stepEditorState.hasUnappliedChanges(for: draft.id) {
                             Image(systemName: "circle.fill").font(.system(size: 5))
                                 .accessibilityLabel(text("Unsaved changes"))
                         }
                     }
                     if !compactRows {
                         Text(text(draft.trigger.title)).font(.caption).foregroundStyle(.secondary)
+                        if stepEditorState.hasUnappliedChanges(for: draft.id) {
+                            Text(WorkflowSyntaxCopy.text("Unapplied rule text", bundle: copyBundle))
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                         if let saved = library.workflows.first(where: { $0.id == draft.id }), saved.trigger.includesAutomatic {
                             Label(text("Automatic version saved"), systemImage: "bolt.fill")
                                 .font(.caption2).foregroundStyle(.secondary)
@@ -240,6 +294,7 @@ struct BuiltInAutomationView: View {
         .dropDestination(for: String.self, isEnabled: true) { values, _ in _ = reorderWorkflow(values.first, before: draft.id) }
         .contextMenu {
             Button(text("Duplicate workflow")) { duplicate(draft) }
+                .disabled(stepEditorState.hasUnappliedChanges(for: draft.id))
             Button(text("Move workflow up")) { moveWorkflow(draft.id, by: -1) }.disabled(index == 0 || !workspace.canReorder)
             Button(text("Move workflow down")) { moveWorkflow(draft.id, by: 1) }.disabled(index == drafts.count - 1 || !workspace.canReorder)
             Divider()
@@ -254,18 +309,27 @@ struct BuiltInAutomationView: View {
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("clipy.workflow.name")
                 Button(text("Save workflow")) { save() }
-                    .disabled(!isDirty || library.failure != nil)
+                    .disabled(!isDirty || library.failure != nil || hasUnappliedRules)
                     .keyboardShortcut("s", modifiers: .command)
                     .accessibilityIdentifier("clipy.workflow.save")
                 Menu {
                     Button(text("Duplicate workflow")) { duplicate(workflow) }
+                        .disabled(hasUnappliedRules)
+                    Button(text("Export workflow…")) { exportWorkflow() }
+                        .disabled(hasUnappliedRules)
+                        .accessibilityIdentifier("clipy.workflow.export")
                     Button(text("Save all changes")) { save(all: true) }
-                        .disabled(!workspace.hasUnsavedChanges || library.failure != nil)
+                        .disabled(!workspace.hasUnsavedChanges || library.failure != nil || stepEditorState.hasUnappliedChanges)
                     Button(text("Revert changes")) {
-                        do { try workspace.discardSelection(); invalidatePreview() }
-                        catch { saveMessage = text(BuiltInAutomationFailure.unreadableWorkflows.message) }
+                        let id = workflow.id
+                        do {
+                            try workspace.discardSelection()
+                            stepEditorState.discard(id)
+                            invalidatePreview()
+                        }
+                        catch { saveMessage = (BuiltInAutomationFailure.unreadableWorkflows.message) }
                     }
-                        .disabled(!isDirty)
+                        .disabled(!isDirty && !hasUnappliedRules)
                     Divider()
                     Button(text("Move workflow up")) { moveWorkflow(workflow.id, by: -1) }
                         .disabled(drafts.first?.id == workflow.id || !workspace.canReorder)
@@ -281,6 +345,12 @@ struct BuiltInAutomationView: View {
             Text(saveMessage ?? text(isDirty ? "Unsaved changes" : "Saved"))
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.workflow.save-status")
+            if hasUnappliedRules {
+                Label(text("Apply or discard rule text changes before saving, running or exporting this workflow."),
+                      systemImage: "pencil.circle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("clipy.workflow.unapplied-rules")
+            }
             if !workflow.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                let failure = definitionFailure {
                 Label(text(failure.message), systemImage: "exclamationmark.triangle")
@@ -295,6 +365,7 @@ struct BuiltInAutomationView: View {
         VStack(alignment: .leading, spacing: 12) {
             Picker(text("Workflow configuration"), selection: $editsScope) {
                 Text(text("Steps")).tag(false)
+                    .accessibilityIdentifier("clipy.workflow.configuration.steps")
                 Text(text("Trigger and scope")).tag(true)
                     .accessibilityIdentifier("clipy.workflow.configuration.scope")
             }
@@ -304,7 +375,8 @@ struct BuiltInAutomationView: View {
                 ScrollView { scopeControls.padding(2) }
             } else {
                 ScrollView {
-                    BuiltInAutomationStepsEditor(steps: $workspace.workflow.steps, bundle: copyBundle)
+                    WorkflowStepsWorkspaceEditor(workflowID: workflow.id, steps: $workspace.workflow.steps,
+                                                 state: stepEditorState, bundle: copyBundle)
                         .padding(2)
                 }
                 Text(text("Drag steps between branches. Conditions choose Then or Otherwise; steps run from top to bottom."))
@@ -468,7 +540,7 @@ struct BuiltInAutomationView: View {
                     Button(text("Apply to draft")) {
                         guard canApply, let result = model.result else { return }
                         pendingApply = result
-                        if workspace.hasUnsavedChanges { confirmsClose = true }
+                        if hasChangesToKeep { confirmsClose = true }
                         else { finishClosing() }
                     }
                     .buttonStyle(.borderedProminent)
@@ -480,10 +552,10 @@ struct BuiltInAutomationView: View {
                         guard isCurrent, let output = model.output else { return }
                         do {
                             try BuiltInAutomationClipboard.copy(output.value)
-                            executionMessage = text("Result copied.")
+                            executionMessage = "Result copied."
                         } catch { inputFailure = error as? BuiltInAutomationFailure }
                     }
-                    .disabled(model.output?.matchedConditions != true || isBusy || !isCurrent)
+                    .disabled(model.output?.matchedConditions != true || isBusy || !isCurrent || hasUnappliedRules)
                     .accessibilityIdentifier("clipy.workflow.copy")
                 }
             }
@@ -491,7 +563,7 @@ struct BuiltInAutomationView: View {
                       ? "Apply changes the draft only. Save Revision in the editor to keep the result. Original content and earlier revisions remain available."
                       : "Preview never sends notifications. Run executes the selected branches and their notifications."))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if !canRun {
+            if !workflow.steps.contains(where: \.enabled) {
                 Text(text("Enable or add a step to preview this workflow.")).font(.caption).foregroundStyle(.secondary)
             } else if !workflow.trigger.includesManual {
                 Text(text("Manual Run is off for this trigger. Preview is still available."))
@@ -506,7 +578,7 @@ struct BuiltInAutomationView: View {
             Label(text(failure.message), systemImage: "exclamationmark.triangle")
                 .accessibilityIdentifier("clipy.workflow.error")
         } else if let executionMessage {
-            Text(executionMessage).foregroundStyle(.secondary)
+            Text(text(executionMessage)).foregroundStyle(.secondary)
         } else if model.isCancelled {
             Label(text("Cancelled. No result was applied."), systemImage: "stop.circle")
                 .foregroundStyle(.secondary)
@@ -532,6 +604,7 @@ struct BuiltInAutomationView: View {
     }
 
     private func run(effects: Bool) {
+        guard canRun else { return }
         executionMessage = nil
         inputFailure = nil
         lastRunUsedEffects = effects
@@ -543,7 +616,6 @@ struct BuiltInAutomationView: View {
         model.invalidate()
         inputFailure = nil
         executionMessage = nil
-        saveMessage = nil
     }
 
     private func select(_ id: UUID) {
@@ -559,24 +631,65 @@ struct BuiltInAutomationView: View {
     }
 
     private func duplicate(_ value: BuiltInAutomationWorkflow) {
+        guard !stepEditorState.hasUnappliedChanges(for: value.id) else { return }
         let name = value.name.isEmpty ? text("Untitled workflow") : value.name
         add(value.duplicated(named: name + " " + text("copy")))
-        saveMessage = text("Copy created as a manual workflow. Save it when ready.")
+        saveMessage = ("Copy created as a manual workflow. Save it when ready.")
+    }
+
+    private func exportWorkflow() {
+        guard !hasUnappliedRules else { return }
+        do {
+            exportDocument = BuiltInAutomationFileDocument(data: try BuiltInAutomationTransfer.export(workflow))
+            exportsWorkflow = true
+        } catch {
+            saveMessage = ((error as? BuiltInAutomationTransfer.Failure)?.message
+                               ?? "The workflow could not be exported. Try another location.")
+        }
+    }
+
+    private func importWorkflow(from url: URL) {
+        guard importTask == nil else { return }
+        saveMessage = nil
+        let maximumBytes = BuiltInAutomationTransfer.maximumFileBytes
+        importTask = Task {
+            defer { importTask = nil }
+            do {
+                let reader = Task.detached(priority: .userInitiated) {
+                    let accessed = url.startAccessingSecurityScopedResource()
+                    defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                    return try BuiltInAutomationTransfer.read(url, maximumBytes: maximumBytes)
+                }
+                let data = try await withTaskCancellationHandler {
+                    try await reader.value
+                } onCancel: {
+                    reader.cancel()
+                }
+                try Task.checkCancellation()
+                importedWorkflow = try BuiltInAutomationTransfer.decode(data)
+            } catch is CancellationError { }
+            catch {
+                guard !Task.isCancelled else { return }
+                saveMessage = ((error as? BuiltInAutomationTransfer.Failure)?.message
+                                   ?? BuiltInAutomationTransfer.Failure.unreadable.message)
+            }
+        }
     }
 
     private func save(all: Bool = false, close: Bool = false) {
+        guard all ? !stepEditorState.hasUnappliedChanges : !hasUnappliedRules else { return }
         do {
             if all { try workspace.saveAll() } else { try workspace.saveSelection() }
-            saveMessage = text("Workflow saved. Source and preview text are never saved with it.")
+            saveMessage = ("Workflow saved. Source and preview text are never saved with it.")
             if close { finishClosing() }
         } catch {
-            saveMessage = text((error as? BuiltInAutomationFailure)?.message ?? BuiltInAutomationFailure.invalidWorkflow.message)
+            saveMessage = ((error as? BuiltInAutomationFailure)?.message ?? BuiltInAutomationFailure.invalidWorkflow.message)
         }
     }
 
     private func requestClose() {
         pendingApply = nil
-        if workspace.hasUnsavedChanges { confirmsClose = true }
+        if hasChangesToKeep { confirmsClose = true }
         else { dismiss() }
     }
 
@@ -588,7 +701,8 @@ struct BuiltInAutomationView: View {
 
     private func requestRemoval(_ id: UUID) {
         guard let target = drafts.first(where: { $0.id == id }) else { return }
-        if library.workflows.contains(where: { $0.id == id }) || workspace.changedDrafts.contains(where: { $0.id == id }) {
+        if library.workflows.contains(where: { $0.id == id }) || workspace.changedDrafts.contains(where: { $0.id == id })
+            || stepEditorState.hasUnappliedChanges(for: id) {
             deletionTarget = target
             confirmsDeletion = true
         } else { remove(id) }
@@ -597,8 +711,9 @@ struct BuiltInAutomationView: View {
     private func remove(_ id: UUID) {
         do {
             try workspace.remove(id)
+            stepEditorState.forget(id)
             invalidatePreview()
-        } catch { saveMessage = text(BuiltInAutomationFailure.unreadableWorkflows.message) }
+        } catch { saveMessage = (BuiltInAutomationFailure.unreadableWorkflows.message) }
     }
 
     private func moveWorkflow(_ id: UUID, by offset: Int) {
@@ -612,7 +727,7 @@ struct BuiltInAutomationView: View {
               let id = UUID(uuidString: String(payload.dropFirst(9))),
               id != target, drafts.contains(where: { $0.id == id }) else { return false }
         do { try workspace.move(id, before: target); return true }
-        catch { saveMessage = text(BuiltInAutomationFailure.unreadableWorkflows.message); return false }
+        catch { saveMessage = (BuiltInAutomationFailure.unreadableWorkflows.message); return false }
     }
 
 }

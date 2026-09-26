@@ -46,7 +46,6 @@
 "Clean up text, sort lines and format JSON inside Clipy. Save reusable steps here, then run them from Edit Content." = "直接在 Clipy 内整理文本、排序行和格式化 JSON。在这里保存常用步骤，即可从「编辑内容」中运行。";
 "Manage workflows…" = "管理工作流…";
 "Text exceeds the 1 MiB workflow limit. Shorten the text or reduce replacement expansion." = "文本超过工作流的 1 MiB 上限。请缩短文本或减少替换扩展。";
-"Use no more than 32 steps in one workflow." = "每个工作流最多支持 32 个步骤。";
 "Line operations support up to 50,000 lines. Shorten the text before running this workflow." = "行处理最多支持 50,000 行，请缩短文本后再运行此工作流。";
 "Enter text to find, or disable the replacement step." = "请输入要查找的文本，或停用替换步骤。";
 "This text is not valid JSON. Correct the source text or disable the JSON step, then preview again." = "文本不是有效的 JSON。请修改原文或停用 JSON 步骤，再重新预览。";
@@ -258,11 +257,9 @@
 "An empty text condition never matches." = "文本条件为空时不会匹配任何内容。";
 "Steps run from top to bottom." = "步骤从上到下依次执行。";
 "%lld of %lld steps" = "%lld / %lld 个步骤";
-"The 32-step limit includes both branches and disabled steps." = "最多 32 个步骤，包含所有分支和已停用的步骤。";
 "Add an action or condition to build this workflow." = "添加动作或条件，开始配置工作流。";
 "No actions. The current value passes to the following steps." = "此分支没有动作，当前内容将直接传给后续步骤。";
 "Duplicate step" = "复制步骤";
-"Duplicates this step and all nested steps, within the 32-step limit." = "复制此步骤及全部嵌套步骤，工作流总计不能超过 32 个步骤。";
 "Disabled" = "已停用";
 "Clipboard content is never included in notifications." = "通知中不会包含剪贴板内容。";
 "Use $0 for the full match and $1, $2 for capture groups. Leave empty to remove matches." = "使用 $0 引用完整匹配，$1、$2 引用捕获组；留空则删除匹配内容。";
@@ -275,3 +272,63 @@
 "Save all and apply" = "全部保存并应用";
 "Apply without saving workflows" = "应用结果，不保存工作流";
 "Apply keeps the result in the content editor. Choose whether to save your workflow definitions as well." = "应用后，结果会保留在内容编辑器中。你可以选择是否同时保存工作流。";
+
+"This file could not be read as a Clipy workflow. Choose a workflow JSON file." = "无法将此文件读取为 Clipy 工作流，请选择工作流 JSON 文件。";
+"Workflow files must be no larger than 4 MiB." = "工作流文件不能超过 4 MiB。";
+"This workflow file uses an unsupported format or version." = "此工作流文件的格式或版本尚不受支持。";
+"Import workflow" = "导入工作流";
+"Original trigger" = "原触发方式";
+"Import creates a separate manual draft. Review its steps and save it before enabling automatic runs." = "导入后会创建独立的手动工作流草稿。检查并保存后，再按需要启用自动执行。";
+"Add as manual workflow" = "添加为手动工作流";
+"Import workflow…" = "导入工作流…";
+"Export workflow…" = "导出工作流…";
+"Workflow exported. Test input and results were not included." = "工作流已导出，未包含测试输入和结果。";
+"The workflow could not be exported. Try another location." = "无法导出工作流，请尝试其他保存位置。";
+"Workflow imported as a manual draft. Review and save it when ready." = "已导入为手动工作流草稿，请检查后保存。";
+
+"Keep rule text within 1 MiB of UTF-8." = "规则文本不能超过 1 MiB（按 UTF-8 计算）。";
+"Keep each rule argument within 16 KiB of UTF-8." = "每个规则参数不能超过 16 KiB（按 UTF-8 计算）。";
+"Use spaces rather than tabs for indentation." = "请使用空格缩进，不要使用 Tab。";
+"Align this line with an existing indentation level." = "请将这一行对齐到已有的缩进层级。";
+"Indent the following actions, or write an indented pass." = "请缩进后续动作；空分支可以缩进后写 pass。";
+"Place else or elif immediately after its matching if block." = "请将 else 或 elif 放在对应 if 分支之后，并保持同级缩进。";
+"End this block heading with a colon." = "请在代码块标题末尾加上冒号。";
+"Use a supported Clipy action name." = "请使用 Clipy 支持的动作名称。";
+"Use is_text, is_image, contains, or matches as the condition." = "条件支持 is_text、is_image、contains 和 matches。";
+"Write a function call with parentheses." = "请在函数名称后使用括号。";
+"Put each argument in single or double quotes." = "请用单引号或双引号包围每个参数。";
+"Check the number of arguments for this action or condition." = "请检查此动作或条件需要的参数数量。";
+"Close the quoted argument on the same line." = "请在同一行补全参数的结束引号。";
+"Use a supported string escape, or a raw string for a regular expression." = "请使用支持的转义写法；正则表达式可以使用 r 前缀的原始字符串。";
+"Remove the unexpected text or add the missing operator." = "请删除多余内容，或添加缺少的运算符。";
+"Enter a condition after the keyword or operator." = "请在关键字或运算符后填写条件。";
+"Close the parenthesized condition." = "请补全条件表达式的右括号。";
+"This definition contains inactive branches that rule text cannot preserve. Use the visual editor." = "此定义包含规则文本无法保留的未执行分支，请使用可视化编辑器。";
+
+"This workflow is nested more deeply than the workflow file format supports. Reduce branch or condition nesting; the number of steps is not limited." = "此工作流的嵌套层级超过工作流文件格式支持的范围。请减少分支或条件组的嵌套层级；步骤总数不限。";
+
+"Not" = "取反";
+"Remove negation" = "取消取反";
+"The condition below must not match." = "下方条件不满足时，才满足此条件。";
+"Combine with All" = "组合为全部满足";
+"Combine with Any" = "组合为任一满足";
+"Negate condition" = "条件取反";
+"Condition actions" = "条件操作";
+"Match conditions" = "条件组合方式";
+"All conditions" = "全部条件满足";
+"Any condition" = "任一条件满足";
+"Remove group" = "取消分组";
+"Condition group actions" = "条件组操作";
+"Every condition in this group must match." = "此组中的每个条件都必须满足。";
+"At least one condition in this group must match." = "此组中至少一个条件满足即可。";
+"Remove condition" = "移除条件";
+"Add a condition to this group." = "请在此组中添加条件。";
+"Add All group" = "添加“全部满足”条件组";
+"Add Any group" = "添加“任一满足”条件组";
+"Duplicates this step and all nested steps." = "复制此步骤及其所有嵌套步骤。";
+"End If" = "条件结束";
+"There is unapplied rule text in this window. Apply it before saving, or discard it when closing." = "窗口中还有未应用的规则文本。请应用后保存，或在关闭时放弃这些修改。";
+"Apply or discard rule text changes before saving, running or exporting this workflow." = "请先应用或放弃规则文本修改，再保存、运行或导出此工作流。";
+
+"Add a condition to each group, or remove the empty group." = "请为每个条件组添加条件，或移除空的条件组。";
+"Conditions in this group: %lld" = "此组包含 %lld 个条件";

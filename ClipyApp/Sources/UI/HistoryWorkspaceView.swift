@@ -68,6 +68,10 @@ struct HistoryWorkspaceView: View {
     }
 
     var body: some View {
+        batchRemovalWorkspace
+    }
+
+    private var workspaceContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             header.padding(16)
             Divider()
@@ -81,6 +85,10 @@ struct HistoryWorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .accessibilityIdentifier("clipy.history.workspace")
+    }
+
+    private var observedWorkspace: some View {
+        workspaceContent
         .onAppear {
             isActive = true
             if let preferences = browsingPreferences {
@@ -152,7 +160,10 @@ struct HistoryWorkspaceView: View {
         }
         .onChange(of: memoryPressureGeneration) { _, _ in applyMemoryPressure() }
         .task(id: action) { await performAction() }
-        .sheet(isPresented: Binding(get: { detailsItem != nil }, set: { if !$0 { detailsItem = nil } })) {
+    }
+
+    private var detailsWorkspace: some View {
+        observedWorkspace.sheet(isPresented: detailsPresented) {
             if let detailsItem {
                 NavigationStack {
                     HistoryDetailsView(viewState: viewState, item: detailsItem)
@@ -165,9 +176,11 @@ struct HistoryWorkspaceView: View {
                 .frame(minWidth: 580, idealWidth: 740, minHeight: 500, idealHeight: 650)
             }
         }
-        .confirmationDialog(text("Remove this item from history?"), isPresented: Binding(
-            get: { removalItem != nil }, set: { if !$0 { removalItem = nil } }
-        ), titleVisibility: .visible) {
+    }
+
+    private var itemRemovalWorkspace: some View {
+        detailsWorkspace.confirmationDialog(text("Remove this item from history?"),
+                                           isPresented: removalPresented, titleVisibility: .visible) {
             Button(text("Remove"), role: .destructive) {
                 if let removalItem { submit(.remove(removalItem.id)) }
                 removalItem = nil
@@ -176,9 +189,11 @@ struct HistoryWorkspaceView: View {
         } message: {
             Text(text("This removes the item and all its revisions. It cannot be undone."))
         }
-        .confirmationDialog(text(clearScope == .all ? "Clear all history?" : "Clear unpinned history?"), isPresented: Binding(
-            get: { clearScope != nil }, set: { if !$0 { clearScope = nil } }
-        ), titleVisibility: .visible) {
+    }
+
+    private var clearWorkspace: some View {
+        itemRemovalWorkspace.confirmationDialog(text(clearScope == .all ? "Clear all history?" : "Clear unpinned history?"),
+                                               isPresented: clearPresented, titleVisibility: .visible) {
             Button(text("Clear history"), role: .destructive) {
                 if let clearScope { submit(.clear(clearScope)) }
                 clearScope = nil
@@ -189,17 +204,45 @@ struct HistoryWorkspaceView: View {
                       ? "Removes every item, including pinned items, regardless of the current filters. This cannot be undone."
                       : "Removes all unpinned items, regardless of the current filters. Pinned items remain. This cannot be undone."))
         }
-        .confirmationDialog(String(format: text("Remove %lld selected items?"), Int64(batchRemoval.count)), isPresented: Binding(
-            get: { !batchRemoval.isEmpty }, set: { if !$0 { batchRemoval = [] } }
-        ), titleVisibility: .visible) {
+    }
+
+    private var batchRemovalWorkspace: some View {
+        clearWorkspace.confirmationDialog(String(format: text("Remove %lld selected items?"), Int64(batchRemoval.count)),
+                                          isPresented: batchRemovalPresented, titleVisibility: .visible) {
             Button(text("Remove selected items"), role: .destructive) {
                 executeBatch(.remove, references: batchRemoval)
                 batchRemoval = []
             }
+            .accessibilityIdentifier("clipy.history.workspace.confirm-batch-remove")
             Button(text("Cancel"), role: .cancel) { batchRemoval = [] }
+                .accessibilityIdentifier("clipy.history.workspace.cancel-batch-remove")
         } message: {
             Text(text("Each selected item and its revisions will be removed. This cannot be undone."))
         }
+    }
+
+    private var detailsPresented: Binding<Bool> {
+        Binding<Bool>(get: { detailsItem != nil }, set: { presented in
+            if !presented { detailsItem = nil }
+        })
+    }
+
+    private var removalPresented: Binding<Bool> {
+        Binding<Bool>(get: { removalItem != nil }, set: { presented in
+            if !presented { removalItem = nil }
+        })
+    }
+
+    private var clearPresented: Binding<Bool> {
+        Binding<Bool>(get: { clearScope != nil }, set: { presented in
+            if !presented { clearScope = nil }
+        })
+    }
+
+    private var batchRemovalPresented: Binding<Bool> {
+        Binding<Bool>(get: { !batchRemoval.isEmpty }, set: { presented in
+            if !presented { batchRemoval = [] }
+        })
     }
 
     private var header: some View {
@@ -241,7 +284,8 @@ struct HistoryWorkspaceView: View {
     }
 
     private var historyColumn: some View {
-        VStack(spacing: 0) {
+        let viewportHeight = listViewportHeight
+        return VStack(spacing: 0) {
             selectionToolbar.padding(10)
             Divider()
             if viewState.isLoadingFirstPage {
@@ -272,7 +316,7 @@ struct HistoryWorkspaceView: View {
                             .disabled(isMutating)
                             .onGeometryChange(for: Bool.self) { proxy in
                                 let frame = proxy.frame(in: .named("history-workspace-list"))
-                                return frame.height > 0 && frame.maxY > 0 && frame.minY < listViewportHeight
+                                return frame.height > 0 && frame.maxY > 0 && frame.minY < viewportHeight
                             } action: { visible in
                                 if visible { visibleIDs.insert(row.item.id) }
                                 else { visibleIDs.remove(row.item.id) }
@@ -310,6 +354,7 @@ struct HistoryWorkspaceView: View {
                 Spacer(minLength: 0)
                 Text(String(format: text("%lld selected"), Int64(selectedIDs.count)))
                     .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("clipy.history.workspace.selection-count")
             }
             .controlSize(.small)
             if !selectedIDs.isEmpty {
@@ -388,11 +433,13 @@ struct HistoryWorkspaceView: View {
             VStack(spacing: 2) {
                 Text(viewState.hasKnownRowOffset
                      ? String(format: text("Page %lld"), Int64(paging.pageNumber))
-                     : text("Near your reading position"))
+                    : text("Near your reading position"))
                     .font(.caption.weight(.medium))
+                    .accessibilityIdentifier("clipy.history.workspace.page-number")
                 if viewState.hasKnownRowOffset, let range = paging.visibleRange(in: viewState.loadedRowRange) {
                     Text(String(format: text("Items %lld–%lld"), Int64(range.lowerBound), Int64(range.upperBound)))
                         .font(.caption2).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("clipy.history.workspace.page-range")
                 }
             }
             .monospacedDigit().frame(maxWidth: .infinity)
@@ -454,6 +501,8 @@ struct HistoryWorkspaceView: View {
                              Int64(batchModel.succeeded.count), Int64(batchModel.failures.count), Int64(batchModel.remaining.count)),
                       systemImage: batchModel.retryReferences.isEmpty ? "checkmark.circle" : "exclamationmark.triangle")
                     .font(.caption)
+                    .accessibilityIdentifier("clipy.history.workspace.batch.summary")
+                    .accessibilityValue(batchActionName)
                 Spacer()
                 if !batchModel.retryReferences.isEmpty, let operation = batchModel.operation {
                     Button(text("Retry remaining items")) {
@@ -505,6 +554,15 @@ struct HistoryWorkspaceView: View {
         .accessibilityIdentifier("clipy.history.workspace.batch.result")
     }
 
+    private var batchActionName: String {
+        switch batchModel.operation {
+        case .some(.pin): text("Pin")
+        case .some(.unpin): text("Unpin")
+        case .some(.remove): text("Remove")
+        case .none: text("History actions")
+        }
+    }
+
     private func sortTitle(_ order: HistorySortOrder) -> String {
         switch order {
         case .automatic: "Default order"
@@ -529,7 +587,7 @@ struct HistoryWorkspaceView: View {
                                       hasKnownRowOffset: viewState.hasKnownRowOffset) {
             switch request {
             case .previous: viewState.loadPreviousPage()
-                case .next: viewState.loadNextPage()
+            case .next: viewState.loadNextPage()
             }
         }
         recordReadingPosition()

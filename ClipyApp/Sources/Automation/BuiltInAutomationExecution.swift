@@ -200,9 +200,18 @@ final class BuiltInAutomationAutomaticRunner {
             return []
         }
         if let savedDefinitions, savedDefinitions.data == data { return savedDefinitions.workflows }
-        let workflows = (try? BuiltInAutomationLibrary.decodeDefinitions(data)) ?? []
-        savedDefinitions = (data, workflows)
-        return workflows
+        do {
+            let workflows = try BuiltInAutomationLibrary.decodeDefinitions(data)
+            savedDefinitions = (data, workflows)
+            return workflows
+        } catch is CancellationError {
+            // Stopping a capture must not cache readable definitions as an
+            // empty library for the next, uncancelled automatic request.
+            return []
+        } catch {
+            savedDefinitions = (data, [])
+            return []
+        }
     }
 
     private static func byteCount(_ capture: ClipboardCapture) -> Int {

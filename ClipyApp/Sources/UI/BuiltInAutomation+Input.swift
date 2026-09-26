@@ -59,73 +59,121 @@ extension BuiltInAutomation {
         case let .text(text): try checkSize(text)
         case let .image(data): try validateImage(data)
         }
-        return try await runBranch(input, steps: steps, insideCondition: false, recognizeText: recognizeText)
+        return try await runBranches(input, steps: steps, recognizeText: recognizeText)
     }
 
-    private static func runBranch(
-        _ input: BuiltInAutomationInput, steps: [BuiltInAutomationStep], insideCondition: Bool,
-        recognizeText: @Sendable (Data) async throws -> String
-    ) async throws -> BuiltInAutomationOutput {
-        var value = input
+    private struct BranchFrame {
+        let original: BuiltInAutomationInput
+        let steps: [BuiltInAutomationStep]
+        var value: BuiltInAutomationInput
+        var nextStep = 0
         var requestsNotification = false
         var hasCondition = false
         var matchedPath = false
-        // Old flat workflows deferred effects until all their guards passed,
-        // even when a notification appeared before a guard. Keep that behavior.
-        var notificationAllowed = insideCondition || steps.contains {
-            $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation)
+        var notificationAllowed: Bool
+
+        init(_ input: BuiltInAutomationInput, steps: [BuiltInAutomationStep], insideCondition: Bool) {
+            original = input
+            value = input
+            self.steps = steps
+            // Existing flat definitions defer notifications until all guards
+            // pass, even when the notification precedes its sibling guard.
+            notificationAllowed = insideCondition || steps.contains {
+                $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation)
+            }
         }
-        for step in steps where step.enabled {
+    }
+
+    /// A heap-backed frame per active branch replaces recursive async calls.
+    /// A failed legacy guard discards only its current branch's work; selected
+    /// branch results and deferred notifications join the parent only on match.
+    private static func runBranches(
+        _ input: BuiltInAutomationInput, steps: [BuiltInAutomationStep],
+        recognizeText: @Sendable (Data) async throws -> String
+    ) async throws -> BuiltInAutomationOutput {
+        var frames = [BranchFrame(input, steps: steps, insideCondition: false)]
+        var stepsSinceYield = 0
+        while var frame = frames.popLast() {
             try Task.checkCancellation()
+            if frame.nextStep == frame.steps.count {
+                let matched = !frame.hasCondition || frame.matchedPath
+                guard var parent = frames.popLast() else {
+                    return BuiltInAutomationOutput(
+                        value: frame.value, requestsNotification: frame.requestsNotification,
+                        matchedConditions: matched, originalInput: input
+                    )
+                }
+                if matched {
+                    parent.value = frame.value
+                    parent.matchedPath = true
+                    parent.requestsNotification = parent.requestsNotification || frame.requestsNotification
+                }
+                frames.append(parent)
+                continue
+            }
+
+            let step = frame.steps[frame.nextStep]
+            frame.nextStep += 1
+            stepsSinceYield += 1
+            if stepsSinceYield == 64 {
+                await Task.yield()
+                try Task.checkCancellation()
+                stepsSinceYield = 0
+            }
+            guard step.enabled else { frames.append(frame); continue }
             switch step.operation {
             case .conditional:
-                hasCondition = true
-                let matches = try conditionMatches(value, step: step)
+                frame.hasCondition = true
+                let matches = try conditionMatches(frame.value, step: step)
                 let selected = matches ? step.thenSteps : step.otherwiseSteps
-                guard matches || selected.contains(where: \.enabled) else { continue }
-                let branch = try await runBranch(value, steps: selected, insideCondition: true, recognizeText: recognizeText)
-                if branch.matchedConditions {
-                    matchedPath = true
-                    value = branch.value
-                    requestsNotification = requestsNotification || branch.requestsNotification
+                frames.append(frame)
+                if matches || selected.contains(where: \.enabled) {
+                    frames.append(BranchFrame(frame.value, steps: selected, insideCondition: true))
                 }
+                continue
             case .requireText, .requireImage, .containsText, .matchesRegex:
-                hasCondition = true
+                frame.hasCondition = true
                 let matches: Bool
                 switch step.operation {
-                case .requireText: matches = value.text != nil
-                case .requireImage: if case .image = value { matches = true } else { matches = false }
-                case .containsText: matches = !step.find.isEmpty && value.text?.range(of: step.find, options: .literal) != nil
+                case .requireText: matches = frame.value.text != nil
+                case .requireImage: if case .image = frame.value { matches = true } else { matches = false }
+                case .containsText: matches = !step.find.isEmpty && frame.value.text?.range(of: step.find, options: .literal) != nil
                 case .matchesRegex:
-                    if let text = value.text { matches = try matchesRegularExpression(text, pattern: step.find) }
+                    if let text = frame.value.text { matches = try matchesRegularExpression(text, pattern: step.find) }
                     else { matches = false }
                 default: matches = false
                 }
-                guard matches else {
-                    return .init(value: input, requestsNotification: false, matchedConditions: false, originalInput: input)
+                if !matches {
+                    if frames.isEmpty {
+                        return .init(value: frame.original, requestsNotification: false,
+                                     matchedConditions: false, originalInput: input)
+                    }
+                    // The suspended parent still owns its pre-branch value.
+                    // Dropping this frame also drops every deferred effect.
+                    continue
                 }
-                matchedPath = true
-                notificationAllowed = true
+                frame.matchedPath = true
+                frame.notificationAllowed = true
             case .recognizeText:
-                guard case let .image(data) = value else { throw BuiltInAutomationFailure.requiresImage }
+                guard case let .image(data) = frame.value else { throw BuiltInAutomationFailure.requiresImage }
                 let recognized = try await recognizeText(data)
                 try Task.checkCancellation()
                 try checkSize(recognized)
                 guard !recognized.isEmpty else { throw BuiltInAutomationFailure.noRecognizedText }
-                value = .text(recognized)
-                matchedPath = true
+                frame.value = .text(recognized)
+                frame.matchedPath = true
             case .notify:
-                guard notificationAllowed else { throw BuiltInAutomationFailure.notificationNeedsCondition }
-                requestsNotification = true
+                guard frame.notificationAllowed else { throw BuiltInAutomationFailure.notificationNeedsCondition }
+                frame.requestsNotification = true
             default:
-                guard case let .text(text) = value else { throw BuiltInAutomationFailure.requiresText }
-                value = .text(try run(text, steps: [step]))
-                matchedPath = true
+                guard case let .text(text) = frame.value else { throw BuiltInAutomationFailure.requiresText }
+                frame.value = .text(try applyTextOperation(text, step: step))
+                frame.matchedPath = true
             }
+            frames.append(frame)
         }
-        try Task.checkCancellation()
-        return BuiltInAutomationOutput(value: value, requestsNotification: requestsNotification,
-                                       matchedConditions: !hasCondition || matchedPath, originalInput: input)
+        // The root frame always returns above, including an empty workflow.
+        throw BuiltInAutomationFailure.invalidWorkflow
     }
 
     private static func recognizeText(_ data: Data) async throws -> String {

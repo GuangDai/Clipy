@@ -80,12 +80,12 @@ struct BuiltInAutomationParameterIssue: Equatable {
 extension BuiltInAutomationStep {
     var needsFind: Bool {
         [.replace, .regexReplace, .regexExtract, .containsText, .matchesRegex].contains(operation)
-            || (operation == .conditional && [.containsText, .matchesRegex].contains(condition))
+            || (operation == .conditional && predicate == nil && [.containsText, .matchesRegex].contains(condition))
     }
 
     var isLiteralFind: Bool {
         [.replace, .containsText].contains(operation)
-            || (operation == .conditional && condition == .containsText)
+            || (operation == .conditional && predicate == nil && condition == .containsText)
     }
 
     var needsReplacement: Bool { [.replace, .regexReplace].contains(operation) }

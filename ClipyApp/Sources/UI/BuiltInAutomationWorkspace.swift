@@ -51,6 +51,10 @@ final class BuiltInAutomationWorkspace {
     }
 
     var visibleDrafts: [BuiltInAutomationWorkflow] {
+        visibleDrafts(includingUnsavedIDs: [])
+    }
+
+    func visibleDrafts(includingUnsavedIDs additionalIDs: Set<UUID>) -> [BuiltInAutomationWorkflow] {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return drafts.filter { draft in
             let includes: Bool
@@ -58,7 +62,7 @@ final class BuiltInAutomationWorkspace {
             case .all: includes = true
             case .manual: includes = draft.trigger.includesManual
             case .automatic: includes = draft.trigger.includesAutomatic
-            case .unsaved: includes = isDirty(draft)
+            case .unsaved: includes = isDirty(draft) || additionalIDs.contains(draft.id)
             }
             return includes && (term.isEmpty || draft.name.localizedStandardContains(term))
         }
@@ -116,13 +120,25 @@ final class BuiltInAutomationWorkspace {
     }
 
     func remove(_ id: UUID) throws {
+        let refresh = Set(drafts.filter { !isDirty($0) }.map(\.id))
+        try library.refresh()
         if library.workflows.contains(where: { $0.id == id }) { try library.remove(id) }
-        removeDraft(id)
+        drafts.removeAll { $0.id == id }
+        inputs.removeValue(forKey: id)
+        savedBaseline.removeValue(forKey: id)
+        refreshSavedDrafts(refresh)
+    }
+
+    func resetSavedDefinitions() {
+        library.reset()
+        savedBaseline.removeAll()
     }
 
     func move(_ id: UUID, before target: UUID?) throws {
         guard canReorder, id != target, let index = drafts.firstIndex(where: { $0.id == id }),
               target == nil || drafts.contains(where: { $0.id == target }) else { return }
+        let refresh = Set(drafts.filter { !isDirty($0) }.map(\.id))
+        try library.refresh()
         var reordered = drafts
         let moved = reordered.remove(at: index)
         let destination = target.flatMap { target in reordered.firstIndex { $0.id == target } } ?? reordered.endIndex
@@ -133,6 +149,7 @@ final class BuiltInAutomationWorkspace {
             try library.move(id: id, before: following?.id)
         }
         drafts = reordered
+        refreshSavedDrafts(refresh)
     }
 
     private func retainDraft() {
@@ -143,12 +160,14 @@ final class BuiltInAutomationWorkspace {
         let selectedID = workflow.id
         let localDrafts = drafts.enumerated().filter { !ids.contains($0.element.id) }
         let localIDs = Set(localDrafts.map(\.element.id))
-        // Saved definitions follow the actual execution order, including new
-        // rows from other windows. Local unsaved/edited rows keep their slots.
-        var refreshed = library.workflows.filter { !localIDs.contains($0.id) }
-        savedBaseline = savedBaseline.filter { localIDs.contains($0.key) }
-        for saved in refreshed { savedBaseline[saved.id] = saved }
-        for (index, draft) in localDrafts {
+        let localByID = Dictionary(uniqueKeysWithValues: localDrafts.map { ($0.element.id, $0.element) })
+        let savedIDs = Set(library.workflows.map(\.id))
+        // Every saved ID follows the actual execution order. Local edits keep
+        // their content/baseline at that position; only unsaved rows keep slots.
+        var refreshed = library.workflows.map { localByID[$0.id] ?? $0 }
+        savedBaseline = savedBaseline.filter { localIDs.contains($0.key) && savedIDs.contains($0.key) }
+        for saved in library.workflows where !localIDs.contains(saved.id) { savedBaseline[saved.id] = saved }
+        for (index, draft) in localDrafts where !savedIDs.contains(draft.id) {
             refreshed.insert(draft, at: min(index, refreshed.count))
         }
         drafts = refreshed
@@ -163,23 +182,6 @@ final class BuiltInAutomationWorkspace {
             let blank = Self.blank()
             placeholder = blank
             drafts = [blank]
-            workflow = blank
-            if !editorInput { source = "" }
-        }
-    }
-
-    private func removeDraft(_ id: UUID) {
-        drafts.removeAll { $0.id == id }
-        inputs.removeValue(forKey: id)
-        savedBaseline.removeValue(forKey: id)
-        guard workflow.id == id else { return }
-        if let next = drafts.first {
-            workflow = next
-            if !editorInput { source = inputs[next.id] ?? "" }
-        } else {
-            let blank = Self.blank()
-            placeholder = blank
-            drafts.append(blank)
             workflow = blank
             if !editorInput { source = "" }
         }

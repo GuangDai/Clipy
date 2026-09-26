@@ -52,15 +52,17 @@ struct BuiltInAutomationStep: Identifiable, Codable, Equatable, Sendable {
     var find = ""
     var replacement = ""
     var condition: Condition = .containsText
+    var predicate: BuiltInAutomationPredicate?
     var thenSteps: [Self] = []
     var otherwiseSteps: [Self] = []
 
     private enum CodingKeys: String, CodingKey {
-        case id, operation, enabled, find, replacement, condition, thenSteps, otherwiseSteps
+        case id, operation, enabled, find, replacement, condition, predicate, thenSteps, otherwiseSteps
     }
 
     init(id: UUID = UUID(), operation: Operation, enabled: Bool = true, find: String = "",
          replacement: String = "", condition: Condition = .containsText,
+         predicate: BuiltInAutomationPredicate? = nil,
          thenSteps: [Self] = [], otherwiseSteps: [Self] = []) {
         self.id = id
         self.operation = operation
@@ -68,6 +70,7 @@ struct BuiltInAutomationStep: Identifiable, Codable, Equatable, Sendable {
         self.find = find
         self.replacement = replacement
         self.condition = condition
+        self.predicate = predicate
         self.thenSteps = thenSteps
         self.otherwiseSteps = otherwiseSteps
     }
@@ -80,16 +83,24 @@ struct BuiltInAutomationStep: Identifiable, Codable, Equatable, Sendable {
         find = try values.decode(String.self, forKey: .find)
         replacement = try values.decode(String.self, forKey: .replacement)
         condition = try values.decodeIfPresent(Condition.self, forKey: .condition) ?? .containsText
+        predicate = try values.decodeIfPresent(BuiltInAutomationPredicate.self, forKey: .predicate)
         thenSteps = try values.decodeIfPresent([Self].self, forKey: .thenSteps) ?? []
         otherwiseSteps = try values.decodeIfPresent([Self].self, forKey: .otherwiseSteps) ?? []
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.id == rhs.id && lhs.operation == rhs.operation && lhs.enabled == rhs.enabled
-            && lhs.find.utf8.elementsEqual(rhs.find.utf8)
-            && lhs.replacement.utf8.elementsEqual(rhs.replacement.utf8)
-            && lhs.condition == rhs.condition && lhs.thenSteps == rhs.thenSteps
-            && lhs.otherwiseSteps == rhs.otherwiseSteps
+        var pending = [(lhs, rhs)]
+        while let (left, right) = pending.popLast() {
+            guard left.id == right.id, left.operation == right.operation, left.enabled == right.enabled,
+                  left.find.utf8.elementsEqual(right.find.utf8),
+                  left.replacement.utf8.elementsEqual(right.replacement.utf8),
+                  left.condition == right.condition, left.predicate == right.predicate,
+                  left.thenSteps.count == right.thenSteps.count,
+                  left.otherwiseSteps.count == right.otherwiseSteps.count else { return false }
+            pending.append(contentsOf: zip(left.thenSteps, right.thenSteps))
+            pending.append(contentsOf: zip(left.otherwiseSteps, right.otherwiseSteps))
+        }
+        return true
     }
 }
 
@@ -133,8 +144,9 @@ struct BuiltInAutomationWorkflow: Identifiable, Codable, Equatable, Sendable {
 }
 
 enum BuiltInAutomationFailure: Error, Equatable {
-    case textTooLarge, tooManySteps, tooManyLines, emptyFind, invalidJSON
+    case textTooLarge, tooManyLines, emptyFind, invalidJSON
     case invalidWorkflow, unreadableWorkflows, workflowLimit, definitionTooLarge
+    case unsupportedDefinitionNesting, emptyConditionGroup
     case requiresText, requiresImage, invalidImage, imageTooLarge, noRecognizedText, recognitionFailed
     case invalidRegex, regexEngineFailed, regexTimedOut, notificationDenied, notificationFailed, clipboardUnavailable
     case conditionNotMet, notificationNeedsCondition, invalidScope, historyUnavailable, executionQueueFull
@@ -159,80 +171,36 @@ enum BuiltInAutomationFailure: Error, Equatable {
         case .notificationFailed: "The workflow finished, but its notification could not be sent."
         case .clipboardUnavailable: "The clipboard does not contain the selected input type, or it could not be written."
         case .textTooLarge: "Text exceeds the 1 MiB workflow limit. Shorten the text or reduce replacement expansion."
-        case .tooManySteps: "Use no more than 32 steps in one workflow."
         case .tooManyLines: "Line operations support up to 50,000 lines. Shorten the text before running this workflow."
         case .emptyFind: "Enter text to find, or disable the replacement step."
         case .invalidJSON: "This text is not valid JSON. Correct the source text or disable the JSON step, then preview again."
         case .invalidWorkflow: "Give this workflow a name and at least one step."
+        case .emptyConditionGroup: "Add a condition to each group, or remove the empty group."
         case .unreadableWorkflows: "Saved workflows could not be read. Your saved data is unchanged. Reset saved workflows to start again."
         case .workflowLimit: "You can save up to 50 workflows. Remove one before saving another."
         case .definitionTooLarge: "Shorten the workflow name to 200 UTF-8 bytes and each find or replacement field to 16 KiB."
+        case .unsupportedDefinitionNesting: "This workflow is nested more deeply than the workflow file format supports. Reduce branch or condition nesting; the number of steps is not limited."
         }
     }
 }
 
 enum BuiltInAutomation {
     static let maximumBytes = 1_048_576
-    static let maximumSteps = 32
 
     static func run(_ source: String, steps: [BuiltInAutomationStep]) throws -> String {
         try Task.checkCancellation()
         try checkSize(source)
         try validateStepTree(steps)
         var value = source
-        for step in steps where step.enabled {
+        var pending = Array(steps.reversed())
+        while let step = pending.popLast() {
             try Task.checkCancellation()
-            switch step.operation {
-            case .conditional:
+            guard step.enabled else { continue }
+            if step.operation == .conditional {
                 let matches = try conditionMatches(.text(value), step: step)
-                value = try run(value, steps: matches ? step.thenSteps : step.otherwiseSteps)
-            case .requireText, .notify:
-                break
-            case .containsText:
-                guard !step.find.isEmpty, value.range(of: step.find, options: .literal) != nil else {
-                    throw BuiltInAutomationFailure.conditionNotMet
-                }
-            case .matchesRegex:
-                guard try matchesRegularExpression(value, pattern: step.find) else {
-                    throw BuiltInAutomationFailure.conditionNotMet
-                }
-            case .requireImage, .recognizeText:
-                throw BuiltInAutomationFailure.requiresImage
-            case .regexReplace, .regexExtract:
-                value = try regularExpression(value, step: step)
-            case .trim:
-                value = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            case .uppercase:
-                value = value.uppercased()
-            case .lowercase:
-                value = value.lowercased()
-            case .replace:
-                value = try replacing(value, find: step.find, replacement: step.replacement)
-            case .prettyJSON, .compactJSON:
-                value = try formatJSON(value, pretty: step.operation == .prettyJSON)
-            case .trimLines, .removeEmptyLines, .uniqueLines, .sortLines:
-                // Bound splitting before allocating owned line strings: a
-                // valid 1 MiB input can contain over a million empty lines.
-                let parts = value.replacingOccurrences(of: "\r\n", with: "\n")
-                    .replacingOccurrences(of: "\r", with: "\n")
-                    .split(separator: "\n", maxSplits: 50_000, omittingEmptySubsequences: false)
-                guard parts.count <= 50_000 else { throw BuiltInAutomationFailure.tooManyLines }
-                var lines = parts.map(String.init)
-                switch step.operation {
-                case .trimLines:
-                    lines = lines.map { $0.trimmingCharacters(in: .whitespaces) }
-                case .removeEmptyLines:
-                    lines.removeAll { $0.trimmingCharacters(in: .whitespaces).isEmpty }
-                case .uniqueLines:
-                    // Exact UTF-8 keeps canonically equivalent but byte-distinct
-                    // lines distinct, just as History content does (02 §5.4).
-                    var seen = Set<Data>()
-                    lines = lines.filter { seen.insert(Data($0.utf8)).inserted }
-                case .sortLines:
-                    lines.sort { $0.utf8.lexicographicallyPrecedes($1.utf8) }
-                default: break
-                }
-                value = lines.joined(separator: "\n")
+                pending.append(contentsOf: (matches ? step.thenSteps : step.otherwiseSteps).reversed())
+            } else {
+                value = try applyTextOperation(value, step: step)
             }
             try checkSize(value)
             try Task.checkCancellation()
@@ -240,44 +208,125 @@ enum BuiltInAutomation {
         return value
     }
 
-    /// The existing 32-step product limit includes both branches, disabled
-    /// steps and every nesting level, so execution and persistence stay bounded.
-    static func validateStepTree(_ steps: [BuiltInAutomationStep]) throws {
-        var remaining = maximumSteps
-        var ids = Set<UUID>()
-        func visit(_ children: [BuiltInAutomationStep]) throws {
-            for step in children {
-                remaining -= 1
-                guard remaining >= 0 else { throw BuiltInAutomationFailure.tooManySteps }
-                guard ids.insert(step.id).inserted else { throw BuiltInAutomationFailure.invalidWorkflow }
-                try visit(step.thenSteps)
-                try visit(step.otherwiseSteps)
+    /// The asynchronous runner has already admitted the whole tree. Applying
+    /// one operation must not recursively revalidate each step's descendants.
+    static func applyTextOperation(_ source: String, step: BuiltInAutomationStep) throws -> String {
+        try Task.checkCancellation()
+        var value = source
+        switch step.operation {
+        case .conditional:
+            throw BuiltInAutomationFailure.invalidWorkflow
+        case .requireText, .notify:
+            break
+        case .containsText:
+            guard !step.find.isEmpty, value.range(of: step.find, options: .literal) != nil else {
+                throw BuiltInAutomationFailure.conditionNotMet
             }
+        case .matchesRegex:
+            guard try matchesRegularExpression(value, pattern: step.find) else {
+                throw BuiltInAutomationFailure.conditionNotMet
+            }
+        case .requireImage, .recognizeText:
+            throw BuiltInAutomationFailure.requiresImage
+        case .regexReplace, .regexExtract:
+            value = try regularExpression(value, step: step)
+        case .trim:
+            value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .uppercase:
+            value = value.uppercased()
+        case .lowercase:
+            value = value.lowercased()
+        case .replace:
+            value = try replacing(value, find: step.find, replacement: step.replacement)
+        case .prettyJSON, .compactJSON:
+            value = try formatJSON(value, pretty: step.operation == .prettyJSON)
+        case .trimLines, .removeEmptyLines, .uniqueLines, .sortLines:
+            // Bound splitting before allocating owned line strings: a
+            // valid 1 MiB input can contain over a million empty lines.
+            let parts = value.replacingOccurrences(of: "\r\n", with: "\n")
+                .replacingOccurrences(of: "\r", with: "\n")
+                .split(separator: "\n", maxSplits: 50_000, omittingEmptySubsequences: false)
+            guard parts.count <= 50_000 else { throw BuiltInAutomationFailure.tooManyLines }
+            var lines = parts.map(String.init)
+            switch step.operation {
+            case .trimLines:
+                lines = lines.map { $0.trimmingCharacters(in: .whitespaces) }
+            case .removeEmptyLines:
+                lines.removeAll { $0.trimmingCharacters(in: .whitespaces).isEmpty }
+            case .uniqueLines:
+                // Exact UTF-8 keeps canonically equivalent but byte-distinct
+                // lines distinct, just as History content does (02 §5.4).
+                var seen = Set<Data>()
+                lines = lines.filter { seen.insert(Data($0.utf8)).inserted }
+            case .sortLines:
+                lines.sort { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+            default: break
+            }
+            value = lines.joined(separator: "\n")
         }
-        try visit(steps)
+        try checkSize(value)
+        try Task.checkCancellation()
+        return value
+    }
+
+    /// Every node, including disabled and inactive branches, needs a distinct
+    /// identity. An explicit stack admits long/deep workflows without imposing
+    /// an artificial step count or consuming the native call stack.
+    static func validateStepTree(_ steps: [BuiltInAutomationStep]) throws {
+        var ids = Set<UUID>()
+        var pending = Array(steps.reversed())
+        while let step = pending.popLast() {
+            try Task.checkCancellation()
+            guard ids.insert(step.id).inserted else { throw BuiltInAutomationFailure.invalidWorkflow }
+            pending.append(contentsOf: step.otherwiseSteps.reversed())
+            pending.append(contentsOf: step.thenSteps.reversed())
+        }
     }
 
     static func conditionMatches(_ input: BuiltInAutomationInput, step: BuiltInAutomationStep) throws -> Bool {
-        switch step.condition {
-        case .isText: return input.text != nil
-        case .isImage: if case .image = input { return true }; return false
-        case .containsText: return !step.find.isEmpty && input.text?.range(of: step.find, options: .literal) != nil
-        case .matchesRegex:
-            guard let text = input.text else { return false }
-            return try matchesRegularExpression(text, pattern: step.find)
-        }
+        try step.effectivePredicate.matches(input)
     }
 
     static func prefersImage(_ steps: [BuiltInAutomationStep]) -> Bool {
-        steps.contains { step in
-            step.enabled && ([.requireImage, .recognizeText].contains(step.operation)
-                || (step.operation == .conditional && (step.condition == .isImage
-                    || prefersImage(step.thenSteps) || prefersImage(step.otherwiseSteps))))
+        var pending = Array(steps.reversed())
+        while let step = pending.popLast() {
+            guard step.enabled else { continue }
+            if step.operation == .requireImage || step.operation == .recognizeText { return true }
+            if step.operation == .conditional {
+                if step.effectivePredicate.containsImageTest { return true }
+                pending.append(contentsOf: step.otherwiseSteps.reversed())
+                pending.append(contentsOf: step.thenSteps.reversed())
+            }
         }
+        return false
     }
 
     static func checkSize(_ text: String) throws {
         guard text.utf8.count <= maximumBytes else { throw BuiltInAutomationFailure.textTooLarge }
+    }
+
+    /// JSONEncoder reports its container-depth failure at the root after
+    /// producing the workflow's value tree. Field-level failures (for example
+    /// a non-finite date) must retain their own error. A decoder also rejects
+    /// ordinary malformed JSON at the root, so only its nesting diagnostic is
+    /// translated. No application-owned depth or step-count cap is imposed.
+    static func definitionNestingFailure(for error: any Error) -> BuiltInAutomationFailure? {
+        if case let EncodingError.invalidValue(_, context) = error,
+           context.codingPath.isEmpty {
+            return .unsupportedDefinitionNesting
+        }
+        guard case let DecodingError.dataCorrupted(context) = error,
+              context.codingPath.isEmpty else { return nil }
+        let underlying = context.underlyingError.map { $0 as NSError }
+        let diagnostics = [
+            context.debugDescription,
+            underlying?.userInfo[NSDebugDescriptionErrorKey] as? String ?? "",
+            context.underlyingError.map { String(describing: $0) } ?? "",
+        ]
+        return diagnostics.contains {
+            $0.range(of: "too many nested", options: .caseInsensitive) != nil
+                || $0.contains("tooManyNestedArraysOrDictionaries")
+        } ? .unsupportedDefinitionNesting : nil
     }
 
     private static func replacing(_ source: String, find: String, replacement: String) throws -> String {

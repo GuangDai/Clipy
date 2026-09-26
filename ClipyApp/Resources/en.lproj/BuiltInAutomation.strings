@@ -46,7 +46,6 @@
 "Clean up text, sort lines and format JSON inside Clipy. Save reusable steps here, then run them from Edit Content." = "Clean up text, sort lines and format JSON inside Clipy. Save reusable steps here, then run them from Edit Content.";
 "Manage workflows…" = "Manage workflows…";
 "Text exceeds the 1 MiB workflow limit. Shorten the text or reduce replacement expansion." = "Text exceeds the 1 MiB workflow limit. Shorten the text or reduce replacement expansion.";
-"Use no more than 32 steps in one workflow." = "Use no more than 32 steps in one workflow.";
 "Line operations support up to 50,000 lines. Shorten the text before running this workflow." = "Line operations support up to 50,000 lines. Shorten the text before running this workflow.";
 "Enter text to find, or disable the replacement step." = "Enter text to find, or disable the replacement step.";
 "This text is not valid JSON. Correct the source text or disable the JSON step, then preview again." = "This text is not valid JSON. Correct the source text or disable the JSON step, then preview again.";
@@ -258,11 +257,9 @@
 "An empty text condition never matches." = "An empty text condition never matches.";
 "Steps run from top to bottom." = "Steps run from top to bottom.";
 "%lld of %lld steps" = "%lld of %lld steps";
-"The 32-step limit includes both branches and disabled steps." = "The 32-step limit includes both branches and disabled steps.";
 "Add an action or condition to build this workflow." = "Add an action or condition to build this workflow.";
 "No actions. The current value passes to the following steps." = "No actions. The current value passes to the following steps.";
 "Duplicate step" = "Duplicate step";
-"Duplicates this step and all nested steps, within the 32-step limit." = "Duplicates this step and all nested steps, within the 32-step limit.";
 "Disabled" = "Disabled";
 "Clipboard content is never included in notifications." = "Clipboard content is never included in notifications.";
 "Use $0 for the full match and $1, $2 for capture groups. Leave empty to remove matches." = "Use $0 for the full match and $1, $2 for capture groups. Leave empty to remove matches.";
@@ -275,3 +272,63 @@
 "Save all and apply" = "Save all and apply";
 "Apply without saving workflows" = "Apply without saving workflows";
 "Apply keeps the result in the content editor. Choose whether to save your workflow definitions as well." = "Apply keeps the result in the content editor. Choose whether to save your workflow definitions as well.";
+
+"This file could not be read as a Clipy workflow. Choose a workflow JSON file." = "This file could not be read as a Clipy workflow. Choose a workflow JSON file.";
+"Workflow files must be no larger than 4 MiB." = "Workflow files must be no larger than 4 MiB.";
+"This workflow file uses an unsupported format or version." = "This workflow file uses an unsupported format or version.";
+"Import workflow" = "Import workflow";
+"Original trigger" = "Original trigger";
+"Import creates a separate manual draft. Review its steps and save it before enabling automatic runs." = "Import creates a separate manual draft. Review its steps and save it before enabling automatic runs.";
+"Add as manual workflow" = "Add as manual workflow";
+"Import workflow…" = "Import workflow…";
+"Export workflow…" = "Export workflow…";
+"Workflow exported. Test input and results were not included." = "Workflow exported. Test input and results were not included.";
+"The workflow could not be exported. Try another location." = "The workflow could not be exported. Try another location.";
+"Workflow imported as a manual draft. Review and save it when ready." = "Workflow imported as a manual draft. Review and save it when ready.";
+
+"Keep rule text within 1 MiB of UTF-8." = "Keep rule text within 1 MiB of UTF-8.";
+"Keep each rule argument within 16 KiB of UTF-8." = "Keep each rule argument within 16 KiB of UTF-8.";
+"Use spaces rather than tabs for indentation." = "Use spaces rather than tabs for indentation.";
+"Align this line with an existing indentation level." = "Align this line with an existing indentation level.";
+"Indent the following actions, or write an indented pass." = "Indent the following actions, or write an indented pass.";
+"Place else or elif immediately after its matching if block." = "Place else or elif immediately after its matching if block.";
+"End this block heading with a colon." = "End this block heading with a colon.";
+"Use a supported Clipy action name." = "Use a supported Clipy action name.";
+"Use is_text, is_image, contains, or matches as the condition." = "Use is_text, is_image, contains, or matches as the condition.";
+"Write a function call with parentheses." = "Write a function call with parentheses.";
+"Put each argument in single or double quotes." = "Put each argument in single or double quotes.";
+"Check the number of arguments for this action or condition." = "Check the number of arguments for this action or condition.";
+"Close the quoted argument on the same line." = "Close the quoted argument on the same line.";
+"Use a supported string escape, or a raw string for a regular expression." = "Use a supported string escape, or a raw string for a regular expression.";
+"Remove the unexpected text or add the missing operator." = "Remove the unexpected text or add the missing operator.";
+"Enter a condition after the keyword or operator." = "Enter a condition after the keyword or operator.";
+"Close the parenthesized condition." = "Close the parenthesized condition.";
+"This definition contains inactive branches that rule text cannot preserve. Use the visual editor." = "This definition contains inactive branches that rule text cannot preserve. Use the visual editor.";
+
+"This workflow is nested more deeply than the workflow file format supports. Reduce branch or condition nesting; the number of steps is not limited." = "This workflow is nested more deeply than the workflow file format supports. Reduce branch or condition nesting; the number of steps is not limited.";
+
+"Not" = "Not";
+"Remove negation" = "Remove negation";
+"The condition below must not match." = "The condition below must not match.";
+"Combine with All" = "Combine with All";
+"Combine with Any" = "Combine with Any";
+"Negate condition" = "Negate condition";
+"Condition actions" = "Condition actions";
+"Match conditions" = "Match conditions";
+"All conditions" = "All conditions";
+"Any condition" = "Any condition";
+"Remove group" = "Remove group";
+"Condition group actions" = "Condition group actions";
+"Every condition in this group must match." = "Every condition in this group must match.";
+"At least one condition in this group must match." = "At least one condition in this group must match.";
+"Remove condition" = "Remove condition";
+"Add a condition to this group." = "Add a condition to this group.";
+"Add All group" = "Add All group";
+"Add Any group" = "Add Any group";
+"Duplicates this step and all nested steps." = "Duplicates this step and all nested steps.";
+"End If" = "End If";
+"There is unapplied rule text in this window. Apply it before saving, or discard it when closing." = "There is unapplied rule text in this window. Apply it before saving, or discard it when closing.";
+"Apply or discard rule text changes before saving, running or exporting this workflow." = "Apply or discard rule text changes before saving, running or exporting this workflow.";
+
+"Add a condition to each group, or remove the empty group." = "Add a condition to each group, or remove the empty group.";
+"Conditions in this group: %lld" = "Conditions in this group: %lld";

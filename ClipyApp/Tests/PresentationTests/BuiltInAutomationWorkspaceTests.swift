@@ -288,7 +288,7 @@ struct BuiltInAutomationWorkspaceTests {
 
         try workspace.saveSelection()
 
-        #expect(workspace.drafts == [gamma, local, editedBeta, editedAlpha, external])
+        #expect(workspace.drafts == [gamma, local, editedAlpha, editedBeta, external])
         #expect(workspace.changedDrafts == [local, editedBeta])
         #expect(workspace.workflow == editedAlpha)
         #expect(workspace.source == "Alpha input")
@@ -298,6 +298,150 @@ struct BuiltInAutomationWorkspaceTests {
         #expect(workspace.source == "Local input")
         workspace.select(beta.id)
         #expect(workspace.source == "Beta input")
+    }
+
+    @Test func savedDirtyWorkflowUsesLatestExecutionPositionWithoutLosingItsLocalEdit() throws {
+        let suite = "WorkflowWorkspaceDirtyPriority.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let alpha = workflow("Alpha", trigger: .newCopies)
+        let beta = workflow("Beta", trigger: .newCopies)
+        let gamma = workflow("Gamma", trigger: .newCopies)
+        try BuiltInAutomationLibrary(defaults: defaults).saveAll([alpha, beta, gamma])
+        let workspace = BuiltInAutomationWorkspace(source: "Alpha input", defaults: defaults)
+        workspace.workflow.name = "Alpha local edit"
+        let editedAlpha = workspace.workflow
+        workspace.select(beta.id)
+        workspace.workflow.name = "Beta saved edit"
+        let editedBeta = workspace.workflow
+        let otherWindow = BuiltInAutomationLibrary(defaults: defaults)
+        try otherWindow.move(id: gamma.id, before: alpha.id)
+        try otherWindow.move(id: beta.id, before: alpha.id)
+
+        try workspace.saveSelection()
+
+        #expect(workspace.drafts == [gamma, editedBeta, editedAlpha])
+        #expect(workspace.drafts.map(\.id) == workspace.library.workflows.map(\.id))
+        #expect(workspace.changedDrafts == [editedAlpha])
+        #expect(workspace.workflow == editedBeta)
+        workspace.select(alpha.id)
+        #expect(workspace.source == "Alpha input")
+        workspace.workflow = alpha
+        #expect(!workspace.isDirty(alpha), "The original saved baseline survives moving the local edit")
+        #expect(BuiltInAutomationLibrary(defaults: defaults).workflows == [gamma, editedBeta, alpha])
+    }
+
+    @Test func externalDeletionRetainsOnlyLocallyEditedDraftsAndKeepsThemUnsaved() throws {
+        let suite = "WorkflowWorkspaceDeletedLocalDraft.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let alpha = workflow("Alpha")
+        let beta = workflow("Beta")
+        let gamma = workflow("Gamma")
+        try BuiltInAutomationLibrary(defaults: defaults).saveAll([alpha, beta, gamma])
+        let workspace = BuiltInAutomationWorkspace(source: "Alpha input", defaults: defaults)
+        workspace.workflow.name = "Alpha local edit"
+        let editedAlpha = workspace.workflow
+        workspace.select(beta.id)
+        workspace.workflow.name = "Beta saved edit"
+        let editedBeta = workspace.workflow
+        let otherWindow = BuiltInAutomationLibrary(defaults: defaults)
+        try otherWindow.remove(alpha.id)
+        try otherWindow.remove(gamma.id)
+
+        try workspace.saveSelection()
+
+        #expect(workspace.drafts == [editedAlpha, editedBeta])
+        #expect(workspace.library.workflows == [editedBeta])
+        #expect(workspace.changedDrafts == [editedAlpha])
+        workspace.select(alpha.id)
+        #expect(workspace.source == "Alpha input")
+        workspace.workflow = alpha
+        #expect(workspace.isDirty(alpha), "An externally deleted draft stays unsaved even when its text is restored")
+    }
+
+    @Test func explicitMoveCombinesLatestSavedOrderWithLocalEditsAndInputs() throws {
+        let suite = "WorkflowWorkspaceMoveRefresh.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let alpha = workflow("Alpha")
+        let beta = workflow("Beta")
+        let gamma = workflow("Gamma")
+        let delta = workflow("Delta")
+        try BuiltInAutomationLibrary(defaults: defaults).saveAll([alpha, beta, gamma, delta])
+        let workspace = BuiltInAutomationWorkspace(source: "Alpha input", defaults: defaults)
+        workspace.workflow.name = "Alpha unsaved"
+        let editedAlpha = workspace.workflow
+        let local = workflow("Local draft")
+        workspace.add(local)
+        workspace.source = "Local input"
+        workspace.select(alpha.id)
+        try BuiltInAutomationLibrary(defaults: defaults).move(id: delta.id, before: alpha.id)
+
+        try workspace.move(gamma.id, before: alpha.id)
+
+        #expect(workspace.drafts == [delta, gamma, editedAlpha, beta, local])
+        #expect(workspace.library.workflows == [delta, gamma, alpha, beta])
+        #expect(workspace.changedDrafts == [editedAlpha, local])
+        #expect(workspace.workflow == editedAlpha)
+        #expect(workspace.source == "Alpha input")
+        workspace.select(local.id)
+        #expect(workspace.source == "Local input")
+    }
+
+    @Test func removalRefreshesLatestPriorityAndSelectsExistingSavedSuccessor() throws {
+        let suite = "WorkflowWorkspaceRemoveRefresh.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let alpha = workflow("Alpha")
+        let beta = workflow("Beta")
+        let gamma = workflow("Gamma")
+        try BuiltInAutomationLibrary(defaults: defaults).saveAll([alpha, beta, gamma])
+        let workspace = BuiltInAutomationWorkspace(source: "Alpha input", defaults: defaults)
+        workspace.workflow.name = "Alpha unsaved"
+        let editedAlpha = workspace.workflow
+        workspace.select(beta.id)
+        let external = workflow("External")
+        let otherWindow = BuiltInAutomationLibrary(defaults: defaults)
+        try otherWindow.move(id: gamma.id, before: alpha.id)
+        try otherWindow.save(external)
+
+        try workspace.remove(beta.id)
+
+        #expect(workspace.drafts == [gamma, editedAlpha, external])
+        #expect(workspace.library.workflows == [gamma, alpha, external])
+        #expect(workspace.workflow == gamma)
+        #expect(workspace.changedDrafts == [editedAlpha])
+        workspace.select(alpha.id)
+        #expect(workspace.source == "Alpha input")
+        try workspace.remove(alpha.id)
+        try workspace.remove(gamma.id)
+        #expect(workspace.workflow == external)
+        #expect(workspace.drafts == [external])
+    }
+
+    @Test(arguments: [false, true])
+    func unreadableSavedDefinitionsPreventMoveOrRemovalWithoutLosingDrafts(remove: Bool) throws {
+        let suite = "WorkflowWorkspaceMutationReadFailure.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let alpha = workflow("Alpha")
+        let beta = workflow("Beta")
+        try BuiltInAutomationLibrary(defaults: defaults).saveAll([alpha, beta])
+        let workspace = BuiltInAutomationWorkspace(source: "Alpha input", defaults: defaults)
+        workspace.workflow.name = "Alpha unsaved"
+        let editedAlpha = workspace.workflow
+        defaults.set(Data("unreadable".utf8), forKey: BuiltInAutomationLibrary.defaultsKey)
+
+        #expect(throws: BuiltInAutomationFailure.unreadableWorkflows) {
+            if remove { try workspace.remove(alpha.id) }
+            else { try workspace.move(alpha.id, before: nil) }
+        }
+
+        #expect(workspace.drafts == [editedAlpha, beta])
+        #expect(workspace.workflow == editedAlpha)
+        #expect(workspace.source == "Alpha input")
+        #expect(workspace.changedDrafts == [editedAlpha])
     }
 
     @Test func discardingUsesOtherWindowsLatestSavedDefinition() throws {

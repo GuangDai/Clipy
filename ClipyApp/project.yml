@@ -152,6 +152,12 @@ targets:
       GCC_TREAT_WARNINGS_AS_ERRORS: YES
     dependencies:
       - target: ClipyApp
+      # Running UI fixtures seed through the production History writer before
+      # launching Clipy; the test process releases that owner before app open.
+      - package: Clipy
+        product: HistoryCore
+      - package: Clipy
+        product: HistoryStorage
       - target: ClipyDragReceiver
         link: false
         embed: true

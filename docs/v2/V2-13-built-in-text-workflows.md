@@ -37,15 +37,29 @@ uses UTF-8 lexical order. JSON is validated, then formatted without rewriting
 number spellings, repeated keys, string escapes, or key order. The literal replacement step treats replacement text literally. Separate regex
 conditions, extraction and capture-template replacement are defined below.
 
-One preview accepts at most 1 MiB of UTF-8 source and output, 32 steps and 50,000
-lines for line operations. Output expansion is checked while constructing JSON
+One preview accepts at most 1 MiB of UTF-8 source and output, and 50,000
+lines for line operations. There is no fixed number-of-steps limit, including
+disabled steps and nested branches. Output expansion is checked while constructing JSON
 and replacement results. Named workflows are limited to 50, names to 200 UTF-8
 bytes and each saved find/replacement field to 16 KiB. Execution runs away from
 the main actor, checks cancellation between steps and during JSON/replacement,
-and rejects late results using a per-preview identity. A result additionally
+and cooperatively yields during long asynchronous workflows. Tree validation,
+text execution and asynchronous branch execution use explicit stacks; increasing
+the number of steps does not increase native call-stack depth. Saved definition
+data retains its existing 4 MiB byte bound. Preview rejects late results using
+a per-preview identity. A result additionally
 must match the exact source and step snapshot before Apply is enabled. Native
 Foundation calls within a step are synchronous and complete within the bounded
 input; cancellation does not claim to preempt those calls.
+
+Saving keeps the existing nested JSON representation. Before replacing saved
+definitions, the library decodes the exact encoded bytes through the same reader
+used on reopening. Foundation's actual JSON container-nesting limits can reject
+an exceptionally deep tree; that failure is shown as unsupported file-format
+nesting and leaves the previous saved bytes untouched. The application does not
+add a step-count or nesting-count threshold. Ordinary malformed JSON and invalid
+field values retain their own error handling, and cancellation never marks
+readable definitions as corrupt.
 
 Before and After use the same native text view with equal column widths, fonts,
 insets, top-left alignment and wrapping; After is read-only and selectable.
@@ -70,7 +84,7 @@ Conditions appear as explicit If blocks with Then and Otherwise branches.
 Each selected branch receives the current value and passes its result to the
 following steps. Nested conditions are supported. A nonmatching condition with
 no Otherwise actions skips only that block; subsequent actions still execute.
-The 32-step bound includes all branches and nesting. Previously saved flat type
+Branches have no fixed step-count cap. Previously saved flat type
 and text guards retain their stop-on-nonmatch semantics and are labeled as such. Regex replacement supports capture templates and extraction joins
 full matches with LF. Matching checks progress for cancellation and a two-second
 deadline; output stays within the existing 1 MiB limit. Image input (PNG/JPEG/
@@ -132,7 +146,8 @@ Step choices are grouped by task: text, lines, structured data, regular
 expressions, images, and notifications. Parameters show their literal or template
 semantics and validation near the field. Conditions have collapsible Then and
 Otherwise branches. Duplicating a condition duplicates the entire subtree with
-fresh IDs and respects the same 32-step total limit as execution and saving.
+fresh IDs. Adding and duplicating steps have no fixed count cap, matching
+execution and saving; the existing definition-byte and parameter bounds remain.
 
 The preview offers equal-width comparison, input-only and result-only display
 modes. Preview completion, unchanged output, cancellation, no match, failure and
@@ -142,3 +157,20 @@ request clears stale operation feedback. Command-R previews; Command-S saves.
 Source and time filters expand separately from the basic trigger and input
 controls, with active-filter feedback and an explanation when untracked manual
 input cannot match them.
+
+## Sharing definitions
+
+The library's Add menu imports workflow JSON; each workflow's actions menu
+exports its current definition as formatted JSON. The file contains
+`format: "com.clipy.workflow"`, `version: 1`, and one `workflow` object with its
+name, steps, nested branches, trigger and scope. Test input, preview output and
+History content are not fields of this format. Export validates the definition;
+it does not implicitly save edits or run the workflow.
+
+Import reads at most 4 MiB, validates the complete definition and presents its
+name, step count, original trigger and input source for review. Accepting creates
+a separate manual draft with fresh workflow and step IDs. Existing definitions
+are never replaced by imported IDs. The user reviews and saves the new draft,
+then chooses automatic triggering explicitly if desired. Cancelling import,
+an unreadable file, an unsupported format/version or an invalid definition leaves
+the library and editor content untouched.

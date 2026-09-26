@@ -32,7 +32,8 @@ struct SearchExpressionBoundedExecutionTests {
             #expect(measured.metrics.batchCount == 1)
             #expect(measured.metrics.stopReason == .pageBudget)
             collected += page.rows.map(\.item.id)
-            cursor = try #require(page.next)
+            let next: HistoryPageCursor = try #require(page.next)
+            cursor = next
         }
         let recent = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 128))
         #expect(collected == Array(recent.rows.prefix(56).map(\.item.id)))

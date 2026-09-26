@@ -36,7 +36,10 @@ struct HistorySortOrderTests {
             #expect((page.next == nil) == (start + 2 >= expected.count))
             if let first = pages.first { #expect(page.position == first.position) }
             pages.append(page)
-            if start + 2 < expected.count { cursor = try #require(page.next) }
+            if start + 2 < expected.count {
+                let next: HistoryPageCursor = try #require(page.next)
+                cursor = next
+            }
         }
 
         let allRows = pages.flatMap(\.rows)
@@ -118,7 +121,10 @@ struct HistorySortOrderTests {
                 #expect((page.next == nil) == (start + 37 >= expected.count))
                 if let first = pages.first { #expect(page.position == first.position) }
                 pages.append(page)
-                if start + 37 < expected.count { cursor = try #require(page.next) }
+                if start + 37 < expected.count {
+                    let next: HistoryPageCursor = try #require(page.next)
+                    cursor = next
+                }
             }
             #expect(pages.flatMap(\.rows).map(\.item.id) == expected)
             var backward = try #require(pages.last?.previous)

@@ -14,6 +14,7 @@ final class BuiltInAutomationLibrary {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         do { workflows = try readCurrent() }
+        catch is CancellationError { }
         catch { failure = .unreadableWorkflows }
     }
 
@@ -88,9 +89,22 @@ final class BuiltInAutomationLibrary {
     }
 
     private func persist(_ updated: [BuiltInAutomationWorkflow]) throws {
-        let data = try JSONEncoder().encode(updated)
+        let data: Data
+        do { data = try JSONEncoder().encode(updated) }
+        catch {
+            if let failure = BuiltInAutomation.definitionNestingFailure(for: error) { throw failure }
+            throw error
+        }
         guard data.count <= 4 * BuiltInAutomation.maximumBytes else {
             throw BuiltInAutomationFailure.textTooLarge
+        }
+        // Validate the actual bytes with the same reader a fresh library and
+        // automatic execution use. Foundation's encoding and decoding nesting
+        // limits need not be identical; a failed draft never replaces saved data.
+        do { _ = try Self.decodeDefinitions(data) }
+        catch {
+            if let failure = BuiltInAutomation.definitionNestingFailure(for: error) { throw failure }
+            throw error
         }
         defaults.set(data, forKey: Self.defaultsKey)
         workflows = updated
@@ -106,6 +120,8 @@ final class BuiltInAutomationLibrary {
                 throw BuiltInAutomationFailure.unreadableWorkflows
             }
             return try Self.decodeDefinitions(data)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             failure = .unreadableWorkflows
             throw BuiltInAutomationFailure.unreadableWorkflows
@@ -141,8 +157,7 @@ final class BuiltInAutomationLibrary {
 
     private static func validate(_ workflow: BuiltInAutomationWorkflow) throws {
         guard !workflow.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !workflow.steps.isEmpty,
-              Set(workflow.steps.map(\.id)).count == workflow.steps.count else {
+              !workflow.steps.isEmpty else {
             throw BuiltInAutomationFailure.invalidWorkflow
         }
         try BuiltInAutomation.validateStepTree(workflow.steps)
@@ -154,32 +169,36 @@ final class BuiltInAutomationLibrary {
     }
 
     private static func validateSteps(_ steps: [BuiltInAutomationStep], insideCondition: Bool) throws {
-        // Old flat workflows deferred effects until all their guards passed,
-        // even when a notification appeared before a guard. Keep that behavior.
-        var notificationAllowed = insideCondition || steps.contains {
-            $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation)
+        typealias ValidationFrame = (remaining: ArraySlice<BuiltInAutomationStep>, notificationAllowed: Bool)
+        func frame(_ children: [BuiltInAutomationStep], insideCondition: Bool) -> ValidationFrame {
+            // Flat notifications may precede their sibling guard, but cannot
+            // borrow permission from an unrelated conditional branch.
+            (children[...], insideCondition || children.contains {
+                $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation)
+            })
         }
-        for step in steps {
+        var pending = [frame(steps, insideCondition: insideCondition)]
+        while var current = pending.popLast() {
+            try Task.checkCancellation()
+            guard let step = current.remaining.popFirst() else { continue }
+            pending.append(current)
             guard step.find.utf8.count <= 16_384, step.replacement.utf8.count <= 16_384 else {
                 throw BuiltInAutomationFailure.definitionTooLarge
             }
             guard step.enabled else { continue }
             if step.operation == .replace && step.find.isEmpty { throw BuiltInAutomationFailure.emptyFind }
-            if [.regexReplace, .regexExtract, .matchesRegex].contains(step.operation)
-                || (step.operation == .conditional && step.condition == .matchesRegex) {
+            if [.regexReplace, .regexExtract, .matchesRegex].contains(step.operation) {
                 guard !step.find.isEmpty, (try? NSRegularExpression(pattern: step.find)) != nil else {
                     throw BuiltInAutomationFailure.invalidRegex
                 }
             }
-            if [.requireText, .requireImage, .containsText, .matchesRegex].contains(step.operation) {
-                notificationAllowed = true
-            }
-            if step.operation == .notify && !notificationAllowed {
+            if step.operation == .notify && !current.notificationAllowed {
                 throw BuiltInAutomationFailure.notificationNeedsCondition
             }
             if step.operation == .conditional {
-                try validateSteps(step.thenSteps, insideCondition: true)
-                try validateSteps(step.otherwiseSteps, insideCondition: true)
+                try step.effectivePredicate.validate()
+                pending.append(frame(step.otherwiseSteps, insideCondition: true))
+                pending.append(frame(step.thenSteps, insideCondition: true))
             }
         }
     }
