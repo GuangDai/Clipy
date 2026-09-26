@@ -51,8 +51,21 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         reopenDetails(itemID: itemID, in: app)
         openEditor(in: app)
         openWorkflowAndPreview(in: app)
+        let workflowName = app.textFields["clipy.workflow.name"]
+        workflowName.click()
+        workflowName.typeText("Unsaved editor workflow")
+        clickPreview(in: app)
         XCTAssertTrue(waitUntil { apply.exists && apply.isEnabled }, app.debugDescription)
         apply.click()
+        let keepEditing = app.buttons["Keep editing"]
+        XCTAssertTrue(keepEditing.waitForExistence(timeout: 5), app.debugDescription)
+        keepEditing.click()
+        XCTAssertTrue(waitUntil { !keepEditing.exists && apply.isHittable }, app.debugDescription)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), original)
+        apply.click()
+        let applyWithoutSaving = app.buttons["clipy.workflow.discard-close"]
+        XCTAssertTrue(applyWithoutSaving.waitForExistence(timeout: 5), app.debugDescription)
+        applyWithoutSaving.click()
         XCTAssertTrue(waitUntil {
             !apply.exists && replacement.exists && replacement.value as? String == expected
         }, app.debugDescription)
@@ -128,7 +141,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         }, app.debugDescription)
         XCTAssertEqual(result.value as? String, "\"playground\" -- result...",
                        "Copying a read-only result must leave its text unchanged")
-        app.typeKey(.escape, modifierFlags: [])
+        discardChangesAndClose(in: app)
         XCTAssertTrue(waitUntil { !source.exists && manage.isHittable }, app.debugDescription)
         app.buttons["clipy.settings.category.general"].click()
     }
@@ -189,7 +202,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         add(attachment)
         // The definition is deliberately unsaved, so this UI test never
         // schedules a real OS notification or changes automatic workflows.
-        app.typeKey(.escape, modifierFlags: [])
+        discardChangesAndClose(in: app)
         XCTAssertTrue(waitUntil { !source.exists && manage.isHittable })
     }
 
@@ -220,9 +233,7 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
             for title in [firstName, secondName] {
                 let row = workflowRow(named: title, in: app)
                 if row.exists {
-                    row.rightClick()
-                    let remove = app.menuItems["Delete workflow"]
-                    if remove.exists { remove.click() }
+                    deleteWorkflow(row, in: app)
                 }
             }
         }
@@ -279,10 +290,183 @@ final class BuiltInAutomationJourneyUITests: XCTestCase {
         // Both workflows are manual and no real notification is requested.
         // Remove the test definitions through the same visible library controls.
         for row in [first, second] {
-            row.rightClick()
-            app.menuItems["Delete workflow"].click()
+            deleteWorkflow(row, in: app)
         }
         app.typeKey(.escape, modifierFlags: [])
+    }
+
+    @MainActor
+    func testSearchDuplicateAndSaveAllPreserveDraftsAndComparisonModes() throws {
+        let originalClipboard = "clipboard unchanged by workflow library tools"
+        let directory = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let app = launch(capturing: originalClipboard, directory: directory)
+        defer { app.terminate(); NSPasteboard.general.clearContents() }
+        XCTAssertTrue(app.descendants(matching: .any)["clipy.panel.root"].waitForExistence(timeout: 20))
+        app.typeKey(",", modifierFlags: .command)
+        let category = app.buttons["clipy.settings.category.automation"]
+        XCTAssertTrue(category.waitForExistence(timeout: 10))
+        category.click()
+        let manage = app.buttons["clipy.settings.workflows.manage"]
+        XCTAssertTrue(manage.waitForExistence(timeout: 5))
+        SettingsJourneyControls.scroll(manage, into: app.scrollViews.containing(.any, identifier: manage.identifier).firstMatch, app: app)
+        manage.click()
+
+        let name = app.textFields["clipy.workflow.name"]
+        let source = app.textViews["clipy.workflow.source"]
+        let result = app.textViews["clipy.workflow.result"]
+        let suffix = String(UUID().uuidString.prefix(8))
+        let firstName = "Trim Alpha " + suffix
+        let secondName = "Trim Beta " + suffix
+        defer {
+            let discard = app.buttons["clipy.workflow.discard-close"]
+            if discard.exists {
+                discard.click()
+                _ = waitUntil { !name.exists }
+            }
+            if !name.exists && manage.isHittable { manage.click() }
+            if name.exists {
+                clearWorkflowFilters(in: app)
+                for title in [firstName, secondName] {
+                    let row = workflowRow(named: title, in: app)
+                    if row.exists { deleteWorkflow(row, in: app) }
+                }
+            }
+        }
+        app.descendants(matching: .any)["clipy.workflow.load"].click()
+        app.menuItems["New workflow"].click()
+        XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
+        name.click()
+        name.typeText(firstName)
+        let firstInput = "  alpha draft input  "
+        source.click()
+        source.typeText(firstInput)
+        let firstRow = workflowRow(named: firstName, in: app)
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 5), app.debugDescription)
+        // The duplicate's name initially contains the original name. Keep
+        // the original ID so the two rows cannot resolve to the same match.
+        let firstID = firstRow.identifier
+        let first = app.buttons[firstID]
+        app.descendants(matching: .any)["clipy.workflow.actions"].click()
+        app.menuItems["Duplicate workflow"].click()
+        XCTAssertTrue(waitUntil { name.value as? String == firstName + " copy" }, app.debugDescription)
+        XCTAssertEqual(source.value as? String, "", "Duplicating a definition must not persist its test input")
+        name.click()
+        name.typeKey("a", modifierFlags: .command)
+        name.typeText(secondName)
+        let secondInput = "  beta draft input  "
+        source.click()
+        source.typeText(secondInput)
+        let secondRow = workflowRow(named: secondName, in: app)
+        XCTAssertTrue(secondRow.waitForExistence(timeout: 5), app.debugDescription)
+        let second = app.buttons[secondRow.identifier]
+        first.click()
+        XCTAssertTrue(waitUntil { name.value as? String == firstName && source.value as? String == firstInput }, app.debugDescription)
+
+        let search = app.textFields["clipy.workflow.search"]
+        search.click()
+        search.typeText(secondName)
+        XCTAssertTrue(waitUntil { !first.exists && second.exists }, app.debugDescription)
+        XCTAssertEqual(name.value as? String, firstName, "Filtering the library must preserve the selected draft")
+        XCTAssertEqual(source.value as? String, firstInput)
+        second.click()
+        XCTAssertTrue(waitUntil { source.value as? String == secondInput }, app.debugDescription)
+        search.click()
+        search.typeKey("a", modifierFlags: .command)
+        search.typeText(suffix)
+        let filter = app.popUpButtons["clipy.workflow.filter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 5), app.debugDescription)
+        filter.click()
+        app.menuItems["Unsaved workflows"].click()
+        XCTAssertTrue(waitUntil { first.exists && second.exists }, app.debugDescription)
+
+        // Close must offer a choice while definitions are unsaved. Keeping
+        // the window open preserves both drafts and their separate test text.
+        app.typeKey(.escape, modifierFlags: [])
+        let keepEditing = app.buttons["Keep editing"]
+        XCTAssertTrue(keepEditing.waitForExistence(timeout: 5), app.debugDescription)
+        keepEditing.click()
+        XCTAssertTrue(waitUntil { !app.buttons["clipy.workflow.discard-close"].exists && source.exists }, app.debugDescription)
+        XCTAssertEqual(name.value as? String, secondName)
+        XCTAssertEqual(source.value as? String, secondInput)
+        XCTAssertTrue(app.buttons["clipy.workflow.save"].isEnabled)
+
+        clickPreview(in: app)
+        XCTAssertTrue(waitUntil { result.value as? String == "beta draft input" }, app.debugDescription)
+        let comparisonWidth = result.frame.width
+        selectPreviewDisplay("Result", in: app)
+        XCTAssertTrue(waitUntil { !source.exists && result.exists && result.frame.width > comparisonWidth }, app.debugDescription)
+        XCTAssertEqual(result.value as? String, "beta draft input")
+        selectPreviewDisplay("Input", in: app)
+        XCTAssertTrue(waitUntil { source.exists && !result.exists }, app.debugDescription)
+        XCTAssertEqual(source.value as? String, secondInput)
+        selectPreviewDisplay("Compare", in: app)
+        XCTAssertTrue(waitUntil { source.exists && result.exists }, app.debugDescription)
+        XCTAssertEqual(source.frame.width, result.frame.width, accuracy: 1)
+        XCTAssertEqual(source.frame.minY, result.frame.minY, accuracy: 1)
+        XCTAssertEqual(NSPasteboard.general.string(forType: .string), originalClipboard)
+
+        app.descendants(matching: .any)["clipy.workflow.actions"].click()
+        app.menuItems["Save all changes"].click()
+        XCTAssertTrue(waitUntil { !app.buttons["clipy.workflow.save"].isEnabled && !first.exists && !second.exists }, app.debugDescription)
+        XCTAssertTrue(app.staticTexts["No matching workflows"].exists, app.debugDescription)
+        clearWorkflowFilters(in: app)
+        XCTAssertTrue(waitUntil { first.exists && second.exists }, app.debugDescription)
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !name.exists && manage.isHittable }, app.debugDescription)
+        XCTAssertFalse(app.buttons["clipy.workflow.discard-close"].exists)
+        manage.click()
+        XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
+        for row in [first, second] {
+            XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription)
+            row.click()
+            XCTAssertTrue(waitUntil { source.value as? String == "" && !app.buttons["clipy.workflow.save"].isEnabled }, app.debugDescription)
+        }
+        // Both definitions only trim text and remain manual. No notification
+        // or history write is requested by this complete library journey.
+        deleteWorkflow(first, in: app)
+        deleteWorkflow(second, in: app)
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !name.exists && manage.isHittable }, app.debugDescription)
+    }
+
+    @MainActor
+    private func discardChangesAndClose(in app: XCUIApplication) {
+        app.typeKey(.escape, modifierFlags: [])
+        let discard = app.buttons["clipy.workflow.discard-close"]
+        XCTAssertTrue(discard.waitForExistence(timeout: 5), app.debugDescription)
+        discard.click()
+        XCTAssertTrue(waitUntil { !app.textFields["clipy.workflow.name"].exists }, app.debugDescription)
+    }
+
+    @MainActor
+    private func deleteWorkflow(_ row: XCUIElement, in app: XCUIApplication) {
+        row.rightClick()
+        let remove = app.menuItems["Delete workflow"]
+        XCTAssertTrue(remove.waitForExistence(timeout: 5), app.debugDescription)
+        remove.click()
+        let confirmation = app.buttons["clipy.workflow.confirm-delete"]
+        XCTAssertTrue(confirmation.waitForExistence(timeout: 5), app.debugDescription)
+        confirmation.click()
+        XCTAssertTrue(waitUntil { !row.exists }, app.debugDescription)
+    }
+
+    @MainActor
+    private func clearWorkflowFilters(in app: XCUIApplication) {
+        let search = app.textFields["clipy.workflow.search"]
+        search.click()
+        search.typeKey("a", modifierFlags: .command)
+        search.typeKey(.delete, modifierFlags: [])
+        app.popUpButtons["clipy.workflow.filter"].click()
+        app.menuItems["All workflows"].click()
+    }
+
+    @MainActor
+    private func selectPreviewDisplay(_ title: String, in app: XCUIApplication) {
+        let segment = app.descendants(matching: .any)["clipy.workflow.display"]
+            .descendants(matching: .any).matching(NSPredicate(format: "label == %@", title)).firstMatch
+        XCTAssertTrue(segment.waitForExistence(timeout: 5), app.debugDescription)
+        segment.click()
     }
 
     @MainActor

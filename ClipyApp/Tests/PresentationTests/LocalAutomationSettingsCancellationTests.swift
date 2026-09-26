@@ -23,6 +23,8 @@ struct LocalAutomationSettingsCancellationTests {
         let firstAppearance = Task { await model.load() }
         await pending.waitUntilEntered()
         #expect(model.isWorking)
+        #expect(model.statusText == "Checking Access…")
+        #expect(!model.canEditCapabilities)
         firstAppearance.cancel()
 
         // SwiftUI starts another .task on returning to the tab before the
@@ -85,6 +87,12 @@ struct LocalAutomationSettingsCancellationTests {
             }
         }
         await pending.waitUntilEntered()
+        #expect(!model.canEditCapabilities)
+        switch mutation {
+        case .enable: #expect(model.statusText == "Enabling Access…")
+        case .revoke: #expect(model.statusText == "Revoking Access…")
+        case .grant: #expect(model.statusText == "Saving Permission…")
+        }
         command.cancel()
         await model.load()
         #expect(loads == 1)
@@ -95,6 +103,15 @@ struct LocalAutomationSettingsCancellationTests {
         #expect(model.failed == !succeeds)
         #expect(model.state == (succeeds ? after : before))
         #expect(mutationCalls == 1)
+        if !succeeds {
+            #expect(model.statusText == "Refresh Needed")
+            #expect(!model.canEditCapabilities)
+            #expect(model.notice == nil)
+            await model.requestCapability(.organize, enabled: true)
+            await model.requestCapability(.deleteItem, enabled: true)
+            #expect(mutationCalls == 1)
+            #expect(!model.confirmsDeletionGrant)
+        }
         // The supplied command result can be lost after the app committed.
         // Retry only asks for the next actual state; it never sends enable,
         // revoke or setCapability again.
@@ -103,6 +120,8 @@ struct LocalAutomationSettingsCancellationTests {
         #expect(mutationCalls == 1)
         #expect(model.state == after)
         #expect(!model.failed)
+        #expect(model.canEditCapabilities == after.enabled)
+        #expect(model.notice == "Permissions are up to date.")
     }
 
     @Test func alreadyCancelledTaskDoesNotEnterACommandOrOpenItsConfirmation() async {

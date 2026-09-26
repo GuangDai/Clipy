@@ -7,6 +7,13 @@ their own confirmation when granting access. Cancelling either confirmation
 leaves that permission off. Revision permission does not grant reading or
 deletion; each permission can be revoked independently.
 
+Settings groups permissions into reading, organizing, and content changes.
+Revision and deletion controls expand separately; existing grants remain visible.
+The access card reports the operation in progress and its result. If a cancelled
+or failed update leaves the actual state uncertain, refresh access status or
+revoke access before editing permissions again. The bundled tool's help and
+Finder actions remain available while access status is loading.
+
 Revising content appends an immutable revision. Original content and older
 revisions remain retained until removed by retention or item deletion; a
 revision does not erase the previous bytes. Programs with revision permission

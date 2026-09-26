@@ -8,11 +8,7 @@ struct BuiltInAutomationView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.locale) private var locale
     @Environment(\.workflowExecutionQueue) private var executionQueue
-    @State private var source: String
-    @State private var workflow = BuiltInAutomationWorkflow(name: "", steps: [.init(operation: .trim)])
-    @State private var drafts: [BuiltInAutomationWorkflow] = []
-    @State private var draftInputs: [UUID: String] = [:]
-    @State private var library = BuiltInAutomationLibrary()
+    @State private var workspace: BuiltInAutomationWorkspace
     @State private var model = BuiltInAutomationModel()
     @State private var hasAppeared = false
     @State private var editsScope = false
@@ -21,21 +17,37 @@ struct BuiltInAutomationView: View {
     @State private var choosesApplications = false
     @State private var inputFailure: BuiltInAutomationFailure?
     @State private var executionMessage: String?
+    @State private var confirmsClose = false
+    @State private var deletionTarget: BuiltInAutomationWorkflow?
+    @State private var confirmsDeletion = false
+    @State private var showsFilters = false
+    @State private var comparisonMode = ComparisonMode.sideBySide
+    @State private var lastRunUsedEffects = false
+    @State private var pendingApply: String?
+    @State private var definitionFailure: BuiltInAutomationFailure?
+    @AppStorage("workflowCompactRows") private var compactRows = false
+
+    private enum ComparisonMode: String, CaseIterable {
+        case sideBySide = "Compare", input = "Input", result = "Result"
+    }
     private let history: (any ClipboardHistory)?
     private let apply: (@MainActor (String) -> Void)?
 
     init(source: String = "", history: (any ClipboardHistory)? = nil, apply: (@MainActor (String) -> Void)? = nil) {
-        _source = State(initialValue: source)
+        _workspace = State(initialValue: BuiltInAutomationWorkspace(source: source, editorInput: apply != nil))
         self.history = history
         self.apply = apply
     }
 
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
     private func text(_ key: String) -> String { BuiltInAutomationCopy.text(key, bundle: copyBundle) }
-    private var input: BuiltInAutomationInput { .text(source) }
+    private var workflow: BuiltInAutomationWorkflow { workspace.workflow }
+    private var drafts: [BuiltInAutomationWorkflow] { workspace.drafts }
+    private var library: BuiltInAutomationLibrary { workspace.library }
+    private var input: BuiltInAutomationInput { .text(workspace.source) }
     private var isCurrent: Bool { model.isCurrent(input: input, steps: workflow.steps) }
     private var isBusy: Bool { model.isRunning || model.isQueued }
-    private var isDirty: Bool { library.workflows.first { $0.id == workflow.id } != workflow }
+    private var isDirty: Bool { workspace.isDirty(workflow) }
     private var canRun: Bool { workflow.steps.contains(where: \.enabled) }
     private var canApply: Bool {
         model.output?.matchedConditions == true && model.result?.isEmpty == false
@@ -51,7 +63,7 @@ struct BuiltInAutomationView: View {
             HStack {
                 Text(text("Workflows")).font(.title2.weight(.semibold))
                 Spacer()
-                Button(text("Close")) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(text("Close")) { requestClose() }.keyboardShortcut(.cancelAction)
             }
             .padding(16)
             Divider()
@@ -80,18 +92,37 @@ struct BuiltInAutomationView: View {
             guard !hasAppeared else { return }
             hasAppeared = true
             if let executionQueue { model = BuiltInAutomationModel(executionQueue: executionQueue) }
-            // An editor invocation starts with Trim for its current draft. The
-            // manager opens the first saved definition, retaining every other.
-            drafts = library.workflows
-            if apply == nil, let first = drafts.first { workflow = first }
-            else { drafts.append(workflow) }
+            definitionFailure = BuiltInAutomationLibrary.validationFailure(for: workflow)
         }
         .onChange(of: workflow) { _, _ in
-            retainDraft()
+            definitionFailure = BuiltInAutomationLibrary.validationFailure(for: workflow)
             invalidatePreview()
         }
         .onChange(of: input) { _, _ in invalidatePreview() }
         .onDisappear { model.invalidate() }
+        .interactiveDismissDisabled(workspace.hasUnsavedChanges)
+        .confirmationDialog(text("Save changes before closing?"), isPresented: $confirmsClose) {
+            Button(text(pendingApply == nil ? "Save all and close" : "Save all and apply")) { save(all: true, close: true) }
+                .disabled(library.failure != nil)
+            Button(text(pendingApply == nil ? "Discard changes and close" : "Apply without saving workflows"), role: .destructive) { finishClosing() }
+                .accessibilityIdentifier("clipy.workflow.discard-close")
+            Button(text("Keep editing"), role: .cancel) { pendingApply = nil }
+        } message: {
+            Text(text(pendingApply == nil
+                      ? "There are unsaved workflow definitions in this window. Temporary test input is not saved."
+                      : "Apply keeps the result in the content editor. Choose whether to save your workflow definitions as well."))
+        }
+        .confirmationDialog(text("Delete workflow?"), isPresented: $confirmsDeletion) {
+            Button(text("Delete workflow"), role: .destructive) {
+                if let target = deletionTarget { remove(target.id) }
+                deletionTarget = nil
+            }
+            .accessibilityIdentifier("clipy.workflow.confirm-delete")
+            Button(text("Cancel"), role: .cancel) { deletionTarget = nil }
+        } message: {
+            Text(deletionTarget?.name ?? "")
+            Text(text("This removes the definition and stops future automatic runs. Clipboard history is unchanged."))
+        }
         .fileImporter(isPresented: $choosesApplications, allowedContentTypes: [.application], allowsMultipleSelection: true) { result in
             if case let .success(urls) = result {
                 var identifiers = workflow.scope.applicationIDs
@@ -101,7 +132,7 @@ struct BuiltInAutomationView: View {
                     guard let identifier = Bundle(url: url)?.bundleIdentifier?.lowercased() else { continue }
                     if !identifiers.contains(identifier) { identifiers.append(identifier) }
                 }
-                workflow.scope.applications = identifiers.joined(separator: ", ")
+                workspace.workflow.scope.applications = identifiers.joined(separator: ", ")
             }
         }
         .confirmationDialog(text("Reset saved workflows?"), isPresented: $confirmsReset) {
@@ -115,7 +146,7 @@ struct BuiltInAutomationView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Text(text("Execution order")).font(.headline)
+                Text(text("Workflow library")).font(.headline)
                 Spacer()
                 Menu {
                     Button(text("New workflow")) {
@@ -135,18 +166,34 @@ struct BuiltInAutomationView: View {
                 .accessibilityLabel(text("New workflow"))
                 .accessibilityIdentifier("clipy.workflow.load")
             }
-            Text(text("Runs from top to bottom. Drag to change priority."))
+            TextField(text("Search workflows"), text: $workspace.query)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("clipy.workflow.search")
+            Picker(text("Show workflows"), selection: $workspace.filter) {
+                ForEach(BuiltInAutomationFilter.allCases, id: \.self) { Text(text($0.title)).tag($0) }
+            }
+            .labelsHidden()
+            .accessibilityIdentifier("clipy.workflow.filter")
+            Text(text(workspace.canReorder
+                      ? "Saved automatic workflows run in this order. Drag to change priority."
+                      : "Clear filters to change execution order."))
                 .font(.caption).foregroundStyle(.secondary)
             ScrollView {
                 LazyVStack(spacing: 4) {
-                    ForEach(Array(drafts.enumerated()), id: \.element.id) { index, draft in
-                        sidebarRow(draft, index: index)
+                    ForEach(workspace.visibleDrafts) { draft in
+                        sidebarRow(draft, index: drafts.firstIndex(where: { $0.id == draft.id }) ?? 0)
+                    }
+                    if workspace.visibleDrafts.isEmpty {
+                        Text(text("No matching workflows")).foregroundStyle(.secondary).padding(.vertical)
+                        Button(text("Clear filters")) { workspace.query = ""; workspace.filter = .all }
                     }
                     Color.clear.frame(height: 20)
                         .dropDestination(for: String.self, isEnabled: true) { values, _ in _ = reorderWorkflow(values.first, before: nil) }
                 }
             }
             .accessibilityIdentifier("clipy.workflow.sidebar")
+            Toggle(text("Compact list"), isOn: $compactRows).toggleStyle(.checkbox)
+                .accessibilityIdentifier("clipy.workflow.compact")
             if let failure = library.failure {
                 Text(text(failure.message)).font(.caption).foregroundStyle(.secondary)
                 Button(text("Reset saved workflows"), role: .destructive) { confirmsReset = true }
@@ -165,12 +212,20 @@ struct BuiltInAutomationView: View {
                     HStack(alignment: .firstTextBaseline, spacing: 4) {
                         Text(draft.name.isEmpty ? text("Untitled workflow") : draft.name)
                             .lineLimit(2).frame(maxWidth: .infinity, alignment: .leading)
-                        if library.workflows.first(where: { $0.id == draft.id }) != draft {
+                        if workspace.isDirty(draft) {
                             Image(systemName: "circle.fill").font(.system(size: 5))
                                 .accessibilityLabel(text("Unsaved changes"))
                         }
                     }
-                    Text(text(draft.trigger.title)).font(.caption).foregroundStyle(.secondary)
+                    if !compactRows {
+                        Text(text(draft.trigger.title)).font(.caption).foregroundStyle(.secondary)
+                        if let saved = library.workflows.first(where: { $0.id == draft.id }), saved.trigger.includesAutomatic {
+                            Label(text("Automatic version saved"), systemImage: "bolt.fill")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        } else if draft.trigger.includesAutomatic {
+                            Text(text("Save to enable automatic runs")).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
                 }
             }
             .padding(9)
@@ -179,21 +234,23 @@ struct BuiltInAutomationView: View {
                         in: RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(workflow.id == draft.id ? .isSelected : [])
         .accessibilityIdentifier("clipy.workflow.row." + draft.id.uuidString)
         .draggable("workflow:" + draft.id.uuidString)
         .dropDestination(for: String.self, isEnabled: true) { values, _ in _ = reorderWorkflow(values.first, before: draft.id) }
         .contextMenu {
-            Button(text("Move workflow up")) { moveWorkflow(draft.id, by: -1) }.disabled(index == 0)
-            Button(text("Move workflow down")) { moveWorkflow(draft.id, by: 1) }.disabled(index == drafts.count - 1)
+            Button(text("Duplicate workflow")) { duplicate(draft) }
+            Button(text("Move workflow up")) { moveWorkflow(draft.id, by: -1) }.disabled(index == 0 || !workspace.canReorder)
+            Button(text("Move workflow down")) { moveWorkflow(draft.id, by: 1) }.disabled(index == drafts.count - 1 || !workspace.canReorder)
             Divider()
-            Button(text("Delete workflow"), role: .destructive) { remove(draft.id) }
+            Button(text("Delete workflow"), role: .destructive) { requestRemoval(draft.id) }
         }
     }
 
     private var editorHeader: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                TextField(text("Workflow name"), text: $workflow.name)
+                TextField(text("Workflow name"), text: $workspace.workflow.name)
                     .textFieldStyle(.roundedBorder)
                     .accessibilityIdentifier("clipy.workflow.name")
                 Button(text("Save workflow")) { save() }
@@ -201,12 +258,21 @@ struct BuiltInAutomationView: View {
                     .keyboardShortcut("s", modifiers: .command)
                     .accessibilityIdentifier("clipy.workflow.save")
                 Menu {
-                    Button(text("Move workflow up")) { moveWorkflow(workflow.id, by: -1) }
-                        .disabled(drafts.first?.id == workflow.id)
-                    Button(text("Move workflow down")) { moveWorkflow(workflow.id, by: 1) }
-                        .disabled(drafts.last?.id == workflow.id)
+                    Button(text("Duplicate workflow")) { duplicate(workflow) }
+                    Button(text("Save all changes")) { save(all: true) }
+                        .disabled(!workspace.hasUnsavedChanges || library.failure != nil)
+                    Button(text("Revert changes")) {
+                        do { try workspace.discardSelection(); invalidatePreview() }
+                        catch { saveMessage = text(BuiltInAutomationFailure.unreadableWorkflows.message) }
+                    }
+                        .disabled(!isDirty)
                     Divider()
-                    Button(text("Delete workflow"), role: .destructive) { remove(workflow.id) }
+                    Button(text("Move workflow up")) { moveWorkflow(workflow.id, by: -1) }
+                        .disabled(drafts.first?.id == workflow.id || !workspace.canReorder)
+                    Button(text("Move workflow down")) { moveWorkflow(workflow.id, by: 1) }
+                        .disabled(drafts.last?.id == workflow.id || !workspace.canReorder)
+                    Divider()
+                    Button(text("Delete workflow"), role: .destructive) { requestRemoval(workflow.id) }
                 } label: { Image(systemName: "ellipsis") }
                 .menuIndicator(.hidden)
                 .accessibilityLabel(text("Workflow actions"))
@@ -215,6 +281,12 @@ struct BuiltInAutomationView: View {
             Text(saveMessage ?? text(isDirty ? "Unsaved changes" : "Saved"))
                 .font(.caption).foregroundStyle(.secondary)
                 .accessibilityIdentifier("clipy.workflow.save-status")
+            if !workflow.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let failure = definitionFailure {
+                Label(text(failure.message), systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("clipy.workflow.validation")
+            }
         }
         .padding(14)
     }
@@ -232,7 +304,7 @@ struct BuiltInAutomationView: View {
                 ScrollView { scopeControls.padding(2) }
             } else {
                 ScrollView {
-                    BuiltInAutomationStepsEditor(steps: $workflow.steps, bundle: copyBundle)
+                    BuiltInAutomationStepsEditor(steps: $workspace.workflow.steps, bundle: copyBundle)
                         .padding(2)
                 }
                 Text(text("Drag steps between branches. Conditions choose Then or Otherwise; steps run from top to bottom."))
@@ -244,48 +316,100 @@ struct BuiltInAutomationView: View {
 
     private var scopeControls: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Picker(text("Trigger"), selection: $workflow.trigger) {
+            Picker(text("Trigger"), selection: $workspace.workflow.trigger) {
                 ForEach(BuiltInAutomationTrigger.allCases, id: \.self) { Text(text($0.title)).tag($0) }
             }
             .accessibilityIdentifier("clipy.workflow.trigger")
-            Picker(text("Manual input"), selection: $workflow.scope.source) {
+            Picker(text("Manual input"), selection: $workspace.workflow.scope.source) {
                 ForEach(BuiltInAutomationScope.Source.allCases, id: \.self) { Text(text($0.title)).tag($0) }
             }
             .disabled(apply != nil)
             .accessibilityIdentifier("clipy.workflow.scope")
-            HStack {
-                Text(text("Source applications"))
-                Spacer()
-                Button(text("Choose Applications…")) { choosesApplications = true }
-                    .accessibilityIdentifier("clipy.workflow.choose-applications")
-            }
-            TextField(text("Source apps (bundle IDs, comma separated; empty means all)"), text: $workflow.scope.applications)
-                .textFieldStyle(.roundedBorder)
-                .accessibilityIdentifier("clipy.workflow.source-apps")
-            Picker(text("Copy time"), selection: $workflow.scope.timeRange) {
-                ForEach(BuiltInAutomationScope.TimeRange.allCases, id: \.self) { Text(text($0.title)).tag($0) }
-            }
-            .accessibilityIdentifier("clipy.workflow.time-range")
-            if workflow.scope.timeRange == .custom {
-                DatePicker(text("From"), selection: $workflow.scope.startDate)
-                DatePicker(text("Through"), selection: $workflow.scope.endDate)
-            }
+            Text(text(workflow.scope.source == .history
+                      ? "Checks a bounded range of history in its current order. No history item is changed."
+                      : "Manual input has no recorded source application or copy time."))
+                .font(.caption).foregroundStyle(.secondary)
             if workflow.scope.source == .history {
-                Stepper(value: $workflow.scope.historyLimit, in: 1...1000) {
+                Stepper(value: $workspace.workflow.scope.historyLimit, in: 1...1000) {
                     Text(text("History items to check") + ": \(workflow.scope.historyLimit)")
                 }
                 .accessibilityIdentifier("clipy.workflow.history-limit")
+            }
+            DisclosureGroup(isExpanded: $showsFilters) {
+                scopeFilters.padding(.top, 8)
+            } label: {
+                Label(text("Source and time filters"), systemImage: "line.3.horizontal.decrease")
+            }
+            .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.workflow.scope.filters"))
+            if !workflow.scope.applicationIDs.isEmpty || workflow.scope.timeRange != .any {
+                HStack {
+                    Text(text("Source or time filters are active")).font(.caption)
+                    Spacer()
+                    Button(text("Clear filters")) {
+                        workspace.workflow.scope.applications = ""
+                        workspace.workflow.scope.timeRange = .any
+                    }
+                }
+                if workflow.scope.source != .history {
+                    Label(text("These filters only match recorded copies. Manual preview will not match this input."),
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Text(text("Automatic runs check new copies only, never existing history. Save the workflow to enable automatic runs. Source and time filters need a recorded copy; untracked manual input will not match these filters."))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
 
+    private var scopeFilters: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(text("Source applications"))
+                Spacer()
+                Button(text("Choose Applications…")) { choosesApplications = true }
+                    .accessibilityIdentifier("clipy.workflow.choose-applications")
+            }
+            TextField(text("Source apps (bundle IDs, comma separated; empty means all)"), text: $workspace.workflow.scope.applications)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("clipy.workflow.source-apps")
+            Picker(text("Copy time"), selection: $workspace.workflow.scope.timeRange) {
+                ForEach(BuiltInAutomationScope.TimeRange.allCases, id: \.self) { Text(text($0.title)).tag($0) }
+            }
+            .accessibilityIdentifier("clipy.workflow.time-range")
+            if workflow.scope.timeRange == .custom {
+                DatePicker(text("From"), selection: $workspace.workflow.scope.startDate)
+                DatePicker(text("Through"), selection: $workspace.workflow.scope.endDate)
+            }
+            if !workflow.scope.validTimeRange {
+                Label(text("Choose an end date on or after the start date."), systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var comparisonArea: some View {
         VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Picker(text("Preview display"), selection: $comparisonMode) {
+                    ForEach(ComparisonMode.allCases, id: \.self) { Text(text($0.rawValue)).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 280)
+                .accessibilityIdentifier("clipy.workflow.display")
+                Spacer()
+                if let output = model.output, output.matchedConditions {
+                    Text(ByteCountFormatter.string(fromByteCount: Int64(output.value.byteCount), countStyle: .binary))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel(text("Result size"))
+                }
+            }
             HStack(alignment: .top, spacing: 12) {
-                comparisonColumn(label: showsManualInput && apply == nil ? "Test text" : "Before", original: true)
-                comparisonColumn(label: "After", original: false)
+                if comparisonMode != .result {
+                    comparisonColumn(label: showsManualInput && apply == nil ? "Test text" : "Before", original: true)
+                }
+                if comparisonMode != .input {
+                    comparisonColumn(label: "After", original: false)
+                }
             }
             if !showsManualInput {
                 Text(text("Preview reads the configured source. Before shows the exact input used for this result."))
@@ -306,11 +430,18 @@ struct BuiltInAutomationView: View {
                     .accessibilityLabel(text(original ? "Image input" : "After"))
             } else {
                 BuiltInAutomationSourceEditor(
-                    text: original && showsManualInput && apply == nil ? $source : .constant(value?.text ?? ""),
+                    text: original && showsManualInput && apply == nil ? $workspace.source : .constant(value?.text ?? ""),
                     accessibilityLabel: text(label),
                     isEditable: original && showsManualInput && apply == nil,
                     accessibilityIdentifier: original ? "clipy.workflow.source" : "clipy.workflow.result"
                 )
+                .overlay(alignment: .topLeading) {
+                    if !original && model.output == nil {
+                        Text(text(isBusy ? "Preparing result…" : "Preview to see the result here."))
+                            .font(.callout).foregroundStyle(.secondary).padding(12)
+                            .allowsHitTesting(false)
+                    }
+                }
             }
         }
         .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -323,20 +454,22 @@ struct BuiltInAutomationView: View {
                 if isBusy {
                     ProgressView().controlSize(.small)
                     Text(text(model.isQueued ? "Waiting to run…" : "Running…")).foregroundStyle(.secondary)
-                    Button(text("Cancel preview")) { model.invalidate() }
+                    Button(text("Cancel preview")) { model.cancel() }
                 } else {
                     Button(text("Preview result")) { run(effects: false) }
                         .disabled(!canRun).accessibilityIdentifier("clipy.workflow.preview")
+                        .keyboardShortcut("r", modifiers: .command)
                     Button(text("Run workflow")) { run(effects: true) }
                         .disabled(!canRun || !workflow.trigger.includesManual)
                         .accessibilityIdentifier("clipy.workflow.run")
                 }
                 Spacer()
-                if let apply {
+                if apply != nil {
                     Button(text("Apply to draft")) {
                         guard canApply, let result = model.result else { return }
-                        apply(result)
-                        dismiss()
+                        pendingApply = result
+                        if workspace.hasUnsavedChanges { confirmsClose = true }
+                        else { finishClosing() }
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canApply)
@@ -358,6 +491,12 @@ struct BuiltInAutomationView: View {
                       ? "Apply changes the draft only. Save Revision in the editor to keep the result. Original content and earlier revisions remain available."
                       : "Preview never sends notifications. Run executes the selected branches and their notifications."))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if !canRun {
+                Text(text("Enable or add a step to preview this workflow.")).font(.caption).foregroundStyle(.secondary)
+            } else if !workflow.trigger.includesManual {
+                Text(text("Manual Run is off for this trigger. Preview is still available."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .padding(14)
     }
@@ -368,12 +507,18 @@ struct BuiltInAutomationView: View {
                 .accessibilityIdentifier("clipy.workflow.error")
         } else if let executionMessage {
             Text(executionMessage).foregroundStyle(.secondary)
+        } else if model.isCancelled {
+            Label(text("Cancelled. No result was applied."), systemImage: "stop.circle")
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("clipy.workflow.cancelled")
         } else if model.output?.matchedConditions == false {
             Text(text("Conditions did not match. No notification was sent.")).foregroundStyle(.secondary)
         } else if let output = model.output {
-            if containsConditions(workflow.steps) {
-                Label(text("Workflow finished."), systemImage: "checkmark.circle")
-                    .accessibilityIdentifier("clipy.workflow.conditions-matched")
+            Label(text(lastRunUsedEffects ? "Workflow finished." : "Preview ready. No notification was sent."), systemImage: "checkmark.circle")
+                .accessibilityIdentifier(containsConditions(workflow.steps)
+                                         ? "clipy.workflow.conditions-matched" : "clipy.workflow.completed")
+            if output.value == originalInput {
+                Text(text("The result is unchanged.")).font(.caption).foregroundStyle(.secondary)
             }
             if output.matchedItemCount > 1 {
                 Text("\(output.matchedItemCount) " + text("items matched. Showing the first result; Copy result copies only this result."))
@@ -388,6 +533,8 @@ struct BuiltInAutomationView: View {
 
     private func run(effects: Bool) {
         executionMessage = nil
+        inputFailure = nil
+        lastRunUsedEffects = effects
         model.preview(input: input, steps: workflow.steps, runEffects: effects,
                       workflow: apply == nil ? workflow : nil, history: history, notificationName: workflow.name)
     }
@@ -399,53 +546,58 @@ struct BuiltInAutomationView: View {
         saveMessage = nil
     }
 
-    private func retainDraft() {
-        if let index = drafts.firstIndex(where: { $0.id == workflow.id }) { drafts[index] = workflow }
-    }
-
     private func select(_ id: UUID) {
         guard id != workflow.id else { return }
         invalidatePreview()
-        retainDraft()
-        draftInputs[workflow.id] = source
-        guard let next = drafts.first(where: { $0.id == id }) else { return }
-        workflow = next
-        if apply == nil { source = draftInputs[id] ?? "" }
+        workspace.select(id)
     }
 
     private func add(_ value: BuiltInAutomationWorkflow) {
         invalidatePreview()
-        retainDraft()
-        drafts.append(value)
-        select(value.id)
+        workspace.add(value)
         editsScope = false
     }
 
-    private func save() {
+    private func duplicate(_ value: BuiltInAutomationWorkflow) {
+        let name = value.name.isEmpty ? text("Untitled workflow") : value.name
+        add(value.duplicated(named: name + " " + text("copy")))
+        saveMessage = text("Copy created as a manual workflow. Save it when ready.")
+    }
+
+    private func save(all: Bool = false, close: Bool = false) {
         do {
-            try library.save(workflow)
-            let following = drafts.drop(while: { $0.id != workflow.id }).dropFirst()
-                .first { draft in library.workflows.contains { $0.id == draft.id } }
-            try library.move(id: workflow.id, before: following?.id)
-            if let saved = library.workflows.first(where: { $0.id == workflow.id }) { workflow = saved; retainDraft() }
+            if all { try workspace.saveAll() } else { try workspace.saveSelection() }
             saveMessage = text("Workflow saved. Source and preview text are never saved with it.")
-        } catch { saveMessage = text((error as? BuiltInAutomationFailure)?.message ?? BuiltInAutomationFailure.invalidWorkflow.message) }
+            if close { finishClosing() }
+        } catch {
+            saveMessage = text((error as? BuiltInAutomationFailure)?.message ?? BuiltInAutomationFailure.invalidWorkflow.message)
+        }
+    }
+
+    private func requestClose() {
+        pendingApply = nil
+        if workspace.hasUnsavedChanges { confirmsClose = true }
+        else { dismiss() }
+    }
+
+    private func finishClosing() {
+        if let pendingApply { apply?(pendingApply) }
+        pendingApply = nil
+        dismiss()
+    }
+
+    private func requestRemoval(_ id: UUID) {
+        guard let target = drafts.first(where: { $0.id == id }) else { return }
+        if library.workflows.contains(where: { $0.id == id }) || workspace.changedDrafts.contains(where: { $0.id == id }) {
+            deletionTarget = target
+            confirmsDeletion = true
+        } else { remove(id) }
     }
 
     private func remove(_ id: UUID) {
-        invalidatePreview()
         do {
-            if library.workflows.contains(where: { $0.id == id }) { try library.remove(id) }
-            drafts.removeAll { $0.id == id }
-            draftInputs.removeValue(forKey: id)
-            if workflow.id == id {
-                if let next = drafts.first { workflow = next; if apply == nil { source = draftInputs[next.id] ?? "" } }
-                else {
-                    workflow = BuiltInAutomationWorkflow(name: "", steps: [.init(operation: .trim)])
-                    drafts.append(workflow)
-                    if apply == nil { source = "" }
-                }
-            }
+            try workspace.remove(id)
+            invalidatePreview()
         } catch { saveMessage = text(BuiltInAutomationFailure.unreadableWorkflows.message) }
     }
 
@@ -456,18 +608,13 @@ struct BuiltInAutomationView: View {
     }
 
     private func reorderWorkflow(_ payload: String?, before target: UUID?) -> Bool {
-        guard let payload, payload.hasPrefix("workflow:"), let id = UUID(uuidString: String(payload.dropFirst(9))),
-              id != target, let index = drafts.firstIndex(where: { $0.id == id }) else { return false }
-        let previous = drafts
-        let moved = drafts.remove(at: index)
-        if let target, let destination = drafts.firstIndex(where: { $0.id == target }) { drafts.insert(moved, at: destination) }
-        else { drafts.append(moved) }
-        guard library.workflows.contains(where: { $0.id == id }) else { return true }
-        let following = drafts.drop(while: { $0.id != id }).dropFirst()
-            .first { draft in library.workflows.contains { $0.id == draft.id } }
-        do { try library.move(id: id, before: following?.id); return true }
-        catch { drafts = previous; saveMessage = text(BuiltInAutomationFailure.unreadableWorkflows.message); return false }
+        guard workspace.canReorder, let payload, payload.hasPrefix("workflow:"),
+              let id = UUID(uuidString: String(payload.dropFirst(9))),
+              id != target, drafts.contains(where: { $0.id == id }) else { return false }
+        do { try workspace.move(id, before: target); return true }
+        catch { saveMessage = text(BuiltInAutomationFailure.unreadableWorkflows.message); return false }
     }
+
 }
 /// Embeddable in the Automation settings tab, with no nested grouped Form.
 struct BuiltInAutomationSettingsView: View {

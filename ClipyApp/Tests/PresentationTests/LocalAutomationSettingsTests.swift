@@ -53,6 +53,76 @@ struct LocalAutomationSettingsTests {
         #expect(model.state?.grants == [.reviseContent])
     }
 
+    @Test func unchangedPermissionsDoNotSubmitOrAskForConfirmation() async {
+        let actions = SettingsActions(grants: [.browsePreview, .deleteItem, .reviseContent])
+        let model = LocalAutomationSettingsModel(settings: actions.settings)
+        await model.load()
+        await model.requestCapability(.browsePreview, enabled: true)
+        await model.requestCapability(.organize, enabled: false)
+        await model.requestCapability(.deleteItem, enabled: true)
+        await model.requestCapability(.reviseContent, enabled: true)
+        #expect(actions.grantCalls == 0)
+        #expect(!model.confirmsDeletionGrant)
+        #expect(!model.confirmsRevisionGrant)
+    }
+
+    @Test func confirmationStaysExclusiveAndSurvivesSwiftUIClosingTheAlert() async {
+        let actions = SettingsActions(grants: [])
+        let model = LocalAutomationSettingsModel(settings: actions.settings)
+        await model.load()
+        await model.requestCapability(.reviseContent, enabled: true)
+        await model.requestCapability(.deleteItem, enabled: true)
+        await model.requestCapability(.browsePreview, enabled: true)
+        #expect(model.confirmsRevisionGrant)
+        #expect(!model.confirmsDeletionGrant)
+        #expect(actions.grantCalls == 0)
+
+        // SwiftUI dismisses the alert before its button's Task gets to run.
+        model.confirmsRevisionGrant = false
+        await model.confirmRevisionGrant()
+        await model.confirmRevisionGrant()
+        #expect(actions.grantCalls == 1)
+        #expect(model.state?.grants == [.reviseContent])
+    }
+
+    @Test(arguments: [true, false])
+    func refreshingOrRevokingInvalidatesAnOldConfirmation(refresh: Bool) async {
+        let actions = SettingsActions(grants: [])
+        let model = LocalAutomationSettingsModel(settings: actions.settings)
+        await model.load()
+        await model.requestCapability(.deleteItem, enabled: true)
+        #expect(model.confirmsDeletionGrant)
+        if refresh { await model.load() } else { await model.revoke() }
+        #expect(!model.confirmsDeletionGrant)
+        await model.confirmDeletionGrant()
+        #expect(actions.grantCalls == 0)
+    }
+
+    @Test func disabledAccessDoesNotOpenAConfirmationOrChangePermissions() async {
+        let actions = SettingsActions(grants: [])
+        let model = LocalAutomationSettingsModel(settings: actions.settings)
+        await model.load()
+        await model.revoke()
+        await model.requestCapability(.deleteItem, enabled: true)
+        await model.requestCapability(.browsePreview, enabled: true)
+        #expect(!model.canEditCapabilities)
+        #expect(!model.confirmsDeletionGrant)
+        #expect(actions.grantCalls == 0)
+        #expect(model.notice == "Access revoked. Programs can no longer use Local Automation.")
+    }
+
+    @Test func accessFeedbackAndPermissionCountsAreLocalized() throws {
+        let english = try bundle("en")
+        let chinese = try bundle("zh-Hans")
+        #expect(LocalAutomationSettingsCopy.permissionSummary(granted: 2, total: 5, bundle: english)
+            == "2 of 5 permissions enabled")
+        #expect(LocalAutomationSettingsCopy.permissionSummary(granted: 2, total: 5, bundle: chinese)
+            == "已启用 2 项权限，共 5 项")
+        #expect(LocalAutomationSettingsCopy.text("Refresh Needed", bundle: chinese) == "状态待确认")
+        #expect(LocalAutomationSettingsCopy.text("Saving Permission…", bundle: chinese) == "正在保存权限…")
+        #expect(LocalAutomationSettingsCopy.text("Refresh Status", bundle: chinese) == "刷新状态")
+    }
+
     @Test func revisionPermissionDisclosureIsLocalizedAndExplainsRetainedHistory() throws {
         let english = try bundle("en")
         let chinese = try bundle("zh-Hans")

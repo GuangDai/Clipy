@@ -26,3 +26,8 @@
 "Path copied." = "已复制路径。";
 "Could not copy the path." = "未能复制路径。";
 "About Content Size" = "关于内容用量";
+"Organize History" = "整理历史";
+"Revise and Delete Items" = "修订与删除条目";
+"Commands and Permissions" = "命令与所需权限";
+"Preview access includes content snippets. Full content requires its own permission." = "预览包含内容片段。读取完整内容需要单独授权。";
+"Reading returns content to your script; it does not paste or change the system clipboard." = "读取操作将内容返回给脚本，不会粘贴或更改系统剪贴板。";

@@ -31,3 +31,17 @@
 "The bundled command-line tool is unavailable." = "内置命令行工具不可用。";
 "Help command copied." = "已复制帮助命令。";
 "Could not copy the help command. Try again." = "无法复制帮助命令。请重试。";
+"Refresh Needed" = "状态待确认";
+"Checking Access…" = "正在检查访问状态…";
+"Enabling Access…" = "正在启用访问…";
+"Revoking Access…" = "正在撤销访问…";
+"Saving Permission…" = "正在保存权限…";
+"Refresh Status" = "刷新状态";
+"Could not check access. Refresh to read the current permissions." = "无法检查访问状态，请刷新以读取当前权限。";
+"The change could not be confirmed. Refresh to check the current permissions before making another change." = "无法确认更改是否已生效，请刷新当前权限后再进行更改。";
+"Permissions are up to date." = "已刷新当前权限。";
+"Local Automation enabled. Choose the permissions your scripts need." = "已启用本机自动化，请选择脚本需要的权限。";
+"Access revoked. Programs can no longer use Local Automation." = "已撤销访问，程序无法再使用本机自动化。";
+"Permission updated." = "权限已更新。";
+"%1$lld of %2$lld permissions enabled" = "已启用 %1$lld 项权限，共 %2$lld 项";
+"Refresh to check permissions." = "请刷新以查看当前权限。";

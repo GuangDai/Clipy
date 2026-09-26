@@ -31,3 +31,17 @@
 "The bundled command-line tool is unavailable." = "The bundled command-line tool is unavailable.";
 "Help command copied." = "Help command copied.";
 "Could not copy the help command. Try again." = "Could not copy the help command. Try again.";
+"Refresh Needed" = "Refresh Needed";
+"Checking Access…" = "Checking Access…";
+"Enabling Access…" = "Enabling Access…";
+"Revoking Access…" = "Revoking Access…";
+"Saving Permission…" = "Saving Permission…";
+"Refresh Status" = "Refresh Status";
+"Could not check access. Refresh to read the current permissions." = "Could not check access. Refresh to read the current permissions.";
+"The change could not be confirmed. Refresh to check the current permissions before making another change." = "The change could not be confirmed. Refresh to check the current permissions before making another change.";
+"Permissions are up to date." = "Permissions are up to date.";
+"Local Automation enabled. Choose the permissions your scripts need." = "Local Automation enabled. Choose the permissions your scripts need.";
+"Access revoked. Programs can no longer use Local Automation." = "Access revoked. Programs can no longer use Local Automation.";
+"Permission updated." = "Permission updated.";
+"%1$lld of %2$lld permissions enabled" = "%1$lld of %2$lld permissions enabled";
+"Refresh to check permissions." = "Refresh to check permissions.";

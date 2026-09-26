@@ -109,3 +109,36 @@ is read at the user request boundary, before waiting in the queue.
 Stop/pause cancels automatic work. An edited/deleted definition is checked again
 before sending an in-flight automatic notification. All inputs/outputs are
 transient; preferences retain definitions, scope and order only.
+
+## Workflow management and editing
+
+The library supports name search and all/manual/automatic/unsaved filters.
+Filtering never changes priority or discards the selected draft. Reordering is
+available in the unfiltered list, where the complete execution order is visible.
+Rows distinguish saved automatic definitions from drafts waiting to be saved;
+compact rows are an optional appearance preference.
+
+Duplicate creates an independent manual workflow, including fresh IDs for every
+nested step. Save All validates changed definitions together and writes them in
+one preference update, retaining unrelated definitions changed in another window.
+Saving edits to an existing definition preserves the current saved order; saving
+new definitions places them according to this window's visible order.
+Unchanged placeholder definitions do not block saving or closing. Closing with
+edited definitions offers Save All, Discard, or Keep Editing. Deleting a saved or
+edited definition requires confirmation. Revert restores the saved definition;
+temporary test input remains separate from definition persistence.
+
+Step choices are grouped by task: text, lines, structured data, regular
+expressions, images, and notifications. Parameters show their literal or template
+semantics and validation near the field. Conditions have collapsible Then and
+Otherwise branches. Duplicating a condition duplicates the entire subtree with
+fresh IDs and respects the same 32-step total limit as execution and saving.
+
+The preview offers equal-width comparison, input-only and result-only display
+modes. Preview completion, unchanged output, cancellation, no match, failure and
+queueing are explicit states. Notification failure retains the computed result
+for Copy or Apply while explaining the failed effect. Editing or starting another
+request clears stale operation feedback. Command-R previews; Command-S saves.
+Source and time filters expand separately from the basic trigger and input
+controls, with active-filter feedback and an explanation when untracked manual
+input cannot match them.

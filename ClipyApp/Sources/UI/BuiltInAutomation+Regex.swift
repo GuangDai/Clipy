@@ -1,6 +1,13 @@
 import Foundation
 
 extension BuiltInAutomation {
+    /// Definition feedback uses the execution parser without starting a match.
+    /// In particular, $12 may mean capture 1 followed by a literal 2.
+    static func validateReplacementTemplate(_ template: String, captureGroupCount: Int) throws {
+        guard template.utf8.count <= 16_384 else { throw BuiltInAutomationFailure.invalidRegex }
+        _ = try replacementParts(template, groups: captureGroupCount)
+    }
+
     static func matchesRegularExpression(_ text: String, pattern: String) throws -> Bool {
         // An empty match is still a match; use the same interruptible loop,
         // replacing the first match with a fixed marker independent of capture.

@@ -72,41 +72,34 @@ struct LocalAutomationSettingsView: View {
     }
 
     @State private var showsAdvancedDetails = false
+    @State private var showsContentPermissions = false
 
     var body: some View {
         Form {
             Section { BuiltInAutomationSettingsView(history: history, failure: workflowFailure) }
-            Group {
-                accessSection
-                commandLineSection
-                if model.state?.enabled == true {
-                    readingPermissionsSection
-                    writingPermissionsSection
-                }
-                if model.failed {
-                    Section {
-                        Label(LocalAutomationSettingsCopy.text("Could not update Local Automation. Retry or revoke access."),
-                              systemImage: "exclamationmark.triangle")
-                            .foregroundStyle(.secondary)
-                        Button(LocalAutomationSettingsCopy.text("Retry")) {
-                            Task { await model.load() }
-                        }
-                        .accessibilityIdentifier("clipy.settings.automation.retry")
-                    }
-                }
+            accessSection
+            if model.state?.enabled == true {
+                readingPermissionsSection
+                organizingPermissionsSection
+                writingPermissionsSection
             }
-            .disabled(model.isWorking)
+            commandLineSection
         }
         .formStyle(.grouped)
         .task { await model.load() }
+        .onChange(of: model.state?.grants.intersection([.reviseContent, .deleteItem])) { _, grants in
+            if model.state?.enabled == true, grants?.isEmpty == false {
+                showsContentPermissions = true
+            }
+        }
     }
 
     private var accessSection: some View {
         Section {
             HStack(alignment: .top, spacing: 12) {
-                Image(systemName: model.state?.enabled == true ? "checkmark.circle.fill" : "lock.circle")
+                Image(systemName: model.failed ? "exclamationmark.circle" : model.state?.enabled == true ? "checkmark.circle.fill" : "lock.circle")
                     .font(.title2)
-                    .foregroundStyle(model.state?.enabled == true ? Color.green : Color.secondary)
+                    .foregroundStyle(model.failed ? Color.orange : model.state?.enabled == true ? Color.green : Color.secondary)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(LocalAutomationSettingsCopy.text(model.statusText))
@@ -121,20 +114,48 @@ struct LocalAutomationSettingsView: View {
                 }
                 if model.isWorking {
                     ProgressView().controlSize(.small)
+                        .accessibilityLabel(LocalAutomationSettingsCopy.text(model.statusText))
                 }
             }
-            if model.state?.enabled == true || model.failed {
-                Button(LocalAutomationSettingsCopy.text("Revoke Access"), role: .destructive) {
-                    Task { await model.revoke() }
+            if let state = model.state, state.enabled, !model.failed {
+                Text(LocalAutomationSettingsCopy.permissionSummary(granted: state.grants.count, total: 5))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .accessibilityIdentifier("clipy.settings.automation.permissionSummary")
+            }
+            HStack {
+                if model.state?.enabled == true || model.failed {
+                    Button(LocalAutomationSettingsCopy.text("Revoke Access"), role: .destructive) {
+                        Task { await model.revoke() }
+                    }
+                    .accessibilityIdentifier("clipy.settings.automation.revoke")
+                } else {
+                    Button(LocalAutomationSettingsCopy.text("Enable Local Automation")) {
+                        Task { await model.enable() }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.state == nil)
+                    .accessibilityIdentifier("clipy.settings.automation.enable")
                 }
-                .accessibilityIdentifier("clipy.settings.automation.revoke")
-            } else {
-                Button(LocalAutomationSettingsCopy.text("Enable Local Automation")) {
-                    Task { await model.enable() }
+                Spacer()
+                Button(LocalAutomationSettingsCopy.text("Refresh Status")) {
+                    Task { await model.load() }
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.state == nil)
-                .accessibilityIdentifier("clipy.settings.automation.enable")
+                .accessibilityIdentifier(model.failed ? "clipy.settings.automation.retry" : "clipy.settings.automation.refresh")
+            }
+            .disabled(model.isWorking)
+            if let message = model.failureMessage {
+                Label(LocalAutomationSettingsCopy.text(message), systemImage: "exclamationmark.triangle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("clipy.settings.automation.failure")
+            } else if let notice = model.notice {
+                Text(LocalAutomationSettingsCopy.text(notice))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("clipy.settings.automation.notice")
             }
         } header: {
             Text(LocalAutomationSettingsCopy.text("Local Automation"))
@@ -171,6 +192,8 @@ struct LocalAutomationSettingsView: View {
                 }
                 DisclosureGroup(isExpanded: $showsAdvancedDetails) {
                     VStack(alignment: .leading, spacing: 12) {
+                        commandReference
+                        Divider()
                         Text(AutomationMaintenancePresentation.text("Tool Location"))
                             .font(.caption).foregroundStyle(.secondary)
                         Text(commandLine.executablePath)
@@ -221,41 +244,92 @@ struct LocalAutomationSettingsView: View {
                              summary: "Read the current text, images, and other clipboard formats.")
         } header: {
             Text(AutomationMaintenancePresentation.text("Read History"))
+        } footer: {
+            Text(AutomationMaintenancePresentation.text("Preview access includes content snippets. Full content requires its own permission."))
+        }
+    }
+
+    private var organizingPermissionsSection: some View {
+        Section {
+            capabilityToggle(.organize, title: "Pin and Unpin Items", identifier: "organize",
+                             summary: "Keep important items pinned, or unpin them.")
+        } header: {
+            Text(AutomationMaintenancePresentation.text("Organize History"))
         }
     }
 
     private var writingPermissionsSection: some View {
         Section {
-            capabilityToggle(.organize, title: "Pin and Unpin Items", identifier: "organize",
-                             summary: "Keep important items pinned, or unpin them.")
-            capabilityToggle(.deleteItem, title: "Delete Items", identifier: "delete",
-                             summary: "Permanently remove individual history items.")
-                .alert(LocalAutomationSettingsCopy.text("Allow Programs to Delete History?"), isPresented: $model.confirmsDeletionGrant) {
-                    Button(LocalAutomationSettingsCopy.text("Allow Deletion"), role: .destructive) {
-                        Task { await model.confirmDeletionGrant() }
-                    }
-                    Button(LocalAutomationSettingsCopy.text("Cancel"), role: .cancel) { model.cancelDeletionGrant() }
-                } message: {
-                    Text(LocalAutomationSettingsCopy.text(
-                        "Programs using your account will be able to permanently delete individual clipboard items without asking again. This cannot be undone."
+            DisclosureGroup(isExpanded: $showsContentPermissions) {
+                VStack(alignment: .leading, spacing: 16) {
+                    capabilityToggle(.reviseContent, title: "Revise Current Content", identifier: "revise",
+                                     summary: "Save content changes as new revisions. Earlier content stays retained.")
+                        .alert(LocalAutomationSettingsCopy.text("Allow Programs to Revise Current Content?"), isPresented: $model.confirmsRevisionGrant) {
+                            Button(LocalAutomationSettingsCopy.text("Allow Revisions"), role: .destructive) {
+                                Task { await model.confirmRevisionGrant() }
+                            }
+                            Button(LocalAutomationSettingsCopy.text("Cancel"), role: .cancel) { model.cancelRevisionGrant() }
+                        } message: {
+                            Text(LocalAutomationSettingsCopy.revisionDisclosure())
+                        }
+                    Divider()
+                    capabilityToggle(.deleteItem, title: "Delete Items", identifier: "delete",
+                                     summary: "Permanently remove individual history items.")
+                        .alert(LocalAutomationSettingsCopy.text("Allow Programs to Delete History?"), isPresented: $model.confirmsDeletionGrant) {
+                            Button(LocalAutomationSettingsCopy.text("Allow Deletion"), role: .destructive) {
+                                Task { await model.confirmDeletionGrant() }
+                            }
+                            Button(LocalAutomationSettingsCopy.text("Cancel"), role: .cancel) { model.cancelDeletionGrant() }
+                        } message: {
+                            Text(LocalAutomationSettingsCopy.text(
+                                "Programs using your account will be able to permanently delete individual clipboard items without asking again. This cannot be undone."
+                            ))
+                        }
+                }
+                .padding(.vertical, 6)
+            } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(AutomationMaintenancePresentation.text("Revise and Delete Items"))
+                    Text(model.failed ? LocalAutomationSettingsCopy.text("Refresh to check permissions.") : LocalAutomationSettingsCopy.permissionSummary(
+                        granted: model.state?.grants.intersection([.reviseContent, .deleteItem]).count ?? 0,
+                        total: 2
                     ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
-            capabilityToggle(.reviseContent, title: "Revise Current Content", identifier: "revise",
-                             summary: "Save content changes as new revisions. Earlier content stays retained.")
-                .alert(LocalAutomationSettingsCopy.text("Allow Programs to Revise Current Content?"), isPresented: $model.confirmsRevisionGrant) {
-                    Button(LocalAutomationSettingsCopy.text("Allow Revisions"), role: .destructive) {
-                        Task { await model.confirmRevisionGrant() }
-                    }
-                    Button(LocalAutomationSettingsCopy.text("Cancel"), role: .cancel) { model.cancelRevisionGrant() }
-                } message: {
-                    Text(LocalAutomationSettingsCopy.revisionDisclosure())
-                }
+            }
+            .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.automation.contentPermissions"))
         } header: {
             Text(AutomationMaintenancePresentation.text("Change History"))
         } footer: {
             Text(LocalAutomationSettingsCopy.text(
                 "Permissions are independent. Enabling Local Automation grants none. All programs using your account share these permissions."
             ))
+        }
+    }
+
+    private var commandReference: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(AutomationMaintenancePresentation.text("Commands and Permissions"))
+                .font(.headline)
+            commandReferenceRow("recent · search", permission: "Browse Previews")
+            commandReferenceRow("read", permission: "Read Current Content")
+            commandReferenceRow("pin · unpin", permission: "Pin and Unpin Items")
+            commandReferenceRow("reviseContent (JSON)", permission: "Revise Current Content")
+            commandReferenceRow("delete", permission: "Delete Items")
+            Text(AutomationMaintenancePresentation.text("Reading returns content to your script; it does not paste or change the system clipboard."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func commandReferenceRow(_ commands: String, permission: String) -> some View {
+        LabeledContent {
+            Text(LocalAutomationSettingsCopy.text(permission))
+                .font(.caption)
+        } label: {
+            Text(commands).font(.system(.caption, design: .monospaced))
         }
     }
 
@@ -276,6 +350,7 @@ struct LocalAutomationSettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .disabled(!model.canEditCapabilities)
         .accessibilityIdentifier("clipy.settings.automation.grant.\(identifier)")
     }
 }
@@ -285,6 +360,10 @@ enum LocalAutomationSettingsCopy {
 
     static func text(_ key: String, bundle: Bundle? = nil) -> String {
         (bundle ?? Self.bundle).localizedString(forKey: key, value: key, table: "LocalAutomationSettings")
+    }
+
+    static func permissionSummary(granted: Int, total: Int, bundle: Bundle? = nil) -> String {
+        String(format: text("%1$lld of %2$lld permissions enabled", bundle: bundle), Int64(granted), Int64(total))
     }
 
     static func revisionDisclosure(bundle: Bundle? = nil) -> String {
