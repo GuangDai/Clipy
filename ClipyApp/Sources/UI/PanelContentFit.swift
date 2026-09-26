@@ -59,8 +59,6 @@ enum PanelContentFit {
         var unpinnedRows: [RowDescriptor] = []
         var density: HistoryRowDensity = .compact
         var fontSize: HistoryRowFontSize = .medium
-        /// The Newer/Latest windowed-navigation bar (HistoryListView).
-        var hasWindowedPages = false
         /// The trailing pagination control (Older button or loading row):
         /// `hasNextPage || isLoadingPage`, matching the list's condition.
         var showsPaginationControl = false
@@ -121,9 +119,6 @@ enum PanelContentFit {
     /// No headings or empty group space, including a pinned-only result.
     static let groupSeparatorHeight: CGFloat = 9
 
-    /// The Newer/Latest windowed-navigation bar: the buttons plus their
-    /// 6pt vertical padding (HistoryListView).
-    static let windowedNavigationHeight: CGFloat = 34
 
     /// The trailing pagination control — the loading row's small progress
     /// view plus its 6pt vertical padding, and the same bound covers the
@@ -205,9 +200,6 @@ enum PanelContentFit {
         }
         if input.isFilterChipVisible {
             height += filterChipDelta
-        }
-        if input.hasWindowedPages {
-            height += windowedNavigationHeight
         }
         let showsGroupSeparator = input.usesPinnedGrouping && !input.pinnedRows.isEmpty
             && (!input.unpinnedRows.isEmpty || input.showsPaginationControl)

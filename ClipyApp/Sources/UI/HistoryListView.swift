@@ -91,36 +91,11 @@ struct HistoryListView: View {
         // Observe row facts directly. A periodic TimelineView must not own
         // publication of captures, pin changes or updated accessibility labels.
         VStack(spacing: 0) {
-            // Reserve navigation space from the first pageable result, so
-            // retiring page one cannot insert a toolbar above the viewport.
-            if viewState.showsPageNavigation {
-                HStack {
-                    Button(HistoryListCopy.text("Newer")) { viewState.loadPreviousPage() }
-                        .disabled(!viewState.hasPreviousPage || viewState.isLoadingPage)
-                        .accessibilityIdentifier("clipy.history.newer")
-                    Spacer()
-                    if let range = viewState.loadedRowRange {
-                        Text(viewState.hasKnownRowOffset
-                             ? HistoryListCopy.loadedRange(range)
-                             : HistoryListCopy.text("Near your reading position"))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                            .accessibilityIdentifier("clipy.history.loaded-range")
-                    }
-                    Spacer()
-                    Button(HistoryListCopy.text("Latest")) { viewState.returnToLatest() }
-                        .disabled(!viewState.hasPreviousPage && !viewState.hasWindowedPages)
-                        .accessibilityIdentifier("clipy.history.latest")
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 6)
-            }
             content(now: Date())
         }
         .background { selectionShortcuts }
         .onChange(of: viewState.hasAuthoritativeFirstPage) { _, hasPage in
-            // A new query or explicit Latest request starts at its first
+            // A new query or return-to-latest request starts at its first
             // result even if that query happens to include the old anchor.
             if !hasPage { firstVisibleRowID = nil }
         }

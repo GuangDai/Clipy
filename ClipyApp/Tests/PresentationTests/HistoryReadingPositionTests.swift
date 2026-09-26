@@ -21,7 +21,6 @@ struct HistoryReadingPositionTests {
         #expect(state.readingItemID == items[4].id)
         #expect(state.hasPreviousPage)
         #expect(state.hasNextPage)
-        #expect(state.showsPageNavigation)
         #expect(!state.hasKnownRowOffset)
         #expect(state.displayedCountIsLowerBound)
         #expect(!state.didLoseReadingPosition)

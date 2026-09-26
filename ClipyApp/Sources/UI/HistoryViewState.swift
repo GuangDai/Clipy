@@ -282,7 +282,6 @@ final class HistoryViewState {
     /// Remains true when Newer returns to the first three pages: dropping
     /// the tail still needs visible-selection reconciliation and Latest.
     private(set) var hasWindowedPages = false
-    var showsPageNavigation: Bool { hasNextPage || hasPreviousPage || loadedPageCount > 1 || hasWindowedPages }
     var traversedRowCount: Int { rowsBeforeWindow + rows.count }
     var loadedRowRange: ClosedRange<Int>? {
         rows.isEmpty ? nil : (rowsBeforeWindow + 1)...traversedRowCount

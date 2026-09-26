@@ -128,13 +128,6 @@ struct PanelContentFitTests {
         )
         #expect(PanelContentFit.failureBannerHeight == 47)
 
-        var withWindowing = base
-        withWindowing.hasWindowedPages = true
-        #expect(
-            PanelContentFit.idealHeight(withWindowing) - baseHeight
-                == PanelContentFit.windowedNavigationHeight
-        )
-
         var withPagination = base
         withPagination.showsPaginationControl = true
         #expect(

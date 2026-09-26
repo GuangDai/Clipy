@@ -15,8 +15,4 @@ internal enum HistoryListCopy {
         String(format: text("No items match “%@”.", bundle: bundle), query)
     }
 
-    static func loadedRange(_ range: ClosedRange<Int>, bundle: Bundle = AppLocalization.bundle) -> String {
-        String(format: text("Items %lld–%lld", bundle: bundle),
-               Int64(range.lowerBound), Int64(range.upperBound))
-    }
 }

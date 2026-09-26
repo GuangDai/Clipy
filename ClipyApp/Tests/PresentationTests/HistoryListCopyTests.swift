@@ -29,9 +29,7 @@ struct HistoryListCopyTests {
         ) == "没有符合当前筛选条件的项目。")
         #expect(HistoryListCopy.text("Loading more items", bundle: chinese) == "正在加载更多项目")
         #expect(HistoryListCopy.text("Load More", bundle: chinese) == "加载更多")
-        #expect(HistoryListCopy.text("Newer", bundle: chinese) == "较新")
         #expect(HistoryListCopy.text("Older", bundle: chinese) == "较早")
-        #expect(HistoryListCopy.text("Latest", bundle: chinese) == "最新")
         #expect(HistoryListCopy.text(
             "Loading clipboard history", bundle: chinese
         ) == "正在加载剪贴板历史记录")
@@ -53,16 +51,10 @@ struct HistoryListCopyTests {
         #expect(HistoryListCopy.text("No Clipboard History", bundle: english) == "No Clipboard History")
         #expect(HistoryListCopy.text("No Results", bundle: english) == "No Results")
         #expect(HistoryListCopy.text("Load More", bundle: english) == "Load More")
-        #expect(HistoryListCopy.text("Newer", bundle: english) == "Newer")
         #expect(HistoryListCopy.text("Older", bundle: english) == "Older")
-        #expect(HistoryListCopy.text("Latest", bundle: english) == "Latest")
         #expect(HistoryListCopy.text(
             "Loading clipboard history", bundle: english
         ) == "Loading clipboard history")
     }
 
-    @Test func loadedWindowRangeIdentifiesItsPositionInBothLanguages() throws {
-        #expect(HistoryListCopy.loadedRange(51...200, bundle: try bundle("en")) == "Items 51–200")
-        #expect(HistoryListCopy.loadedRange(51...200, bundle: try bundle("zh-Hans")) == "第 51–200 项")
-    }
 }
