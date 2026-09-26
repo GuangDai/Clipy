@@ -168,6 +168,13 @@ final class AppComposition {
     /// The panel's state holder over HistoryCore DTOs (01 §6).
     let viewState: HistoryViewState
 
+    /// Settings browses the same authority with its own query and bounded
+    /// page window, so opening a workspace never changes the floating panel.
+    let historyWorkspaceViewState: HistoryViewState
+    let historyWorkspaceCopyState = HistoryWorkspaceCopyState()
+    let searchHistoryStore = SearchHistoryStore(defaults: .standard)
+    let historyBrowsingPreferences = HistoryBrowsingPreferences(defaults: .standard)
+
     /// App-local synchronous consumer for the one real panel surface. The
     /// ingress and user-receipt announcement paths both await/apply here
     /// instead of relying on a later SwiftUI observation turn.
@@ -221,6 +228,8 @@ final class AppComposition {
     /// task can reach its first `await`, so a second UI gesture is rejected as
     /// `.busy` instead of entering FIFO/latest-wins machinery (CLIP-5).
     private var pasteTask: Task<Void, Never>?
+    private enum PasteSource { case panel, workspace }
+    private var pasteSource: PasteSource?
     private let filePreviewLoader = LocalFilePreviewLoader()
 
 #if DEBUG
@@ -367,6 +376,7 @@ final class AppComposition {
         )
         let viewState = HistoryViewState(history: history)
         self.viewState = viewState
+        historyWorkspaceViewState = HistoryViewState(history: history)
         let panelSurfacePurgeRelay = PanelSurfacePurgeRelay(
             viewState: viewState
         )
@@ -582,6 +592,12 @@ final class AppComposition {
         viewState.onPaste = { [weak self] item in
             self?.requestPaste(item)
         }
+        historyWorkspaceViewState.onPaste = { [weak self] item in
+            self?.requestPaste(item, source: .workspace)
+        }
+        historyWorkspaceCopyState.cancel = { [weak self] in
+            self?.cancelWorkspaceCopy()
+        }
         viewState.onExportRepresentation = { representation in
             guard let window = NSApp.keyWindow else { return .failure(.unavailable) }
             return await RepresentationExporter.saveAs(representation, for: window)
@@ -589,6 +605,16 @@ final class AppComposition {
         let filePreviewLoader = self.filePreviewLoader
         viewState.filePreviewSettings = FilePreviewSettings { address in
             try await filePreviewLoader.load(address)
+        }
+        historyWorkspaceViewState.filePreviewSettings = viewState.filePreviewSettings
+        historyWorkspaceViewState.onExportRepresentation = viewState.onExportRepresentation
+        viewState.onCommittedSurfacePurge = { [weak self] purge, position in
+            self?.historyWorkspaceViewState.acceptPeerSurfacePurge(purge, position: position)
+        }
+        historyWorkspaceViewState.onCommittedSurfacePurge = { [weak self] purge, position in
+            guard let self else { return }
+            let received = viewState.acceptPeerSurfacePurge(purge, position: position)
+            panelSurfacePurgeRelay.apply(received)
         }
         viewState.onCommittedUserRemoval = { [weak self] purge in
             self?.panelSurfacePurgeRelay.apply(purge)
@@ -645,13 +671,19 @@ final class AppComposition {
         viewState.filePreviewSettings = nil
         viewState.onExportRepresentation = { _ in .failure(.unavailable) }
         viewState.onCommittedUserRemoval = { _ in }
+        viewState.onCommittedSurfacePurge = { _, _ in }
+        historyWorkspaceViewState.deactivate()
+        historyWorkspaceViewState.onPaste = { _ in }
+        historyWorkspaceViewState.filePreviewSettings = nil
+        historyWorkspaceViewState.onExportRepresentation = { _ in .failure(.unavailable) }
+        historyWorkspaceViewState.onCommittedSurfacePurge = { _, _ in }
         pendingCapture = nil
         drainsPreInactivityPendingCapture = false
         captureTask?.cancel()
         captureTask = nil
         activeCaptureBytes = 0
         publishCaptureHealthIfChanged()
-        cancelPendingPaste()
+        cancelAllPendingPastes()
     }
 
     func stopLocalAutomation() async {
@@ -664,8 +696,20 @@ final class AppComposition {
     /// post-read cancellation check precedes the synchronous MainActor write;
     /// cancellation never attempts to undo an already completed write.
     func cancelPendingPaste() {
+        guard pasteSource == .panel else { return }
+        cancelAllPendingPastes()
+    }
+
+    private func cancelWorkspaceCopy() {
+        if pasteSource == .workspace { cancelAllPendingPastes() }
+        historyWorkspaceCopyState.status = nil
+    }
+
+    private func cancelAllPendingPastes() {
         pasteTask?.cancel()
         pasteTask = nil
+        pasteSource = nil
+        historyWorkspaceCopyState.isCopying = false
     }
 
 #if DEBUG
@@ -1100,14 +1144,19 @@ final class AppComposition {
     /// refreshes the rows. Auto-paste (Command-V) and plain-text paste
     /// remain out of scope (05-recommended-target-design.md product
     /// decisions).
-    private func requestPaste(_ item: HistoryItemReference) {
+    private func requestPaste(_ item: HistoryItemReference, source: PasteSource = .panel) {
         // Exclusive first-accepted policy (REVIEW CLIP-5/Card 7): the first
         // request reserves the slot before any suspension. There is no
         // pending request because a later pasteboard overwrite is not a
         // reversible operation and repeated UI activation should be busy.
         guard pasteTask == nil else {
-            onPasteFailed?(.busy)
+            reportPasteFailure(.busy, source: source)
             return
+        }
+        pasteSource = source
+        if source == .workspace {
+            historyWorkspaceCopyState.isCopying = true
+            historyWorkspaceCopyState.status = nil
         }
 
         let history = self.history
@@ -1129,14 +1178,28 @@ final class AppComposition {
             // Release admission before publishing either hook so a user's
             // explicit retry from failure UI is immediately admissible.
             pasteTask = nil
+            pasteSource = nil
+            if source == .workspace { historyWorkspaceCopyState.isCopying = false }
             switch outcome {
             case .completed:
-                onPasteCompleted?()
+                if source == .workspace {
+                    historyWorkspaceCopyState.status = .success(SettingsCopy.text("Copied to Clipboard"))
+                } else {
+                    onPasteCompleted?()
+                }
             case .failed(let failure):
-                onPasteFailed?(failure)
+                reportPasteFailure(failure, source: source)
             case .cancelled:
                 break
             }
+        }
+    }
+
+    private func reportPasteFailure(_ failure: ClipyPasteFailure, source: PasteSource) {
+        if source == .workspace {
+            historyWorkspaceCopyState.status = .failure(PanelRootView.pasteFailureMessage(failure))
+        } else {
+            onPasteFailed?(failure)
         }
     }
 

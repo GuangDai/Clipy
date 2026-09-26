@@ -24,7 +24,7 @@ enum PreviewPlacement: Equatable, Sendable {
 enum PopupPositionGeometry {
 
     /// The floating preview pane's frame beside the presented main panel
-    /// (the redesign's transient preview: fixed width, the main panel's
+    /// (the redesign's transient preview: preferred width, the main panel's
     /// measured content height, top edges aligned when the screen allows,
     /// never a main-panel resize).
     /// The pane goes on the trailing side when the screen's visible frame
@@ -36,24 +36,30 @@ enum PopupPositionGeometry {
         in screenVisibleFrame: NSRect?,
         previewWidth: CGFloat = PanelGeometry.floatingPreviewWidth,
         previewHeight: CGFloat? = nil,
-        gap: CGFloat = PanelGeometry.floatingPreviewGap
+        gap: CGFloat = PanelGeometry.floatingPreviewGap,
+        preferredPlacement: PreviewPlacement? = nil,
+        preferredInnerEdge: CGFloat? = nil
     ) -> (frame: NSRect, placement: PreviewPlacement) {
         let desiredHeight = previewHeight ?? mainPanelFrame.height
+        let desiredWidth = previewWidth.isFinite ? max(0, previewWidth) : PanelGeometry.floatingPreviewWidth
+        let fittedWidth = screenVisibleFrame.map { min(desiredWidth, $0.width) } ?? desiredWidth
         let size = NSSize(
-            width: previewWidth,
+            width: fittedWidth,
             height: screenVisibleFrame.map { min(desiredHeight, $0.height) } ?? desiredHeight
         )
         let preferredGap = gap.isFinite ? max(0, gap) : PanelGeometry.floatingPreviewGap
         let availableGap = screenVisibleFrame.map {
-            max(0, max($0.maxX - mainPanelFrame.maxX, mainPanelFrame.minX - $0.minX) - previewWidth)
+            max(0, max($0.maxX - mainPanelFrame.maxX, mainPanelFrame.minX - $0.minX) - fittedWidth)
         } ?? preferredGap
         let fittedGap = min(preferredGap, availableGap)
         let trailingX = mainPanelFrame.maxX + fittedGap
-        let leadingX = mainPanelFrame.minX - fittedGap - previewWidth
+        let leadingX = mainPanelFrame.minX - fittedGap - fittedWidth
 
         let placement: PreviewPlacement
-        if let screenVisibleFrame {
-            placement = trailingX + previewWidth <= screenVisibleFrame.maxX
+        if let preferredPlacement {
+            placement = preferredPlacement
+        } else if let screenVisibleFrame {
+            placement = trailingX + fittedWidth <= screenVisibleFrame.maxX
                 ? .trailing
                 : .leading
         } else {
@@ -64,7 +70,9 @@ enum PopupPositionGeometry {
         // must not compress the independent preview's controls and content.
         var frame = NSRect(
             origin: NSPoint(
-                x: placement == .trailing ? trailingX : leadingX,
+                x: preferredInnerEdge.map {
+                    placement == .trailing ? $0 : $0 - fittedWidth
+                } ?? (placement == .trailing ? trailingX : leadingX),
                 y: mainPanelFrame.maxY - size.height
             ),
             size: size
@@ -73,6 +81,52 @@ enum PopupPositionGeometry {
             frame.origin = clamped(frame.origin, size: size, into: screenVisibleFrame)
         }
         return (frame, placement)
+    }
+
+    /// Resizing holds the inner edge and physical side in place. Screen
+    /// coordinates prevent leading-edge drags from counting the moving
+    /// window origin as pointer movement; the main window never changes.
+    static func resizedFloatingPreviewFrame(
+        from initialFrame: NSRect,
+        placement: PreviewPlacement,
+        pointerDeltaX: CGFloat,
+        in screenVisibleFrame: NSRect?,
+        minimumWidth: CGFloat = PanelGeometry.minimumPersistedFloatingPreviewWidth
+    ) -> NSRect {
+        guard pointerDeltaX.isFinite else { return initialFrame }
+        let maximumWidth = screenVisibleFrame.map {
+            max(0, placement == .trailing
+                ? $0.maxX - initialFrame.minX
+                : initialFrame.maxX - $0.minX)
+        } ?? .greatestFiniteMagnitude
+        let width = min(maximumWidth, max(min(minimumWidth, maximumWidth),
+            initialFrame.width + (placement == .trailing ? pointerDeltaX : -pointerDeltaX)))
+        return NSRect(
+            x: placement == .trailing ? initialFrame.minX : initialFrame.maxX - width,
+            y: initialFrame.minY,
+            width: width,
+            height: initialFrame.height
+        )
+    }
+
+    /// The gap has no NSView and therefore produces no entry/exit events.
+    /// Cover only the horizontal space between the windows, including a
+    /// diagonal route between their independently fitted content heights.
+    static func pointerIsBetweenPanels(_ point: NSPoint, main: NSRect, preview: NSRect) -> Bool {
+        let leftEdge: CGFloat
+        let rightEdge: CGFloat
+        if preview.minX >= main.maxX {
+            leftEdge = main.maxX
+            rightEdge = preview.minX
+        } else if main.minX >= preview.maxX {
+            leftEdge = preview.maxX
+            rightEdge = main.minX
+        } else {
+            return false
+        }
+        return point.x >= leftEdge && point.x <= rightEdge
+            && point.y >= min(main.minY, preview.minY)
+            && point.y <= max(main.maxY, preview.maxY)
     }
 
     /// Computes the panel's top-left screen-space origin (AppKit window

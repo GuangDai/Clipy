@@ -3,14 +3,14 @@
 import Foundation
 
 internal enum HistoryRowCopy {
-    static var bundle: Bundle { .main }
+    static var bundle: Bundle { AppLocalization.bundle }
 
     static func copyCount(_ count: UInt64, locale: Locale = .current) -> String {
         "×" + count.formatted(.number.locale(locale))
     }
 
     static func copiedCount(
-        _ count: UInt64, bundle: Bundle = .main, locale: Locale = .current
+        _ count: UInt64, bundle: Bundle = AppLocalization.bundle, locale: Locale = .current
     ) -> String {
         let format = bundle.localizedString(
             forKey: "Copied %llu times",

@@ -30,6 +30,7 @@ struct SQLiteScaleSearchCase: Sendable {
         case .exact: "exact"
         case .fuzzy: "fuzzy"
         case .regexp: "regexp"
+        case .expression: "expression"
         }
     }
 }

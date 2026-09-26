@@ -20,6 +20,7 @@ import SwiftUI
 /// content size load separately on opening or explicit refresh, and after
 /// applying a policy; they do not start another observation subscription.
 struct RetentionSettingsTab: View {
+    @Environment(\.locale) private var interfaceLocale
 
     private let viewState: HistoryViewState
 
@@ -59,6 +60,7 @@ struct RetentionSettingsTab: View {
     }
 
     var body: some View {
+        let _ = interfaceLocale
         Form {
             if let retentionConfigurationFailure {
                 Section {
@@ -626,6 +628,7 @@ struct RetentionSettingsTab: View {
 /// layout moves these same controls vertically when space is constrained;
 /// resizing never creates a second TextField or discards an in-progress edit.
 private struct RetentionLimitField: View {
+    @Environment(\.locale) private var interfaceLocale
     let toggleLabel: String
     let toggleHint: String
     let toggleIdentifier: String
@@ -638,6 +641,7 @@ private struct RetentionLimitField: View {
     let range: ClosedRange<Int>
 
     var body: some View {
+        let _ = interfaceLocale
         VStack(alignment: .leading, spacing: 4) {
             SettingsFieldLayout {
                 Toggle(toggleLabel, isOn: $isEnabled)

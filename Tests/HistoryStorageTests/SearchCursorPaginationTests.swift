@@ -17,6 +17,7 @@ private static func modeName(_ mode: SearchMode) -> String {
     case .exact: return "exact"
     case .fuzzy: return "fuzzy"
     case .regexp: return "regexp"
+    case .expression: return "expression"
     }
 }
 

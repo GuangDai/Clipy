@@ -2,16 +2,16 @@ import AppKit
 import SwiftUI
 
 enum KeyboardShortcutsCopy {
-    static func text(_ key: String, bundle: Bundle = .main) -> String {
+    static func text(_ key: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(forKey: key, value: key, table: "KeyboardShortcuts")
     }
 
-    static func conflict(_ action: PanelShortcutAction, bundle: Bundle = .main) -> String {
+    static func conflict(_ action: PanelShortcutAction, bundle: Bundle = AppLocalization.bundle) -> String {
         String(format: text("Already assigned to %@. Choose another shortcut, or clear that action first.", bundle: bundle),
                text(action.title, bundle: bundle))
     }
 
-    static func failure(_ error: PanelShortcutFailure, bundle: Bundle = .main) -> String {
+    static func failure(_ error: PanelShortcutFailure, bundle: Bundle = AppLocalization.bundle) -> String {
         switch error {
         case .conflict(let action): conflict(action, bundle: bundle)
         case .globalConflict:

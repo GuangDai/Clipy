@@ -407,4 +407,20 @@ public struct HistoryObservationRequest: Sendable, Hashable {
 
 Observation intentionally has no cursor: it tracks the current first page for one query. Additional pages are one-shot `browse` requests. A caller passes either `HistoryPage.previous` or `next` as `cursor`; direction is encoded inside that opaque value, not supplied separately. Both directions bind the complete query shape and snapshot position and have process-local validity. A nil cursor requests the first page.
 
+The current browse request also accepts `startAround: HistoryItemID?`, independent
+of its `filter` and `sortOrder`. With no cursor, this reads a fresh snapshot and
+starts the returned page at that item, using its current copy and pin facts. The
+item must still belong to the current query and filter; absence or exclusion
+returns `HistoryFailure.notFound(id)`. The returned `previous` and `next` cursors
+continue normally, without repeating `startAround`. Supplying both a cursor and
+`startAround` returns `.invalidInput(.conflictingPageAnchors)`.
+
+Remembering a reading position persists only the item UUID and the user's opt-in
+preference, never query text, clipboard content, or a process-local cursor. The
+lookup uses the item key and bounded neighboring keyset reads, without walking
+pages from the beginning or calculating a global row offset. Until navigation
+reaches a known beginning, presentation must not label the restored page as rows
+1 through N. A missing remembered item returns the interface to its first page
+with visible feedback; it does not delete or alter History.
+
 Invalid regular expressions and out-of-range limits are typed input failures. Search evaluation has exactly the three v1 modes above; dedup ranking is unrelated and not public.

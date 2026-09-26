@@ -22,7 +22,7 @@ internal enum SQLiteSearchIndex {
     /// ANDs necessary grams (at most 16); fuzzy ORs every possible matching
     /// scalar. No caller-controlled text enters FTS query syntax directly.
     internal static func matchExpression(term: String, mode: SearchMode) -> String? {
-        guard !term.isEmpty else { return nil }
+        guard !term.isEmpty, mode != .expression else { return nil }
         var indexedTerm = term
         if mode == .regexp {
             // A plain literal, optionally bounded by ^/$, is necessary text.

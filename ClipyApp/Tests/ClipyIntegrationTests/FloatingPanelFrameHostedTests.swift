@@ -766,6 +766,9 @@ struct FloatingPanelFrameHostedTests {
         let keys = [
             PanelGeometry.panelContentWidthDefaultsKey,
             PanelGeometry.panelHeightDefaultsKey,
+            PanelGeometry.floatingPreviewWidthDefaultsKey,
+            PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey,
+            PanelGeometry.floatingPreviewGapDefaultsKey,
             "clipy.panelAnchorX",
             "clipy.panelAnchorY",
         ]

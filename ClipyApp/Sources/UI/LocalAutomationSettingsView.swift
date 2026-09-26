@@ -59,6 +59,7 @@ struct LocalAutomationSettings {
 }
 
 struct LocalAutomationSettingsView: View {
+    @Environment(\.locale) private var interfaceLocale
     @State private var model: LocalAutomationSettingsModel
 
     private let history: (any ClipboardHistory)?
@@ -75,6 +76,7 @@ struct LocalAutomationSettingsView: View {
     @State private var showsContentPermissions = false
 
     var body: some View {
+        let _ = interfaceLocale
         Form {
             Section { BuiltInAutomationSettingsView(history: history, failure: workflowFailure) }
             accessSection
@@ -356,7 +358,7 @@ struct LocalAutomationSettingsView: View {
 }
 
 enum LocalAutomationSettingsCopy {
-    static let bundle = Bundle.main
+    static var bundle: Bundle { AppLocalization.bundle }
 
     static func text(_ key: String, bundle: Bundle? = nil) -> String {
         (bundle ?? Self.bundle).localizedString(forKey: key, value: key, table: "LocalAutomationSettings")

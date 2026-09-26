@@ -32,7 +32,7 @@ enum NativeAppearance: String, CaseIterable {
 
 enum NativeAppearanceCopy {
     static func text(_ key: String) -> String {
-        NSLocalizedString(key, tableName: "NativeAppearance", bundle: .main, comment: "")
+        NSLocalizedString(key, tableName: "NativeAppearance", bundle: AppLocalization.bundle, comment: "")
     }
 }
 

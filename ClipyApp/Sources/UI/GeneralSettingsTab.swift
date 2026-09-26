@@ -14,6 +14,8 @@ struct GeneralSettingsTab: View {
     private let viewState: HistoryViewState
     private let launchAtLogin: LaunchAtLoginSettings?
 
+    @AppStorage(AppLanguageSettings.defaultsKey) private var language: AppLanguage = .system
+
     @State private var status: SettingStatus?
     @State private var isWorking = false
     @State private var isConfirmingClearUnpinned = false
@@ -30,6 +32,16 @@ struct GeneralSettingsTab: View {
 
     var body: some View {
         Form {
+            Section(AppLanguageCopy.text("Language")) {
+                Picker(AppLanguageCopy.text("Interface language"), selection: $language) {
+                    ForEach(AppLanguage.allCases, id: \.self) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                .accessibilityIdentifier("clipy.settings.language")
+                Text(AppLanguageCopy.text("Changes apply immediately. Your open drafts stay unchanged."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if let launchAtLogin {
                 Section(SettingsCopy.text("Startup")) {
                     launchAtLoginControl(launchAtLogin)

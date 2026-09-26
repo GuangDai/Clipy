@@ -25,7 +25,8 @@ fall back to the default. This does not enlarge genuinely short content.
 
 - Default browsing width: 360 pt, user-resizable with no forced minimum.
   The default 420 pt height is a ceiling, never a minimum. Both the list and
-  the independent 340 pt floating preview fit their own content.
+  the independent floating preview fit their own content. The preview defaults
+  to 340 pt wide, with an optional custom width in Appearance.
 - Compact rows: 16 pt content/type slot, 13 pt system title, 2 pt vertical
   padding plus 2 pt list insets: 24 pt total. Comfortable density uses a 24 pt slot.
   Search snippets appear only when they provide body-match evidence.
@@ -54,7 +55,30 @@ fall back to the default. This does not enlarge genuinely short content.
   metal texture. Menu-bar/control icons must remain legible as templates and
   at small sizes; they must not be raster reductions of a shaded app icon.
 
+## 保存搜索条件
+
+收藏与最近搜索只保存查询文字、匹配方式、类型、置顶、日期、来源和排序条件，不保存
+结果内容，也不在后台执行搜索。总保存开关默认关闭；开启后可以手动收藏，最近搜索
+仍需另行开启，只在提交完整查询或明确选用结果时记录，不逐键保存输入草稿。收藏最多
+50 条，最近搜索默认 20 条，可调为 1–100 条；重复的完整查询移至最近列表首位。
+相对日期保留“今天／最近 7 天”等意图，再次使用时按当天重新解析。
+
+排除词对查询文字、来源条件及收藏名称进行字面子串检查，命中后整条不保存。比较采用
+固定 `en_US_POSIX` locale 的 Unicode 大小写折叠及 NFC 规范化，组合形式等价的字符
+视为相同，重音与全半角保持区别；保存的原始查询文字不被改写。新增排除词立即清理
+匹配的已有收藏和最近搜索。关闭最近记录会清空最近搜索；关闭总保存开关会同时清空
+两组，并关闭最近记录选项。设置在同一个本地 UserDefaults 值中与剩余记录一同写入。
+
 ## Preview responsiveness and preferences
+
+The preview width defaults to 340 pt. Appearance offers an optional custom
+width; turning that option off preserves its last value for later reuse.
+Dragging the preview's physical outer edge enables and remembers custom
+width. Its SwiftUI handle also supports accessibility width adjustment.
+The preview stays open throughout a resize, and its placement side remains
+stable until the gesture ends. Display fitting can reduce the actual width
+without replacing the saved preference. Reset Preview Settings restores the
+default width along with the other preview preferences.
 
 The preview gap defaults to 2 pt and can be changed in Appearance, including
 zero for touching edges. The saved preference has no arbitrary upper bound;
@@ -217,6 +241,23 @@ a pending exit synchronously. A delayed selection observation cannot schedule
 auto-preview after the pointer leaves the main panel. Hide grace remains a
 Duration in milliseconds, with the existing 150 ms default and immediate native
 window dismissal after the timer; entry into either surface cancels that grace.
+
+Appearance also offers an optional custom preview width; the default remains
+340 pt. A SwiftUI handle on the preview's outer edge changes only the preview
+width and enables the custom preference when a completed drag changes its
+size. Disabling custom width preserves its last value for later use. The
+current display limits the visible width without rewriting a larger saved
+preference. VoiceOver can adjust the same handle in 20 pt increments.
+
+Moving through the horizontal gap between the history and preview windows
+keeps the preview open. Because that gap has no tracking view, the native
+window shell rechecks actual pointer position and still hides after the
+pointer leaves both windows and their connecting gap. During a width drag,
+the preview retains its physical side, inner edge and height, suppresses
+pointer-exit hiding, and saves the width only on release. Releasing restores
+the ordinary pointer-exit behavior. Panel close, Details navigation, a removed
+item, and explicit dismissal still retire the preview and cancel an unfinished
+resize immediately.
 
 
 The history list uses SwiftUI ScrollView and LazyVStack. HistoryRowView owns

@@ -27,6 +27,7 @@ internal enum SearchWorkerSuspensionPoint: String, Sendable {
     case evaluationEntry = "SearchWorker.page.evaluationEntry"
 #if DEBUG
     case exactScanChunk = "SearchWorker.page.exactScanChunk"
+    case expressionScanChunk = "SearchWorker.page.expressionScanChunk"
     case regexpScanChunk = "SearchWorker.page.regexpScanChunk"
     case fuzzyScanChunk = "SearchWorker.page.fuzzyScanChunk"
     case sqliteBatchComplete = "SearchWorker.page.sqliteBatchComplete"
@@ -153,6 +154,8 @@ internal actor SearchWorker {
             point = .regexpScanChunk
         case .fuzzy:
             point = .fuzzyScanChunk
+        case .expression:
+            point = .expressionScanChunk
         }
         await suspensionHandler?(point)
 #endif
@@ -265,6 +268,13 @@ internal actor SearchWorker {
         // boundary. The worker never trusts the already-materialized corpus
         // to imply that its independently supplied request was admitted.
         let admitted = try AdmittedSearchRequest(request, limits: limits)
+        if let target = request.startAround {
+            guard request.cursor == nil, continuationAnchor == nil else {
+                throw HistoryFailure.invalidInput(.conflictingPageAnchors)
+            }
+            return try await pageStartingAtInCorpus(target, request: request, admitted: admitted,
+                                                    corpus: corpus, processMarker: processMarker)
+        }
         let term = admitted.term
         let mode = admitted.mode
         let direction: HistoryPageDirection
@@ -302,7 +312,11 @@ internal actor SearchWorker {
             direction: direction
         )
         let evaluation: EvaluationResult
-        if term.isEmpty {
+        if request.sortOrder != .automatic {
+            evaluation = try await evaluateMetadataOrder(
+                admitted: admitted, in: corpus, sortOrder: request.sortOrder, directive: directive
+            )
+        } else if term.isEmpty {
             evaluation = evaluateRecentEquivalent(in: corpus, directive: directive)
         } else {
             switch mode {
@@ -321,6 +335,13 @@ internal actor SearchWorker {
             case .fuzzy:
                 evaluation = try await evaluateFuzzy(
                     term: term, in: corpus, directive: directive
+                )
+            case .expression:
+                guard let expression = admitted.expression else {
+                    throw HistoryFailure.persistence(.invariantViolation)
+                }
+                evaluation = try await evaluateExpression(
+                    PreparedSearchExpression(expression.root), in: corpus, directive: directive
                 )
             }
         }

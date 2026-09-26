@@ -9,11 +9,13 @@ import HistoryCore
 internal struct AdmittedSearchRequest {
     internal let term: String
     internal let mode: SearchMode
+    internal let expression: HistorySearchExpression?
 
     internal init(
         _ request: HistoryBrowseRequest,
         limits: HistoryLimits
     ) throws {
+        try HistoryFilterSQL.validate(request.filter, limits: limits)
         guard case .search(let term, let mode) = request.kind else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
@@ -38,6 +40,10 @@ internal struct AdmittedSearchRequest {
                 throw HistoryFailure.invalidInput(.invalidRegularExpression)
             }
         }
+        if mode == .expression {
+            do { expression = try HistorySearchExpression.parse(term) }
+            catch { throw HistoryFailure.invalidInput(.invalidSearchTerm) }
+        } else { expression = nil }
         self.term = term
         self.mode = mode
     }

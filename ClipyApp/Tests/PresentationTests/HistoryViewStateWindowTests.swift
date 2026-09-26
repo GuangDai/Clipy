@@ -149,7 +149,7 @@ struct HistoryViewStateWindowTests {
         #expect(await history.observeRequests.last?.kind == .search(text: "row ", mode: .exact))
     }
 
-    @Test func fullWindowStopsPrefetchAndRetargetsOnlyTheVisibleSelection() async throws {
+    @Test func fullWindowProtectsVisibleRowsAndRetargetsOnlyTheVisibleSelection() async throws {
         let (history, allRows) = fixture()
         let state = HistoryViewState(history: history, pageLimit: 2)
         state.activate()
@@ -166,7 +166,9 @@ struct HistoryViewStateWindowTests {
             try #require(await pollUntil { !state.isLoadingPage })
         }
         let priorRequestCount = await history.browseRequests.count
-        state.prefetchNextPageIfNeeded(appearingRowID: allRows[5].item.id)
+        // A viewport large enough to show all three pages must never have
+        // its first page evicted by automatic continuation.
+        state.prefetchPagesIfNeeded(visibleRowIDs: state.rows.map(\.item.id))
         #expect(!state.isLoadingPage)
         #expect(await history.browseRequests.count == priorRequestCount)
         state.loadNextPage()
@@ -201,6 +203,58 @@ struct HistoryViewStateWindowTests {
         state.requestPasteFromDisplayedRow(try #require(surface.selectedReference(in: state.rows)))
         #expect(pasted == allRows[0].item)
         #expect(state.surfacePurge == nil)
+    }
+
+    @Test func visibleEdgesContinueInBothDirectionsBeyondTheFirstThreePages() async throws {
+        let (history, allRows) = fixture()
+        let state = HistoryViewState(history: history, pageLimit: 2)
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 2 })
+        for page in 1..<8 {
+            let visibleLast = try #require(state.rows.last?.item.id)
+            state.prefetchPagesIfNeeded(visibleRowIDs: [visibleLast])
+            try #require(await pollUntil { !state.isLoadingPage })
+            #expect(state.rows == Array(allRows[(max(0, page - 2) * 2)..<((page + 1) * 2)]))
+            #expect(state.rows.contains { $0.item.id == visibleLast }, "Continuation retains the reading anchor")
+            #expect(state.rows.count <= 6)
+            #expect(state.loadedRowRange == (max(0, page - 2) * 2 + 1)...((page + 1) * 2))
+        }
+        for firstPage in stride(from: 4, through: 0, by: -1) {
+            let visibleFirst = try #require(state.rows.first?.item.id)
+            state.prefetchPagesIfNeeded(visibleRowIDs: [visibleFirst])
+            try #require(await pollUntil { !state.isLoadingPage })
+            #expect(state.rows == Array(allRows[(firstPage * 2)..<((firstPage + 3) * 2)]))
+            #expect(state.rows.contains { $0.item.id == visibleFirst })
+            #expect(state.loadedPageCount == 3)
+        }
+        #expect(!state.hasPreviousPage)
+        #expect(state.loadedRowRange == 1...6)
+        #expect(await history.browseRequests.count == 12)
+    }
+
+    @Test func reversingScrollDuringPrefetchDoesNotEvictRowsNowInView() async throws {
+        let (history, allRows) = fixture(pausedPage: 3)
+        let state = HistoryViewState(history: history, pageLimit: 2)
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.rows.count == 2 })
+        for _ in 0..<2 {
+            state.loadNextPage()
+            try #require(await pollUntil { !state.isLoadingPage })
+        }
+        let cursor = fixtureCursor("page-3")
+        state.prefetchPagesIfNeeded(visibleRowIDs: [allRows[5].item.id])
+        try #require(await pollUntil { await history.isBrowsePaused(cursor: cursor) })
+        state.prefetchPagesIfNeeded(visibleRowIDs: [allRows[0].item.id])
+        await history.resumeBrowse(cursor: cursor)
+        try #require(await pollUntil { !state.isLoadingPage })
+        #expect(state.rows == Array(allRows.prefix(6)))
+        #expect(!state.hasPreviousPage)
+        #expect(!state.hasWindowedPages)
+        #expect(state.hasNextPage)
+        #expect(state.loadedRowRange == 1...6)
+        #expect(state.failure == nil)
     }
 
     @Test func observedReplacementRetiresTheWindowAndItsBoundaryCursors() async throws {

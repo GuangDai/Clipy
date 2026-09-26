@@ -35,7 +35,9 @@ public protocol ClipboardHistory: Sendable {
     func perform(_ action: HistoryAction) async throws -> HistoryReceipt
 
     /// One-shot browse: recent rows or a search, optionally continuing after
-    /// a cursor from an earlier page.
+    /// a cursor from an earlier page, or starting at a remembered item ID in
+    /// a fresh snapshot. Item location returns the item as the first row and
+    /// fails `notFound` when it is absent or outside the current query.
     ///
     /// The returned page identifies the durable snapshot position its values
     /// were captured from. A cursor from an older position — or one whose

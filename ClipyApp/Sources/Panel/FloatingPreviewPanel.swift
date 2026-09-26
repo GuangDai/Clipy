@@ -4,7 +4,7 @@
 /// no in-window column, no divider, no edge opener — the main panel's
 /// geometry never changes for preview.
 ///
-/// Geometry (PopupPositionGeometry.floatingPreviewFrame): fixed width, the
+/// Geometry (PopupPositionGeometry.floatingPreviewFrame): preferred width, the
 /// rendered content's height, top edges aligned, trailing
 /// side when the screen's visible frame has room, otherwise leading; clamped into the
 /// visible frame. Placement applies with an instant, non-animated
@@ -25,14 +25,24 @@ final class FloatingPreviewPanel: NSPanel {
     /// Whether the pane is currently on screen.
     private(set) var isPresented = false
     private var contentHeight: CGFloat?
+    private let previewState: PreviewPaneState
+    private let defaults: UserDefaults
+    private var placement: PreviewPlacement = .trailing
+    private var lastParentFrame: NSRect?
+    private var resizedAnchor: (innerEdge: CGFloat, width: CGFloat, gap: CGFloat, placement: PreviewPlacement)?
+    private var mouseDownScreenX: CGFloat?
+    private var widthResize: (pointerX: CGFloat, frame: NSRect, placement: PreviewPlacement)?
 
     func fitToContent(height: CGFloat) {
         guard height.isFinite, height > 0, contentHeight != height else { return }
         contentHeight = height
+        guard widthResize == nil else { return }
         if let parent, isPresented { present(beside: parent) }
     }
 
-    init(rootView: FloatingPreviewRootView) {
+    init(rootView: FloatingPreviewRootView, defaults: UserDefaults = .standard) {
+        self.previewState = rootView.appDelegate.previewState
+        self.defaults = defaults
         super.init(
             contentRect: NSRect(
                 x: 0, y: 0,
@@ -44,7 +54,7 @@ final class FloatingPreviewPanel: NSPanel {
             defer: false
         )
 
-        // The main panel's floating traits, without resizing: no application
+        // The main panel's floating traits, with a SwiftUI width handle: no application
         // activation theft, no hide-on-deactivate, transparent chrome
         // under a rounded content layer (macOS 26's 12-point radius).
         animationBehavior = .none
@@ -62,7 +72,7 @@ final class FloatingPreviewPanel: NSPanel {
         // `clipy.preview.root` in the accessibility tree (CI preview journeys).
         setAccessibilityIdentifier("clipy.panel.floatingPreview")
 
-        let hostingView = NSHostingView(rootView: rootView)
+        let hostingView = NSHostingView(rootView: rootView.appLanguage())
         hostingView.sizingOptions = []
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 12
@@ -82,6 +92,12 @@ final class FloatingPreviewPanel: NSPanel {
             }
             return surfaces
         }
+        rootView.appDelegate.previewState.pointerIsBetweenSurfaces = { [weak self] in
+            guard let self, self.isPresented, let parent = self.parent, parent.isVisible else { return false }
+            return PopupPositionGeometry.pointerIsBetweenPanels(
+                NSEvent.mouseLocation, main: parent.frame, preview: self.frame
+            )
+        }
     }
 
     /// Automatic presentation never makes this window key. Clicking the
@@ -91,8 +107,15 @@ final class FloatingPreviewPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {
-        if event.type == .leftMouseDown, !isKeyWindow { makeKey() }
+        if event.type == .leftMouseDown {
+            mouseDownScreenX = convertPoint(toScreen: event.locationInWindow).x
+            if !isKeyWindow { makeKey() }
+        }
         super.sendEvent(event)
+        if event.type == .leftMouseUp {
+            finishWidthResize()
+            mouseDownScreenX = nil
+        }
     }
 
     override func becomeKey() {
@@ -110,13 +133,25 @@ final class FloatingPreviewPanel: NSPanel {
     /// call keeps the pane aligned to the main panel while retaining its
     /// independently measured content height.
     func present(beside mainPanel: NSWindow) {
+        guard widthResize == nil else { return }
+        let width = PanelGeometry.persistedFloatingPreviewWidth(from: defaults)
+        let gap = PanelGeometry.persistedFloatingPreviewGap(from: defaults)
+        if lastParentFrame != mainPanel.frame || resizedAnchor?.width != width || resizedAnchor?.gap != gap {
+            resizedAnchor = nil
+        }
+        lastParentFrame = mainPanel.frame
         let placement = PopupPositionGeometry.floatingPreviewFrame(
             beside: mainPanel.frame,
             in: mainPanel.screen?.visibleFrame,
+            previewWidth: width,
             previewHeight: contentHeight,
-            gap: PanelGeometry.persistedFloatingPreviewGap(from: .standard)
+            gap: gap,
+            preferredPlacement: resizedAnchor?.placement,
+            preferredInnerEdge: resizedAnchor?.innerEdge
         )
+        self.placement = placement.placement
         setFrame(placement.frame, display: isPresented)
+        publishDisplayedGeometry()
         if mainPanel.childWindows?.contains(self) != true {
             mainPanel.addChildWindow(self, ordered: .above)
         }
@@ -124,9 +159,76 @@ final class FloatingPreviewPanel: NSPanel {
         isPresented = true
     }
 
+    /// SwiftUI owns the drag gesture; AppKit supplies screen-space pointer
+    /// coordinates so moving a leading edge cannot feed back into translation.
+    func resizeWidth(at screenX: CGFloat) {
+        guard isPresented, screenX.isFinite, previewState.isOpen else { return }
+        if widthResize == nil {
+            widthResize = (mouseDownScreenX ?? screenX, frame, placement)
+            previewState.beginPreviewResize()
+        }
+        guard let widthResize else { return }
+        setFrame(PopupPositionGeometry.resizedFloatingPreviewFrame(
+            from: widthResize.frame,
+            placement: widthResize.placement,
+            pointerDeltaX: screenX - widthResize.pointerX,
+            in: parent?.screen?.visibleFrame
+        ), display: true)
+        publishDisplayedGeometry()
+    }
+
+    func finishWidthResize() {
+        guard let widthResize else { return }
+        self.widthResize = nil
+        rememberResizeAnchor(frame, placement: widthResize.placement)
+        if frame.width != widthResize.frame.width {
+            PanelGeometry.persistFloatingPreviewWidth(frame.width, to: defaults)
+        }
+        if let parent, isPresented { present(beside: parent) }
+        previewState.endPreviewResize()
+    }
+
+    /// VoiceOver adjustment uses the same bounds and persistence as dragging.
+    func adjustWidth(by delta: CGFloat) {
+        guard isPresented, delta.isFinite, previewState.isOpen else { return }
+        let priorWidth = frame.width
+        let adjusted = PopupPositionGeometry.resizedFloatingPreviewFrame(
+            from: frame, placement: placement,
+            pointerDeltaX: placement == .trailing ? delta : -delta,
+            in: parent?.screen?.visibleFrame
+        )
+        guard adjusted.width != priorWidth else { return }
+        rememberResizeAnchor(adjusted, placement: placement)
+        PanelGeometry.persistFloatingPreviewWidth(adjusted.width, to: defaults)
+        if let parent { present(beside: parent) }
+    }
+
+    private func publishDisplayedGeometry() {
+        previewState.displayedPreviewWidth = frame.width
+        previewState.isPreviewOnLeadingSide = placement == .leading
+    }
+
+    private func rememberResizeAnchor(_ frame: NSRect, placement: PreviewPlacement) {
+        // Recomputing a large preferred gap after mouse-up would shift the
+        // handle away from the pointer. Preserve its actual inner edge until
+        // the main window or an explicit width/gap preference changes.
+        resizedAnchor = (
+            placement == .trailing ? frame.minX : frame.maxX,
+            frame.width,
+            PanelGeometry.persistedFloatingPreviewGap(from: defaults),
+            placement
+        )
+    }
+
     /// Orders the pane out and detaches it from its parent; the instance is
     /// reused on the next `present(beside:)`.
     func dismiss() {
+        // A purge, Details navigation or panel close always wins over a
+        // gesture; retiring this session must not save an unfinished drag.
+        widthResize = nil
+        mouseDownScreenX = nil
+        resizedAnchor = nil
+        lastParentFrame = nil
         // A pointer-exit hide retires only the preview. Return its keyboard
         // focus before detaching, unless the whole browsing session closed.
         if isKeyWindow, let panel = parent as? FloatingPanel, panel.isPresented {
@@ -135,6 +237,7 @@ final class FloatingPreviewPanel: NSPanel {
         parent?.removeChildWindow(self)
         orderOut(nil)
         isPresented = false
+        previewState.endPreviewResize()
     }
 }
 
@@ -146,6 +249,12 @@ final class FloatingPreviewPanel: NSPanel {
 /// update without retaining a fading copy of the previously selected item.
 struct FloatingPreviewRootView: View {
     let appDelegate: AppDelegate
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private var resizePaddingEdge: Edge.Set {
+        let isPhysicalLeft = appDelegate.previewState.isPreviewOnLeadingSide
+        return isPhysicalLeft == (layoutDirection == .leftToRight) ? .leading : .trailing
+    }
 
     /// The per-pane icon store, built once at this AppKit boundary through
     /// the same public provider seam the main panel uses (01 §8).
@@ -172,6 +281,7 @@ struct FloatingPreviewRootView: View {
                     maximumHeight: appDelegate.previewState.availablePreviewHeight,
                     preparedLoader: appDelegate.floatingPreviewLoader
                 )
+                .padding(resizePaddingEdge, PreviewWidthResizeHandle.thickness)
                 .id(item)
                 .fixedSize(horizontal: false, vertical: true)
                 .onGeometryChange(for: CGFloat.self) { geometry in
@@ -185,6 +295,23 @@ struct FloatingPreviewRootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Use physical sides for window geometry even in an RTL interface.
+        .overlay(alignment: .topLeading) {
+            GeometryReader { geometry in
+                PreviewWidthResizeHandle(
+                    width: appDelegate.previewState.displayedPreviewWidth,
+                    onDragChanged: { appDelegate.resizeFloatingPreviewWidth() },
+                    onDragEnded: { appDelegate.finishFloatingPreviewWidthResize() },
+                    onAdjust: { appDelegate.adjustFloatingPreviewWidth(by: $0) }
+                )
+                .position(
+                    x: appDelegate.previewState.isPreviewOnLeadingSide
+                        ? PreviewWidthResizeHandle.thickness / 2
+                        : geometry.size.width - PreviewWidthResizeHandle.thickness / 2,
+                    y: geometry.size.height / 2
+                )
+            }
+        }
         .onExitCommand {
             if appDelegate.previewState.isInformationPresented {
                 appDelegate.previewState.isInformationPresented = false

@@ -3,6 +3,7 @@
 "Remember search between opens" = "Remember search between opens";
 "Select rows when the pointer moves over them" = "Select rows when the pointer moves over them";
 "Search is remembered only while Clipy is running. With pointer selection off, click a row or use the arrow keys." = "Search is remembered only while Clipy is running. With pointer selection off, click a row or use the arrow keys.";
+"The current search draft is remembered between panel opens only while Clipy is running. Saved searches below are managed separately. With pointer selection off, click a row or use the arrow keys." = "The current search draft is remembered between panel opens only while Clipy is running. Saved searches below are managed separately. With pointer selection off, click a row or use the arrow keys.";
 "Preview timing" = "Preview timing";
 "Preview delay" = "Preview delay";
 "Hide preview after leaving" = "Hide preview after leaving";

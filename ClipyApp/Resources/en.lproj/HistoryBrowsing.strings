@@ -1,0 +1,12 @@
+"Floating panel opens at" = "Floating panel opens at";
+"Settings History opens at" = "Settings History opens at";
+"Start of list (current sort order)" = "Start of list (current sort order)";
+"Last read position" = "Last read position";
+"Forget saved reading positions" = "Forget saved reading positions";
+"Opening position" = "Opening position";
+"Last read saves only the record’s identifier, separately for each surface. It does not save clipboard content or search text. If that record is no longer available in the current results, browsing returns to the start with a notice." = "Last read saves only the record’s identifier, separately for each surface. It does not save clipboard content or search text. If that record is no longer available in the current results, browsing returns to the start with a notice.";
+"Remember History workspace layout" = "Remember History workspace layout";
+"Reset History workspace layout" = "Reset History workspace layout";
+"History workspace" = "History workspace";
+"Remembers the list and preview widths, sort order, and row density. Turning this off keeps the current layout until the workspace closes and removes its saved layout." = "Remembers the list and preview widths, sort order, and row density. Turning this off keeps the current layout until the workspace closes and removes its saved layout.";
+"Saved reading position is unavailable in these results. Showing the start of the list." = "Saved reading position is unavailable in these results. Showing the start of the list.";

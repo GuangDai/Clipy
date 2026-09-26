@@ -64,6 +64,9 @@ enum PanelContentFit {
         /// The trailing pagination control (Older button or loading row):
         /// `hasNextPage || isLoadingPage`, matching the list's condition.
         var showsPaginationControl = false
+        /// Explicit metadata ordering keeps pinned rows in that order and
+        /// therefore has no pinned/recent separator.
+        var usesPinnedGrouping = true
         /// The search header's removable active-filter summary chip.
         var isFilterChipVisible = false
         /// The browsing column's typed-failure banner.
@@ -206,7 +209,7 @@ enum PanelContentFit {
         if input.hasWindowedPages {
             height += windowedNavigationHeight
         }
-        let showsGroupSeparator = !input.pinnedRows.isEmpty
+        let showsGroupSeparator = input.usesPinnedGrouping && !input.pinnedRows.isEmpty
             && (!input.unpinnedRows.isEmpty || input.showsPaginationControl)
         if showsGroupSeparator { height += groupSeparatorHeight }
         if !input.pinnedRows.isEmpty {

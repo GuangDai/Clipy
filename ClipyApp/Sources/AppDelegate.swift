@@ -350,6 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - AppKit-owned surfaces
 
     private var statusItem: NSStatusItem?
+    private var statusItemLanguage = AppLanguageSettings.load()
     /// The right-click menu controller. Lazily built on first use (or first
     /// hosted-test read); the menu is attached to the status item only for
     /// the duration of one pop-up (see `presentStatusItemMenu`).
@@ -745,7 +746,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onClosed: { [weak self] in self?.panelDidClose() }
             )
         }
-        composition?.viewState.activate()
+        if let composition {
+            composition.viewState.activate(restoring:
+                composition.historyBrowsingPreferences.readingItemID(for: .panel))
+        }
         panel?.open(
             at: mode,
             statusItemButtonScreenFrame: statusItemButtonScreenFrame()
@@ -761,6 +765,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   in: composition.viewState.displayedRows
               )
         else { return }
+        if HistorySearchCopy.issue(for: composition.viewState) == nil,
+           composition.viewState.sourceResolutionError == nil,
+           composition.viewState.searchFilters.hasValidDates() {
+            composition.searchHistoryStore.recordSubmittedSearch(
+                HistorySearchDefinition(viewState: composition.viewState)
+            )
+        }
         composition.viewState.requestPaste(reference)
     }
 
@@ -836,6 +847,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var floatingPreviewFitTask: Task<Void, Never>?
     @ObservationIgnored
     private var configuredPreviewGap = PanelGeometry.persistedFloatingPreviewGap(from: .standard)
+    @ObservationIgnored
+    private var configuredPreviewWidth = PanelGeometry.persistedFloatingPreviewWidth(from: .standard)
+
+    func resizeFloatingPreviewWidth() {
+        floatingPreviewPanel?.resizeWidth(at: NSEvent.mouseLocation.x)
+    }
+
+    func finishFloatingPreviewWidthResize() {
+        floatingPreviewPanel?.finishWidthResize()
+    }
+
+    func adjustFloatingPreviewWidth(by delta: CGFloat) {
+        floatingPreviewPanel?.adjustWidth(by: delta)
+    }
 
     /// The panel content's analytic height demand (HistoryPanelView's
     /// `PanelContentFit.Input` reports). Coalesced ~40 ms, then applied to
@@ -939,6 +964,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelContentFitTask?.cancel()
         panelContentFitTask = nil
         composition?.cancelPendingPaste()
+        if let composition {
+            composition.historyBrowsingPreferences.rememberReadingPosition(
+                composition.viewState.readingItemID ?? panelSurfaceState?.selection, for: .panel
+            )
+        }
         hideFloatingPreviewPane()
         panelSurfaceState?.endSession()
         composition?.viewState.deactivate()
@@ -1172,7 +1202,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // just as `openPanel` would, so the History view starts its first
         // authoritative observation without closing/reopening the panel.
         if panel?.isPresented == true {
-            opened.viewState.activate()
+            opened.viewState.activate(restoring:
+                opened.historyBrowsingPreferences.readingItemID(for: .panel))
             panelSurfaceState.beginSession(rows: opened.viewState.rows)
         }
     }
@@ -1282,6 +1313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateStatusItemImage() {
+        statusItemLanguage = AppLanguageSettings.load()
         let isPaused = captureAccessState == .userPaused
         let symbolName = statusItemSymbolName
         let accessibilityLabel = AppCaptureCopy.statusLabel(isPaused: isPaused)
@@ -1411,6 +1443,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated {
                 self?.reloadPanelAppearance()
                 self?.reloadInteractionSettings()
+                if self?.statusItemLanguage != AppLanguageSettings.load() {
+                    self?.updateStatusItemImage()
+                }
             }
         }
     }
@@ -1422,8 +1457,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func reloadPanelAppearance() {
         reloadNativeAppearance()
         let gap = PanelGeometry.persistedFloatingPreviewGap(from: .standard)
-        if configuredPreviewGap != gap {
+        let width = PanelGeometry.persistedFloatingPreviewWidth(from: .standard)
+        if configuredPreviewGap != gap || configuredPreviewWidth != width {
             configuredPreviewGap = gap
+            configuredPreviewWidth = width
             followMainPanelFrameWithPreview()
         }
         let loaded = PanelAppearanceSettings.load(from: .standard)

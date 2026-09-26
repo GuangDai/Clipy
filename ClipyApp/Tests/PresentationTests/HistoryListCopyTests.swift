@@ -60,4 +60,9 @@ struct HistoryListCopyTests {
             "Loading clipboard history", bundle: english
         ) == "Loading clipboard history")
     }
+
+    @Test func loadedWindowRangeIdentifiesItsPositionInBothLanguages() throws {
+        #expect(HistoryListCopy.loadedRange(51...200, bundle: try bundle("en")) == "Items 51–200")
+        #expect(HistoryListCopy.loadedRange(51...200, bundle: try bundle("zh-Hans")) == "第 51–200 项")
+    }
 }

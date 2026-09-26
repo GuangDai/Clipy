@@ -148,6 +148,10 @@ extension ExternalOperationDescriptor {
                     throw ExternalFailure.requestDenied(.invalidInput)
                 }
                 encodedMode = .regexp
+            case .expression:
+                do { _ = try HistorySearchExpression.parse(text) }
+                catch { throw ExternalFailure.requestDenied(.invalidInput) }
+                encodedMode = .expression
             }
             return Self(
                 capability: browseCapability,

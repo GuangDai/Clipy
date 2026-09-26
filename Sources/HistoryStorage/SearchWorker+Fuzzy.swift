@@ -181,6 +181,8 @@ extension SearchWorker {
                 return reversesEligiblePredecessors && anchorRow != nil
             }
             switch worst.anchor {
+            case .metadata:
+                return false
             case .defaultOrder(let pinOrdinal, _, _):
                 return pinOrdinal != nil
             case .fuzzyUnpinned(let score, _, _):
@@ -204,7 +206,7 @@ extension SearchWorker {
 
         /// The frozen pinned/score/date/UUID total order, shared by heap
         /// selection and final ordering so equal scores keep cursor ties.
-        private static func precedes(
+        internal static func precedes(
             _ lhs: StoredOrderingAnchor,
             _ rhs: StoredOrderingAnchor
         ) -> Bool {
@@ -213,6 +215,10 @@ extension SearchWorker {
             let leftID: HistoryItemID
             let rightID: HistoryItemID
             switch (lhs, rhs) {
+            case (.metadata, _), (_, .metadata):
+                // Explicit sorting uses SQL keysets and never this relevance
+                // heap. A foreign anchor cannot enter a fuzzy result window.
+                return false
             case let (.defaultOrder(leftPin, ld, li), .defaultOrder(rightPin, rd, ri)):
                 if leftPin != rightPin {
                     return (leftPin ?? Int.max) < (rightPin ?? Int.max)

@@ -13,6 +13,7 @@ internal enum SearchModeRawV1: UInt16, Sendable, Equatable, CaseIterable {
     case exact = 1
     case fuzzy = 2
     case regexp = 3
+    case expression = 4
 }
 
 internal enum RequestSummaryV1: Sendable, Equatable {

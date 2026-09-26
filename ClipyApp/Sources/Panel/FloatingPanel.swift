@@ -157,7 +157,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         // applied at open. The bounds only constrain interactive resizes.
         applyResizeLimits()
 
-        let hostingView = NSHostingView(rootView: rootView)
+        let hostingView = NSHostingView(rootView: rootView.appLanguage())
         hostingView.sizingOptions = []
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 12

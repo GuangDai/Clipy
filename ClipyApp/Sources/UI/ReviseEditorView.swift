@@ -18,11 +18,11 @@ import SwiftUI
 enum ReviseEditorPresentation {
     /// Product decision 3D: Save never claims to redact Canonical Content or
     /// previously committed revisions.
-    static func revisionDisclosure(bundle: Bundle = .main) -> String {
+    static func revisionDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         PanelActionsCopy.revisionDisclosure(bundle: bundle)
     }
 
-    static func formatIndependenceDisclosure(bundle: Bundle = .main) -> String {
+    static func formatIndependenceDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         PanelActionsCopy.text(
             "Editing one format leaves other kept formats unchanged. The destination app may use those formats instead.",
             bundle: bundle

@@ -133,6 +133,7 @@ internal func mapExternalHistoryFailure(
              .invalidTimestamp,
              .incoherentRevisionDraft,
              .invalidPageLimit,
+             .conflictingPageAnchors,
              .invalidPixelSize,
              .invalidRetentionPolicy:
             return invariantMapping()

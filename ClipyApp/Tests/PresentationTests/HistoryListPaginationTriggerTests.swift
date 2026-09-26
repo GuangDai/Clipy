@@ -1,4 +1,4 @@
-/// Card 8B: row appearance drives the real view-state pagination owner,
+/// Card 8B: actual viewport visibility drives the real pagination owner,
 /// including continuation of an authoritative filtered query. These tests
 /// observe browse requests and appended rows rather than repeat a Boolean
 /// predicate with precomputed last-row identities.
@@ -23,18 +23,18 @@ struct HistoryListPaginationTriggerTests {
         defer { state.deactivate() }
         try #require(await pollUntil { state.hasAuthoritativeFirstPage })
 
-        state.prefetchNextPageIfNeeded(appearingRowID: first.item.id)
+        state.prefetchPagesIfNeeded(visibleRowIDs: [first.item.id])
         #expect(!state.isLoadingPage)
-        state.prefetchNextPageIfNeeded(appearingRowID: last.item.id)
+        state.prefetchPagesIfNeeded(visibleRowIDs: [last.item.id])
         try #require(await pollUntil { await history.isBrowsePaused(cursor: cursor) })
-        state.prefetchNextPageIfNeeded(appearingRowID: last.item.id)
+        state.prefetchPagesIfNeeded(visibleRowIDs: [last.item.id])
         await history.resumeBrowse(cursor: cursor)
         try #require(await pollUntil { !state.isLoadingPage })
 
         #expect(await history.browseRequests.count == 1)
         #expect(state.rows == [first, last, continuation])
         #expect(!state.hasNextPage)
-        state.prefetchNextPageIfNeeded(appearingRowID: continuation.item.id)
+        state.prefetchPagesIfNeeded(visibleRowIDs: [continuation.item.id])
         #expect(!state.isLoadingPage)
         #expect(await history.browseRequests.count == 1)
     }
@@ -58,9 +58,9 @@ struct HistoryListPaginationTriggerTests {
         #expect(state.displayedPinnedRows == [visible])
         #expect(state.displayedUnpinnedRows.isEmpty)
 
-        state.prefetchNextPageIfNeeded(appearingRowID: hidden.item.id)
+        state.prefetchPagesIfNeeded(visibleRowIDs: [hidden.item.id])
         #expect(!state.isLoadingPage)
-        state.prefetchNextPageIfNeeded(appearingRowID: visible.item.id)
+        state.prefetchPagesIfNeeded(visibleRowIDs: [visible.item.id])
         try #require(await pollUntil { state.rows == [visible, continuation] && !state.isLoadingPage })
         #expect(await history.browseRequests.count == 1)
         #expect(await history.browseRequests.last?.filter == HistoryFilter(type: pinnedOnly ? .all : .text, pinnedOnly: pinnedOnly))

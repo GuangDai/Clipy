@@ -16,6 +16,7 @@ import SwiftUI
 /// discloses. The floating preview's side is chosen from screen geometry
 /// (PopupPositionGeometry.floatingPreviewFrame) — it has no control here.
 struct AppearanceSettingsTab: View {
+    @Environment(\.locale) private var interfaceLocale
 
     private let popupPosition: Binding<PopupPositionMode>?
     @AppStorage(NativeAppearance.defaultsKey)
@@ -41,12 +42,18 @@ struct AppearanceSettingsTab: View {
     private var isPreviewTextLengthLimited = true
     @AppStorage(PanelGeometry.floatingPreviewGapDefaultsKey)
     private var previewGap = Double(PanelGeometry.floatingPreviewGap)
+    @AppStorage(PanelGeometry.floatingPreviewWidthDefaultsKey)
+    private var previewWidth = Double(PanelGeometry.floatingPreviewWidth)
+    @AppStorage(PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey)
+    private var usesCustomPreviewWidth = false
+    @State private var isPreviewWidthInvalid = false
 
     init(popupPosition: Binding<PopupPositionMode>?) {
         self.popupPosition = popupPosition
     }
 
     var body: some View {
+        let _ = interfaceLocale
         Form {
             Section {
                 Picker(NativeAppearanceCopy.text("Appearance"), selection: $nativeAppearance) {
@@ -135,6 +142,47 @@ struct AppearanceSettingsTab: View {
                     isOn: $isPreviewAutoOpenEnabled
                 )
                 .accessibilityIdentifier("clipy.settings.appearance.preview-auto-open")
+                Toggle(SettingsCopy.text("Customize preview width"), isOn: $usesCustomPreviewWidth)
+                    .accessibilityIdentifier("clipy.settings.preview.custom-width")
+                    .onChange(of: usesCustomPreviewWidth) { _, _ in isPreviewWidthInvalid = false }
+                if usesCustomPreviewWidth {
+                    SettingsFieldLayout {
+                        Label(SettingsCopy.text("Preview width"), systemImage: "arrow.left.and.right")
+                        HStack(spacing: 8) {
+                            TextField("", value: Binding(
+                                get: { Double(effectivePreviewWidth) },
+                                set: {
+                                    guard $0.isFinite,
+                                          $0 >= Double(PanelGeometry.minimumPersistedFloatingPreviewWidth)
+                                    else {
+                                        isPreviewWidthInvalid = true
+                                        return
+                                    }
+                                    isPreviewWidthInvalid = false
+                                    previewWidth = $0
+                                }
+                            ), format: .number.grouping(.never))
+                                .textFieldStyle(.roundedBorder)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 88)
+                                .accessibilityLabel(SettingsCopy.text("Preview width"))
+                                .accessibilityIdentifier("clipy.settings.preview.panel-width")
+                            Text("pt").foregroundStyle(.secondary)
+                        }
+                        .frame(width: 120, alignment: .trailing)
+                    }
+                    if isPreviewWidthInvalid {
+                        SettingStatusView(status: .failure(String(
+                            format: SettingsCopy.text("Enter at least %lld pt to keep the preview controls visible."),
+                            Int64(PanelGeometry.minimumPersistedFloatingPreviewWidth)
+                        )))
+                        .accessibilityIdentifier("clipy.settings.preview.width-error")
+                    }
+                }
+                Text(SettingsCopy.text("The default width is 340 pt. You can also drag the preview’s outer edge; the new width is remembered. Available screen space may reduce the displayed width."))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 SettingsFieldLayout {
                     Label(SettingsCopy.text("Panel gap"), systemImage: "arrow.left.and.right")
                     TextField("", value: Binding(
@@ -179,6 +227,9 @@ struct AppearanceSettingsTab: View {
                     previewMaximumCharacters = PreviewTextSettings.defaultMaximumCharacters
                     isPreviewTextLengthLimited = true
                     previewGap = Double(PanelGeometry.floatingPreviewGap)
+                    previewWidth = Double(PanelGeometry.floatingPreviewWidth)
+                    usesCustomPreviewWidth = false
+                    isPreviewWidthInvalid = false
                 }
                 .accessibilityIdentifier("clipy.settings.preview.reset")
             } header: {
@@ -272,13 +323,19 @@ struct AppearanceSettingsTab: View {
         .padding(.vertical, PanelContentFit.listRowVerticalInset)
     }
 
+    private var effectivePreviewWidth: CGFloat {
+        PanelGeometry.preferredFloatingPreviewWidth(
+            CGFloat(previewWidth), usesCustomWidth: usesCustomPreviewWidth
+        )
+    }
+
     /// A small scale drawing expresses the relationship between the windows.
-    /// Only the drawing scales to fit; the persisted gap stays unbounded.
+    /// Only the drawing scales to fit; saved width and gap stay unbounded.
     private var previewPlacementSample: some View {
         GeometryReader { geometry in
             let gap = CGFloat(previewGap.isFinite ? max(0, previewGap) : 2)
             let width = max(0, geometry.size.width)
-            let panelWidths = PanelGeometry.contentWidth + PanelGeometry.floatingPreviewWidth
+            let panelWidths = PanelGeometry.contentWidth + effectivePreviewWidth
             let scale = min(220 / panelWidths, width / (panelWidths + gap))
             let drawingWidth = (panelWidths + gap) * scale
             let leadingEdge = (width - drawingWidth) / 2 + PanelGeometry.contentWidth * scale
@@ -289,7 +346,7 @@ struct AppearanceSettingsTab: View {
                     miniatureWindow(isPreview: false)
                         .frame(width: PanelGeometry.contentWidth * scale, height: 60)
                     miniatureWindow(isPreview: true)
-                        .frame(width: PanelGeometry.floatingPreviewWidth * scale, height: 48)
+                        .frame(width: effectivePreviewWidth * scale, height: 48)
                 }
                 .frame(width: width, alignment: .top)
                 // Dimension witnesses start at the actual two window edges,

@@ -85,9 +85,15 @@ internal struct ScalarReadRow {
         )
     }
 
+    internal var metadataOrderAnchor: StoredOrderingAnchor {
+        .metadata(lastCopiedAt: lastCopiedAt, copyCount: copyCount, id: id)
+    }
+
     /// Whether this row matches the given continuation anchor (04 §6).
     internal func matches(_ anchor: StoredOrderingAnchor) -> Bool {
         switch anchor {
+        case .metadata(let date, let count, let anchoredID):
+            return id == anchoredID && lastCopiedAt == date && copyCount == count
         case .defaultOrder(let pinnedOrdinal, let anchoredLastCopiedAt, let anchoredID):
             return id == anchoredID
                 && lastCopiedAt == anchoredLastCopiedAt

@@ -202,8 +202,8 @@ struct OperationPayloadBlobV1Tests {
         }
 
         var unknownSearchMode = valid
-        unknownSearchMode.replaceSubrange(6..<8, with: Data.bigEndian(UInt16(4)))
-        #expect(throws: OperationPayloadCodecRejection.unknownEnumRaw(4)) {
+        unknownSearchMode.replaceSubrange(6..<8, with: Data.bigEndian(UInt16(5)))
+        #expect(throws: OperationPayloadCodecRejection.unknownEnumRaw(5)) {
             try OperationPayloadBlobCodec.decode(unknownSearchMode, context: context)
         }
 

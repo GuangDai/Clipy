@@ -8,190 +8,190 @@ import HistoryCore
 internal enum RetentionSettingsCopy {
 
     internal static let tableName = "RetentionSettings"
-    internal static var bundle: Bundle { .main }
+    internal static var bundle: Bundle { AppLocalization.bundle }
 
     // MARK: Tab and Items section
 
-    internal static let tabTitle = plain(
+    internal static var tabTitle: String { plain(
         "settings.retention.tab-title",
         "Retention"
-    )
-    internal static let itemsSection = plain(
+    ) }
+    internal static var itemsSection: String { plain(
         "settings.retention.items.section",
         "Items"
-    )
-    internal static let countToggle = plain(
+    ) }
+    internal static var countToggle: String { plain(
         "settings.retention.items.toggle",
         "Limit unpinned item count"
-    )
-    internal static let countInputHint = plain(
+    ) }
+    internal static var countInputHint: String { plain(
         "settings.retention.items.input-hint",
         "Enter a positive whole number."
-    )
-    internal static let countEnforcementNote = plain(
+    ) }
+    internal static var countEnforcementNote: String { plain(
         "settings.retention.items.enforcement-note",
         "Turn off to keep unpinned items without a count limit. Age, storage and revision limits "
             + "still apply when enabled. Pinned items are not removed by the count limit."
-    )
-    internal static let itemsKeepAtMost = plain(
+    ) }
+    internal static var itemsKeepAtMost: String { plain(
         "settings.retention.items.keep-at-most",
         "Keep at most"
-    )
-    internal static let maximumUnpinnedAccessibilityLabel = plain(
+    ) }
+    internal static var maximumUnpinnedAccessibilityLabel: String { plain(
         "settings.retention.items.field-accessibility-label",
         "Maximum unpinned items"
-    )
-    internal static let unpinnedItemsUnit = plain(
+    ) }
+    internal static var unpinnedItemsUnit: String { plain(
         "settings.retention.items.unit",
         "unpinned items"
-    )
-    internal static let applyItemLimit = plain(
+    ) }
+    internal static var applyItemLimit: String { plain(
         "settings.retention.items.apply",
         "Apply Item Limit"
-    )
-    internal static let confirmItemLimitTitle = plain(
+    ) }
+    internal static var confirmItemLimitTitle: String { plain(
         "settings.retention.items.confirm-title",
         "Apply a stricter item limit?"
-    )
-    internal static let confirmItemLimitApply = plain(
+    ) }
+    internal static var confirmItemLimitApply: String { plain(
         "settings.retention.items.confirm-apply",
         "Apply Stricter Limit"
-    )
-    internal static let confirmItemLimitMessage = plain(
+    ) }
+    internal static var confirmItemLimitMessage: String { plain(
         "settings.retention.items.confirm-message",
         "A stricter limit can immediately remove unpinned items, and they can't be recovered."
-    )
+    ) }
 
     // MARK: Item age section
 
-    internal static let ageSection = plain(
+    internal static var ageSection: String { plain(
         "settings.retention.age.section",
         "Item age"
-    )
-    internal static let ageToggle = plain(
+    ) }
+    internal static var ageToggle: String { plain(
         "settings.retention.age.toggle",
         "Limit item age"
-    )
-    internal static let ageToggleHint = plain(
+    ) }
+    internal static var ageToggleHint: String { plain(
         "settings.retention.age.toggle-hint",
         "Retire items whose last copy is older than the entered age."
-    )
-    internal static let ageFieldLabel = plain(
+    ) }
+    internal static var ageFieldLabel: String { plain(
         "settings.retention.age.field-label",
         "Maximum item age"
-    )
-    internal static let ageUnit = plain(
+    ) }
+    internal static var ageUnit: String { plain(
         "settings.retention.age.unit",
         "days"
-    )
+    ) }
 
     /// R1 runs on capture and `.setRetentionPolicies`; it has no
     /// wall-clock worker or background reaper (`V2-02` §2.2/§7; review
     /// Card 10B). The copy must not imply a time-driven sweep.
-    internal static let ageEnforcementNote = plain(
+    internal static var ageEnforcementNote: String { plain(
         "settings.retention.age.enforcement-note",
         "Age limits are checked when Clipy captures a clipboard change or "
             + "you apply retention settings. Time passing alone doesn't remove items."
-    )
+    ) }
 
     // MARK: Storage section
 
-    internal static let storageSection = plain(
+    internal static var storageSection: String { plain(
         "settings.retention.storage.section",
         "Storage"
-    )
-    internal static let storageToggle = plain(
+    ) }
+    internal static var storageToggle: String { plain(
         "settings.retention.storage.toggle",
         "Limit storage budget"
-    )
-    internal static let storageToggleHint = plain(
+    ) }
+    internal static var storageToggleHint: String { plain(
         "settings.retention.storage.toggle-hint",
         "Retire the oldest unpinned items until history fits the budget."
-    )
-    internal static let storageFieldLabel = plain(
+    ) }
+    internal static var storageFieldLabel: String { plain(
         "settings.retention.storage.field-label",
         "Storage budget"
-    )
+    ) }
 
     // MARK: Revision limits section
 
-    internal static let revisionsSection = plain(
+    internal static var revisionsSection: String { plain(
         "settings.retention.revisions.section",
         "Revision limits"
-    )
-    internal static let revisionCountKeepAtMost = plain(
+    ) }
+    internal static var revisionCountKeepAtMost: String { plain(
         "settings.retention.revisions.keep-at-most",
         "Keep at most"
-    )
-    internal static let revisionCountToggleHint = plain(
+    ) }
+    internal static var revisionCountToggleHint: String { plain(
         "settings.retention.revisions.count-toggle-hint",
         "Prune the oldest inactive revisions beyond this count."
-    )
-    internal static let revisionCountFieldLabel = plain(
+    ) }
+    internal static var revisionCountFieldLabel: String { plain(
         "settings.retention.revisions.count-field-label",
         "Revisions per item"
-    )
-    internal static let revisionCountUnit = plain(
+    ) }
+    internal static var revisionCountUnit: String { plain(
         "settings.retention.revisions.count-unit",
         "revisions"
-    )
-    internal static let revisionBytesToggle = plain(
+    ) }
+    internal static var revisionBytesToggle: String { plain(
         "settings.retention.revisions.bytes-toggle",
         "Limit revision storage"
-    )
-    internal static let revisionBytesToggleHint = plain(
+    ) }
+    internal static var revisionBytesToggleHint: String { plain(
         "settings.retention.revisions.bytes-toggle-hint",
         "Prune the oldest inactive revisions until they fit this budget."
-    )
-    internal static let revisionBytesFieldLabel = plain(
+    ) }
+    internal static var revisionBytesFieldLabel: String { plain(
         "settings.retention.revisions.bytes-field-label",
         "Revision storage per item"
-    )
+    ) }
 
     // MARK: Policy Apply and destructive confirmation
 
-    internal static let applyPolicies = plain(
+    internal static var applyPolicies: String { plain(
         "settings.retention.apply",
         "Apply"
-    )
-    internal static let confirmPoliciesTitle = plain(
+    ) }
+    internal static var confirmPoliciesTitle: String { plain(
         "settings.retention.confirm-title",
         "Apply stricter retention limits?"
-    )
-    internal static let confirmPoliciesApply = plain(
+    ) }
+    internal static var confirmPoliciesApply: String { plain(
         "settings.retention.confirm-apply",
         "Apply Stricter Limits"
-    )
-    internal static let confirmPoliciesMessage = plain(
+    ) }
+    internal static var confirmPoliciesMessage: String { plain(
         "settings.retention.confirm-message",
         "Stricter limits can permanently remove items or revisions."
-    )
-    internal static let confirmCancel = plain(
+    ) }
+    internal static var confirmCancel: String { plain(
         "settings.retention.confirm-cancel",
         "Cancel"
-    )
-    internal static let applyNote = plain(
+    ) }
+    internal static var applyNote: String { plain(
         "settings.retention.apply-note",
         "Changes apply to new and existing items at once."
-    )
+    ) }
 
     // MARK: Range hint and failures
 
-    internal static let noLimit = plain("settings.retention.no-limit", "No limit")
-    internal static let applying = plain("settings.retention.applying", "Applying limits…")
-    internal static let cancelling = plain("settings.retention.cancelling", "Cancelling…")
-    internal static let countApplyCancelled = plain(
+    internal static var noLimit: String { plain("settings.retention.no-limit", "No limit") }
+    internal static var applying: String { plain("settings.retention.applying", "Applying limits…") }
+    internal static var cancelling: String { plain("settings.retention.cancelling", "Cancelling…") }
+    internal static var countApplyCancelled: String { plain(
         "settings.retention.count-cancelled",
         "Cancelled. The item limit was not changed and no items were removed by this apply."
-    )
-    internal static let policyApplyCancelled = plain(
+    ) }
+    internal static var policyApplyCancelled: String { plain(
         "settings.retention.policies-cancelled",
         "Cancelled. These cleanup limits were not changed and no items or revisions were removed by this apply."
-    )
-    internal static let historyChanged = plain(
+    ) }
+    internal static var historyChanged: String { plain(
         "settings.retention.history-changed",
         "History changed while preparing cleanup. Nothing was applied. Try applying again."
-    )
+    ) }
 
     internal static func countFailureMessage(for failure: HistoryFailure) -> String {
         if case .snapshotExpired = failure { return historyChanged }
@@ -203,7 +203,7 @@ internal enum RetentionSettingsCopy {
     internal static func rangeHint(
         from lowerBound: Int,
         to upperBound: Int,
-        bundle: Bundle = .main,
+        bundle: Bundle = AppLocalization.bundle,
         locale: Locale = .current
     ) -> String {
         formatted(
@@ -216,39 +216,39 @@ internal enum RetentionSettingsCopy {
         )
     }
 
-    internal static let readFailure = plain(
+    internal static var readFailure: String { plain(
         "settings.retention.read-failure",
         "The current retention settings could not be read."
-    )
-    internal static let countSaveFailure = plain(
+    ) }
+    internal static var countSaveFailure: String { plain(
         "settings.retention.count-save-failure",
         "The setting could not be saved."
-    )
-    internal static let policiesSaveFailure = plain(
+    ) }
+    internal static var policiesSaveFailure: String { plain(
         "settings.retention.policies-save-failure",
         "The policies could not be saved."
-    )
+    ) }
 
     /// Retention-specific recovery guidance (V2-07 §5.2): the set-time
     /// pinned-over-budget rejection and the unsatisfiable R2 budget carry
     /// their own text.
-    internal static let pinnedOverBudget = plain(
+    internal static var pinnedOverBudget: String { plain(
         "settings.retention.pinned-over-budget",
         "Pinned items exceed this budget. Unpin items or raise the budget."
-    )
-    internal static let budgetUnsatisfiable = plain(
+    ) }
+    internal static var budgetUnsatisfiable: String { plain(
         "settings.retention.budget-unsatisfiable",
         "This budget can't be satisfied with the current history."
-    )
-    internal static let activeRevisionOverBudget = plain(
+    ) }
+    internal static var activeRevisionOverBudget: String { plain(
         "settings.retention.active-revision-over-budget",
         "An active revision exceeds this limit. Increase the revision storage limit."
-    )
-    internal static let combinedBudgetUnsatisfiable = plain(
+    ) }
+    internal static var combinedBudgetUnsatisfiable: String { plain(
         "settings.retention.combined-budget-unsatisfiable",
         "Pinned items may exceed the storage budget, or an active revision may exceed its limit. "
             + "Raise the limits, or unpin items to reduce protected storage."
-    )
+    ) }
 
     /// V2-02 §8.3 gives pinned R2 bytes and irreducible active R3 bytes the
     /// same failure. A validated Settings draft's dimensions can rule out a cause, but when
@@ -276,28 +276,28 @@ internal enum RetentionSettingsCopy {
 
     // MARK: Receipt feedback (03a §6; V2-02 §12; deep review Card 10)
 
-    internal static let feedbackDone = plain(
+    internal static var feedbackDone: String { plain(
         "settings.retention.feedback.done",
         "Done."
-    )
-    internal static let feedbackNothingToClear = plain(
+    ) }
+    internal static var feedbackNothingToClear: String { plain(
         "settings.retention.feedback.nothing-to-clear",
         "Nothing to clear."
-    )
-    internal static let feedbackNoChange = plain(
+    ) }
+    internal static var feedbackNoChange: String { plain(
         "settings.retention.feedback.no-change",
         "No change."
-    )
-    internal static let clearFailure = plain(
+    ) }
+    internal static var clearFailure: String { plain(
         "settings.retention.feedback.clear-failure",
         "The history could not be cleared."
-    )
+    ) }
 
     /// Translators own the summary order and punctuation (V2-02 §12).
     internal static func appliedSummary(
         retiredPhrase: String,
         prunedPhrase: String,
-        bundle: Bundle = .main,
+        bundle: Bundle = AppLocalization.bundle,
         locale: Locale = .current
     ) -> String {
         formatted(
@@ -312,7 +312,7 @@ internal enum RetentionSettingsCopy {
 
     internal static func clearedItemsRemoved(
         _ removed: Int,
-        bundle: Bundle = .main,
+        bundle: Bundle = AppLocalization.bundle,
         locale: Locale = .current
     ) -> String {
         plural(
@@ -327,7 +327,7 @@ internal enum RetentionSettingsCopy {
 
     internal static func countLimitItemsRemoved(
         _ removed: Int,
-        bundle: Bundle = .main,
+        bundle: Bundle = AppLocalization.bundle,
         locale: Locale = .current
     ) -> String {
         plural(
@@ -342,7 +342,7 @@ internal enum RetentionSettingsCopy {
 
     internal static func itemsRetired(
         _ retired: Int,
-        bundle: Bundle = .main,
+        bundle: Bundle = AppLocalization.bundle,
         locale: Locale = .current
     ) -> String {
         plural(
@@ -357,7 +357,7 @@ internal enum RetentionSettingsCopy {
 
     internal static func revisionsPruned(
         _ pruned: Int,
-        bundle: Bundle = .main,
+        bundle: Bundle = AppLocalization.bundle,
         locale: Locale = .current
     ) -> String {
         plural(
@@ -375,7 +375,7 @@ internal enum RetentionSettingsCopy {
     internal static func plain(
         _ key: String,
         _ englishDefault: String,
-        bundle: Bundle = .main
+        bundle: Bundle = AppLocalization.bundle
     ) -> String {
         bundle.localizedString(
             forKey: key,

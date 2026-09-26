@@ -13,20 +13,28 @@ extension HistoryAuthority {
     /// One explicit snapshot joins ChangePosition, anchor validation and the
     /// bounded page. The synchronous helper also serves Gateway callers that
     /// already own a transaction; it never nests BEGIN inside that interval.
-    internal func recentPage(limit: Int, cursor: HistoryPageCursor?, filter: HistoryFilter = .all) async throws -> HistoryPage {
+    internal func recentPage(limit: Int, cursor: HistoryPageCursor?, filter: HistoryFilter = .all,
+                             sortOrder: HistorySortOrder = .automatic,
+                             startAround: HistoryItemID? = nil) async throws -> HistoryPage {
         await suspendIfRequested(.readEntry)
         guard limits.pageRowLimitRange.contains(limit) else {
             throw HistoryFailure.invalidInput(.invalidPageLimit)
         }
+        guard cursor == nil || startAround == nil else {
+            throw HistoryFailure.invalidInput(.conflictingPageAnchors)
+        }
+        try HistoryFilterSQL.validate(filter, limits: limits)
         try Task.checkCancellation()
         let page: HistoryPage
         do {
             page = try autoreleasepool {
-                try database.readTransaction {
-                    try recentPageInLocalContext(limit: limit, cursor: cursor, filter: filter)
+                try database.readTransaction(checkingCancellation: true) {
+                    try recentPageInLocalContext(limit: limit, cursor: cursor, filter: filter,
+                                                 sortOrder: sortOrder, startAround: startAround)
                 }
             }
         } catch let failure as SQLiteFailure {
+            try Task.checkCancellation()
             throw failure.historyFailure
         }
 #if DEBUG
@@ -37,24 +45,37 @@ extension HistoryAuthority {
     }
 
     internal func recentPageInLocalContext(
-        limit: Int, cursor continuation: HistoryPageCursor?, filter: HistoryFilter = .all
+        limit: Int, cursor continuation: HistoryPageCursor?, filter: HistoryFilter = .all,
+        sortOrder: HistorySortOrder = .automatic, startAround: HistoryItemID? = nil
     ) throws -> HistoryPage {
         guard limits.pageRowLimitRange.contains(limit) else {
             throw HistoryFailure.invalidInput(.invalidPageLimit)
         }
+        guard continuation == nil || startAround == nil else {
+            throw HistoryFailure.invalidInput(.conflictingPageAnchors)
+        }
+        try HistoryFilterSQL.validate(filter, limits: limits)
         try Task.checkCancellation()
         let row = try Self.fetchExactlyOnePositionRow(in: database)
         let currentPosition = try Self.decodePositionRow(row, limits: limits).position
+        if let startAround {
+            return try recentPageStartingAt(startAround, limit: limit, filter: filter,
+                                             sortOrder: sortOrder, position: currentPosition)
+        }
         let cursor: ResolvedPageCursor?
         do {
             cursor = try continuation.map {
-                try Self.decodeCursor($0, request: .init(kind: .recent, limit: limit, filter: filter), processMarker: processMarker)
+                try Self.decodeCursor($0, request: .init(kind: .recent, limit: limit, filter: filter, sortOrder: sortOrder), processMarker: processMarker)
             }
         } catch is PageCursorRejection {
             throw HistoryFailure.snapshotExpired(current: currentPosition)
         }
         if let cursor, cursor.position != currentPosition {
             throw HistoryFailure.snapshotExpired(current: currentPosition)
+        }
+        if sortOrder != .automatic {
+            return try sortedRecentPage(limit: limit, cursor: cursor, filter: filter,
+                                        sortOrder: sortOrder, position: currentPosition)
         }
         let anchor: (ordinal: Int?, date: Date, id: HistoryItemID)?
         if let cursor {
@@ -256,7 +277,7 @@ extension HistoryAuthority {
 
     private func recentResult(
         _ slice: [ScalarReadRow], limit: Int, position: ChangePosition,
-        hasPrevious: Bool, hasNext: Bool, filter: HistoryFilter
+        hasPrevious: Bool, hasNext: Bool, filter: HistoryFilter, sortOrder: HistorySortOrder = .automatic
     ) throws -> HistoryPage {
         let rows = try slice.map {
             try Task.checkCancellation()
@@ -267,19 +288,111 @@ extension HistoryAuthority {
         do {
             previous = try hasPrevious ? slice.first.map {
                 try PageCursorCodec.encode(ResolvedPageCursor(
-                    queryShape: .recent(limit: limit, filter: filter), position: position,
-                    anchor: $0.defaultOrderAnchor, direction: .backward
+                    queryShape: .recent(limit: limit, filter: filter, sortOrder: sortOrder), position: position,
+                    anchor: sortOrder == .automatic ? $0.defaultOrderAnchor : $0.metadataOrderAnchor, direction: .backward
                 ), processMarker: processMarker)
             } : nil
             next = try hasNext ? slice.last.map {
                 try PageCursorCodec.encode(ResolvedPageCursor(
-                    queryShape: .recent(limit: limit, filter: filter), position: position,
-                    anchor: $0.defaultOrderAnchor, direction: .forward
+                    queryShape: .recent(limit: limit, filter: filter, sortOrder: sortOrder), position: position,
+                    anchor: sortOrder == .automatic ? $0.defaultOrderAnchor : $0.metadataOrderAnchor, direction: .forward
                 ), processMarker: processMarker)
             } : nil
         } catch {
             throw HistoryFailure.persistence(.invariantViolation)
         }
+        try Task.checkCancellation()
+        return HistoryPage(position: position, rows: rows, previous: previous, next: next)
+    }
+
+    /// Explicit sorting includes pinned and unpinned rows in the same order.
+    /// Every range reads only the still-needed page, anchor and lookahead rows.
+    private func sortedRecentPage(
+        limit: Int, cursor: ResolvedPageCursor?, filter: HistoryFilter,
+        sortOrder: HistorySortOrder, position: ChangePosition
+    ) throws -> HistoryPage {
+        let anchor: HistorySortSQL.Anchor?
+        if let cursor {
+            guard case let .metadata(date, count, id) = cursor.anchor else {
+                throw HistoryFailure.snapshotExpired(current: position)
+            }
+            anchor = (date, count, id)
+        } else { anchor = nil }
+        let reversed = cursor?.direction == .backward
+        let capacity = limit + 1 + (anchor == nil ? 0 : 1)
+        var fetched: [ScalarReadRow] = []
+        for range in HistorySortSQL.ranges(sortOrder: sortOrder, anchor: anchor, reversed: reversed) {
+            guard fetched.count < capacity else { break }
+            fetched += try fetchRecentScalars(filter: filter, whereSQL: range.condition, orderSQL: range.order,
+                                              bindings: range.bindings, limit: capacity - fetched.count)
+        }
+        if let cursor {
+            guard fetched.first?.matches(cursor.anchor) == true else {
+                throw HistoryFailure.snapshotExpired(current: position)
+            }
+            fetched.removeFirst()
+        }
+        let slice = Array(fetched.prefix(limit))
+        return try recentResult(
+            reversed ? Array(slice.reversed()) : slice, limit: limit, position: position,
+            hasPrevious: reversed ? fetched.count > limit : cursor != nil,
+            hasNext: reversed ? cursor != nil : fetched.count > limit,
+            filter: filter, sortOrder: sortOrder
+        )
+    }
+
+    /// Resolve a remembered UUID against the current snapshot, then reuse the
+    /// normal neighboring keyset reads. At most one target, one page with its
+    /// lookahead and a bounded predecessor page are projected. All anchors
+    /// come from these fresh facts; no saved cursor or absolute offset is used.
+    private func recentPageStartingAt(
+        _ id: HistoryItemID, limit: Int, filter: HistoryFilter,
+        sortOrder: HistorySortOrder, position: ChangePosition
+    ) throws -> HistoryPage {
+        let candidates = try fetchRecentScalars(
+            filter: filter, whereSQL: "id = ?", orderSQL: "id",
+            bindings: [.text(id.rawValue.uuidString)], limit: 1
+        )
+        guard let target = candidates.first else { throw HistoryFailure.notFound(id) }
+        let targetRow = try target.toHistoryRow(limits: limits)
+
+        func anchor(for row: HistoryRow) -> StoredOrderingAnchor {
+            if sortOrder == .automatic {
+                return .defaultOrder(pinnedOrdinal: row.pinnedPosition,
+                                     lastCopiedAt: row.lastCopiedAt, id: row.item.id)
+            }
+            return .metadata(lastCopiedAt: row.lastCopiedAt, copyCount: row.copyCount, id: row.item.id)
+        }
+
+        func cursor(
+            at row: HistoryRow, direction: HistoryPageDirection, pageLimit: Int
+        ) throws -> HistoryPageCursor {
+            do {
+                return try PageCursorCodec.encode(ResolvedPageCursor(
+                    queryShape: .recent(limit: pageLimit, filter: filter, sortOrder: sortOrder),
+                    position: position, anchor: anchor(for: row), direction: direction
+                ), processMarker: processMarker)
+            } catch { throw HistoryFailure.persistence(.invariantViolation) }
+        }
+
+        let following = try recentPageInLocalContext(
+            limit: limit, cursor: cursor(at: targetRow, direction: .forward, pageLimit: limit),
+            filter: filter, sortOrder: sortOrder
+        )
+        let predecessorLimit = limits.pageRowLimitRange.lowerBound
+        let preceding = try recentPageInLocalContext(
+            limit: predecessorLimit,
+            cursor: cursor(at: targetRow, direction: .backward, pageLimit: predecessorLimit),
+            filter: filter, sortOrder: sortOrder
+        )
+        let rows = [targetRow] + following.rows.prefix(limit - 1)
+        let previous: HistoryPageCursor?
+        if preceding.rows.isEmpty { previous = nil }
+        else { previous = try cursor(at: targetRow, direction: .backward, pageLimit: limit) }
+        let next: HistoryPageCursor?
+        if following.rows.count >= limit, let last = rows.last {
+            next = try cursor(at: last, direction: .forward, pageLimit: limit)
+        } else { next = nil }
         try Task.checkCancellation()
         return HistoryPage(position: position, rows: rows, previous: previous, next: next)
     }
@@ -309,6 +422,7 @@ extension HistoryAuthority {
             }
             return rows
         } catch let failure as SQLiteFailure {
+            try Task.checkCancellation()
             throw failure.historyFailure
         }
     }

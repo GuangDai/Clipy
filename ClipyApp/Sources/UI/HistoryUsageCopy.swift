@@ -4,13 +4,13 @@
 import Foundation
 
 internal enum HistoryUsageCopy {
-    static var bundle: Bundle { .main }
+    static var bundle: Bundle { AppLocalization.bundle }
 
-    static func text(_ english: String, bundle: Bundle = .main) -> String {
+    static func text(_ english: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(forKey: english, value: english, table: "HistoryUsage")
     }
 
-    static func disclosure(bundle: Bundle = .main) -> String {
+    static func disclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         text(
             "Content size includes originals and retained revisions. "
                 + "Actual disk usage may differ.",

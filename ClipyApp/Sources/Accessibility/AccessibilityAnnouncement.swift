@@ -10,7 +10,7 @@ import AppKit
 enum CaptureNoticePresentation {
     static func message(
         for notice: ClipyCaptureNotice,
-        bundle: Bundle = .main,
+        bundle: Bundle = AppLocalization.bundle,
         locale: Locale = .current
     ) -> String {
         switch notice {
@@ -42,7 +42,7 @@ enum CaptureNoticePresentation {
 enum SearchResultCountAnnouncementPresentation {
     static func message(
         count: Int, hasNextPage: Bool,
-        bundle: Bundle = .main, locale: Locale = .current
+        bundle: Bundle = AppLocalization.bundle, locale: Locale = .current
     ) -> String {
         AppHistoryAnnouncementsCopy.searchResults(
             count: count, hasNextPage: hasNextPage, bundle: bundle, locale: locale
@@ -109,7 +109,7 @@ struct AccessibilityAnnouncement {
         )
     }
 
-    func announceHistoryItemRemoved(bundle: Bundle = .main) {
+    func announceHistoryItemRemoved(bundle: Bundle = AppLocalization.bundle) {
         operations.post(
             AppHistoryAnnouncementsCopy.text("Item removed from history.", bundle: bundle),
             priority: .medium
@@ -119,7 +119,7 @@ struct AccessibilityAnnouncement {
     func announceSettledSearchResultCount(
         _ count: Int,
         hasNextPage: Bool,
-        bundle: Bundle = .main,
+        bundle: Bundle = AppLocalization.bundle,
         locale: Locale = .current
     ) {
         operations.post(

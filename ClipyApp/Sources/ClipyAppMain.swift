@@ -41,12 +41,13 @@ struct ClipyAppMain: App {
 
         Settings {
             SettingsRootView(appDelegate: appDelegate)
+                .appLanguage()
                 // Settings defaults to disabled resize interaction even when
                 // contentMinSize allows a range. Let SwiftUI own both the
                 // interaction behavior and the existing content constraints.
                 .windowResizeBehavior(.enabled)
         }
-        .defaultSize(width: 780, height: 620)
+        .defaultSize(width: 980, height: 680)
         .windowResizability(.contentMinSize)
     }
 }
@@ -58,15 +59,20 @@ struct ClipyAppMain: App {
 /// (`AppDelegate.popupPositionDefaultsKey`).
 private struct SettingsRootView: View {
     let appDelegate: AppDelegate
+    @Environment(\.locale) private var locale
 
     @AppStorage(AppDelegate.popupPositionDefaultsKey)
     private var panelPosition: PopupPositionMode = .cursor
     @State private var isRecordingSummonShortcut = false
 
     var body: some View {
+        let _ = locale
         if let composition = appDelegate.composition {
             ClipySettingsView(
                 viewState: composition.viewState,
+                workspaceViewState: composition.historyWorkspaceViewState,
+                workspaceCopyState: composition.historyWorkspaceCopyState,
+                workspaceSourceIconProvider: SourceIconProviderFactory.makeProvider(),
                 launchAtLogin: appDelegate.launchAtLoginBinding(),
                 summonShortcut: appDelegate.summonShortcutBinding {
                     isRecordingSummonShortcut = true
@@ -77,6 +83,10 @@ private struct SettingsRootView: View {
                 interactionDefaults: appDelegate.interactionDefaults
             )
             .environment(\.workflowExecutionQueue, composition.workflowRunner.executionQueue)
+            .environment(\.searchHistoryStore, composition.searchHistoryStore)
+            .environment(\.historyBrowsingPreferences, composition.historyBrowsingPreferences)
+            .environment(\.displayMemoryPressure, appDelegate.displayMemoryPressure)
+            .environment(\.displayMemoryPressureGeneration, appDelegate.panelSurfaceState?.memoryPressureGeneration ?? 0)
             .sheet(isPresented: $isRecordingSummonShortcut) {
                 SummonShortcutRecorderView(conflictingPanelAction: { chord in
                     chord.conflictingPanelAction(in: PanelShortcutSettings.load(from: appDelegate.interactionDefaults))

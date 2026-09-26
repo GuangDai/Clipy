@@ -5,6 +5,7 @@
 "Newer" = "较新";
 "Older" = "较早";
 "Latest" = "最新";
+"Items %lld–%lld" = "第 %lld–%lld 项";
 "Loading clipboard history" = "正在加载剪贴板历史记录";
 "No Results" = "无结果";
 "No Clipboard History" = "暂无剪贴板历史记录";
@@ -12,3 +13,5 @@
 "No items match the current filter." = "没有符合当前筛选条件的项目。";
 "No items match “%@”." = "没有与“%@”匹配的项目。";
 "Toggle Pin" = "切换置顶状态";
+
+"Near your reading position" = "阅读位置附近";

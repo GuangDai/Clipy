@@ -100,6 +100,57 @@ struct PanelAppearanceSettingsTests {
         #expect(PanelGeometry.clampedContentWidth(360) == PanelGeometry.contentWidth)
     }
 
+    @Test("custom preview width is optional and survives switching back to the default")
+    func customPreviewWidthPreservesPreviousChoice() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        #expect(PanelGeometry.persistedFloatingPreviewWidth(from: defaults) == 340)
+
+        PanelGeometry.persistFloatingPreviewWidth(528.5, to: defaults)
+        #expect(PanelGeometry.persistedFloatingPreviewWidth(from: defaults) == 528.5)
+        #expect(defaults.bool(forKey: PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey))
+
+        defaults.set(false, forKey: PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey)
+        #expect(PanelGeometry.persistedFloatingPreviewWidth(from: defaults) == 340)
+        #expect(defaults.double(forKey: PanelGeometry.floatingPreviewWidthDefaultsKey) == 528.5)
+        defaults.set(true, forKey: PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey)
+        #expect(PanelGeometry.persistedFloatingPreviewWidth(from: defaults) == 528.5)
+
+        PanelGeometry.persistFloatingPreviewWidth(10_000, to: defaults)
+        #expect(PanelGeometry.persistedFloatingPreviewWidth(from: defaults) == 10_000)
+    }
+
+    @Test("invalid preview widths cannot replace a usable saved choice or enable custom width")
+    func invalidPreviewWidthPreservesPreference() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        PanelGeometry.persistFloatingPreviewWidth(480, to: defaults)
+        defaults.set(false, forKey: PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey)
+        for invalid in [CGFloat(0), -1, 10, .infinity, .nan] {
+            PanelGeometry.persistFloatingPreviewWidth(invalid, to: defaults)
+            #expect(defaults.double(forKey: PanelGeometry.floatingPreviewWidthDefaultsKey) == 480)
+            #expect(!defaults.bool(forKey: PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey))
+        }
+        defaults.set(true, forKey: PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey)
+        #expect(PanelGeometry.persistedFloatingPreviewWidth(from: defaults) == 480)
+    }
+
+    @Test("damaged custom preview preferences recover independently of the browsing panel")
+    func damagedPreviewWidthUsesDefault() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        PanelGeometry.persistSize(contentWidth: 600, height: 720, to: defaults)
+        defaults.set(true, forKey: PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey)
+        for invalid in ["wide", "0", "nan"] {
+            defaults.set(invalid, forKey: PanelGeometry.floatingPreviewWidthDefaultsKey)
+            #expect(PanelGeometry.persistedFloatingPreviewWidth(from: defaults) == 340)
+        }
+        defaults.set(10.0, forKey: PanelGeometry.floatingPreviewWidthDefaultsKey)
+        #expect(PanelGeometry.persistedFloatingPreviewWidth(from: defaults) == 340)
+        #expect(PanelGeometry.persistedSize(from: defaults).contentWidth == 600)
+        #expect(PanelGeometry.persistedSize(from: defaults).height == 720)
+    }
+
     @Test("height clamps at, below, and above the resizable bounds")
     func heightClampsIntoBounds() {
         // A short user size is meaningful; there is no aesthetic floor.

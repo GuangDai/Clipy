@@ -1,13 +1,13 @@
 import Foundation
 
 internal enum MaintenanceSettingsCopy {
-    static var bundle: Bundle { .main }
+    static var bundle: Bundle { AppLocalization.bundle }
 
-    static func text(_ english: String, bundle: Bundle = .main) -> String {
+    static func text(_ english: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(forKey: english, value: english, table: "MaintenanceSettings")
     }
 
-    static func backupDisclosure(bundle: Bundle = .main) -> String {
+    static func backupDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         text(
             "Backups contain all retained history, including original content and revisions. "
                 + "They may contain passwords and other sensitive information and are not encrypted. "
@@ -17,7 +17,7 @@ internal enum MaintenanceSettingsCopy {
     }
 
     static func backupStatus(
-        _ outcome: HistoryBackupSettingsModel.Outcome, bundle: Bundle = .main
+        _ outcome: HistoryBackupSettingsModel.Outcome, bundle: Bundle = AppLocalization.bundle
     ) -> String {
         switch outcome {
         case .cancelled:
@@ -38,11 +38,11 @@ internal enum MaintenanceSettingsCopy {
         }
     }
 
-    static func logicalDisclosure(bundle: Bundle = .main) -> String {
+    static func logicalDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         text("Originals and retained revisions, excluding database and filesystem overhead.", bundle: bundle)
     }
 
-    static func folderDisclosure(bundle: Bundle = .main) -> String {
+    static func folderDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         text(
             "Approximate allocated size of all files in this folder, including hidden files "
                 + "and any other data stored here. Linked files and folders are excluded. "
@@ -51,14 +51,14 @@ internal enum MaintenanceSettingsCopy {
         )
     }
 
-    static func cacheDisclosure(bundle: Bundle = .main) -> String {
+    static func cacheDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         text(
             "Thumbnail and preview results are retained in memory. This version has no derived disk cache.",
             bundle: bundle
         )
     }
 
-    static func memoryDisclosure(bundle: Bundle = .main) -> String {
+    static func memoryDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         text(
             "Kernel readings for the whole Clipy process. RSS is currently resident memory; "
                 + "footprint is memory charged to the process. Peak RSS is since launch. "

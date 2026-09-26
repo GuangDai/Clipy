@@ -64,7 +64,7 @@ enum FailurePresentation {
             return "Hiding every representation is not allowed"
         case .invalidRegularExpression:
             return "Invalid regular expression"
-        case .invalidPageLimit, .invalidPixelSize:
+        case .invalidPageLimit, .invalidPixelSize, .conflictingPageAnchors:
             return "That request isn't valid"
         case .invalidRetentionPolicy:
             return "Pinned items exceed this budget. Unpin items or raise the budget."

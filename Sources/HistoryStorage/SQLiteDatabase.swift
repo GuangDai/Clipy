@@ -222,8 +222,25 @@ internal final class SQLiteDatabase {
 
     /// A snapshot starts at the first SELECT in this closure. All reads for
     /// one page/search snapshot run on this connection until COMMIT.
-    internal func readTransaction<T>(_ body: () throws -> T) throws -> T {
-        try transaction(begin: "BEGIN DEFERRED", body)
+    internal func readTransaction<T>(checkingCancellation: Bool = false, _ body: () throws -> T) throws -> T {
+        guard checkingCancellation else { return try transaction(begin: "BEGIN DEFERRED", body) }
+        try Task.checkCancellation()
+        let handle = try openHandle()
+        do {
+            return try transaction(begin: "BEGIN DEFERRED") {
+                // Explicit metadata sorts may scan an older store without the
+                // optional ordering index. Cancellation must interrupt native
+                // SQL work before it has produced its first bounded row.
+                sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
+                defer { sqlite3_progress_handler(handle, 0, nil, nil) }
+                let value = try body()
+                try Task.checkCancellation()
+                return value
+            }
+        } catch let failure as SQLiteFailure {
+            try Task.checkCancellation()
+            throw failure
+        }
     }
 
     /// V2-09 §6: item/revision/reference/aggregate/Gateway writes and the one

@@ -1,5 +1,7 @@
 // General, Privacy, and Appearance (V2-07 §10 / UI17).
 "General" = "General";
+"History" = "History";
+"Copied to Clipboard" = "Copied to Clipboard";
 "Appearance" = "Appearance";
 "Startup" = "Startup";
 "Keyboard Shortcut" = "Keyboard Shortcut";
@@ -52,6 +54,10 @@
 "Panel size reset. Reopen the panel to use the default size." = "Panel size reset. Reopen the panel to use the default size.";
 "Clearing history…" = "Clearing history…";
 "Panel gap" = "Panel gap";
+"Customize preview width" = "Customize preview width";
+"Preview width" = "Preview width";
+"Enter at least %lld pt to keep the preview controls visible." = "Enter at least %lld pt to keep the preview controls visible.";
+"The default width is 340 pt. You can also drag the preview’s outer edge; the new width is remembered. Available screen space may reduce the displayed width." = "The default width is 340 pt. You can also drag the preview’s outer edge; the new width is remembered. Available screen space may reduce the displayed width.";
 "Reading notes — collect useful ideas, save a link, and pick up where you left off." = "Reading notes — collect useful ideas, save a link, and pick up where you left off.";
 "Weekend itinerary.pdf" = "Weekend itinerary.pdf";
 "List sample" = "List sample";

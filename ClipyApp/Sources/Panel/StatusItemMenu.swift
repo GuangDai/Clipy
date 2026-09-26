@@ -53,7 +53,11 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
     /// The one state-dependent item, retained so `refresh()` can rewrite
     /// its title/enabled state in place.
     private let pauseResumeItem: NSMenuItem
-    private let localizationBundle: Bundle
+    private let showHistoryItem: NSMenuItem
+    private let settingsItem: NSMenuItem
+    private let quitItem: NSMenuItem
+    private let localizationBundle: Bundle?
+    private let languageDefaults: UserDefaults
 
     private let isCapturePaused: @MainActor () -> Bool
     private let canToggleCapturePause: @MainActor () -> Bool
@@ -71,7 +75,8 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
         onOpenSettings: @escaping @MainActor () -> Void,
         onQuit: @escaping @MainActor () -> Void,
         onMenuDidClose: @escaping @MainActor () -> Void,
-        localizationBundle: Bundle = .main
+        localizationBundle: Bundle? = nil,
+        languageDefaults: UserDefaults = .standard
     ) {
         self.isCapturePaused = isCapturePaused
         self.canToggleCapturePause = canToggleCapturePause
@@ -81,8 +86,10 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
         self.onQuit = onQuit
         self.onMenuDidClose = onMenuDidClose
         self.localizationBundle = localizationBundle
+        self.languageDefaults = languageDefaults
+        let bundle = localizationBundle ?? AppLocalization.bundle(for: AppLanguageSettings.load(from: languageDefaults))
         let pauseResumeItem = NSMenuItem(
-            title: StatusMenuCopy.text("Pause Clipboard Monitoring for 5 Minutes", bundle: localizationBundle),
+            title: StatusMenuCopy.text("Pause Clipboard Monitoring for 5 Minutes", bundle: bundle),
             action: #selector(toggleCapturePauseClicked(_:)),
             keyEquivalent: ""
         )
@@ -91,24 +98,30 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
         // Validation is manual: the Pause/Resume item's enabled state is
         // owned by `refresh()`, not by responder-chain validation.
         menu.autoenablesItems = false
-        menu.addItem(NSMenuItem(
-            title: StatusMenuCopy.text("Show Clipboard History", bundle: localizationBundle),
+        let showHistoryItem = NSMenuItem(
+            title: StatusMenuCopy.text("Show Clipboard History", bundle: bundle),
             action: #selector(showHistoryClicked(_:)),
             keyEquivalent: ""
-        ))
+        )
+        self.showHistoryItem = showHistoryItem
+        menu.addItem(showHistoryItem)
         menu.addItem(pauseResumeItem)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(
-            title: StatusMenuCopy.text("Settings…", bundle: localizationBundle),
+        let settingsItem = NSMenuItem(
+            title: StatusMenuCopy.text("Settings…", bundle: bundle),
             action: #selector(openSettingsClicked(_:)),
             keyEquivalent: ""
-        ))
+        )
+        self.settingsItem = settingsItem
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(
-            title: StatusMenuCopy.text("Quit Clipy", bundle: localizationBundle),
+        let quitItem = NSMenuItem(
+            title: StatusMenuCopy.text("Quit Clipy", bundle: bundle),
             action: #selector(quitClicked(_:)),
             keyEquivalent: ""
-        ))
+        )
+        self.quitItem = quitItem
+        menu.addItem(quitItem)
         self.menu = menu
         super.init()
         for item in menu.items where !item.isSeparatorItem {
@@ -118,16 +131,20 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
         refresh()
     }
 
-    /// Recomputes the one state-dependent item from the owner's live facts.
+    /// Recomputes language and capture state from the owner's live facts.
     /// Called at build time and by AppKit on every `menuNeedsUpdate`
     /// (before each presentation), so a stale title can never be shown.
     /// `NSMenu.update()` is NOT a refresh entry: it only applies
     /// NSMenuValidation enable/disable state.
     func refresh() {
+        let bundle = localizationBundle ?? AppLocalization.bundle(for: AppLanguageSettings.load(from: languageDefaults))
+        showHistoryItem.title = StatusMenuCopy.text("Show Clipboard History", bundle: bundle)
+        settingsItem.title = StatusMenuCopy.text("Settings…", bundle: bundle)
+        quitItem.title = StatusMenuCopy.text("Quit Clipy", bundle: bundle)
         let title = isCapturePaused()
             ? "Resume Clipboard Monitoring"
             : "Pause Clipboard Monitoring for 5 Minutes"
-        pauseResumeItem.title = StatusMenuCopy.text(title, bundle: localizationBundle)
+        pauseResumeItem.title = StatusMenuCopy.text(title, bundle: bundle)
         pauseResumeItem.isEnabled = canToggleCapturePause()
     }
 

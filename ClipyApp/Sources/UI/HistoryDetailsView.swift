@@ -224,14 +224,15 @@ struct HistoryDetailsView: View {
                         )
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .failed(let message):
+                case .failed(let failure):
                     ContentUnavailableView {
                         Label(
                             PanelActionsCopy.text("Couldn't Load Item", bundle: copyBundle),
                             systemImage: "exclamationmark.triangle"
                         )
                     } description: {
-                        Text(message)
+                        Text(failure.map { FailurePresentation.message(for: $0, bundle: copyBundle) }
+                             ?? PanelActionsCopy.text("Clipy couldn't load this item.", bundle: copyBundle))
                     } actions: {
                         Button(PanelActionsCopy.text("Retry", bundle: copyBundle)) {
                             Task { await load() }
@@ -718,15 +719,13 @@ struct HistoryDetailsView: View {
             case .notFound:
                 phase = .removed
             default:
-                phase = .failed(
-                    message: FailurePresentation.message(for: failure, bundle: copyBundle)
-                )
+                phase = .failed(failure)
             }
         } catch {
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
             guard !Task.isCancelled, loadFence.owns(generation) else { return }
             guard error is CancellationError else {
-                phase = .failed(message: PanelActionsCopy.text("Clipy couldn't load this item.", bundle: copyBundle))
+                phase = .failed(nil)
                 return
             }
         }
@@ -1322,7 +1321,9 @@ private enum DetailsPhase {
     case loading
     case loaded(HistoryDetails, DetailsContentPresentation)
     case removed
-    case failed(message: String)
+    // Retain the fact, so a language change can redraw its message without
+    // restarting the load or disturbing an open editor's draft.
+    case failed(HistoryFailure?)
 }
 
 /// Which content lineage the Content section lists (03b §9).

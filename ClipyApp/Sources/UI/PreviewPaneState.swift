@@ -86,6 +86,12 @@ final class PreviewPaneState {
     /// minimum and independent of the number of rows in the browsing list.
     var availablePreviewHeight: CGFloat = PanelGeometry.height
 
+    /// Actual fitted window dimensions drive the SwiftUI resize affordance;
+    /// the saved preference can be wider than the current screen permits.
+    var displayedPreviewWidth: CGFloat = PanelGeometry.floatingPreviewWidth
+    var isPreviewOnLeadingSide = false
+    private(set) var isResizingPreview = false
+
     /// The AppDelegate-owned wiring to the floating preview window. Set
     /// once by the composition shell; every state transition that changes
     /// what a window must show publishes exactly one event here.
@@ -185,6 +191,11 @@ final class PreviewPaneState {
     /// pointer crosses from the list to a control such as Retry (Card 9D).
     /// AppKit stays at the window boundary; this state receives surfaces only.
     var pointerSurfacesContainingPointer: (() -> Set<PreviewPointerSurface>)?
+
+    /// The empty gap between the two native windows is a valid route to the
+    /// preview. It has no tracking view of its own, so the exit task rechecks
+    /// actual screen geometry until the pointer enters a window or leaves it.
+    var pointerIsBetweenSurfaces: (() -> Bool)?
 
     /// The pending pointer-exit grace task; cancelled by any re-entry.
     private var pointerExitTask: Task<Void, Never>?
@@ -432,25 +443,53 @@ final class PreviewPaneState {
         guard isPointerInteractionActive else { return }
         guard pointerPresence.isEmpty else { return }
         cancelPendingAutoOpen()
-        guard isOpen, !isInformationPresented else { return }
+        guard isOpen, !isInformationPresented, !isResizingPreview else { return }
         schedulePointerExit()
     }
 
-    private func schedulePointerExit() {
+    /// A resize may move the frame away from its pointer between native
+    /// tracking events. Keep the current item alive until mouse-up, then
+    /// restore the ordinary exit policy from the actual window containment.
+    func beginPreviewResize() {
+        guard isOpen else { return }
+        isResizingPreview = true
+        pointerMoved(over: .preview)
         cancelPendingPointerExit()
-        let grace = pointerExitGrace
+        cancelPendingAutoOpen()
+    }
+
+    func endPreviewResize() {
+        guard isResizingPreview else { return }
+        isResizingPreview = false
+        if let pointerSurfacesContainingPointer {
+            pointerPresence = pointerSurfacesContainingPointer()
+        }
+        guard isOpen, isPointerInteractionActive, pointerPresence.isEmpty,
+              !isInformationPresented else { return }
+        schedulePointerExit()
+    }
+
+    private func schedulePointerExit(recheckingGap: Bool = false) {
+        cancelPendingPointerExit()
+        // A zero hide preference must not turn an untracked gap into a
+        // busy loop. The initial exit still honors that preference exactly.
+        let grace = recheckingGap ? max(pointerExitGrace, .milliseconds(50)) : pointerExitGrace
         // Same MainActor/weak-self discipline as the dwell task.
         pointerExitTask = Task { [weak self] in
             if grace > .zero {
                 try? await Task.sleep(for: grace)
             }
             guard !Task.isCancelled, let self, self.pointerPresence.isEmpty,
-                  !self.isInformationPresented
+                  !self.isInformationPresented, !self.isResizingPreview
             else { return }
             self.pointerExitTask = nil
             if let nativePresence = self.pointerSurfacesContainingPointer?(),
                !nativePresence.isEmpty {
                 self.pointerPresence = nativePresence
+                return
+            }
+            if self.pointerIsBetweenSurfaces?() == true {
+                self.schedulePointerExit(recheckingGap: true)
                 return
             }
             // Lightweight hide: no manual-close suppression — pointer
@@ -569,6 +608,8 @@ final class PreviewPaneState {
     }
 
     private func closePreview() {
+        cancelPendingPointerExit()
+        isResizingPreview = false
         isOpen = false
         previewedItem = nil
         onFloatingPreviewTransition?(.hide)

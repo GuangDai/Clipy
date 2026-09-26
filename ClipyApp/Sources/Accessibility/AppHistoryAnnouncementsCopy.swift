@@ -3,7 +3,7 @@
 import Foundation
 
 enum AppHistoryAnnouncementsCopy {
-    static func text(_ english: String, bundle: Bundle = .main) -> String {
+    static func text(_ english: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(
             forKey: english, value: english, table: "AppHistoryAnnouncements"
         )
@@ -11,7 +11,7 @@ enum AppHistoryAnnouncementsCopy {
 
     static func searchResults(
         count: Int, hasNextPage: Bool,
-        bundle: Bundle = .main, locale: Locale = .current
+        bundle: Bundle = AppLocalization.bundle, locale: Locale = .current
     ) -> String {
         let digits = count.formatted(.number.locale(locale))
         if hasNextPage {

@@ -244,6 +244,18 @@ internal enum SQLiteHistorySchema {
         CREATE INDEX history_items_retention_order ON history_items(lastCopiedAt ASC, id ASC)
             WHERE pinOrdinal IS NULL
         """,
+        // Explicit library sorts include pinned items in the selected order.
+        // Keyset continuations also work for existing stores without these
+        // optional indexes; opening never rewrites an existing layout.
+        """
+        CREATE INDEX history_items_all_recent_order ON history_items(lastCopiedAt DESC, id ASC)
+        """,
+        """
+        CREATE INDEX history_items_all_oldest_order ON history_items(lastCopiedAt ASC, id ASC)
+        """,
+        """
+        CREATE INDEX history_items_copy_count_order ON history_items(copyCount DESC, lastCopiedAt DESC, id ASC)
+        """,
         // Prune and cascading item deletion check this incoming content FK
         // for every removed revision. Without an index each check scans all
         // retained items, making large Clear/retention transactions quadratic.

@@ -90,13 +90,13 @@ public struct HistoryPage: Sendable, Hashable {
 }
 ```
 
-Recent rows have `search == nil`; search rows carry presentation evidence but not an internal score. Results are already deterministically ordered. `HistoryRow.pinnedPosition` is 0-based and equals the item's `PinOrdinal` (`nil` for unpinned rows); it identifies position within the pinned group only — a UI wanting a 1-based display number adds one itself.
+Recent rows have `search == nil`; text matches carry presentation evidence but not an internal score. Expression matches based only on metadata or negation also have `search == nil`. Results are already deterministically ordered. `HistoryRow.pinnedPosition` is 0-based and equals the item's `PinOrdinal` (`nil` for unpinned rows); it identifies position within the pinned group only — a UI wanting a 1-based display number adds one itself.
 
 `previous` requests up to `limit` matching rows immediately before this page's first row;
 `next` requests up to `limit` matching rows immediately after its last row. Returned rows
 always use the same normal display order, including when traversing backwards. Neither
 cursor is emitted when that direction has no matching rows; empty pages have neither.
-This applies to recent and all three search modes, with unchanged matching and ordering.
+This applies to recent and all search modes, with unchanged matching and ordering.
 Callers can retain a bounded page window with its two continuation endpoints instead of
 remembering every previously visited request cursor.
 
@@ -114,6 +114,42 @@ not just rows loaded by the UI. It combines a pinned-only switch with one of
 all, text, images, or links. Families use exact Effective representation facts
 with image-before-link-before-text precedence; unknown types remain visible in
 all. The filter is part of both observation and opaque cursor query identity.
+
+The filter also accepts an inclusive `copiedAfter` and exclusive
+`copiedBefore` boundary on `lastCopiedAt`, and a source application selection.
+The app resolves display names against installed application metadata and
+passes exact bundle identifiers through `sourceApplicationIDs`; a missing
+selection means every source, while an empty resolved set matches none.
+These controls intersect with all search modes without changing their text
+interpretation. The optional lower-level `sourceApplication` substring uses
+literal ASCII case-insensitive matching of the last recorded bundle identifier.
+
+Expression search is a fourth, explicitly selected mode. Existing exact,
+fuzzy and regexp inputs retain their original meaning. Expressions accept
+case-insensitive `AND`, `OR`, `NOT`, parentheses and double-quoted phrases;
+adjacent terms imply AND, and precedence is NOT, AND, then OR. Text terms use
+the existing exact literal matcher and expressions preserve default History
+ordering. The app resolves `source:` (alias `app:`) names into `source-id:`
+exact bundle-identifier predicates, combining multiple applications with OR.
+Unknown application names are reported before sending the search. Lower-level
+unresolved source terms compare substrings of the last recorded source value.
+
+`date:YYYY-MM-DD` selects one UTC calendar day; a `date:start..end` range
+includes both days. `after:` includes the named day's start and `before:`
+excludes it. The GUI's separate date controls use local calendar boundaries
+and pass their concrete timestamps as filters. `type:text`, `type:image`
+(`images`), `type:link` (`links`), `type:all` and `is:pinned` can appear anywhere
+in a Boolean expression. For example:
+`(source:Telegram OR source:Brave) AND after:2026-09-01 AND NOT type:image`.
+
+Expression admission retains the 4,096-byte UTF-8 bound, permits at most 128
+tokens and 16 nested parentheses/negations, and reports a typed syntax reason
+with a Character offset. The app validates any name-expanded expression again
+and presents an explicit length/complexity error if expansion exceeds these
+bounds. Matching uses bounded SQLite batches and the existing cooperative
+cancellation cadence. Candidate postings are only a necessary filter; OR and
+NOT never infer a nonmatch from an approximate posting result. Metadata-only
+matches and negated terms do not fabricate text highlights.
 
 - An empty term is equivalent to `.recent` and carries no search presentation.
 - Every non-empty mode first enforces the Part VI 4,096-UTF-8-byte search-term

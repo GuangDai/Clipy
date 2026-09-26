@@ -54,6 +54,7 @@ struct FailurePresentationTests {
             .incoherentRevisionDraft,
             .invalidRegularExpression,
             .invalidPageLimit,
+            .conflictingPageAnchors,
             .invalidPixelSize,
             .invalidRetentionPolicy,
             .invalidSearchTerm,

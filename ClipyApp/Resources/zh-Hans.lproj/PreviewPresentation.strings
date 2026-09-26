@@ -2,3 +2,6 @@
 "Source" = "来源";
 "Last Copied" = "上次复制";
 "Full Reference" = "完整引用";
+"Preview width" = "预览宽度";
+"Drag to adjust preview width" = "拖动调整预览宽度";
+"Adjusts and remembers the preview width." = "调整并记住预览面板的宽度。";

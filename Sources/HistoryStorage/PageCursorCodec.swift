@@ -58,12 +58,13 @@ internal struct ResolvedPageCursor: Sendable, Hashable {
 
 /// The complete normalized query shape a cursor binds to (§6 step 1: "the
 /// request shape matches the cursor"). Same kind, same term+mode for search,
-/// same limit and filter.
+/// same limit, filter, and ordering.
 internal enum StoredQueryShape: Sendable, Hashable {
-    /// Recent browse: page limit and the complete filter.
-    case recent(limit: Int, filter: HistoryFilter = .all)
-    /// Search browse: term, evaluation mode, page limit, and filter.
-    case search(text: String, mode: SearchMode, limit: Int, filter: HistoryFilter = .all)
+    /// Recent browse: page limit, the complete filter, and ordering.
+    case recent(limit: Int, filter: HistoryFilter = .all, sortOrder: HistorySortOrder = .automatic)
+    /// Search browse: term, evaluation mode, page limit, filter, and ordering.
+    case search(text: String, mode: SearchMode, limit: Int, filter: HistoryFilter = .all,
+                sortOrder: HistorySortOrder = .automatic)
 
     // MARK: Request correspondence (§6 step 1)
 
@@ -72,20 +73,21 @@ internal enum StoredQueryShape: Sendable, Hashable {
     internal init(request: HistoryBrowseRequest) {
         switch request.kind {
         case .recent:
-            self = .recent(limit: request.limit, filter: request.filter)
+            self = .recent(limit: request.limit, filter: request.filter, sortOrder: request.sortOrder)
         case .search(let text, let mode):
-            self = .search(text: text, mode: mode, limit: request.limit, filter: request.filter)
+            self = .search(text: text, mode: mode, limit: request.limit, filter: request.filter,
+                           sortOrder: request.sortOrder)
         }
     }
 
     /// Whether `request` matches this stored shape — same kind, same
-    /// term+mode for search, same limit (§6 step 1).
+    /// term+mode for search, same limit, filter, and ordering (§6 step 1).
     internal func matches(_ request: HistoryBrowseRequest) -> Bool {
         switch self {
-        case .recent(let limit, let filter):
+        case .recent(let limit, let filter, let sortOrder):
             guard case .recent = request.kind else { return false }
-            return request.limit == limit && request.filter == filter
-        case .search(let text, let mode, let limit, let filter):
+            return request.limit == limit && request.filter == filter && request.sortOrder == sortOrder
+        case .search(let text, let mode, let limit, let filter, let sortOrder):
             guard case .search(let requestText, let requestMode) = request.kind else {
                 return false
             }
@@ -96,6 +98,7 @@ internal enum StoredQueryShape: Sendable, Hashable {
                 && mode == requestMode
                 && request.limit == limit
                 && request.filter == filter
+                && request.sortOrder == sortOrder
         }
     }
 }
@@ -112,6 +115,9 @@ internal enum StoredOrderingAnchor: Sendable, Hashable {
     /// the cursor is opaque — 03b §8: "Search scores and Fuse objects remain
     /// internal").
     case fuzzyUnpinned(score: Double, lastCopiedAt: Date, id: HistoryItemID)
+    /// Explicit metadata ordering: recency, copy count, and final item ID
+    /// identify the boundary independently of pinned or search-score priority.
+    case metadata(lastCopiedAt: Date, copyCount: UInt64, id: HistoryItemID)
 }
 
 // MARK: - Cursor rejection (docs/05-authority-kernel.md §16)
@@ -145,6 +151,11 @@ private struct StoredQueryShapeWire: Codable {
     let mode: String?
     let contentType: String
     let pinnedOnly: Bool
+    let sourceApplication: String?
+    let sourceApplicationIDs: [String]?
+    let copiedAfter: Date?
+    let copiedBefore: Date?
+    let sortOrder: String?
 }
 
 /// The Codable wire form of a `StoredOrderingAnchor`. `HistoryItemID` is not
@@ -153,6 +164,7 @@ private struct StoredOrderingAnchorWire: Codable {
     let kind: String
     let pinnedOrdinal: Int?
     let score: Double?
+    let copyCount: UInt64?
     let lastCopiedAt: Date?
     let id: UUID?
 }
@@ -160,18 +172,26 @@ private struct StoredOrderingAnchorWire: Codable {
 private extension StoredQueryShape {
     var wire: StoredQueryShapeWire {
         switch self {
-        case .recent(let limit, let filter):
+        case .recent(let limit, let filter, let sortOrder):
             return StoredQueryShapeWire(
                 kind: "recent", limit: limit, text: nil, mode: nil,
-                contentType: filter.type.rawValue, pinnedOnly: filter.pinnedOnly
+                contentType: filter.type.rawValue, pinnedOnly: filter.pinnedOnly,
+                sourceApplication: filter.sourceApplication,
+                sourceApplicationIDs: filter.sourceApplicationIDs,
+                copiedAfter: filter.copiedAfter, copiedBefore: filter.copiedBefore,
+                sortOrder: sortOrder == .automatic ? nil : sortOrder.rawValue
             )
-        case .search(let text, let mode, let limit, let filter):
+        case .search(let text, let mode, let limit, let filter, let sortOrder):
             return StoredQueryShapeWire(
                 kind: "search",
                 limit: limit,
                 text: text,
                 mode: StoredQueryShape.modeTag(mode),
-                contentType: filter.type.rawValue, pinnedOnly: filter.pinnedOnly
+                contentType: filter.type.rawValue, pinnedOnly: filter.pinnedOnly,
+                sourceApplication: filter.sourceApplication,
+                sourceApplicationIDs: filter.sourceApplicationIDs,
+                copiedAfter: filter.copiedAfter, copiedBefore: filter.copiedBefore,
+                sortOrder: sortOrder == .automatic ? nil : sortOrder.rawValue
             )
         }
     }
@@ -184,13 +204,26 @@ private extension StoredQueryShape {
         guard let type = HistoryContentType(rawValue: wire.contentType) else {
             throw PageCursorRejection.malformedCursor
         }
-        let filter = HistoryFilter(type: type, pinnedOnly: wire.pinnedOnly)
+        guard let sortOrder = HistorySortOrder(rawValue: wire.sortOrder ?? HistorySortOrder.automatic.rawValue) else {
+            throw PageCursorRejection.malformedCursor
+        }
+        let filter = HistoryFilter(
+            type: type, pinnedOnly: wire.pinnedOnly,
+            sourceApplication: wire.sourceApplication,
+            sourceApplicationIDs: wire.sourceApplicationIDs,
+            copiedAfter: wire.copiedAfter, copiedBefore: wire.copiedBefore
+        )
+        do {
+            try HistoryFilterSQL.validate(filter, limits: limits)
+        } catch {
+            throw PageCursorRejection.malformedCursor
+        }
         switch wire.kind {
         case "recent":
             guard wire.text == nil, wire.mode == nil else {
                 throw PageCursorRejection.malformedCursor
             }
-            self = .recent(limit: wire.limit, filter: filter)
+            self = .recent(limit: wire.limit, filter: filter, sortOrder: sortOrder)
         case "search":
             guard let text = wire.text, let modeTag = wire.mode else {
                 throw PageCursorRejection.malformedCursor
@@ -199,7 +232,7 @@ private extension StoredQueryShape {
                 throw PageCursorRejection.malformedCursor
             }
             let mode = try StoredQueryShape.mode(fromTag: modeTag)
-            self = .search(text: text, mode: mode, limit: wire.limit, filter: filter)
+            self = .search(text: text, mode: mode, limit: wire.limit, filter: filter, sortOrder: sortOrder)
         default:
             throw PageCursorRejection.malformedCursor
         }
@@ -210,6 +243,7 @@ private extension StoredQueryShape {
         case .exact: return "exact"
         case .fuzzy: return "fuzzy"
         case .regexp: return "regexp"
+        case .expression: return "expression"
         }
     }
 
@@ -218,6 +252,7 @@ private extension StoredQueryShape {
         case "exact": return .exact
         case "fuzzy": return .fuzzy
         case "regexp": return .regexp
+        case "expression": return .expression
         default:
             throw PageCursorRejection.malformedCursor
         }
@@ -232,6 +267,7 @@ private extension StoredOrderingAnchor {
                 kind: "defaultOrder",
                 pinnedOrdinal: pinnedOrdinal,
                 score: nil,
+                copyCount: nil,
                 lastCopiedAt: lastCopiedAt,
                 id: id.rawValue
             )
@@ -240,6 +276,16 @@ private extension StoredOrderingAnchor {
                 kind: "fuzzyUnpinned",
                 pinnedOrdinal: nil,
                 score: score,
+                copyCount: nil,
+                lastCopiedAt: lastCopiedAt,
+                id: id.rawValue
+            )
+        case .metadata(let lastCopiedAt, let copyCount, let id):
+            return StoredOrderingAnchorWire(
+                kind: "metadata",
+                pinnedOrdinal: nil,
+                score: nil,
+                copyCount: copyCount,
                 lastCopiedAt: lastCopiedAt,
                 id: id.rawValue
             )
@@ -250,6 +296,7 @@ private extension StoredOrderingAnchor {
         switch wire.kind {
         case "defaultOrder":
             guard wire.score == nil,
+                  wire.copyCount == nil,
                   wire.pinnedOrdinal.map({ $0 >= 0 }) ?? true,
                   let lastCopiedAt = wire.lastCopiedAt,
                   lastCopiedAt.timeIntervalSinceReferenceDate.isFinite,
@@ -264,6 +311,7 @@ private extension StoredOrderingAnchor {
             )
         case "fuzzyUnpinned":
             guard wire.pinnedOrdinal == nil,
+                  wire.copyCount == nil,
                   let score = wire.score,
                   score.isFinite,
                   let lastCopiedAt = wire.lastCopiedAt,
@@ -274,6 +322,19 @@ private extension StoredOrderingAnchor {
             self = .fuzzyUnpinned(
                 score: score,
                 lastCopiedAt: lastCopiedAt,
+                id: HistoryItemID(rawValue: id)
+            )
+        case "metadata":
+            guard wire.pinnedOrdinal == nil, wire.score == nil,
+                  let copyCount = wire.copyCount, copyCount >= 1,
+                  let lastCopiedAt = wire.lastCopiedAt,
+                  lastCopiedAt.timeIntervalSinceReferenceDate.isFinite,
+                  let id = wire.id else {
+                throw PageCursorRejection.malformedCursor
+            }
+            self = .metadata(
+                lastCopiedAt: lastCopiedAt,
+                copyCount: copyCount,
                 id: HistoryItemID(rawValue: id)
             )
         default:
@@ -307,11 +368,12 @@ internal enum PageCursorCodec {
     /// The only cursor version this codec reads or writes.
     private static let formatVersion: UInt16 = 3
 
-    /// Pre-parse cursor envelope. A valid search term may consume 4,096 UTF-8
-    /// bytes and JSON escaping can expand one input byte to six ASCII bytes;
+    /// Pre-parse cursor envelope. The search term and source filters have fixed
+    /// UTF-8 limits and JSON escaping can expand one input byte to six ASCII bytes;
     /// two KiB covers every fixed field and container delimiter (04 §6).
     internal static let maximumPayloadBytes =
-        HistoryLimits.standard.maximumSearchTermUTF8Bytes * 6 + 2_048
+        (HistoryLimits.standard.maximumSearchTermUTF8Bytes * 2
+            + HistoryLimits.standard.maximumSourceApplicationObservationUTF8Bytes) * 6 + 2_048
 
     // MARK: Encode
 

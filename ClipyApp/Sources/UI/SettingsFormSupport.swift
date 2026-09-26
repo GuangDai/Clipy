@@ -10,6 +10,7 @@ import SwiftUI
 /// field carries its own accessibility label; the caption is the
 /// invalid-input state, never the only cue).
 struct ValueFieldRow: View {
+    @Environment(\.locale) private var interfaceLocale
 
     let label: String
     let unit: String
@@ -20,6 +21,7 @@ struct ValueFieldRow: View {
     let range: ClosedRange<Int>
 
     var body: some View {
+        let _ = interfaceLocale
         VStack(alignment: .leading, spacing: 2) {
             SettingsFieldLayout {
                 Text(label)
@@ -107,10 +109,12 @@ internal enum SettingStatus: Equatable {
 /// Status text wraps to its full height in narrow settings panes; the icon
 /// pairs with text so the outcome is never conveyed by color alone (V2-07 §9).
 struct SettingStatusView: View {
+    @Environment(\.locale) private var interfaceLocale
 
     let status: SettingStatus
 
     var body: some View {
+        let _ = interfaceLocale
         switch status {
         case .success(let message):
             Label(message, systemImage: "checkmark.circle")

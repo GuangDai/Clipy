@@ -367,13 +367,17 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
                 return try await authority.recentPage(
                     limit: request.limit,
                     cursor: request.cursor,
-                    filter: request.filter
+                    filter: request.filter,
+                    sortOrder: request.sortOrder,
+                    startAround: request.startAround
                 )
             case .search(let text, _) where text.isEmpty:
                 return try await authority.recentPage(
                     limit: request.limit,
                     cursor: request.cursor,
-                    filter: request.filter
+                    filter: request.filter,
+                    sortOrder: request.sortOrder,
+                    startAround: request.startAround
                 )
             case .search:
                 return try await searchWorker.page(
@@ -638,7 +642,8 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     private func firstPage(
         for request: HistoryObservationRequest
     ) async throws -> HistoryPage {
-        let browseRequest = HistoryBrowseRequest(kind: request.kind, limit: request.limit, filter: request.filter)
+        let browseRequest = HistoryBrowseRequest(kind: request.kind, limit: request.limit, filter: request.filter,
+                                                sortOrder: request.sortOrder)
         while true {
             try Task.checkCancellation()
             let page = try await browse(browseRequest)

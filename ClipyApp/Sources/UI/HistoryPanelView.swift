@@ -161,6 +161,9 @@ final class HistoryPanelSurfaceState {
         }
     }
     var selection: HistoryItemID?
+    /// Only an explicit keyboard request should reveal a selection. Page
+    /// eviction can reconcile the selected ID without moving the viewport.
+    private(set) var keyboardNavigationGeneration = 0
     /// The exact item the Space-triggered quick-look overlay renders.
     /// Reference-exact like the preview target and retired by the same
     /// purge/session transitions as the selection, so overlay content can
@@ -376,6 +379,7 @@ final class HistoryPanelSurfaceState {
         noteKeyboardNavigation()
         let unchanged = selection == id
         selection = id
+        keyboardNavigationGeneration += 1
         guard unchanged else { return }
         previewState.handleSelectionChange(
             PreviewSelectionResolution.resolve(selectedID: id, rows: rows).reference,
@@ -843,6 +847,7 @@ struct HistoryPanelView: View {
                 areShortcutsEnabled: surfaceState.isAtListRoot,
                 selection: $surfaceState.selection,
                 inputMode: surfaceState.inputMode,
+                keyboardNavigationGeneration: surfaceState.keyboardNavigationGeneration,
                 onFocusHistory: {
                     isSearchFieldFocused = false
                     // An actual click is a choice, not pointer transit.
@@ -907,11 +912,12 @@ struct HistoryPanelView: View {
             },
             density: appearance.rowDensity,
             fontSize: appearance.rowFontSize,
-            hasWindowedPages: viewState.hasWindowedPages,
+            hasWindowedPages: viewState.showsPageNavigation,
             showsPaginationControl:
                 viewState.hasNextPage || viewState.isLoadingPage,
+            usesPinnedGrouping: viewState.sortOrder == .automatic,
             isFilterChipVisible:
-                viewState.typeFilter != .all || viewState.showsPinnedOnly,
+                viewState.hasActiveFilters || viewState.searchMode == .expression || viewState.sortOrder != .automatic,
             isFailureBannerVisible: isFailureBannerVisible,
             prefersFullHeight:
                 !surfaceState.detailsPath.isEmpty
@@ -923,7 +929,7 @@ struct HistoryPanelView: View {
     }
 
     /// Keyboard navigation follows the same authoritative filtered lanes
-    /// as HistoryListView, with pinned rows first.
+    /// as HistoryListView, preserving the selected authoritative sort order.
     private var displayedSelectionRows: [HistoryRow] {
         viewState.displayedRows
     }
@@ -1125,7 +1131,7 @@ struct HistoryPanelView: View {
     internal static func itemCountText(
         for viewState: HistoryViewState,
         locale: Locale = .current,
-        bundle: Bundle = .main
+        bundle: Bundle = AppLocalization.bundle
     ) -> String {
         HistoryCountCopy.items(
             count: viewState.displayedCount,
@@ -1206,8 +1212,7 @@ struct HistoryPanelView: View {
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .clearSearch, whileEditingText: isSearchFieldFocused))
 
                 Button(PanelChromeCopy.text("Clear filters")) {
-                    viewState.typeFilter = .all
-                    viewState.showsPinnedOnly = false
+                    viewState.clearFilters()
                     isSearchFieldFocused = true
                 }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .clearFilters, whileEditingText: isSearchFieldFocused))

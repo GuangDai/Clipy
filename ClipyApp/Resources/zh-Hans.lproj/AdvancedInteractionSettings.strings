@@ -3,6 +3,7 @@
 "Remember search between opens" = "重新打开时保留搜索";
 "Select rows when the pointer moves over them" = "鼠标经过时选中条目";
 "Search is remembered only while Clipy is running. With pointer selection off, click a row or use the arrow keys." = "搜索仅在本次运行期间保留。关闭鼠标经过选择后，仍可点击条目或使用方向键。";
+"The current search draft is remembered between panel opens only while Clipy is running. Saved searches below are managed separately. With pointer selection off, click a row or use the arrow keys." = "当前搜索草稿仅在本次运行期间随面板再次打开而保留，下方的收藏和搜索历史独立管理。关闭鼠标经过选择后，可点击条目或使用方向键。";
 "Preview timing" = "预览时机";
 "Preview delay" = "停留多久后显示预览";
 "Hide preview after leaving" = "移出多久后隐藏预览";

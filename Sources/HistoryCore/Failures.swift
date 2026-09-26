@@ -62,6 +62,8 @@ public enum InvalidInputReason: Sendable, Equatable {
     case invalidRegularExpression
     /// A browse/observation limit or source-page offset is outside its allowed range.
     case invalidPageLimit
+    /// A browse request supplied both a continuation cursor and an item to locate.
+    case conflictingPageAnchors
     /// A thumbnail pixel size is outside the allowed range.
     case invalidPixelSize
     /// A retention policy configuration is not valid.

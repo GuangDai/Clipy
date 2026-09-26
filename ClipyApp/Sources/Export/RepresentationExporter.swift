@@ -38,7 +38,7 @@ enum RepresentationExporter {
     }
 
     static func suggestedFileName(
-        for typeIdentifier: String, bundle: Bundle = .main
+        for typeIdentifier: String, bundle: Bundle = AppLocalization.bundle
     ) -> String {
         let base = bundle.localizedString(forKey: "Clipboard", value: "Clipboard", table: "RepresentationExport")
         // Clipboard encoding identifiers need not have filesystem tags in

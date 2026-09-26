@@ -89,22 +89,52 @@ struct FilteredRowAccessTests {
         let lastVisible = raw[pinnedOnly ? 5 : 4]
 
         for row in raw where row.item != lastVisible.item {
-            state.prefetchNextPageIfNeeded(appearingRowID: row.item.id)
+            state.prefetchPagesIfNeeded(visibleRowIDs: [row.item.id])
             #expect(!state.isLoadingPage)
         }
         #expect(await history.browseRequests.isEmpty)
-        state.prefetchNextPageIfNeeded(appearingRowID: lastVisible.item.id)
+        state.prefetchPagesIfNeeded(visibleRowIDs: [lastVisible.item.id])
         try #require(await pollUntil { await history.isBrowsePaused(cursor: cursor) })
-        state.prefetchNextPageIfNeeded(appearingRowID: lastVisible.item.id)
+        state.prefetchPagesIfNeeded(visibleRowIDs: [lastVisible.item.id])
         await history.resumeBrowse(cursor: cursor)
         try #require(await pollUntil { !state.hasNextPage && !state.isLoadingPage })
         #expect(await history.browseRequests.count == 1)
         #expect(await history.browseRequests.last?.filter == HistoryFilter(type: .text, pinnedOnly: pinnedOnly))
         #expect(state.rows == matching)
-        state.prefetchNextPageIfNeeded(appearingRowID: lastVisible.item.id)
+        state.prefetchPagesIfNeeded(visibleRowIDs: [lastVisible.item.id])
         #expect(!state.isLoadingPage)
         #expect(await history.browseRequests.count == 1)
         await history.finishObservation()
+    }
+
+    @Test(arguments: [HistorySortOrder.newestFirst, .oldestFirst, .mostCopied])
+    func explicitSortKeepsAuthoritativeOrderForSelectionAndPagination(order: HistorySortOrder) async throws {
+        let raw = Array(mixedRows().prefix(6))
+        let cursor = fixtureCursor("explicit-sort-next")
+        let history = ScriptedHistory(
+            observedFirstPage: fixturePage(rows: raw, next: "explicit-sort-next"),
+            browseScript: [cursor: .paused(fixturePage(rows: [], next: nil))]
+        )
+        let state = HistoryViewState(history: history)
+        state.sortOrder = order
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.displayedRows == raw)
+        let surface = HistoryPanelSurfaceState(viewState: state, previewState: PreviewPaneState())
+        surface.beginSession(rows: state.displayedRows)
+        defer { surface.endSession() }
+        surface.moveSelection(in: state.displayedRows, direction: .next)
+        #expect(surface.selectedReference(in: state.displayedRows) == raw[0].item)
+
+        // This ordered result ends in a pinned row. Prefetch must follow the
+        // displayed order instead of searching backwards for an unpinned row.
+        state.prefetchPagesIfNeeded(visibleRowIDs: [try #require(raw.last?.item.id)])
+        try #require(await pollUntil { await history.isBrowsePaused(cursor: cursor) })
+        #expect(await history.browseRequests.last?.sortOrder == order)
+        await history.resumeBrowse(cursor: cursor)
+        try #require(await pollUntil { !state.isLoadingPage })
+        #expect(state.displayedRows == raw)
     }
 
     private func mixedRows() -> [HistoryRow] {

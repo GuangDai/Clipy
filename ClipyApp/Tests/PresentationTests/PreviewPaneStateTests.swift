@@ -763,6 +763,87 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == nil)
     }
 
+    @Test func gapTransitSurvivesTheGraceAndLeavingTheGapStillHides() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        var isInGap = true
+        var readCount = 0
+        state.pointerSurfacesContainingPointer = { [] }
+        state.pointerIsBetweenSurfaces = {
+            readCount += 1
+            return isInGap
+        }
+        let item = reference()
+        state.togglePreview(for: item)
+        state.pointerEntered(.mainPanel)
+        state.pointerExited(.mainPanel)
+        await waitForScheduledDwell { readCount > 0 }
+        #expect(state.previewedItem == item)
+        #expect(state.isOpen)
+        isInGap = false
+        try? await Task.sleep(for: .milliseconds(75))
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen, "The untracked gap must not hold the preview after departure")
+    }
+
+    @Test func resizingCancelsQueuedExitAndMouseUpOutsideRestoresTheGrace() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        state.pointerSurfacesContainingPointer = { [] }
+        let item = reference()
+        state.togglePreview(for: item)
+        state.pointerEntered(.preview)
+        state.pointerExited(.preview)
+        state.beginPreviewResize()
+        state.pointerExited(.preview)
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isResizingPreview)
+        #expect(state.previewedItem == item)
+        state.endPreviewResize()
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isResizingPreview)
+        #expect(!state.isOpen)
+    }
+
+    @Test func endingResizeInsidePreviewKeepsItUntilTheNextRealDeparture() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        var nativePresence: Set<PreviewPaneState.PreviewPointerSurface> = [.preview]
+        state.pointerSurfacesContainingPointer = { nativePresence }
+        state.togglePreview(for: reference())
+        state.beginPreviewResize()
+        state.pointerExited(.preview)
+        state.endPreviewResize()
+        await Task.yield()
+        #expect(state.isOpen)
+        nativePresence = []
+        state.pointerExited(.preview)
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen)
+    }
+
+    @Test(arguments: ["close", "details", "remove", "selection", "dismiss"])
+    func retiringThePreviewAlwaysCancelsResize(_ action: String) async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        let item = reference()
+        state.togglePreview(for: item)
+        state.beginPreviewResize()
+        switch action {
+        case "close": state.panelClosed()
+        case "details": state.setBrowsingHistory(false)
+        case "remove": state.purge(.item(item.id))
+        case "selection": state.handleSelectionChange(nil)
+        default: state.dismissPreview()
+        }
+        state.endPreviewResize()
+        await Task.yield()
+        #expect(!state.isResizingPreview)
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+    }
+
     @Test func nativePointerReentryIntoMainPanelCancelsAStalePreviewExit() async {
         let state = makePointerState()
         defer { state.panelClosed() }

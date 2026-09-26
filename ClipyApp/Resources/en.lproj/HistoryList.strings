@@ -5,6 +5,7 @@
 "Newer" = "Newer";
 "Older" = "Older";
 "Latest" = "Latest";
+"Items %lld–%lld" = "Items %lld–%lld";
 "Loading clipboard history" = "Loading clipboard history";
 "No Results" = "No Results";
 "No Clipboard History" = "No Clipboard History";
@@ -12,3 +13,5 @@
 "No items match the current filter." = "No items match the current filter.";
 "No items match “%@”." = "No items match “%@”.";
 "Toggle Pin" = "Toggle Pin";
+
+"Near your reading position" = "Near your reading position";
