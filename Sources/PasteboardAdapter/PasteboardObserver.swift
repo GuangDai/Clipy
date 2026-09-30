@@ -1,6 +1,6 @@
 /// PasteboardObserver — changeCount-polled observation that drives
-/// `history.perform(.capture(...))` (docs/01-architecture.md §5.1; roadmap
-/// docs/roadmap/04-pasteboardadapter.md deliverable 3).
+/// `history.perform(.capture(...))` (docs/architecture.md; roadmap
+/// docs/testing.md deliverable 3).
 ///
 /// NSPasteboard exposes no change notification, so polling `changeCount` is
 /// the v1 mechanism. The observer is main-actor confined with the adapter
@@ -8,9 +8,9 @@
 /// only immutable `Sendable` `CaptureOutcome` values — the frozen capture
 /// plus the partial-freeze record (audit SPEC-IMPL-005), so the
 /// composition root, not the adapter, judges a partial freeze
-/// (docs/01-architecture.md §6 boundary rule). Paste orchestration stays
+/// (docs/architecture.md boundary rule). Paste orchestration stays
 /// owned by the composition root, never by this observer
-/// (docs/01-architecture.md §5.6).
+/// (docs/architecture.md).
 import AppKit
 import Foundation
 import HistoryCore

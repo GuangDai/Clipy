@@ -3,17 +3,17 @@
 /// the active Revision ID, together with the §4 row-scalar checks that travel
 /// with the revision lineage (Content Version, occurrence values, pin
 /// ordinal).
-/// Owning spec: docs/05-authority-kernel.md §3.1 (column semantics), §4
+/// Owning spec: docs/storage.md (column semantics), §4
 /// (versioned storage codecs), §7.3 (revision fact loading); gates:
-/// docs/06-cross-cutting.md §7.3 (codec round trip) and §7.4 (corruption
+/// docs/testing.md (codec round trip) and §7.4 (corruption
 /// rejection).
 import Foundation
 import HistoryCore
 import HistoryDomain
 
-// MARK: - Wire values (docs/05-authority-kernel.md §4)
+// MARK: - Wire values (docs/storage.md)
 
-/// Versioned wire value of the revision-state blob. docs/05-authority-kernel.md
+/// Versioned wire value of the revision-state blob. docs/storage.md
 /// §4
 ///
 /// `formatVersion` is exactly 1 for every blob `RevisionStateBlobCodec`
@@ -27,9 +27,9 @@ internal struct RevisionStateBlobV1: Codable, Sendable {
 }
 
 /// One stored revision: a complete Effective Content snapshot, not a sparse
-/// action map (docs/02-domain.md §2.5). The active revision alone contains
+/// action map (docs/architecture.md). The active revision alone contains
 /// every byte required to rebuild current Effective Content after restart.
-/// docs/05-authority-kernel.md §4
+/// docs/storage.md
 internal struct StoredRevisionV1: Codable, Sendable {
     internal let id: UUID
     internal let createdAt: Date
@@ -39,7 +39,7 @@ internal struct StoredRevisionV1: Codable, Sendable {
 /// One stored representation of a revision's Effective Content snapshot.
 /// Unlike a Canonical representation it carries no fingerprint evidence:
 /// revision content never feeds the Canonical Signature Index
-/// (docs/05-authority-kernel.md §4, §11).
+/// (docs/storage.md, §11).
 internal struct StoredRepresentationV1: Codable, Sendable {
     internal let typeIdentifier: String
     internal let bytes: Data
@@ -52,11 +52,11 @@ internal struct StoredRepresentationV1: Codable, Sendable {
     }
 }
 
-// MARK: - Codec (docs/05-authority-kernel.md §4)
+// MARK: - Codec (docs/storage.md)
 
 /// Encodes validated revision state to its durable blob and decodes the blob
 /// back with the full §4 check set, failing closed with `CodecRejection`.
-/// docs/05-authority-kernel.md §4
+/// docs/storage.md
 internal enum RevisionStateBlobCodec {
     /// The only blob version this codec reads or writes (§4: "known blob
     /// version (exactly 1 for each V1 blob)").
@@ -66,7 +66,7 @@ internal enum RevisionStateBlobCodec {
 
     /// Encodes an already-validated revision list and active Revision ID
     /// deterministically (§4: "Encode starts from validated Domain/stamped
-    /// values and is deterministic"). Domain planners (docs/02-domain.md §11)
+    /// values and is deterministic"). Domain planners (docs/architecture.md)
     /// have already enforced the Part VI revision bounds and the D3 active-ID
     /// coherence; decode re-verifies every one of them.
     internal static func encode(
@@ -113,7 +113,7 @@ internal enum RevisionStateBlobCodec {
     /// - the revision count stays within the Part VI per-item revision bound
     ///   (an empty list is valid — the Canonical state, §3.1);
     /// - every revision's content is a normalized, non-empty content set
-    ///   (docs/02-domain.md §2.1): type identifiers non-empty, within the Part
+    ///   (docs/architecture.md): type identifiers non-empty, within the Part
     ///   VI UTF-8 bound, unique, and strictly increasing in stable Unicode
     ///   scalar order; no empty-bytes representation; per-representation,
     ///   per-revision, and total per-item revision bytes within the Part VI
@@ -292,7 +292,7 @@ internal enum RevisionStateBlobCodec {
         return (revisions: revisions, activeRevisionID: RevisionID(rawValue: activeRevisionID))
     }
 
-    // MARK: Row-scalar decode checks (docs/05-authority-kernel.md §4)
+    // MARK: Row-scalar decode checks (docs/storage.md)
 
     /// Decodes the row's `contentVersionRaw` (§3.1: "Current Effective
     /// Content version, always at least 1"; §4: "a valid (≥1) Content
@@ -373,7 +373,7 @@ internal enum RevisionStateBlobCodec {
 
     /// Decodes the row's `pinOrdinal` (§3.1: "`nil` is unpinned"; §4: "a
     /// non-negative pin ordinal (negative is corruption)";
-    /// docs/02-domain.md §3.2). The unique-contiguous pinned-order proof is a
+    /// docs/architecture.md). The unique-contiguous pinned-order proof is a
     /// separate collection-wide fact load (Part V §7.2), not a per-row check.
     internal static func decodePinOrdinal(_ rawValue: Int?) throws -> PinOrdinal? {
         guard let rawValue else { return nil }
@@ -407,7 +407,7 @@ internal enum RevisionStateBlobCodec {
     /// format. Production callers use `encode(revisions:activeRevisionID:)`,
     /// which builds the wire value from validated Domain values; this entry
     /// point exists so tests can craft decodable-but-invalid blobs through
-    /// the exact production serializer (docs/06-cross-cutting.md §7.4).
+    /// the exact production serializer (docs/testing.md).
     internal static func encodeWire(_ wire: RevisionStateBlobV1) throws -> Data {
         do {
             return try CodecWireFormat.makeEncoder().encode(wire)

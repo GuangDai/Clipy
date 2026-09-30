@@ -1,5 +1,5 @@
 /// MatchHighlighting.swift — search-match highlighting for row titles and
-/// snippets (docs/03b-instruction-set.md §8; roadmap 05).
+/// snippets (docs/architecture.md; roadmap 05).
 ///
 /// Matched ranges are UTF-16 offsets relative to the string they annotate:
 /// the row title when `search.snippet == nil`, else the snippet excerpt. The

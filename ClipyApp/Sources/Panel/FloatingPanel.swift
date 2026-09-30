@@ -626,7 +626,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
 /// replacement for Maccy's `NSApplication+Windows.swift` alert scan, which
 /// matched the AppKit-private class name `_NSAlertPanel` (audit S-5 /
 /// APL-C-11: Apple publishes no such class-name contract, and
-/// docs/00-overview.md:65-69 requires documented platform behavior, not an
+/// docs/architecture.md:65-69 requires documented platform behavior, not an
 /// invented API surface). Both documented alert presentations are covered:
 /// `NSApplication.modalWindow` is non-nil while an alert runs as an
 /// app-modal session (`NSAlert.runModal`), and `NSWindow.attachedSheet` is

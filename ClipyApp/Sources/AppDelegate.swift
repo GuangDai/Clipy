@@ -5,7 +5,7 @@
 /// observable; Clipy keeps the state ON the delegate so the single
 /// `@NSApplicationDelegateAdaptor` serves both the scenes and AppKit).
 ///
-/// Owning spec: docs/01-architecture.md §2 (ClipyApp composition-root row),
+/// Owning spec: docs/architecture.md (ClipyApp composition-root row),
 /// §6 (window behavior lives on the main actor); the store open is
 /// `AppComposition.open` (05 §13) — moved from first-panel-appearance to
 /// launch so the capture loop is always live (a clipboard manager that
@@ -339,10 +339,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The documented public `OpenSettingsAction` captured from the panel's
     /// live SwiftUI tree by PanelRootView (audit S-5 / SPEC-IMPL-010: no
     /// private `showSettingsWindow:` responder selector). The status-item
-    /// menu's "Settings…" invokes it. It is nil only until the panel content
-    /// first appears; `openSettingsFromStatusMenu` keeps that bounded
-    /// pre-first-summon gap to app activation alone rather than inventing a
-    /// synthetic scene call. `@ObservationIgnored`: pure wiring bookkeeping,
+    /// menu's "Settings…" invokes it once installed. Before the panel first
+    /// appears, the app's existing Command-comma menu item opens that same
+    /// SwiftUI Settings scene. `@ObservationIgnored`: pure wiring bookkeeping,
     /// never render state.
     @ObservationIgnored
     private var settingsOpenOperation: (@MainActor () -> Void)?
@@ -689,12 +688,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The status menu's Settings entry: activate first (an LSUIElement
     /// agent never activates on its own — the same reason the panel
     /// footer's Settings row activates), then invoke the captured public
-    /// OpenSettingsAction. Before the panel content's first appearance no
-    /// action has been captured yet; activation is then the entire bounded
-    /// effect rather than a synthetic or private-selector scene call.
+    /// OpenSettingsAction. Before the panel's first appearance, invoke the
+    /// Command-comma item SwiftUI supplies for the declared Settings scene.
+    /// AppKit dispatches its own menu action; neither a localized title nor
+    /// a private responder selector is needed.
     private func openSettingsFromStatusMenu() {
         NSApp.activate()
-        settingsOpenOperation?()
+        if let settingsOpenOperation {
+            settingsOpenOperation()
+            return
+        }
+        guard let appMenu = NSApp.mainMenu?.items.first?.submenu else { return }
+        // performActionForItem does not validate automatically (NSMenu docs).
+        appMenu.update()
+        guard let index = appMenu.items.firstIndex(where: {
+            $0.keyEquivalent == ","
+                && $0.keyEquivalentModifierMask == .command
+                && $0.isEnabled
+        }) else { return }
+        appMenu.performActionForItem(at: index)
     }
 
     /// Installed by PanelRootView from its live SwiftUI environment.

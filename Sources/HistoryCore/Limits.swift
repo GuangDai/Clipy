@@ -1,10 +1,10 @@
 /// HistoryLimits — the fixed v1 admission and resource-safety bounds.
-/// Owning spec: docs/06-cross-cutting.md §2 (Part VI). Foundation-only.
+/// Owning spec: docs/testing.md (Part VI). Foundation-only.
 import Foundation
 
 /// The fixed v1 safety bounds, encoded as one validated immutable value.
 ///
-/// docs/06-cross-cutting.md §2: these bounds are admission and
+/// docs/testing.md: these bounds are admission and
 /// resource-safety constraints, not caches or user-facing retention features.
 /// One field corresponds to one row of the §2 table, in table order; byte
 /// counts use binary units (1 KiB = 1,024 bytes, 1 MiB = 1,048,576 bytes).
@@ -83,7 +83,7 @@ public struct HistoryLimits: Sendable, Hashable {
     public let maximumEncodedThumbnailBytes: Int
 
     /// Creates a set of bounds, rejecting out-of-range or inconsistent
-    /// combinations by returning `nil` (docs/06-cross-cutting.md §2).
+    /// combinations by returning `nil` (docs/testing.md).
     ///
     /// Rejected: any non-positive scalar bound; an inverted lower/upper bound
     /// pair; a range whose lower bound is below 1;
@@ -179,7 +179,7 @@ public struct HistoryLimits: Sendable, Hashable {
         self.maximumEncodedThumbnailBytes = maximumEncodedThumbnailBytes
     }
 
-    /// Exactly the docs/06-cross-cutting.md §2 table values — the only value
+    /// Exactly the docs/testing.md table values — the only value
     /// production and the `SQLiteHistory` walking-skeleton tests use.
     ///
     /// The force unwrap cannot fail: the table values satisfy every check in

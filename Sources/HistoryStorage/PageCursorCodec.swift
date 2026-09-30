@@ -1,10 +1,10 @@
 /// PageCursorCodec / cursor wire types — the versioned, fail-closed codec for
 /// the opaque `HistoryPageCursor` payload.
-/// Owning spec: docs/04-coherence.md §6 (cursor semantics: complete normalized
+/// Owning spec: docs/storage.md (cursor semantics: complete normalized
 /// query shape + page ChangePosition + direction + complete boundary-row anchor +
 /// process-instance marker), §16 (failure translation: cursor shape,
 /// generation, or position mismatch → `.snapshotExpired`); bounds:
-/// docs/06-cross-cutting.md §2.
+/// docs/testing.md
 ///
 /// `HistoryPageCursor.payload` is the only public surface; callers never
 /// inspect or mint it. Decode validates the wire format, the format version,
@@ -21,7 +21,7 @@
 import Foundation
 import HistoryCore
 
-// MARK: - Resolved cursor value (docs/04-coherence.md §6)
+// MARK: - Resolved cursor value (docs/storage.md)
 
 /// Which adjacent range to read. Rows always return in the query's normal
 /// order; this direction changes selection, not the displayed ordering.
@@ -32,7 +32,7 @@ internal enum HistoryPageDirection: String, Codable, Sendable, Hashable {
 
 /// The fully validated cursor the read paths resume from: the complete
 /// normalized query shape, the page's Change Position, and the complete
-/// boundary-row ordering anchor and direction. docs/04-coherence.md §6
+/// boundary-row ordering anchor and direction. docs/storage.md
 ///
 /// The Authority captures the position inside one non-suspending read
 /// interval (§2) and the `SearchWorker` mints the continuation cursor
@@ -120,7 +120,7 @@ internal enum StoredOrderingAnchor: Sendable, Hashable {
     case metadata(lastCopiedAt: Date, copyCount: UInt64, id: HistoryItemID)
 }
 
-// MARK: - Cursor rejection (docs/05-authority-kernel.md §16)
+// MARK: - Cursor rejection (docs/storage.md)
 
 /// One typed cursor-codec rejection. Decode-side cases map to
 /// `.snapshotExpired(current:)` (§16: "cursor shape, generation, or position
@@ -343,7 +343,7 @@ private extension StoredOrderingAnchor {
     }
 }
 
-// MARK: - Wire value (docs/05-authority-kernel.md §4 style)
+// MARK: - Wire value (docs/storage.md style)
 
 /// Versioned wire value of the opaque cursor payload. `formatVersion` is
 /// exactly 3 for every cursor `PageCursorCodec` writes; decode rejects any
@@ -359,11 +359,11 @@ private struct PageCursorBlobV3: Codable, Sendable {
     let direction: HistoryPageDirection
 }
 
-// MARK: - Codec (docs/04-coherence.md §6)
+// MARK: - Codec (docs/storage.md)
 
 /// Encodes a `ResolvedPageCursor` to its opaque payload and decodes it back,
 /// validating the wire format, format version, and process-instance marker
-/// exactly. docs/04-coherence.md §6
+/// exactly. docs/storage.md
 internal enum PageCursorCodec {
     /// The only cursor version this codec reads or writes.
     private static let formatVersion: UInt16 = 3

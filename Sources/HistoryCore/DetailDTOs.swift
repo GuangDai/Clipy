@@ -2,12 +2,12 @@
 /// explicit representation reads return one requested payload, paste returns
 /// current Effective Content, and thumbnail returns encoded bytes rather than
 /// `NSImage`/`CGImage`.
-/// Owning spec: docs/03b-instruction-set.md §9 (Part III — Caller Interface B).
+/// Owning spec: docs/architecture.md (Part III — Caller Interface B).
 /// Foundation-only.
 import Foundation
 
 /// One typed representation of an item's stored content bytes.
-/// docs/03b-instruction-set.md §9
+/// docs/architecture.md
 public struct HistoryRepresentation: Sendable, Hashable {
     /// Zero-based position of the original system pasteboard item.
     public let pasteboardItemIndex: Int
@@ -60,7 +60,7 @@ public struct HistoryRepresentationRequest: Sendable, Hashable {
 }
 
 /// Summary of a single revision of an item, in revision order.
-/// docs/03b-instruction-set.md §9
+/// docs/architecture.md
 public struct RevisionSummary: Sendable, Hashable {
     public let id: RevisionID
     public let createdAt: Date
@@ -87,7 +87,7 @@ public struct RevisionSummary: Sendable, Hashable {
 }
 
 /// Aggregate copy-occurrence facts for an item.
-/// docs/03b-instruction-set.md §9
+/// docs/architecture.md
 public struct CopyOccurrenceSummary: Sendable, Hashable {
     public let firstCopiedAt: Date
     public let lastCopiedAt: Date
@@ -181,7 +181,7 @@ public struct HistoryDetails: Sendable, Hashable {
 
 /// Payload handed to the pasteboard adapter on paste; carries the item's
 /// current Effective Content only, plus a lineage hint for the next capture.
-/// docs/03b-instruction-set.md §9
+/// docs/architecture.md
 public struct PastePayload: Sendable, Hashable {
     public let item: HistoryItemReference
     public let representations: [HistoryRepresentation]
@@ -199,7 +199,7 @@ public struct PastePayload: Sendable, Hashable {
 }
 
 /// Requested or produced thumbnail extent, in pixels.
-/// docs/03b-instruction-set.md §9
+/// docs/architecture.md
 public struct PixelSize: Sendable, Hashable {
     public let width: Int
     public let height: Int
@@ -211,14 +211,14 @@ public struct PixelSize: Sendable, Hashable {
 }
 
 /// Encoded thumbnail image format.
-/// docs/03b-instruction-set.md §9
+/// docs/architecture.md
 public enum ThumbnailFormat: Sendable, Hashable {
     case png
 }
 
 /// Encoded thumbnail bytes for one item — `Sendable` data rather than
 /// `NSImage`/`CGImage`, so HistoryCore stays Foundation-only.
-/// docs/03b-instruction-set.md §9
+/// docs/architecture.md
 public struct ThumbnailPayload: Sendable, Hashable {
     public let item: HistoryItemReference
     public let pixels: PixelSize

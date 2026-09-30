@@ -1,6 +1,6 @@
 /// Sorting is part of a page's query identity. Explicit copy-metadata ordering
 /// binds its complete boundary facts; automatic keeps the v3 default payload.
-/// docs/04-coherence.md §6.
+/// docs/storage.md
 import Foundation
 import HistoryCore
 import Testing

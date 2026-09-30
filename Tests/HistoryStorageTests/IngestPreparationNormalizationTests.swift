@@ -1,5 +1,5 @@
 /// Capture-normalization tests at the preparation seam
-/// (docs/05-authority-kernel.md §6.1 step 4; docs/02-domain.md §2.1).
+/// (docs/storage.md step 4; docs/architecture.md).
 import Foundation
 import HistoryCore
 import Testing

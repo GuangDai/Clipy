@@ -1,6 +1,6 @@
 /// HistoryDomain value-construction tests and the index for the direct
-/// D1–D19 planner suite (docs/02-domain.md §14; docs/06-cross-cutting.md §8)
-/// plus the V2-02 expansion invariants D23–D24 (docs/v2/V2-02-retention.md
+/// D1–D19 planner suite (docs/architecture.md; docs/testing.md)
+/// plus the V2-02 expansion invariants D23–D24 (docs/storage.md
 /// §11).
 ///
 /// The runtime matrix is split by owning seam:
@@ -13,10 +13,10 @@
 /// - `RetentionPlannerTests`: D13, D16, D18–D19 through `planRetention`;
 /// - `RetentionExpansionPlannerTests` (V2-02): D13–D14, D16, D19-as-extended
 ///   by D24, D24(a)/(b) victim-safety and deduplicated-union shape through
-///   `OrderedRetentionSelection` (docs/v2/V2-02-retention.md §4.1/§4.2/
+///   `OrderedRetentionSelection` (docs/storage.md/
 ///   §6.5; `RET-SELECT-1` Domain half);
 /// - `RevisionPrunePlannerTests` (V2-02): D3, D16, D23 through
-///   `planRevisionRetentionExpansion` (docs/v2/V2-02-retention.md §5/§6.5;
+///   `planRevisionRetentionExpansion` (docs/storage.md;
 ///   `RET-PRUNE-1` Domain half);
 /// - this file: Canonical value validation/fingerprint-independent equality
 ///   (D7).
@@ -32,7 +32,7 @@ import Foundation
 import Testing
 @testable import HistoryDomain
 
-// MARK: - CanonicalContent validation (docs/02-domain.md §2.1, §2.3)
+// MARK: - CanonicalContent validation (docs/architecture.md, §2.3)
 
 private let plainText = "public.utf8-plain-text"
 private let pngImage = "public.png"

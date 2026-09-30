@@ -1,11 +1,11 @@
-/// WS9 — Retention in the primary commit (docs/06-cross-cutting.md §8 WS9):
+/// WS9 — Retention in the primary commit (docs/testing.md WS9):
 /// with the user retention policy at maximum unpinned 2, inserting a third
 /// unpinned item retires the oldest eligible unpinned item INSIDE the third
 /// insert's own History Commit — an insert and its retention victims are one
-/// commit (docs/02-domain.md §12), so Change Position advances exactly once
-/// for the combined plan (docs/02-domain.md §13, D6).
+/// commit (docs/architecture.md), so Change Position advances exactly once
+/// for the combined plan (docs/architecture.md, D6).
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS9's
+/// Phasing (docs/testing.md, WS-clause phasing note): WS9's
 /// public-read clause (the retained set as reported by the step-7 `browse`
 /// read) defers to step 7; this file closes the step-6 commit/receipt/storage
 /// clauses — the `.inserted` receipts at Change Positions 1–3, the
@@ -21,7 +21,7 @@ import Testing
 
 struct WS9RetentionPrimaryCommitTests {
 
-/// WS9 (docs/06-cross-cutting.md §8): with maximum unpinned 2, three distinct
+/// WS9 (docs/testing.md): with maximum unpinned 2, three distinct
 /// unpinned captures commit at positions 1, 2, 3; the third commit retires
 /// the oldest item in the SAME History Commit, leaving exactly items two and
 /// three (both unpinned, untouched), item one's ID absent, and the position
@@ -34,7 +34,7 @@ struct WS9RetentionPrimaryCommitTests {
 
     // Three DISTINCT unpinned text captures with strictly increasing
     // observedAt: eviction order is `lastCopiedAt` ascending
-    // (docs/02-domain.md §12), so item one is the oldest eligible victim
+    // (docs/architecture.md), so item one is the oldest eligible victim
     // once the policy is exceeded.
     let firstText = "ws9 retention item one"
     let secondText = "ws9 retention item two"
@@ -85,7 +85,7 @@ struct WS9RetentionPrimaryCommitTests {
         WSSupport.textCapture(thirdText, observedAt: thirdObservedAt, source: source)
     ))
     // WS9: the third capture is itself a History Commit with `.inserted` —
-    // the primary is never its own retention victim (docs/02-domain.md §12).
+    // the primary is never its own retention victim (docs/architecture.md).
     guard case let .committed(thirdCommit) = thirdReceipt,
           case let .inserted(thirdReference) = thirdCommit.outcome
     else {
@@ -94,7 +94,7 @@ struct WS9RetentionPrimaryCommitTests {
     }
     // WS9: "ChangePosition advanced once" — the create and the retention
     // retire are ONE plan, so the position moves 2 → 3 exactly once
-    // (docs/02-domain.md §13: one advance per plan, not per mutation).
+    // (docs/architecture.md: one advance per plan, not per mutation).
     #expect(thirdCommit.position.rawValue == 3)
     #expect(thirdCommit.hasDestructiveRetentionEffects)
 

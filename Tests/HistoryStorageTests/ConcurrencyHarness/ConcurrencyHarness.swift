@@ -1,9 +1,9 @@
 /// Deterministic-concurrency harness for the walking-skeleton proofs WS12
 /// (observation registration race), WS13 (transaction failure), WS15
 /// (thumbnail version fence), and WS20 (concurrent revision and coalescing)
-/// in docs/06-cross-cutting.md §8.
+/// in docs/testing.md
 ///
-/// Roadmap-owned test infrastructure (docs/roadmap/03-historystorage.md,
+/// Roadmap-owned test infrastructure (docs/storage.md,
 /// "Deliverables — test infrastructure"): scaffolded at step 0 as
 /// `SuspensionGate`, finished at step 5 with `resumeAll()` and the
 /// `runParked(at:operation:whileCommitting:)` helper. The file is

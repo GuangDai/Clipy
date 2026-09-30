@@ -9,8 +9,8 @@
 /// before any later operation makes `.bufferingNewest(1)` non-coalescing for
 /// this probe: its exact count can only be zero or one.
 ///
-/// Owning contracts: docs/04-coherence.md §4; docs/05-authority-kernel.md
-/// §10–§11; docs/06-cross-cutting.md §8 WS13.
+/// Owning contracts: docs/storage.md; docs/storage.md
+/// §10–§11; docs/testing.md WS13.
 @testable import HistoryStorage
 
 struct SingleOperationInvalidationPublicationProbe {

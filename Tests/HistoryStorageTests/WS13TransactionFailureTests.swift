@@ -1,4 +1,4 @@
-/// WS13 — Transaction failure (docs/06-cross-cutting.md §8 WS13): inject a
+/// WS13 — Transaction failure (docs/testing.md WS13): inject a
 /// failure inside the `SQLite write transaction` closure AFTER row mutation
 /// but BEFORE either singleton can advance. The failed attempt is inspected
 /// immediately, before any successful write can repair or obscure residue:
@@ -6,7 +6,7 @@
 /// retention-config singleton remains byte/scalar exact; the public browse
 /// and details reads still return the literal pre-attempt state; the rejected
 /// ID has no committed content or representation rows; and the invalidation stream
-/// is empty (docs/05-authority-kernel.md §10–§11, §14).
+/// is empty (docs/storage.md, §14).
 ///
 /// The existing forced-collision capture seam proves subsequent SQL candidate
 /// lookup and byte-exact confirmation after rollback.
@@ -17,7 +17,7 @@ import Testing
 @testable import HistoryStorage
 
 struct WS13TransactionFailureTests {
-    /// WS13 (docs/06-cross-cutting.md §8): closure failure commits no durable
+    /// WS13 (docs/testing.md): closure failure commits no durable
     /// or derived state and publishes no invalidation. The failure oracle is
     /// complete before the first post-failure success; later captures are
     /// controls only and cannot hide a failed-attempt publish in a newest-one
@@ -38,7 +38,7 @@ struct WS13TransactionFailureTests {
         // All three values have the same type, fingerprint, and literal byte
         // count (16), but different bytes. Every later capture therefore
         // reaches byte-exact confirmation instead of passing through an empty
-        // candidate set (D7; docs/02-domain.md §9.1–§9.2).
+        // candidate set (D7; docs/architecture.md).
         let firstText = "ws13 seed item A"
         let secondText = "ws13 seed item B"
         let rejectedText = "ws13 seed item C"

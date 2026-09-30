@@ -5,7 +5,7 @@ import Testing
 
 /// Explicit order applies to the complete filtered history before paging;
 /// observation and both cursor directions preserve that same query shape.
-/// Owning specification: docs/03a-instruction-set.md §7 / docs/04-coherence.md §6.
+/// Owning specification: docs/architecture.md / docs/storage.md
 struct HistorySortOrderTests {
     private static let kinds: [HistoryBrowseKind] = [
         .recent,

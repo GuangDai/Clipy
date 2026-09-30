@@ -2,7 +2,7 @@
 import PackageDescription
 
 // SwiftPM library graph (target graph:
-// docs/01-architecture.md §1, target list: docs/06-cross-cutting.md §5).
+// docs/architecture.md, target list: docs/testing.md).
 // The HistoryStorage→Fuse edge landed at roadmap step 3 (pinned below; first
 // imported at step 7). xxh3 is package-internal (no product) and vendors
 // pinned xxHash v0.8.3 since step 3 (see Sources/xxh3/VENDORED.md).
@@ -22,8 +22,8 @@ let package = Package(
         .library(name: "LocalAutomation", targets: ["LocalAutomation"]),
     ],
     dependencies: [
-        // Tag 1.4.0 (NOT 2.0.0-rc.x, per docs/roadmap/07-external-deps.md and
-        // docs/AUDIT.md §4b).
+        // Tag 1.4.0 (NOT 2.0.0-rc.x, per docs/architecture.md and
+        // docs/testing.md).
         .package(url: "https://github.com/krisk/fuse-swift.git", revision: "26ba868691b2d8b7bf2b1322951eb591be70ccca"),
     ],
     targets: [
@@ -71,7 +71,7 @@ let package = Package(
             // SQLiteHistory concrete facade. WL8 also calls the package
             // ThumbnailService seam after one prefetched immutable source so
             // it measures the shared decode rather than Authority serialization
-            // (docs/06-cross-cutting.md §9; V1-Verified/04).
+            // (docs/testing.md; V1-Verified/04).
             dependencies: ["HistoryCore", "HistoryStorage"]
         ),
         .executableTarget(

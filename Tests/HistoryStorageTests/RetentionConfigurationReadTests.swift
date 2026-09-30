@@ -1,10 +1,10 @@
 /// SPEC-IMPL-003 proof — the authoritative configured-policy READ
-/// (`ClipboardHistory.retentionConfiguration()`, docs/v2/V2-07-ux.md §5.2
+/// (`ClipboardHistory.retentionConfiguration()`, docs/interface.md
 /// "the settings panel shows the configured budget" and §6.3's panel-open
 /// one-shot read per §4.2.2; audit: docs/reviews/
 /// 2026-08-20-clipy-maccy-audit/02-spec-implementation.md SPEC-IMPL-003).
 /// The seam returns the persisted CONFIGURED retention state — the v1 count
-/// from the position singleton (docs/05-authority-kernel.md §3.2) plus the
+/// from the position singleton (docs/storage.md) plus the
 /// V2-02 dimensions from the retention-expansion config singleton (`V2-02`
 /// §3.3). Live retained-byte totals belong to the independent usage read.
 ///
@@ -134,7 +134,7 @@ struct RetentionConfigurationReadTests {
 
     /// The read is the value a later set compares against (05 §3.2; `V2-02`
     /// §3.3): re-applying exactly the read-back configuration is the
-    /// satisfied-value no-op (docs/02-domain.md §12/§13) — no commit, no
+    /// satisfied-value no-op (docs/architecture.md) — no commit, no
     /// position advance, no retirement. This is the settings surface's
     /// "Apply unchanged" safety property (SPEC-IMPL-003): an Apply that
     /// starts from the authoritative read can never silently wipe a real

@@ -244,7 +244,7 @@ extension SearchWorker {
     /// pinned-first order: pinned rows first by `pinOrdinal` ascending
     /// (the corpus's pre-order), then unpinned rows by ascending Fuse
     /// score, `lastCopiedAt` descending, History Item ID bytes ascending
-    /// (03b §8; docs/04-coherence.md §7).
+    /// (03b §8; docs/storage.md).
     internal func evaluateFuzzy(
         term: String,
         in corpus: SearchCorpusSnapshot,

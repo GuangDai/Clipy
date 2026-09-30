@@ -1,5 +1,5 @@
 /// ThumbnailMeasurementTests — owner suite for the DEC-THUMB-CACHE G1
-/// evidence sink (docs/06-cross-cutting.md §3 G1; docs/reviews/
+/// evidence sink (docs/testing.md G1; docs/reviews/
 /// 2026-08-22-clipy-maccy-deep-review/05-evidence-and-open-questions.md §6
 /// "Completed thumbnail cache" row; 11 §4.7). The sink lives in
 /// ThumbnailStore.swift, DEBUG-only and package-scoped (Batch 39 posture);

@@ -1,21 +1,21 @@
 /// ClipboardHistory.swift — the public History interface: the single protocol
 /// every caller (UI, paste coordination, previews) talks to.
-/// Owning spec: docs/03a-instruction-set.md §3 (Part III — Caller Interface A);
-/// interface guarantees: docs/03b-instruction-set.md §11.
+/// Owning spec: docs/architecture.md (Part III — Caller Interface A);
+/// interface guarantees: docs/architecture.md
 /// Foundation-only; no persistence, Domain aggregate, fingerprint, framework
 /// object, or service locator (03a §1).
 import Foundation
 
 /// The complete public interface between callers and retained History.
 ///
-/// Owning spec: docs/03a-instruction-set.md §3.
+/// Owning spec: docs/architecture.md
 ///
 /// `SQLiteHistory` is the production implementation. UI previews may use a
 /// scripted implementation, which must itself conform to `Sendable` (because
 /// `ClipboardHistory: Sendable`) and must not be used as a substitute for
 /// storage semantic tests.
 ///
-/// Interface guarantees (docs/03b-instruction-set.md §11): a `.committed`
+/// Interface guarantees (docs/architecture.md): a `.committed`
 /// receipt from `perform` returns only after the durable transaction, and a
 /// later call begun after that receipt observes at least its `ChangePosition`;
 /// `observe` emits complete replacement pages, not deltas; read APIs resolve
@@ -30,7 +30,7 @@ public protocol ClipboardHistory: Sendable {
     /// invalidation publication. Failures return no receipt — they throw a
     /// typed `HistoryFailure`.
     ///
-    /// docs/03a-instruction-set.md §3; guarantees docs/03b-instruction-set.md
+    /// docs/architecture.md; guarantees docs/architecture.md
     /// §11 items 1–3.
     func perform(_ action: HistoryAction) async throws -> HistoryReceipt
 
@@ -45,8 +45,8 @@ public protocol ClipboardHistory: Sendable {
     /// `.snapshotExpired(current:)` rather than silently skipping or
     /// repeating items.
     ///
-    /// docs/03a-instruction-set.md §3, §7; guarantees
-    /// docs/03b-instruction-set.md §11 items 4 and 6.
+    /// docs/architecture.md, §7; guarantees
+    /// docs/architecture.md items 4 and 6.
     func browse(
         _ request: HistoryBrowseRequest
     ) async throws -> HistoryPage
@@ -60,8 +60,8 @@ public protocol ClipboardHistory: Sendable {
     /// still throw `HistoryFailure`, so callers that need its cases must cast
     /// the received `Error` to `HistoryFailure`.
     ///
-    /// docs/03a-instruction-set.md §3, §7; guarantee
-    /// docs/03b-instruction-set.md §11 item 5.
+    /// docs/architecture.md, §7; guarantee
+    /// docs/architecture.md item 5.
     func observe(
         _ request: HistoryObservationRequest
     ) async -> AsyncThrowingStream<HistoryPage, Error>
@@ -70,8 +70,8 @@ public protocol ClipboardHistory: Sendable {
     /// descriptors, revision summaries, occurrence and pin position. This read
     /// opens no content payloads; it resolves the current item or fails typed.
     ///
-    /// docs/03a-instruction-set.md §3; docs/03b-instruction-set.md §9;
-    /// guarantee docs/03b-instruction-set.md §11 item 7.
+    /// docs/architecture.md; docs/architecture.md;
+    /// guarantee docs/architecture.md item 7.
     func details(
         for id: HistoryItemID
     ) async throws -> HistoryDetails
@@ -104,8 +104,8 @@ public protocol ClipboardHistory: Sendable {
     /// The paste payload for one retained item: current Effective Content
     /// only, plus the item's lineage hint.
     ///
-    /// docs/03a-instruction-set.md §3; docs/03b-instruction-set.md §9;
-    /// guarantee docs/03b-instruction-set.md §11 item 7.
+    /// docs/architecture.md; docs/architecture.md;
+    /// guarantee docs/architecture.md item 7.
     func pastePayload(
         for id: HistoryItemID
     ) async throws -> PastePayload
@@ -119,8 +119,8 @@ public protocol ClipboardHistory: Sendable {
     /// stale `item` reference fails typed rather than returning current bytes
     /// under the old Content Version.
     ///
-    /// docs/03a-instruction-set.md §3; docs/03b-instruction-set.md §9;
-    /// guarantee docs/03b-instruction-set.md §11 item 7.
+    /// docs/architecture.md; docs/architecture.md;
+    /// guarantee docs/architecture.md item 7.
     func thumbnail(
         for item: HistoryItemReference,
         pixels: PixelSize
@@ -147,11 +147,11 @@ public protocol ClipboardHistory: Sendable {
     /// count plus the V2-02 age/storage/revision dimensions, exactly as
     /// persisted.
     ///
-    /// This is the settings surface's panel-open read (docs/v2/V2-07-ux.md
+    /// This is the settings surface's panel-open read (docs/interface.md
     /// §6.3 — a one-shot read per §4.2.2): it returns the configured policy.
     /// The separate `usage()` read returns retained counts and content bytes.
     /// Configuration reads the same durable singletons the mutation paths write
-    /// (docs/05-authority-kernel.md §3.2; `V2-02` §3.3), so the value read
+    /// (docs/storage.md; `V2-02` §3.3), so the value read
     /// here is the value a later `.setRetentionPolicy` /
     /// `.setRetentionPolicies` compares against, and the §11 read-after-
     /// commit guarantee applies unchanged. Extension-by-addition to the read
@@ -163,8 +163,8 @@ public protocol ClipboardHistory: Sendable {
     /// exactly as the other reads (a corrupted singleton fails closed as
     /// `.persistence(...)`, never as a default value).
     ///
-    /// docs/v2/V2-02-retention.md §8.1/§12;
-    /// docs/v2/V2-07-ux.md §5.2; audit: docs/reviews/
+    /// docs/storage.md;
+    /// docs/interface.md; audit: docs/reviews/
     /// 2026-08-20-clipy-maccy-audit/02-spec-implementation.md SPEC-IMPL-003.
     func retentionConfiguration() async throws -> HistoryRetentionConfiguration
 }

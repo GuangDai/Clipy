@@ -1,5 +1,5 @@
 /// FailurePresentationTests — the typed-failure → user-facing message
-/// mapping (docs/03b-instruction-set.md §10; docs/roadmap/
+/// mapping (docs/architecture.md; docs/roadmap/
 /// 05-presentationui.md). Every case of the closed `HistoryFailure`
 /// vocabulary — including every nested reason/kind of the associated-value
 /// enums — must produce a non-empty message, and the contract-pinned
@@ -105,7 +105,7 @@ struct FailurePresentationTests {
     }
 
     /// One payload for every `HistoryFailure` case — the full closed
-    /// vocabulary of docs/03b-instruction-set.md §10.
+    /// vocabulary of docs/architecture.md
     private var allFailures: [HistoryFailure] {
         var failures: [HistoryFailure] = [
             .notFound(itemID),
@@ -133,7 +133,7 @@ struct FailurePresentationTests {
 
     /// Every case of the closed vocabulary answers a non-empty message — a
     /// new failure case is an owned source change that must be answered
-    /// here (docs/03b-instruction-set.md §10).
+    /// here (docs/architecture.md).
     @Test func everyFailureCaseYieldsANonEmptyLocalizedMessage() throws {
         let englishBundle = try localizedBundle("en")
         let chineseBundle = try localizedBundle("zh-Hans")
@@ -170,7 +170,7 @@ struct FailurePresentationTests {
 
     /// The four contract-specified spot checks: the regex-rejection and
     /// reindexing-retry wording, and the not-found / stale-content banner
-    /// strings (docs/roadmap/05-presentationui.md).
+    /// strings (docs/interface.md).
     @Test func contractSpecifiedStringsMatchExactly() throws {
         #expect(
             try message(for: .invalidInput(.invalidRegularExpression))
@@ -220,7 +220,7 @@ struct FailurePresentationTests {
         )
     }
 
-    /// REVIEW Card 11C (docs/03b-instruction-set.md §8/§10): the engine
+    /// REVIEW Card 11C (docs/architecture.md): the engine
     /// deadline is retryable, so the message says so.
     @Test func searchEngineDeadlineMessageSaysSearchIsSlowAndRetryable() throws {
         #expect(

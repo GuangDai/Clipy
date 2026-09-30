@@ -1,5 +1,5 @@
 /// WS8Composed — Pin order through the composed app stack
-/// (docs/06-cross-cutting.md §8 WS8; docs/02-domain.md §10; D12): pin three
+/// (docs/testing.md WS8; docs/architecture.md; D12): pin three
 /// items, move the last before the first, then unpin the item now occupying
 /// the middle position. After each receipt the public order is asserted
 /// through the detail reads (`pinnedPosition` ordinals unique and exactly
@@ -58,7 +58,7 @@ struct WS8ComposedPinOrderTests {
         )
     }
 
-    /// WS8 (docs/06-cross-cutting.md §8): pin A, B, C (`.last`), move C
+    /// WS8 (docs/testing.md): pin A, B, C (`.last`), move C
     /// `.before` A ([A,B,C] → [C,A,B]), then unpin the middle item (A),
     /// leaving [C,B]. Content Versions never move; each non-no-op action
     /// advances Change Position once; the composed view state renders the

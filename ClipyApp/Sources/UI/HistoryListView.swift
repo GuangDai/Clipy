@@ -4,13 +4,13 @@
 /// surface, and the empty states. Rows render the view state's DISPLAYED
 /// lanes: History applies type/pinned filters before pagination. Row content
 /// uses the available width without changing metadata formats on resize.
-/// Owning spec: docs/01-architecture.md §5.2 (gesture → action), §5.4
+/// Owning spec: docs/architecture.md (gesture → action), §5.4
 /// (browse/observe), §6 (main-actor selection);
-/// docs/03b-instruction-set.md §8 (default ordering: pinned rows by ordinal
+/// docs/architecture.md (default ordering: pinned rows by ordinal
 /// ascending, then unpinned by lastCopiedAt descending);
-/// docs/04-coherence.md §5 (snapshot-replacement pages — the list renders
+/// docs/storage.md (snapshot-replacement pages — the list renders
 /// `HistoryViewState.rows`, never deltas) and §6 (cursor expiry is handled by
-/// `HistoryViewState.loadNextPage()`); accessibility per docs/v2/V2-07-ux.md §9.
+/// `HistoryViewState.loadNextPage()`); accessibility per docs/interface.md
 import Foundation
 import HistoryCore
 import SwiftUI

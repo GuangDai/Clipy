@@ -1,5 +1,5 @@
 /// Expression search grammar and caller-visible diagnostics.
-/// Owning spec: docs/03a-instruction-set.md §7.
+/// Owning spec: docs/architecture.md
 import Foundation
 import Testing
 @testable import HistoryCore
@@ -158,6 +158,7 @@ func expressionSearchSerializationPreservesGroupingWithoutAddingExcessiveNesting
     Array(repeating: "app:Editor", count: 128).joined(separator: " "),
     String(repeating: "a", count: HistoryLimits.standard.maximumSearchTermUTF8Bytes),
     "app:" + String(repeating: "a", count: HistoryLimits.standard.maximumSearchTermUTF8Bytes - 4),
+    ":app:" + String(repeating: "a", count: HistoryLimits.standard.maximumSearchTermUTF8Bytes - 5),
     String(repeating: "url:", count: HistoryLimits.standard.maximumSearchTermUTF8Bytes / 4)
 ])
 func expressionSearchSerializationKeepsAdmittedTokenAndByteBoundaries(text: String) throws {

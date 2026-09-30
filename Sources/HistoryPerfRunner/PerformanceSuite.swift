@@ -1,10 +1,10 @@
 /// HistoryPerfRunner — release-like performance runner for the Part VI §9
-/// performance proofs (docs/06-cross-cutting.md §9). Drives the PUBLIC
+/// performance proofs (docs/testing.md). Drives the PUBLIC
 /// ClipboardHistory surface via the production SQLiteHistory facade. Each
 /// workload records fixture data (medians, complexity ratios, bounds) and
 /// exits non-zero if any complexity check fails.
 ///
-/// Acceptance (docs/06-cross-cutting.md §9; docs/roadmap/README.md §3 step 8):
+/// Acceptance (docs/testing.md; docs/testing.md step 8):
 /// the proofs are COMPLEXITY claims, not latency targets — "No numeric latency
 /// target in a future PR may be declared satisfied by the current repository's
 /// implementation" (§9). General complexity bounds keep at least 1.5× the
@@ -29,7 +29,7 @@
 /// least 1.5× headroom over its declared linear/constant theoretical ratio
 /// except WL1a's documented asymptotic-inventory exception above, so each proof
 /// keeps its intended sensitivity while the suite fits the CI wall-clock budget.
-/// The V2-02 R-active retention lanes (docs/v2/V2-02-retention.md Record 3
+/// The V2-02 R-active retention lanes (docs/storage.md Record 3
 /// RET-PERF-1/2/3) reuse the same discipline: capture composition with R1+R2
 /// active, the revise-path expansion with R2+R3 active, and the
 /// `.setRetentionPolicies` scalar sweep each gate a 3× span at 6× (a 2×

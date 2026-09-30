@@ -1,5 +1,5 @@
 /// ThumbnailStoreTests — the panel thumbnail store acceptance suite
-/// (docs/01-architecture.md §5.7; docs/04-coherence.md §9; docs/
+/// (docs/architecture.md; docs/storage.md; docs/
 /// roadmap/05-presentationui.md), driven by a scripted `ClipboardHistory`
 /// double that answers one fixed encoded 1×1 PNG per exact reference.
 ///

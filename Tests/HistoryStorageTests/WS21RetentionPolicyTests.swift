@@ -1,4 +1,4 @@
-/// WS21 — Retention policy in the primary commit (docs/06-cross-cutting.md
+/// WS21 — Retention policy in the primary commit (docs/testing.md
 /// §8 WS21): the commit/receipt/storage side of
 /// `HistoryAction.setRetentionPolicy` through the public
 /// `SQLiteHistory.perform(_:)` and the real `HistoryAuthority` commit
@@ -8,7 +8,7 @@
 ///
 /// - the satisfied-value no-op: setting the value the current state already
 ///   satisfies (the requested value equals the durable value AND the state
-///   satisfies it, docs/02-domain.md §12) returns `.unchanged` — no commit,
+///   satisfies it, docs/architecture.md) returns `.unchanged` — no commit,
 ///   no position advance (02 §13);
 /// - lowering below the current unpinned count: the excess oldest unpinned
 ///   items retire in the SAME History Commit (02 §12 eviction order:
@@ -26,7 +26,7 @@
 ///   D13) — the oldest item in the store survives once pinned while a newer
 ///   unpinned item is retired.
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS21 carries
+/// Phasing (docs/testing.md, WS-clause phasing note): WS21 carries
 /// no public-read or observation clause — every assertion here is
 /// commit/storage side: receipts plus the INDEPENDENT second
 /// `SQLite connection` over the same on-disk store (see `WSSupport`). The
@@ -40,7 +40,7 @@ import Testing
 
 struct WS21RetentionPolicyTests {
 
-/// WS21 (docs/06-cross-cutting.md §8): a satisfied set is `.unchanged` with
+/// WS21 (docs/testing.md): a satisfied set is `.unchanged` with
 /// no advance; lowering to 1 with three unpinned items retires the two
 /// oldest in the same commit at exactly one position advance, persists the
 /// policy on the singleton, and the durable value survives a restart.
@@ -93,7 +93,7 @@ struct WS21RetentionPolicyTests {
 
     // WS21 satisfied-value clause (06 §8): "Set maximumUnpinnedItems to a
     // value the current state already satisfies and assert .unchanged" — 200
-    // equals the durable value and 3 unpinned ≤ 200 (docs/02-domain.md §12).
+    // equals the durable value and 3 unpinned ≤ 200 (docs/architecture.md).
     let satisfiedReceipt = try await history.perform(.setRetentionPolicy(maximumUnpinnedItems: 200))
     guard case .unchanged = satisfiedReceipt else {
         Issue.record("WS21 satisfied-value clause: expected .unchanged, got \(satisfiedReceipt)")
@@ -170,7 +170,7 @@ struct WS21RetentionPolicyTests {
     #expect(finalSingleton.maximumUnpinnedItems == 1)
 }
 
-/// WS21 (docs/06-cross-cutting.md §8, boundary): values outside the Part VI
+/// WS21 (docs/testing.md, boundary): values outside the Part VI
 /// user range 1–5,000 (06 §2) are rejected at the storage boundary with
 /// `.invalidInput(.invalidRetentionPolicy)` (02 §5.5, D19) — no commit, no
 /// position advance, no policy change.
@@ -214,8 +214,8 @@ struct WS21RetentionPolicyTests {
     #expect(rows.count == 1)
 }
 
-/// WS21 (docs/06-cross-cutting.md §8, pinned exemption): retention never
-/// retires a pinned item (docs/02-domain.md §12: "Pinned items are excluded
+/// WS21 (docs/testing.md, pinned exemption): retention never
+/// retires a pinned item (docs/architecture.md: "Pinned items are excluded
 /// before victim selection"; D13). The pinned item here has the OLDEST
 /// `lastCopiedAt` in the store, so its survival is the exemption, not the
 /// eviction order.

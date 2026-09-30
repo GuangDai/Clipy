@@ -1,5 +1,5 @@
 /// Search request admission performed before any operation-local context or
-/// corpus exists (REVIEW Card 11A; docs/03b-instruction-set.md §8; 06 §2).
+/// corpus exists (REVIEW Card 11A; docs/architecture.md; 06 §2).
 import Foundation
 import HistoryCore
 

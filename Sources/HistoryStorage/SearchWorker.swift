@@ -1,6 +1,6 @@
 /// Search evaluation worker for request-owned SQLite snapshots (V2-09 §4).
-/// Owning spec: docs/03b-instruction-set.md §8 (frozen search behavior);
-/// bounds: docs/06-cross-cutting.md §2; fixtures: docs/06-cross-cutting.md
+/// Owning spec: docs/architecture.md (frozen search behavior);
+/// bounds: docs/testing.md; fixtures: docs/testing.md
 /// §8 WS17.
 ///
 /// The facade supplies only an immutable store location. Each request opens
@@ -12,7 +12,7 @@
 /// The actor exists to confine the non-Sendable Fuse 1.4.0 matcher: `Fuse`
 /// is a pre-concurrency class with no `Sendable` conformance, so it lives
 /// entirely as actor-isolated state and never appears in a public or
-/// package signature (docs/01-architecture.md §6; docs/AUDIT.md §4b).
+/// package signature (docs/architecture.md; docs/testing.md).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -22,7 +22,7 @@ import Fuse
 /// The handler is always nil in production and is compiled in so `@testable`
 /// coherence proofs can place a commit inside the snapshot→evaluation gap or
 /// cancellation at a bounded scan checkpoint without retaining any SwiftData
-/// value across the suspension (docs/04-coherence.md §5/§7; REVIEW Card 11B).
+/// value across the suspension (docs/storage.md; REVIEW Card 11B).
 internal enum SearchWorkerSuspensionPoint: String, Sendable {
     case evaluationEntry = "SearchWorker.page.evaluationEntry"
 #if DEBUG
@@ -34,13 +34,13 @@ internal enum SearchWorkerSuspensionPoint: String, Sendable {
 #endif
 }
 
-/// Search evaluation worker (docs/05-authority-kernel.md §14.2). Roadmap
+/// Search evaluation worker (docs/storage.md). Roadmap
 /// step 7: the three frozen search modes plus the recent-equivalent empty
-/// term (docs/03b-instruction-set.md §8; docs/06-cross-cutting.md §8 WS17).
+/// term (docs/architecture.md; docs/testing.md WS17).
 ///
 /// All mode behavior is frozen by 03b §8 and fixture-locked by WS17; the
 /// individual steps cite the paragraph they implement. Determinism follows
-/// docs/04-coherence.md §7: every sort ends with `lastCopiedAt` descending
+/// docs/storage.md: every sort ends with `lastCopiedAt` descending
 /// and History Item ID bytes ascending, and matched ranges are UTF-16
 /// offsets into the returned title/snippet, never `String.Index` values.
 internal actor SearchWorker {
@@ -62,19 +62,19 @@ internal actor SearchWorker {
     internal static let defaultRegexpEngineDeadline: Duration = .milliseconds(2_000)
 
     /// The fixed `HistoryLimits.standard` safety profile
-    /// (docs/06-cross-cutting.md §2): the common 4,096-UTF-8-byte search-term
+    /// (docs/testing.md): the common 4,096-UTF-8-byte search-term
     /// bound, the 512-Character regexp-pattern bound, the 64-Character
     /// fuzzy-query bound, the 1,000/5,000-Character regexp/fuzzy scan prefixes,
     /// and the 322-Character snippet bound.
     internal let limits: HistoryLimits
 
-    /// The confined fuzzy matcher (docs/01-architecture.md §6). Frozen
+    /// The confined fuzzy matcher (docs/architecture.md). Frozen
     /// parameters (03b §8): `threshold` 0.7, `location` 0, `distance` 100,
     /// `isCaseSensitive` false; `tokenize` keeps its `false` default.
     /// `maxPatternLength` is deliberately not passed: it is a dead
     /// parameter in the pinned 1.4.0 revision (stored, never read — see
     /// `Fuse/Classes/Fuse.swift` at krisk/fuse-swift
-    /// 26ba868691b2d8b7bf2b1322951eb591be70ccca; docs/AUDIT.md §4b), so the
+    /// 26ba868691b2d8b7bf2b1322951eb591be70ccca; docs/testing.md), so the
     /// 64-Character query bound is enforced by `page` itself before Fuse
     /// is called.
     internal let fuse: Fuse
@@ -172,7 +172,7 @@ internal actor SearchWorker {
     /// One evaluated row in final page order: the corpus scalar row, its
     /// deferred presentation (`nil` on the recent-equivalent lane, 03b §8),
     /// and the complete ordering anchor the next cursor binds to
-    /// (docs/04-coherence.md §6).
+    /// (docs/storage.md).
     internal struct EvaluatedRow {
         let corpusRow: SearchCorpusRow
         let search: DeferredSearchPresentation?
@@ -214,7 +214,7 @@ internal actor SearchWorker {
     /// - Parameter continuationAnchor: The decoded cursor anchor for a
     ///   continuation page, or `nil` for a first page. The anchor drops
     ///   every row up to and including the anchored row in the computed
-    ///   order (docs/04-coherence.md §6).
+    ///   order (docs/storage.md).
     /// - Parameter processMarker: The Authority-owned process-instance
     ///   marker the minted cursor binds to (04 §6); the facade forwards it
     ///   — this worker never mints markers.
@@ -435,7 +435,7 @@ internal actor SearchWorker {
         return HistoryPage(position: corpus.position, rows: rows, previous: previous, next: next)
     }
 
-    // MARK: - Default-order anchor (docs/04-coherence.md §6)
+    // MARK: - Default-order anchor (docs/storage.md)
 
     /// Both SQLite streaming and the pure matcher fixtures materialize only
     /// returned rows, using the same frozen Unicode/window construction.

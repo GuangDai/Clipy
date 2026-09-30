@@ -4,7 +4,7 @@
 /// coalescing, a search-debounce storm, a resident-memory leak tripwire,
 /// and activate/deactivate cancellation hygiene.
 ///
-/// These suites guard the docs/06-cross-cutting.md §2 resource ceilings'
+/// These suites guard the docs/testing.md resource ceilings'
 /// behavioral side — the UI/storage loop stays BOUNDED under stress — rather
 /// than re-measuring the ceilings themselves (the timed proofs live in Part
 /// VI §9's runner). Nothing here asserts timing: every wait is a
@@ -30,9 +30,9 @@ import Testing
 @Suite("Render-storm / memory tripwires (fixtures-v1 where gated)", .serialized)
 struct RenderStormAndMemoryTests {
 
-    /// Render-storm coalescing (docs/04-coherence.md §4 newest-only
+    /// Render-storm coalescing (docs/storage.md newest-only
     /// invalidation buffering + §5 position-recheck page freshness; the
-    /// stress twin of WS12 in docs/06-cross-cutting.md §8): an ACTIVATED
+    /// stress twin of WS12 in docs/testing.md): an ACTIVATED
     /// view state and a second, independent page-counting `observe` stream
     /// face 100 back-to-back capture commits. The counting stream must
     /// never deliver MORE pages than commits plus the stream's one initial
@@ -46,7 +46,7 @@ struct RenderStormAndMemoryTests {
         let commitTotal = 100
         let history = try await ComposedSupport.openMemoryHistory()
         // One page holds the whole storm: 100 rows is inside the Part VI
-        // page/observation row-limit range 1…500 (docs/06-cross-cutting.md §2).
+        // page/observation row-limit range 1…500 (docs/testing.md).
         let viewState = HistoryViewState(history: history, pageLimit: commitTotal)
         defer { viewState.deactivate() }
 
@@ -258,7 +258,7 @@ struct RenderStormAndMemoryTests {
         #expect(viewState.failure == nil)
     }
 
-    /// Memory tripwire (docs/06-cross-cutting.md §2 resource ceilings; 04 §9
+    /// Memory tripwire (docs/testing.md resource ceilings; 04 §9
     /// thumbnail single-flight + reference-exact cache): seed ~40 items
     /// including the real-scale 4K/8K raster fixtures, then run 5 rounds of
     /// browse first page → details of the heaviest image items →
@@ -402,7 +402,7 @@ struct RenderStormAndMemoryTests {
         #expect(viewState.failure == nil)
     }
 
-    /// Cancellation hygiene (docs/04-coherence.md §5: "cancellation
+    /// Cancellation hygiene (docs/storage.md: "cancellation
     /// unregisters the continuation and releases query/search tasks"; 05
     /// §14.4: "cancellation removes the token"): ten
     /// activate → search → deactivate cycles with alternating query shapes

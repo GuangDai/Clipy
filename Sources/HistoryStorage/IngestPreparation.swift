@@ -3,12 +3,12 @@
 /// validation against the fixed Part VI bounds, normalization, xxh3-64
 /// fingerprinting, Canonical Content construction,
 /// candidate-ID minting, and the initial content projection.
-/// Owning spec: docs/05-authority-kernel.md §6.1 (capture preparation and its
-/// fixed order), §16 (failure translation); bounds: docs/06-cross-cutting.md
-/// §2; normalized-set requirements: docs/02-domain.md §2.1; fingerprint
-/// evidence: docs/02-domain.md §2.2 (D7 — evidence only, never identity).
+/// Owning spec: docs/storage.md (capture preparation and its
+/// fixed order), §16 (failure translation); bounds: docs/testing.md
+/// §2; normalized-set requirements: docs/architecture.md; fingerprint
+/// evidence: docs/architecture.md (D7 — evidence only, never identity).
 ///
-/// This is the only target that imports xxh3 (docs/01-architecture.md §1–§2);
+/// This is the only target that imports xxh3 (docs/architecture.md);
 /// the import appears here and nowhere else in the target's preparation path.
 /// The serial commit interval performs no pasteboard access, rich-text
 /// parsing, fingerprinting, or initial projection (§6.1): everything the
@@ -29,16 +29,16 @@ internal enum XXH3Fingerprint {
     }
 }
 
-// MARK: - Prepared bundle (docs/05-authority-kernel.md §6.1)
+// MARK: - Prepared bundle (docs/storage.md)
 
 /// Everything capture preparation hands to the Authority for planning and
-/// stamping. docs/05-authority-kernel.md §6.1
+/// stamping. docs/storage.md
 ///
 /// Canonical representations already carry every persistent candidate fact:
 /// item/type, byte count and fingerprint. No duplicate signature array or
 /// resident Signature Index is needed by the SQLite writer (V2-09 §4).
 internal struct PreparedCaptureBundle: Sendable {
-    /// The prepared Domain input for `planCapture` (docs/02-domain.md §4).
+    /// The prepared Domain input for `planCapture` (docs/architecture.md).
     internal let domain: PreparedCapture
     /// The initial content projection from Canonical-as-Effective Content
     /// (§6.1 step 8, §15).
@@ -47,7 +47,7 @@ internal struct PreparedCaptureBundle: Sendable {
     /// Reuses the already validated/fingerprinted capture while Storage
     /// replaces only an occupied candidate identity. Collision recovery must
     /// not repeat payload work or let the pure Domain mint identifiers
-    /// (Card 2B-2; docs/05-authority-kernel.md §6.1 step 7).
+    /// (Card 2B-2; docs/storage.md step 7).
     internal func replacingCandidateID(
         with candidateID: HistoryItemID
     ) -> PreparedCaptureBundle {
@@ -63,7 +63,7 @@ internal struct PreparedCaptureBundle: Sendable {
     }
 }
 
-// MARK: - Preparation actor (docs/05-authority-kernel.md §6.1)
+// MARK: - Preparation actor (docs/storage.md)
 
 /// Converts a raw `ClipboardCapture` into a `PreparedCaptureBundle` off the
 /// Authority, following §6.1's fixed order:
@@ -83,11 +83,11 @@ internal struct PreparedCaptureBundle: Sendable {
 ///
 /// The actor holds only immutable configuration, so every preparation is
 /// independent and only immutable `Sendable` values cross its boundary
-/// (docs/05-authority-kernel.md Part I-facing confinement rules;
-/// docs/02-domain.md D17).
+/// (docs/storage.md Part I-facing confinement rules;
+/// docs/architecture.md D17).
 internal actor IngestPreparationActor {
     /// Pasteboard marker types that exclude the whole capture at steps 1/3.
-    /// docs/05-authority-kernel.md §6.1, docs/02-domain.md §2.1
+    /// docs/storage.md, docs/architecture.md
     ///
     /// V1 recognizes six third-party convention strings as a best-effort
     /// private/transient denylist. None is a framework guarantee; a marker is
@@ -104,7 +104,7 @@ internal actor IngestPreparationActor {
     ]
 
     /// The fixed `HistoryLimits.standard` safety profile in production
-    /// (docs/06-cross-cutting.md §2); focused tests inject smaller bounds.
+    /// (docs/testing.md); focused tests inject smaller bounds.
     private let limits: HistoryLimits
 
     /// The configured best-effort transient/private convention-string
@@ -113,17 +113,17 @@ internal actor IngestPreparationActor {
     private let transientTypeIdentifiers: Set<String>
 
     /// The representation fingerprint function — xxh3-64 in production.
-    /// docs/02-domain.md §2.2
+    /// docs/architecture.md
     ///
     /// Injectable so tests can substitute the deterministic collision double
     /// of `ForcedCollisionFingerprint` and exercise the §7.6 forced-collision
-    /// path (docs/06-cross-cutting.md §7.6: equal fingerprints still require
+    /// path (docs/testing.md: equal fingerprints still require
     /// byte confirmation, D7).
     private let fingerprint: @Sendable (Data) -> UInt64
 
     /// Package-injected History Item identity source. Production supplies
     /// UUID entropy; focused tests pin identities without putting generation
-    /// in the pure Domain (docs/01-architecture.md §4).
+    /// in the pure Domain (docs/architecture.md).
     private let makeCandidateID: @Sendable () -> HistoryItemID
 
     /// Creates the preparation actor. Production uses every default:
@@ -168,7 +168,7 @@ internal actor IngestPreparationActor {
         }
 
         // Step 1 continued — reject an empty capture or hard-limit violation
-        // (docs/06-cross-cutting.md §2 bounds). Totals use checked arithmetic;
+        // (docs/testing.md bounds). Totals use checked arithmetic;
         // no byte-count calculation wraps (§2).
         guard !representations.isEmpty else {
             throw HistoryFailure.invalidInput(.emptyCapture)
@@ -200,7 +200,7 @@ internal actor IngestPreparationActor {
 
         // Step 2 — reject invalid/oversized type identifiers and bytes. A
         // normalized content set forbids empty identifiers and empty bytes
-        // (docs/02-domain.md §2.1); identifier problems report the identifier
+        // (docs/architecture.md); identifier problems report the identifier
         // reason, byte problems the byte reason.
         for representation in representations {
             let typeIdentifier = representation.typeIdentifier
@@ -220,7 +220,7 @@ internal actor IngestPreparationActor {
         // Step 1 proved that no exclusion marker is present; retaining a
         // marker's sibling values would leak the very content it protects.
 
-        // Step 4 — sort by stable Unicode scalar order (docs/02-domain.md §2.1),
+        // Step 4 — sort by stable Unicode scalar order (docs/architecture.md),
         // then reject duplicate identifiers, including duplicates with equal
         // bytes (§6.1: preparation never chooses one by iteration order).
         // Swift String equality is canonically equivalent, while scalar order
@@ -257,7 +257,7 @@ internal actor IngestPreparationActor {
 
         // Step 5 — compute xxh3-64 exactly once for every remaining
         // representation; step 6 — construct validated Canonical Content
-        // (docs/02-domain.md §2.2–§2.3; V2-09 §4).
+        // (docs/architecture.md; V2-09 §4).
         let canonicalRepresentations = try sorted.map { representation in
             try Task.checkCancellation()
             return CanonicalRepresentation(
@@ -281,13 +281,13 @@ internal actor IngestPreparationActor {
         }
         // Step 7 — mint the candidate History Item ID through the package ID
         // source (§6.1 step 7; minting is centralized in HistoryStorage,
-        // docs/03a-instruction-set.md §2). Used only if planning inserts.
+        // docs/architecture.md). Used only if planning inserts.
         let candidateID = makeCandidateID()
 
         // Step 8 — project the initial title/search/type summary from
         // Canonical-as-Effective Content: a new item starts with no revision,
         // so Effective Content equals Canonical Content with fingerprints
-        // stripped (§6.1 step 8, §15; docs/02-domain.md §2.6).
+        // stripped (§6.1 step 8, §15; docs/architecture.md).
         let projection = ContentProjector.project(
             EffectiveContent(representations: canonical.representations.map(\.content)),
             limits: limits
@@ -311,7 +311,7 @@ internal actor IngestPreparationActor {
     /// Mints only a replacement candidate after the Authority proves the
     /// previous candidate is already occupied. The facade calls this between
     /// isolated Authority attempts, so no context or stored row crosses the
-    /// actor hop (Card 2B-2; docs/05-authority-kernel.md §5/§6.1).
+    /// actor hop (Card 2B-2; docs/storage.md).
     internal func remintCandidateID(
         in prepared: PreparedCaptureBundle
     ) -> PreparedCaptureBundle {

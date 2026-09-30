@@ -1,5 +1,5 @@
 /// WS14Composed — Restart reconstruction through the composed app stack
-/// (docs/06-cross-cutting.md §8 WS14; docs/05-authority-kernel.md §13):
+/// (docs/testing.md WS14; docs/storage.md):
 /// after insert, coalesce, pin reorder, and multiple revisions on a DURABLE
 /// temp store, reopen the facade and assert the composed surfaces — the
 /// reopened `HistoryViewState`, detail reads, and paste payload — match the
@@ -16,7 +16,7 @@ import Testing
 
 struct WS14ComposedRestartTests {
 
-    /// WS14 (docs/06-cross-cutting.md §8): reopen over the same on-disk
+    /// WS14 (docs/testing.md): reopen over the same on-disk
     /// store and observe through the composed panel that every pre-restart
     /// public result survived: rows (title + copyCount + pinned lane), the
     /// item's Effective Content and revision lineage in details, the paste

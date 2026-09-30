@@ -1,7 +1,7 @@
 /// GlobalHotKey.swift — the global ⌘⇧C summon hotkey: a minimal Carbon
 /// `RegisterEventHotKey` wrapper (the same mechanism Maccy uses through the
 /// KeyboardShortcuts package — replicated WITHOUT adding a dependency, per
-/// docs/roadmap/07-external-deps.md's no-new-dependencies rule).
+/// docs/architecture.md's no-new-dependencies rule).
 ///
 /// Carbon hotkeys are the one global-shortcut API that needs no
 /// accessibility grant (`NSEvent.addGlobalMonitorForEvents` cannot deliver
@@ -10,10 +10,10 @@
 /// MainActor's executor is the main thread, but Apple publishes no
 /// symbol-level guarantee that Carbon invokes an event-dispatcher-target
 /// handler on that thread (audit S-6,
-/// docs/reviews/2026-08-20-clipy-maccy-audit/01-standards.md), so the C
+/// docs/testing.md), so the C
 /// callback below checks `Thread.isMainThread` at runtime and block-hops
 /// through the main queue when the expectation ever fails — per
-/// docs/00-overview.md §5 the required outcome (MainActor-isolated firing)
+/// docs/architecture.md the required outcome (MainActor-isolated firing)
 /// is enforced, not assumed.
 ///
 /// Registration is owned by the shortcut controller. Rebinding or recording

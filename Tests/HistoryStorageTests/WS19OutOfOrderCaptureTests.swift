@@ -1,8 +1,8 @@
-/// WS19 — Out-of-order capture monotonicity (docs/06-cross-cutting.md §8
+/// WS19 — Out-of-order capture monotonicity (docs/testing.md
 /// WS19): an identical capture whose `observedAt` is EARLIER than the stored
 /// `lastCopiedAt` still coalesces, but the occurrence fold is monotone —
 /// `lastCopiedAt` never moves backward and `lastSource` never regresses —
-/// per the docs/02-domain.md §3.1 fold rules:
+/// per the docs/architecture.md fold rules:
 ///
 /// ```text
 /// lastCopiedAt = max(existing.lastCopiedAt, incoming.observedAt)
@@ -11,7 +11,7 @@
 ///                otherwise existing.lastSource
 /// ```
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS19's
+/// Phasing (docs/testing.md, WS-clause phasing note): WS19's
 /// public-read/observation clauses defer to step 7; this file closes the
 /// step-5 clauses — the `.coalesced` receipt with the unchanged winner ID
 /// and Content Version, the incremented occurrence count, and the monotone
@@ -25,7 +25,7 @@ import Testing
 
 struct WS19OutOfOrderCaptureTests {
 
-/// WS19 (docs/06-cross-cutting.md §8): capture an item at t2 with an
+/// WS19 (docs/testing.md): capture an item at t2 with an
 /// observed source, then submit an identical capture observed at t1 < t2
 /// with NO source. The winner ID and Content Version are unchanged, the
 /// occurrence count increments to 2, `lastCopiedAt` stays at t2 (no backward
@@ -62,7 +62,7 @@ struct WS19OutOfOrderCaptureTests {
 
     // WS19: "the winner ID is unchanged" — the repeat is a `.coalesced`
     // History Commit naming the same item at its preserved Content Version
-    // (docs/02-domain.md §13), advancing Change Position once.
+    // (docs/architecture.md), advancing Change Position once.
     guard case let .committed(commit) = receipt else {
         Issue.record("WS19: expected a .committed receipt, got \(receipt)")
         return
@@ -85,21 +85,21 @@ struct WS19OutOfOrderCaptureTests {
     #expect(row.contentVersionRaw == 1)
 
     // WS19: "occurrence `count` increments" — the out-of-order copy still
-    // folds into the occurrence summary (docs/02-domain.md §3.1).
+    // folds into the occurrence summary (docs/architecture.md).
     #expect(row.copyCount == 2)
     // WS19: "`lastCopiedAt` does not move backward" — the fold's
-    // max(existing, incoming) keeps t2 (docs/02-domain.md §3.1: "Out-of-order
+    // max(existing, incoming) keeps t2 (docs/architecture.md: "Out-of-order
     // capture must not move recency … backwards").
     #expect(row.lastCopiedAt == laterObservedAt)
     #expect(row.firstCopiedAt == laterObservedAt)
     // WS19: "`lastSource` does not regress to nil" — the
     // `incoming ?? existing` update applies only when the incoming
     // observation is at least as recent as the stored `lastCopiedAt`; here
-    // t1 < t2, so the stored source survives (docs/02-domain.md §3.1).
+    // t1 < t2, so the stored source survives (docs/architecture.md).
     #expect(row.lastSource == source)
     #expect(row.firstSource == source)
 
-    // Canonical Content is untouched by the fold (docs/02-domain.md D2).
+    // Canonical Content is untouched by the fold (docs/architecture.md D2).
     let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
     #expect(canonical.representations.map(\.content.typeIdentifier) == ["public.utf8-plain-text"])
     #expect(canonical.representations.map(\.content.bytes) == [Data(text.utf8)])
@@ -116,7 +116,7 @@ struct WS19OutOfOrderCaptureTests {
     #expect(details.occurrence.lastSource == source)
 }
 
-/// WS19 companion (docs/02-domain.md §3.1): an out-of-order capture carrying
+/// WS19 companion (docs/architecture.md): an out-of-order capture carrying
 /// its OWN non-nil source still cannot rewrite `lastSource` — the
 /// "otherwise `existing.lastSource`" branch keeps the newer observation's
 /// source, proving the guard is the observation-time comparison and not the
@@ -168,7 +168,7 @@ struct WS19OutOfOrderCaptureTests {
     let row = try #require(rows.first)
     #expect(row.id == reference.id.rawValue)
 
-    // docs/02-domain.md §3.1: the count still increments and recency stays
+    // docs/architecture.md: the count still increments and recency stays
     // monotone …
     #expect(row.copyCount == 2)
     #expect(row.lastCopiedAt == laterObservedAt)

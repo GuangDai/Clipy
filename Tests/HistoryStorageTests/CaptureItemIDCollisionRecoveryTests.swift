@@ -6,7 +6,7 @@
 /// storage lifecycle probe proves retry happens before the transaction; the
 /// Authority invalidation stream proves failed candidates are never published.
 /// Owning review: `04-tdd-remediation-playbook.md` Card 2B-2; capture owner:
-/// docs/05-authority-kernel.md §6.1/§9–§11.
+/// docs/storage.md
 import Foundation
 import HistoryCore
 import Synchronization

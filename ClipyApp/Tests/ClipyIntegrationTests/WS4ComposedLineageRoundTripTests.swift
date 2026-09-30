@@ -1,7 +1,7 @@
 /// WS4Composed — Lineage hint for revised Effective Content, driven through
-/// the app's paste orchestration (docs/06-cross-cutting.md §8 WS4;
-/// docs/01-architecture.md §5.6; docs/03b-instruction-set.md §9;
-/// docs/04-coherence.md §8): revise an item, export its paste payload,
+/// the app's paste orchestration (docs/testing.md WS4;
+/// docs/architecture.md; docs/architecture.md;
+/// docs/storage.md): revise an item, export its paste payload,
 /// WRITE it to a real (private) pasteboard exactly as `AppComposition.paste`
 /// does (`history.pastePayload(for:)` → `adapter.write(payload)` — everything
 /// outside any History transaction), then re-capture that pasteboard through
@@ -23,9 +23,9 @@ import Testing
 struct WS4ComposedLineageRoundTripTests {
 
     /// A `.replace` draft that substitutes new plain-text bytes and HIDES the
-    /// html type — one decision per Canonical type (docs/03a-instruction-set.md
+    /// html type — one decision per Canonical type (docs/architecture.md
     /// §5) — producing plain-only version-2 Effective Content while Canonical
-    /// Content keeps both representations (docs/02-domain.md §2.6).
+    /// Content keeps both representations (docs/architecture.md).
     private static func replacePlainHideHtmlRequest(
         itemID: HistoryItemID,
         expected: ContentVersion,
@@ -44,7 +44,7 @@ struct WS4ComposedLineageRoundTripTests {
         )
     }
 
-    /// WS4 (docs/06-cross-cutting.md §8): "Revise an item, export its paste
+    /// WS4 (docs/testing.md): "Revise an item, export its paste
     /// payload, and capture that payload with its hint. Exact Effective
     /// Content equality must coalesce into the hinted item while preserving
     /// Canonical Content and Content Version." Here the "capture that
@@ -100,7 +100,7 @@ struct WS4ComposedLineageRoundTripTests {
 
         // (4) The capture loop's next poll freezes the pasted content: the
         // hint decodes into the origin and is NOT retained as content
-        // (docs/03a-instruction-set.md §4; PasteboardLineageHint).
+        // (docs/architecture.md; PasteboardLineageHint).
         let recapture = try #require(
             adapter.capture(observedAt: recaptureObservedAt),
             "WS4 (4): the written payload is re-captured"
@@ -118,7 +118,7 @@ struct WS4ComposedLineageRoundTripTests {
             "WS4 (4): the hint type never survives as content"
         )
 
-        // The lineage lane (docs/02-domain.md §9.3 lane 1): byte-set-equal
+        // The lineage lane (docs/architecture.md lane 1): byte-set-equal
         // Effective Content coalesces into the hinted item.
         let recaptureReceipt = try await history.perform(.capture(recapture))
         let commit = try #require(
@@ -138,7 +138,7 @@ struct WS4ComposedLineageRoundTripTests {
         )
 
         // Canonical Content untouched by both the revision's hide and the
-        // coalesce (docs/02-domain.md D2); occurrence folded to 2.
+        // coalesce (docs/architecture.md D2); occurrence folded to 2.
         let details = try await history.details(for: itemID)
         #expect(
             Set(details.canonical.map(\.typeIdentifier))
@@ -150,7 +150,7 @@ struct WS4ComposedLineageRoundTripTests {
         #expect(details.occurrence.count == 2)
     }
 
-    /// WS4 counter-case (docs/02-domain.md §9.3 lane 1): the lineage lane
+    /// WS4 counter-case (docs/architecture.md lane 1): the lineage lane
     /// requires byte-set EQUALITY — a capture carrying the payload's hint
     /// but ONE byte of different plain text must not coalesce; neither lane
     /// can confirm, so a new distinct item is inserted. Built as a direct

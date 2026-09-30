@@ -1,6 +1,6 @@
 /// Compiled exact-literal matcher for HistoryStorage's exact-search worker.
-/// Owning semantics: docs/03b-instruction-set.md §8. Complexity investigation:
-/// docs/AUDIT.md IND-07.
+/// Owning semantics: docs/architecture.md Complexity investigation:
+/// docs/testing.md IND-07.
 ///
 /// The scan is the word-prefilter pipeline glibc/musl `memmem` and Rust's
 /// `memchr::memmem` use on scalar builds: one 8-byte SWAR sweep answers three

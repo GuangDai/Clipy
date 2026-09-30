@@ -1,5 +1,5 @@
 /// WS9Composed — Retention in the primary commit through the composed app
-/// stack (docs/06-cross-cutting.md §8 WS9; docs/02-domain.md §12):
+/// stack (docs/testing.md WS9; docs/architecture.md):
 /// configure maximum unpinned count 2, insert three unpinned items, and
 /// expect the OLDEST eligible item retired in the third insert's SAME
 /// History Commit — leaving two unpinned items, the retired ID gone from
@@ -18,7 +18,7 @@ import Testing
 
 struct WS9ComposedRetentionPrimaryCommitTests {
 
-    /// WS9 (docs/06-cross-cutting.md §8): the third insert into a
+    /// WS9 (docs/testing.md): the third insert into a
     /// maximum-2 store retires the OLDEST unpinned item in the same commit
     /// (receipt at exactly one position advance), and the composed panel
     /// (`HistoryViewState`) settles on the two survivors.

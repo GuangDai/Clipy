@@ -1,13 +1,13 @@
 /// PanelAppearanceSettings.swift — the panel's presentation preferences
 /// (row density, preview auto-open, and the row-typography pair of snippet
 /// line count and font size), the panel-chrome half of the Settings
-/// consolidation surface (docs/v2/V2-07-ux.md §6).
+/// consolidation surface (docs/interface.md).
 ///
 /// These are framework-neutral immutable snapshots with product defaults,
 /// not policy: every UserDefaults read fails open to the default value, so
 /// a missing or unrecognized persisted entry can never break the panel.
 ///
-/// Access split (GOV-3 contraction; docs/v2/V2-07-ux.md §6): the snapshot
+/// Access split (GOV-3 contraction; docs/interface.md): the snapshot
 /// type, its `load(from:)` seam, and the default `init()` the public
 /// `HistoryPanelView` initializer's default argument evaluates in the
 /// caller's module are public — that is exactly the configuration vocabulary

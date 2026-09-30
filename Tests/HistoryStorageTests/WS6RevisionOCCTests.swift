@@ -1,6 +1,6 @@
-/// WS6 — Revision OCC and append-only revert (docs/06-cross-cutting.md §8
+/// WS6 — Revision OCC and append-only revert (docs/testing.md
 /// WS6): the commit/receipt/storage side of the two-phase revision path
-/// (docs/05-authority-kernel.md §6.2) driven through the public
+/// (docs/storage.md) driven through the public
 /// `SQLiteHistory.perform(.revise(_:))` facade — a changing revision
 /// commits once at the checked-successor Content Version, a stale draft is
 /// rejected `.staleContent` with no commit, and a revert to Canonical
@@ -9,8 +9,8 @@
 /// This file closes WS6's step-6 commit clauses; the separately landed
 /// step-7 read suites own the "Effective-derived … paste updated" clause:
 /// the `.committed` receipts with `.revised(reference)` at one successor
-/// Content Version each (docs/02-domain.md §11, §13), the Change Position
-/// advancing exactly once per commit (docs/02-domain.md §13), the
+/// Content Version each (docs/architecture.md, §13), the Change Position
+/// advancing exactly once per commit (docs/architecture.md), the
 /// `.staleContent(expected:current:)` OCC rejection producing no commit, and
 /// the durable append-only revision lineage plus the §15 Effective-derived
 /// projection as seen through an INDEPENDENT second `SQLite connection` over
@@ -23,7 +23,7 @@ import Testing
 
 struct WS6RevisionOCCTests {
 
-/// A `.replace` draft request (docs/03a-instruction-set.md §5) substituting
+/// A `.replace` draft request (docs/architecture.md) substituting
 /// `bytes` for the item's single `public.utf8-plain-text` representation,
 /// based on the OCC token `expected`.
 private static func replaceTextRequest(
@@ -43,12 +43,12 @@ private static func replaceTextRequest(
     )
 }
 
-/// WS6 (docs/06-cross-cutting.md §8): "Create an item, append a changing
+/// WS6 (docs/testing.md): "Create an item, append a changing
 /// revision, then submit a stale draft and expect `.staleContent` with no
 /// commit. Revert from the current version to Canonical …; expect a new
 /// Revision ID, old revisions unchanged, Effective-derived title/search/…
 /// updated, and one successor Content Version." The revert append follows
-/// docs/02-domain.md §2.5 rule 6 (a meaningful replace or revert appends a
+/// docs/architecture.md rule 6 (a meaningful replace or revert appends a
 /// new revision and makes it active) and the §14 D3 note (a
 /// revert-to-canonical appends a real revision whose bytes happen to equal
 /// Canonical — the active ID is never repointed); "one successor Content
@@ -73,7 +73,7 @@ private static func replaceTextRequest(
         Issue.record("WS6: expected a .committed capture receipt, got \(captureReceipt)")
         return
     }
-    // The first commit moves the singleton 0 → 1 (docs/05-authority-kernel.md
+    // The first commit moves the singleton 0 → 1 (docs/storage.md
     // §3.2).
     #expect(captureCommit.position.rawValue == 1)
     guard case let .inserted(inserted) = captureCommit.outcome else {
@@ -85,7 +85,7 @@ private static func replaceTextRequest(
     #expect(version1.rawValue == 1)
 
     // WS6: "append a changing revision" — replace the single Canonical type's
-    // bytes, based on version 1 (the OCC token, docs/02-domain.md §11 step 1).
+    // bytes, based on version 1 (the OCC token, docs/architecture.md step 1).
     let revisedText = "ws6 revised effective text"
     let reviseReceipt = try await history.perform(.revise(
         Self.replaceTextRequest(itemID: itemID, expected: version1, bytes: Data(revisedText.utf8))
@@ -95,23 +95,23 @@ private static func replaceTextRequest(
         return
     }
     // WS6: the revision is one History Commit — the Change Position advances
-    // exactly once, 1 → 2 (docs/02-domain.md §13).
+    // exactly once, 1 → 2 (docs/architecture.md).
     #expect(reviseCommit.position.rawValue == 2)
     guard case let .revised(revised) = reviseCommit.outcome else {
         Issue.record("WS6: expected .revised(reference), got \(reviseCommit.outcome)")
         return
     }
     // WS6: "one successor Content Version" — `.appendRevision` stamps the
-    // checked successor (docs/02-domain.md §13).
+    // checked successor (docs/architecture.md).
     #expect(revised.id == itemID)
     let version2 = revised.contentVersion
     #expect(version2.rawValue == 2)
 
     // Storage side, through the INDEPENDENT container (no production test
     // seam): one row at version 2, Canonical bytes untouched (revision never
-    // changes Canonical Content, docs/02-domain.md §2.6), and exactly ONE
+    // changes Canonical Content, docs/architecture.md), and exactly ONE
     // revision carrying the new Effective bytes as the active revision
-    // (docs/02-domain.md §2.5 rules 1/6).
+    // (docs/architecture.md rules 1/6).
     let reviseContainer = try WSSupport.makeDatabase(storeURL: storeURL)
     let reviseRows = try WSSupport.fetchRows(reviseContainer)
     #expect(reviseRows.count == 1)
@@ -135,7 +135,7 @@ private static func replaceTextRequest(
             == ["public.utf8-plain-text"]
     )
     // The durable singleton matches the receipt's position (one transaction,
-    // docs/06-cross-cutting.md §7.1).
+    // docs/testing.md).
     let revisePosition = try WSSupport.fetchPosition(reviseContainer)
     #expect(revisePosition.rawValue == 2)
 
@@ -143,7 +143,7 @@ private static func replaceTextRequest(
     // an otherwise real change (different bytes) based on the OLD version 1
     // while the item is at version 2. Phase one of the §6.2 two-phase path
     // rejects the stale OCC token before planning ever runs
-    // (docs/05-authority-kernel.md §6.2).
+    // (docs/storage.md).
     let staleRequest = Self.replaceTextRequest(
         itemID: itemID,
         expected: version1,
@@ -155,7 +155,7 @@ private static func replaceTextRequest(
 
     // WS6: "with no commit" — the row, the lineage, the projection, and the
     // position singleton are exactly the post-revision state
-    // (docs/02-domain.md §13: no commit, no advance; docs/04-coherence.md §4).
+    // (docs/architecture.md: no commit, no advance; docs/storage.md).
     let staleContainer = try WSSupport.makeDatabase(storeURL: storeURL)
     let staleRows = try WSSupport.fetchRows(staleContainer)
     #expect(staleRows.count == 1)
@@ -185,7 +185,7 @@ private static func replaceTextRequest(
         return
     }
     // Exactly one position advance for this commit, 2 → 3
-    // (docs/02-domain.md §13).
+    // (docs/architecture.md).
     #expect(revertCommit.position.rawValue == 3)
     guard case let .revised(reverted) = revertCommit.outcome else {
         Issue.record("WS6: expected .revised(reference) for the revert, got \(revertCommit.outcome)")

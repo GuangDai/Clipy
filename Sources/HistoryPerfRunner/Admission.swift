@@ -1,5 +1,5 @@
 /// Manual performance-admission workloads for measurement-gated deferred
-/// work (docs/06-cross-cutting.md §9; V1-Verified G2/G5/G8).
+/// work (docs/testing.md; V1-Verified G2/G5/G8).
 ///
 /// These workloads are intentionally absent from per-push CI. The full
 /// dispatch runs the release binary against one 5,000-row persistent corpus,

@@ -169,18 +169,6 @@ struct BuiltInAutomationView: View {
             Text(deletionTarget?.name ?? "")
             Text(text("This removes the definition and stops future automatic runs. Clipboard history is unchanged."))
         }
-        .fileImporter(isPresented: $choosesApplications, allowedContentTypes: [.application], allowsMultipleSelection: true) { result in
-            if case let .success(urls) = result {
-                var identifiers = workflow.scope.applicationIDs
-                for url in urls {
-                    let accessed = url.startAccessingSecurityScopedResource()
-                    defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-                    guard let identifier = Bundle(url: url)?.bundleIdentifier?.lowercased() else { continue }
-                    if !identifiers.contains(identifier) { identifiers.append(identifier) }
-                }
-                workspace.workflow.scope.applications = identifiers.joined(separator: ", ")
-            }
-        }
         .confirmationDialog(text("Reset saved workflows?"), isPresented: $confirmsReset) {
             Button(text("Reset saved workflows"), role: .destructive) {
                 invalidatePreview()
@@ -442,6 +430,18 @@ struct BuiltInAutomationView: View {
                 Spacer()
                 Button(text("Choose Applications…")) { choosesApplications = true }
                     .accessibilityIdentifier("clipy.workflow.choose-applications")
+                    .fileImporter(isPresented: $choosesApplications, allowedContentTypes: [.application], allowsMultipleSelection: true) { result in
+                        if case let .success(urls) = result {
+                            var identifiers = workflow.scope.applicationIDs
+                            for url in urls {
+                                let accessed = url.startAccessingSecurityScopedResource()
+                                defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+                                guard let identifier = Bundle(url: url)?.bundleIdentifier?.lowercased() else { continue }
+                                if !identifiers.contains(identifier) { identifiers.append(identifier) }
+                            }
+                            workspace.workflow.scope.applications = identifiers.joined(separator: ", ")
+                        }
+                    }
             }
             TextField(text("Source apps (bundle IDs, comma separated; empty means all)"), text: $workspace.workflow.scope.applications)
                 .textFieldStyle(.roundedBorder)

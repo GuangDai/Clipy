@@ -1,7 +1,7 @@
 /// AppIntentDependencyRegistration.swift — the sole framework-owned
 /// dependency registration point for Clipy's App Intents surface.
-/// Owning spec: docs/v2/V2-05-external-gateway.md §6.5–§6.6 and
-/// docs/v2/V2-roadmap.md X.7 (`PLAY-PY-B0I`, `X-COMPILE-2/3/4`).
+/// Owning spec: docs/automation.md and
+/// docs/testing.md X.7 (`PLAY-PY-B0I`, `X-COMPILE-2/3/4`).
 import AppIntents
 import HistoryCore
 

@@ -3,7 +3,7 @@
 /// (docs/reviews/2026-08-22-clipy-maccy-deep-review/
 /// 04-tdd-remediation-playbook.md §26 TIER row 1; that review's
 /// 09-tiered-storage-and-unbounded-history.md §5 and §12 DESIGN-TIER-16;
-/// docs/v2/V2-08-decoder-access-modes.md).
+/// docs/formats-preview.md).
 ///
 /// This is a PLATFORM CHARACTERIZATION, not a gate (playbook §26:
 /// "`PLAY-TIER-1A` [PLATFORM CHARACTERIZATION，非 Red]"). Nothing here
@@ -426,7 +426,7 @@ package enum PreviewAccessProbe {
 /// as the reader's own sampling-integrity gap.
 ///
 /// NOT a ratchet: nothing here evaluates a threshold — G8 adjudication
-/// stays with docs/06-cross-cutting.md §3 and V2-06's P3 record.
+/// stays with docs/testing.md and V2-06's P3 record.
 package final class PreviewAccessMeasurement {
 
     private let fileURL: URL

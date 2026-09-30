@@ -1,12 +1,12 @@
 /// Action-specific complete facts — values whose type identity proves
-/// fact-loading completeness to a planner (docs/02-domain.md §5) — and the
-/// package rejection vocabulary planners throw (docs/02-domain.md §6).
+/// fact-loading completeness to a planner (docs/architecture.md) — and the
+/// package rejection vocabulary planners throw (docs/architecture.md).
 /// Immutable values only: no I/O, actor, clock, UUID generation, cache, or
-/// async (docs/02-domain.md §1).
+/// async (docs/architecture.md).
 import Foundation
 import HistoryCore
 
-// MARK: - Ingest facts (docs/02-domain.md §5.1)
+// MARK: - Ingest facts (docs/architecture.md)
 
 /// Byte-confirmed capture winner facts (02 §9). Content is consumed during
 /// confirmation; coalescing needs only identity, occurrence, and pin state.
@@ -35,7 +35,7 @@ package struct CanonicalCaptureMatch: Sendable {
 }
 
 /// Retention-relevant projection of one retained item.
-/// docs/02-domain.md §5.1
+/// docs/architecture.md
 package struct RetainedItemSummary: Sendable, Hashable {
     package let id: HistoryItemID
     package let lastCopiedAt: Date
@@ -68,7 +68,7 @@ package struct CaptureRetentionFacts: Sendable {
 }
 
 /// The complete facts capture planning requires.
-/// docs/02-domain.md §5.1
+/// docs/architecture.md
 ///
 /// Storage confirms a direct lineage hint first, then reduces every Canonical
 /// signature candidate with the pure confirmation helpers. A nil match means
@@ -90,7 +90,7 @@ package struct IngestFacts: Sendable {
     }
 }
 
-// MARK: - Pinned-order facts (docs/02-domain.md §5.2)
+// MARK: - Pinned-order facts (docs/architecture.md)
 
 /// The complete facts pin placement and unpin planning require.
 /// Storage proves the pinned lane is exactly 0..<pinnedCount, then point
@@ -113,10 +113,10 @@ package struct PinFacts: Sendable {
     }
 }
 
-// MARK: - Revision facts (docs/02-domain.md §5.3)
+// MARK: - Revision facts (docs/architecture.md)
 
 /// Content and revision metadata needed to plan against the revision target.
-/// docs/02-domain.md §5.3
+/// docs/architecture.md
 ///
 /// Storage derives and validates `current` from the active lineage before
 /// constructing these facts. Older revision bytes are unnecessary for draft
@@ -146,10 +146,10 @@ package struct RevisionFacts: Sendable {
     }
 }
 
-// MARK: - Clear and remove facts (docs/02-domain.md §5.4)
+// MARK: - Clear and remove facts (docs/architecture.md)
 
 /// The complete facts removal planning requires.
-/// docs/02-domain.md §5.4
+/// docs/architecture.md
 ///
 /// A nil `item` means the target is absent from the retained set; planning
 /// rejects it with `.notFound`. The target's ordinal and the proven pinned
@@ -166,7 +166,7 @@ package struct RemoveFacts: Sendable {
 }
 
 /// The complete facts clear planning requires.
-/// docs/02-domain.md §5.4
+/// docs/architecture.md
 ///
 /// `affectedCount` counts the complete scope at the Authority linearization
 /// point. Scope deletion needs no retained IDs or per-item facts.
@@ -178,10 +178,10 @@ package struct ClearFacts: Sendable {
     }
 }
 
-// MARK: - Retention facts (docs/02-domain.md §5.5)
+// MARK: - Retention facts (docs/architecture.md)
 
 /// The single v1 user retention dimension: maximum unpinned item count.
-/// docs/02-domain.md §5.5
+/// docs/architecture.md
 ///
 /// Nil disables count retention. A positive value limits only unpinned
 /// items; there is no separate total-item cap (V2-09 §9). Storage rejects
@@ -194,10 +194,10 @@ package struct RetentionPolicy: Sendable, Hashable {
     }
 }
 
-// MARK: - Domain rejection vocabulary (docs/02-domain.md §6)
+// MARK: - Domain rejection vocabulary (docs/architecture.md)
 
 /// The complete rejection vocabulary thrown by Domain planners.
-/// docs/02-domain.md §6
+/// docs/architecture.md
 ///
 /// Planners throw only this package vocabulary; `HistoryStorage` maps it
 /// exhaustively at the boundary. `candidateItemIDCollision` is intercepted
@@ -210,19 +210,19 @@ package struct RetentionPolicy: Sendable, Hashable {
 /// planner is never invoked with a known-incomplete fact.
 package enum DomainRejection: Error, Sendable, Equatable {
     /// The referenced item is absent from the retained set.
-    /// docs/02-domain.md §6
+    /// docs/architecture.md
     case notFound(HistoryItemID)
     /// The request's expected Content Version no longer matches the item's
-    /// durable one. docs/02-domain.md §6, §11 step 1
+    /// durable one. docs/architecture.md, §11 step 1
     case staleContent(
         expected: ContentVersion,
         current: ContentVersion
     )
     /// A pin placement request referenced an invalid target/anchor pair.
-    /// docs/02-domain.md §6, §10
+    /// docs/architecture.md, §10
     case invalidPinnedPlacement(PinnedPlacementFailure)
     /// The prepared revision failed Domain-level revalidation.
-    /// docs/02-domain.md §6, §11 steps 2 and 4
+    /// docs/architecture.md, §11 steps 2 and 4
     case invalidRevisionDraft
     /// Capture selected the insert lane, but Storage's candidate History Item
     /// ID already names a retained item. The pure planner rejects; Storage
@@ -230,9 +230,9 @@ package enum DomainRejection: Error, Sendable, Equatable {
     case candidateItemIDCollision(HistoryItemID)
     /// A validated fact proved internally inconsistent (e.g. an active
     /// revision ID naming no stored revision). Defensive backstop only.
-    /// docs/02-domain.md §6, §11 step 3
+    /// docs/architecture.md, §11 step 3
     case corruptLineage
     /// A configured capacity dimension rejected the action.
-    /// docs/02-domain.md §6, §12
+    /// docs/architecture.md, §12
     case capacityExceeded(CapacityKind)
 }

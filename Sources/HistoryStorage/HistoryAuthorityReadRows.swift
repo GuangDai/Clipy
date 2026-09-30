@@ -3,7 +3,7 @@ import Foundation
 import HistoryCore
 import HistoryDomain
 
-// MARK: - Scalar read row helper (docs/05-authority-kernel.md §14.1)
+// MARK: - Scalar read row helper (docs/storage.md)
 
 /// One bounded metadata projection from a SQLite row. Canonical content,
 /// revisions, inline representation bytes and blob files are not selected.
@@ -129,7 +129,7 @@ internal struct ScalarReadRow {
 }
 
 internal extension DomainRejection {
-    /// The exhaustive docs/02-domain.md §6 → Part III mapping the storage
+    /// The exhaustive docs/architecture.md → Part III mapping the storage
     /// boundary applies to every planner throw.
     var historyFailure: HistoryFailure {
         switch self {

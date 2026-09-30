@@ -1,5 +1,5 @@
 /// WS16Composed — Remove and not-found failures through the composed app
-/// stack (docs/06-cross-cutting.md §8 WS16; docs/03b-instruction-set.md
+/// stack (docs/testing.md WS16; docs/architecture.md
 /// §10): `viewState.remove(_:)` (the row's ⌫ command) removes exactly one
 /// item with one position advance; the ID is then absent from browse,
 /// details, and paste; and the follow-up failure vocabulary on the absent
@@ -14,7 +14,7 @@ import Testing
 
 struct WS16ComposedRemoveAndNotFoundTests {
 
-    /// WS16 (docs/06-cross-cutting.md §8): insert one item, remove it via
+    /// WS16 (docs/testing.md): insert one item, remove it via
     /// the composed panel interaction, and prove the removed ID's absence
     /// plus the typed failure producers — with the position proof that one
     /// removal and NOTHING after it advanced the position.

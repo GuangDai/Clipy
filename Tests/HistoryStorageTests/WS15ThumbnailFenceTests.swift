@@ -1,5 +1,5 @@
-/// WS15 — Thumbnail version fence (docs/06-cross-cutting.md §8 WS15;
-/// docs/04-coherence.md §9 thumbnail single-flight; §16 failure
+/// WS15 — Thumbnail version fence (docs/testing.md WS15;
+/// docs/storage.md thumbnail single-flight; §16 failure
 /// translation): the version-fence semantics of the
 /// `SQLiteHistory.thumbnail(for:pixels:)` pipeline driven through the
 /// PUBLIC facade and the real `HistoryAuthority` + `ThumbnailService`.
@@ -88,12 +88,12 @@ private static func installDecodeEntryPark(
     }
 }
 
-/// A `.replace` draft request (docs/03a-instruction-set.md §5) that substitutes
+/// A `.replace` draft request (docs/architecture.md) that substitutes
 /// `secondPng` bytes for BOTH Canonical representations (`public.png` and
 /// `public.utf8-plain-text`), based on the OCC token `expected`. Both decisions
 /// are `.replace(bytes:)` with the second PNG — the effective content bytes
 /// change, so this is a content-changing revision that advances Content
-/// Version (docs/02-domain.md §11).
+/// Version (docs/architecture.md).
 private static func replaceBothWithSecondPngRequest(
     itemID: HistoryItemID,
     expected: ContentVersion,
@@ -117,7 +117,7 @@ private static func replaceBothWithSecondPngRequest(
 
 // MARK: - Test 1: revision during decode leaves the result tagged with the old reference
 
-/// WS15 (docs/06-cross-cutting.md §8; 04 §9): "Start a thumbnail request for
+/// WS15 (docs/testing.md; 04 §9): "Start a thumbnail request for
 /// one reference, revise the item during decode, and verify the old result
 /// remains tagged with the old reference and cannot be applied to the new row."
 ///
@@ -184,7 +184,7 @@ private static func replaceBothWithSecondPngRequest(
 
     // WS15: "revise the item during decode" — a byte-changing revision that
     // replaces BOTH Canonical types' effective bytes with the SECOND png. The
-    // item advances from Content Version 1 to 2 (docs/02-domain.md §11).
+    // item advances from Content Version 1 to 2 (docs/architecture.md).
     let reviseReceipt = try await history.perform(.revise(
         Self.replaceBothWithSecondPngRequest(
             itemID: R1.id,
@@ -245,7 +245,7 @@ private static func replaceBothWithSecondPngRequest(
 
 // MARK: - Test 2: stale reference fails before decode rather than returning current bytes under an old key
 
-/// WS15 (docs/06-cross-cutting.md §8; 04 §9): "A request begun with an already
+/// WS15 (docs/testing.md; 04 §9): "A request begun with an already
 /// stale reference fails rather than returning current bytes under an old key."
 ///
 /// After the item is revised to Content Version 2, a thumbnail request carrying
@@ -312,7 +312,7 @@ private static func replaceBothWithSecondPngRequest(
 
 // MARK: - Test 3: text-only item yields nil thumbnail
 
-/// WS15 (docs/06-cross-cutting.md §8; 04 §9 step 4): "If no supported image
+/// WS15 (docs/testing.md; 04 §9 step 4): "If no supported image
 /// representation exists, return `nil`." A text-only item has no
 /// representation whose type identifier is in the frozen v1 image set, so
 /// the already-installed source-to-decode flight completes with `nil`.
@@ -349,7 +349,7 @@ private static func replaceBothWithSecondPngRequest(
 
 // MARK: - Test 4: out-of-range pixel dimensions throw invalidPixelSize
 
-/// WS15 (docs/06-cross-cutting.md §8; 04 §9 step 2; §16): "Validate positive
+/// WS15 (docs/testing.md; 04 §9 step 2; §16): "Validate positive
 /// bounded dimensions." Both a zero dimension and a dimension above the Part VI
 /// `thumbnailDimensionRange` upper bound (06 §2: 1–2,048) throw
 /// `HistoryFailure.invalidInput(.invalidPixelSize)` at the Authority's

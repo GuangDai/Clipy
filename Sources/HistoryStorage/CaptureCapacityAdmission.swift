@@ -27,7 +27,7 @@ internal enum CaptureCapacityAdmission {
     }
 }
 
-// MARK: - Test seam (docs/05-authority-kernel.md §16)
+// MARK: - Test seam (docs/storage.md)
 
 extension HistoryAuthority {
     /// Installs (or clears) the fixed spare-capacity witness that overrides

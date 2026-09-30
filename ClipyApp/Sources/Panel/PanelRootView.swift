@@ -2,8 +2,8 @@
 /// history panel once the store is open, the opening progress view before
 /// it, and the launch-failure pane after a failed open (the
 /// MenuBarExtra-era three-state content, moved into the AppKit panel).
-/// Owning spec: docs/01-architecture.md §2 (composition root), §6
-/// (main-actor UI); failure vocabulary docs/03b-instruction-set.md §10.
+/// Owning spec: docs/architecture.md (composition root), §6
+/// (main-actor UI); failure vocabulary docs/architecture.md
 import AppKit
 import HistoryCore
 import SwiftUI

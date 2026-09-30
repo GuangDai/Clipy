@@ -4,11 +4,11 @@
 /// (copy, pin toggle, revise, remove). All data flows through
 /// `HistoryViewState` (the only state holder) against `HistoryCore` DTOs;
 /// nothing here sees SwiftData, Domain state, or fingerprints.
-/// Owning spec: docs/01-architecture.md §6 (Main-actor UI) and §5.4 (detail
-/// flow); detail DTOs docs/03b-instruction-set.md §9; revise semantics
-/// docs/03a-instruction-set.md §5; explicit representation reads
-/// docs/v2/V2-09-multilevel-storage.md §5; roadmap:
-/// docs/roadmap/05-presentationui.md (step 9).
+/// Owning spec: docs/architecture.md (Main-actor UI) and §5.4 (detail
+/// flow); detail DTOs docs/architecture.md; revise semantics
+/// docs/architecture.md; explicit representation reads
+/// docs/storage.md; roadmap:
+/// docs/interface.md (step 9).
 import ClipboardFormats
 import ContentPreview
 import Foundation
@@ -1035,7 +1035,7 @@ private struct DetailsBody: View {
             .controlSize(.small)
             // A canonical revert whose proposed Effective Content is
             // byte-identical to the current Effective Content commits an
-            // `.unchanged` no-op (docs/02-domain.md §11 step 5; WS7 (b)),
+            // `.unchanged` no-op (docs/architecture.md step 5; WS7 (b)),
             // so the action is disabled exactly in that state.
             .disabled(!canRevertToOriginal)
             .accessibilityLabel(PanelActionsCopy.text("Revert to Original", bundle: copyBundle))

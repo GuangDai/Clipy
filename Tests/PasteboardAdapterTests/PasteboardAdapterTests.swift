@@ -1,4 +1,4 @@
-/// PasteboardAdapter acceptance gates (docs/roadmap/04-pasteboardadapter.md
+/// PasteboardAdapter acceptance gates (docs/testing.md
 /// "Acceptance"):
 ///
 /// - Capture freezes all retainable typed representations of the pasteboard
@@ -21,7 +21,7 @@
 ///   during that attempt and produces an explicit content-free retry outcome;
 ///   the complete-capture convenience returns nil (REVIEW Card 5B).
 /// - Failure is explicit, never silent (audit SPEC-IMPL-005,
-///   docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md):
+///   docs/testing.md):
 ///   a declared-but-unavailable type is recorded by the
 ///   `CaptureOutcome.declaredUnavailable` case instead of being silently
 ///   dropped, and `write(_:)` throws

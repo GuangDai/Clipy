@@ -1,4 +1,4 @@
-/// WS16 — Remove and not-found failures (docs/06-cross-cutting.md §8 WS16):
+/// WS16 — Remove and not-found failures (docs/testing.md WS16):
 /// the commit/receipt/storage side of `perform(.remove(_:))` through the
 /// public `SQLiteHistory` facade and the real step-6 mutation commit
 /// paths, plus the `.notFound` / `.invalidPinnedPlacement` failure producers
@@ -9,12 +9,12 @@
 /// `.committed` receipt with
 /// `.removed(count: 1)` and Change Position advanced exactly once; the
 /// pinned-lane compaction inside the remove commit (AUDIT IMP6-01,
-/// docs/02-domain.md §10: the survivor range shifts back to `0 ..< count` in the
+/// docs/architecture.md: the survivor range shifts back to `0 ..< count` in the
 /// SAME commit, so D12 holds and the final-order revalidation cannot gap);
 /// the failure vocabulary — `.remove`, `.unpin`, and `.revise` on an absent
 /// ID throw `.notFound(id)` while `.placePinned` throws
 /// `.invalidPinnedPlacement(.targetMissing)`, placement's own anchor-missing
-/// vocabulary by design (docs/03b-instruction-set.md §10
+/// vocabulary by design (docs/architecture.md
 /// `PinnedPlacementFailure`); and the durable row/singleton state as seen
 /// through an INDEPENDENT second `SQLite connection` over the same on-disk
 /// store (see `WSSupport`).
@@ -26,7 +26,7 @@ import Testing
 
 struct WS16RemoveAndNotFoundTests {
 
-/// WS16 (docs/06-cross-cutting.md §8): removing the only retained item is one
+/// WS16 (docs/testing.md): removing the only retained item is one
 /// History Commit with outcome `.removed(count: 1)`, Change Position advances
 /// exactly once (1 → 2), and the durable store shows zero rows with the
 /// position singleton at the receipt's position.
@@ -61,7 +61,7 @@ struct WS16RemoveAndNotFoundTests {
         return
     }
     // WS16: "ChangePosition advanced once" — the second commit moves the
-    // singleton 1 → 2 (docs/05-authority-kernel.md §3.2).
+    // singleton 1 → 2 (docs/storage.md).
     #expect(commit.position.rawValue == 2)
     // WS16: "Expect .removed(count: 1)" — exactly one item retired.
     guard case .removed(count: 1) = commit.outcome else {
@@ -72,7 +72,7 @@ struct WS16RemoveAndNotFoundTests {
     // Storage side, through the INDEPENDENT container: the row is gone (D15 —
     // removal is absence from the retained set, there is no tombstone) and
     // the position singleton matches the receipt (one transaction,
-    // docs/06-cross-cutting.md §7.1).
+    // docs/testing.md).
     let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.isEmpty)
@@ -80,7 +80,7 @@ struct WS16RemoveAndNotFoundTests {
     #expect(position.rawValue == 2)
 }
 
-/// WS16 (docs/06-cross-cutting.md §8) + AUDIT IMP6-01 (docs/02-domain.md
+/// WS16 (docs/testing.md) + AUDIT IMP6-01 (docs/architecture.md
 /// §10): removing the FIRST of three pinned items compacts the pinned lane in
 /// the same commit — the two survivors keep their original relative order and
 /// their ordinals re-zip to exactly 0 and 1 (D12 preserved) — while the
@@ -91,7 +91,7 @@ struct WS16RemoveAndNotFoundTests {
     let history = try await WSSupport.openHistory(storeURL: storeURL)
 
     // Arrange: three DISTINCT text captures (identical content would
-    // coalesce, docs/02-domain.md §9) at monotone fixed observation times.
+    // coalesce, docs/architecture.md) at monotone fixed observation times.
     let firstObservedAt = Date(timeIntervalSinceReferenceDate: 700_031_000)
     let secondObservedAt = Date(timeIntervalSinceReferenceDate: 700_031_100)
     let thirdObservedAt = Date(timeIntervalSinceReferenceDate: 700_031_200)
@@ -142,7 +142,7 @@ struct WS16RemoveAndNotFoundTests {
     #expect(thirdCaptureCommit.position.rawValue == 3)
 
     // Pin all three in capture order (`.last` each time): every placement is
-    // one History Commit with outcome `.placedPinned(id)` (docs/02-domain.md
+    // one History Commit with outcome `.placedPinned(id)` (docs/architecture.md
     // §10), so the lane becomes [first: 0, second: 1, third: 2] at Change
     // Positions 4–6.
     let firstPin = try await history.perform(.placePinned(firstReference.id, at: .last))
@@ -205,11 +205,11 @@ struct WS16RemoveAndNotFoundTests {
         return
     }
 
-    // WS16 + AUDIT IMP6-01 (docs/02-domain.md §10): the same commit compacted
+    // WS16 + AUDIT IMP6-01 (docs/architecture.md): the same commit compacted
     // the lane — the survivors hold ordinals 0 and 1 in their ORIGINAL
     // relative order (second before third), so D12 (contiguous ordinals from
     // 0) holds and the Part V §10 final-order revalidation cannot fail on a
-    // gap. Pin mutations never advance Content Version (docs/02-domain.md
+    // gap. Pin mutations never advance Content Version (docs/architecture.md
     // §10), so both survivors stay at their capture-time version.
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 2)
@@ -222,16 +222,16 @@ struct WS16RemoveAndNotFoundTests {
     #expect(thirdRow.contentVersionRaw == 1)
 
     // The durable singleton matches the receipt's position (one transaction,
-    // docs/06-cross-cutting.md §7.1).
+    // docs/testing.md).
     let position = try WSSupport.fetchPosition(container)
     #expect(position.rawValue == 7)
 }
 
-/// WS16 (docs/06-cross-cutting.md §8): on an absent ID, `.remove`, `.unpin`,
-/// and `.revise` throw `.notFound(id)` (docs/02-domain.md §6 — those planners
+/// WS16 (docs/testing.md): on an absent ID, `.remove`, `.unpin`,
+/// and `.revise` throw `.notFound(id)` (docs/architecture.md — those planners
 /// reject a missing target as `.notFound`), while `.placePinned` throws
 /// `.invalidPinnedPlacement(.targetMissing)` — placement's own vocabulary by
-/// design (docs/03b-instruction-set.md §10). No rejected action is a History
+/// design (docs/architecture.md). No rejected action is a History
 /// Commit: the position singleton and the empty store are unchanged.
 @Test func absentIDYieldsNotFoundForRemoveUnpinReviseAndTargetMissingForPlacePinned() async throws {
     let storeURL = WSSupport.tempStoreURL("ws16-not-found-vocabulary")
@@ -268,18 +268,18 @@ struct WS16RemoveAndNotFoundTests {
     let absentID = reference.id
 
     // WS16: "A later .remove … on the absent ID returns .notFound"
-    // (docs/06-cross-cutting.md §8 WS16).
+    // (docs/testing.md WS16).
     await #expect(throws: HistoryFailure.notFound(absentID)) {
         try await history.perform(.remove(absentID))
     }
     // WS16: ".unpin … on the absent ID returns .notFound" — unpin rejects a
-    // missing target as `.notFound` (docs/02-domain.md §6, §10).
+    // missing target as `.notFound` (docs/architecture.md, §10).
     await #expect(throws: HistoryFailure.notFound(absentID)) {
         try await history.perform(.unpin(absentID))
     }
     // WS16: ".revise … on the absent ID returns .notFound" — the §6.2
     // preparation snapshot fetches the target first and throws `.notFound`
-    // before any draft resolution runs (docs/05-authority-kernel.md §6.2).
+    // before any draft resolution runs (docs/storage.md).
     // The OCC token is the item's real capture-time Content Version.
     await #expect(throws: HistoryFailure.notFound(absentID)) {
         try await history.perform(.revise(RevisionRequest(
@@ -290,13 +290,13 @@ struct WS16RemoveAndNotFoundTests {
     }
     // WS16: ".placePinned returns .invalidPinnedPlacement(.targetMissing) —
     // placement uses its own anchor-missing vocabulary by design"
-    // (docs/03b-instruction-set.md §10 `PinnedPlacementFailure`;
-    // docs/02-domain.md §10 step 1).
+    // (docs/architecture.md `PinnedPlacementFailure`;
+    // docs/architecture.md step 1).
     await #expect(throws: HistoryFailure.invalidPinnedPlacement(.targetMissing)) {
         try await history.perform(.placePinned(absentID, at: .last))
     }
 
-    // No rejected action is a History Commit (docs/04-coherence.md §4): the
+    // No rejected action is a History Commit (docs/storage.md): the
     // position singleton stays at 2 and the store stays empty.
     let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)

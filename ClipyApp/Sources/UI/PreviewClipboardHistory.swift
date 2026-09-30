@@ -1,10 +1,10 @@
 /// PreviewClipboardHistory.swift — the scripted `ClipboardHistory` double for
-/// SwiftUI previews ONLY (docs/01-architecture.md §4; docs/
+/// SwiftUI previews ONLY (docs/architecture.md; docs/
 /// 03a-instruction-set.md §3; roadmap 05).
 ///
 /// It exists so previews and view-development need no store. It is NOT a
 /// second storage implementation and must never substitute for storage
-/// semantic tests (docs/01-architecture.md §4). DTOs are constructed through
+/// semantic tests (docs/architecture.md). DTOs are constructed through
 /// their `package` initializers, which this SwiftPM package target can reach.
 ///
 /// The dataset is fully deterministic — fixed UUIDs and timestamps, no clock
@@ -26,7 +26,7 @@ struct PreviewClipboardHistory: ClipboardHistory, Sendable {
 
     /// 2 pinned + 8 recent rows — realistic titles, types, timestamps,
     /// sources, and copy counts; one row carries a `SearchPresentation`
-    /// with a snippet and matched ranges (docs/03b-instruction-set.md §8).
+    /// with a snippet and matched ranges (docs/architecture.md).
     static var populated: PreviewClipboardHistory {
         PreviewClipboardHistory(page: Self.populatedPage)
     }
@@ -166,7 +166,7 @@ struct PreviewClipboardHistory: ClipboardHistory, Sendable {
     }
 
     /// UTF-16 range of `needle` in `haystack`, matching the offset space of
-    /// `SearchPresentation.matchedRanges` (docs/03b-instruction-set.md §8).
+    /// `SearchPresentation.matchedRanges` (docs/architecture.md).
     /// Fixed ASCII snippets make this deterministic.
     private static func utf16Range(
         of needle: String,
@@ -179,7 +179,7 @@ struct PreviewClipboardHistory: ClipboardHistory, Sendable {
 
     /// The canned page: pinned lane first (0-based `pinnedPosition`),
     /// then recent rows by descending `lastCopiedAt` — the same order the
-    /// storage read path produces (docs/03b-instruction-set.md §8; docs/
+    /// storage read path produces (docs/architecture.md; docs/
     /// 04-coherence.md §7). `next` is nil: previews show one page.
     private static let populatedPage: HistoryPage = {
         // One row carries search presentation evidence: a bounded body

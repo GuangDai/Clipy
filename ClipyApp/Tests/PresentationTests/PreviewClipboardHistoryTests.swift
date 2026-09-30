@@ -1,11 +1,11 @@
 /// PreviewClipboardHistoryTests — the scripted preview adapter's frozen
-/// behavior (docs/01-architecture.md §4; docs/03a-instruction-set.md §3;
-/// docs/roadmap/05-presentationui.md): `browse` returns the canned page
+/// behavior (docs/architecture.md; docs/architecture.md;
+/// docs/interface.md): `browse` returns the canned page
 /// (`next: nil`), `observe` yields that page exactly once and finishes,
 /// `perform` answers `.unchanged`, `details`/`pastePayload` throw
 /// `.notFound`, and `thumbnail` returns `nil`. The dataset itself is pinned:
 /// 2 pinned + 8 recent rows with deterministic IDs and timestamps, one row
-/// carrying search presentation evidence (docs/03b-instruction-set.md §8).
+/// carrying search presentation evidence (docs/architecture.md).
 import Foundation
 @testable import HistoryCore
 @testable import ClipyApp
@@ -28,7 +28,7 @@ struct PreviewClipboardHistoryTests {
     /// The populated variant browses ten rows — the pinned lane first with
     /// 0-based ordinals 0 and 1, then eight recent rows — and exactly one
     /// row carries a `SearchPresentation` with a snippet and two matched
-    /// ranges (docs/03b-instruction-set.md §8).
+    /// ranges (docs/architecture.md).
     @Test func browseReturnsTheCannedPopulatedPage() async throws {
         let page = try await PreviewClipboardHistory.populated.browse(browseRequest)
 
@@ -66,7 +66,7 @@ struct PreviewClipboardHistoryTests {
 
     /// `observe` streams the canned page exactly once, then finishes — the
     /// same page `browse` returns (snapshot replacement discipline,
-    /// docs/04-coherence.md §5, holds trivially for one page).
+    /// docs/storage.md, holds trivially for one page).
     @Test func observeYieldsTheCannedPageOnceThenFinishes() async throws {
         let history = PreviewClipboardHistory.populated
         let browsed = try await history.browse(browseRequest)

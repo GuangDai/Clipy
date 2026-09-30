@@ -1,5 +1,5 @@
 /// Public reconstruction of exported history-item identity.
-/// Owning spec: docs/03a-instruction-set.md §2.
+/// Owning spec: docs/architecture.md
 import HistoryCore
 import Testing
 

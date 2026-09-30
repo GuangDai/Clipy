@@ -1,15 +1,15 @@
 /// WS4 — Lineage hint for revised Effective Content
-/// (docs/06-cross-cutting.md §8 WS4), driven through the public
+/// (docs/testing.md WS4), driven through the public
 /// `SQLiteHistory` facade. After a revision produces a version-2 Effective
 /// Content that is a strict subset of Canonical Content, the paste payload's
 /// `lineageHint` plus exact Effective-Content byte-set-equality must coalesce a
 /// re-capture into the SAME item — preserving Canonical Content and Content
-/// Version (docs/02-domain.md §9.3 lane 1) — while a byte-mismatched hint
+/// Version (docs/architecture.md lane 1) — while a byte-mismatched hint
 /// never coalesces (equality, not containment; lane 1 anti-spoofing).
 ///
 /// Unlike WS1/WS3/WS5/WS6 which close step-5/6 commit-side clauses, WS4's
 /// core assertion is the PASTE PAYLOAD READ (`pastePayload(for:)`) — a step-7
-/// (reads + observation) gate (docs/roadmap/README.md §3). Nothing is deferred:
+/// (reads + observation) gate (docs/testing.md). Nothing is deferred:
 /// every read path exercised here is implemented at HEAD.
 import Foundation
 import HistoryCore
@@ -20,10 +20,10 @@ import Testing
 struct WS4LineageHintPasteTests {
 
 /// A `.replace` draft that substitutes new plain-text bytes and HIDES the html
-/// type — one decision per Canonical type (docs/03a-instruction-set.md §5),
+/// type — one decision per Canonical type (docs/architecture.md),
 /// producing a version-2 Effective Content that is plain-only with the new
 /// bytes while Canonical Content still carries both representations
-/// (docs/02-domain.md §2.6: revision never changes Canonical Content).
+/// (docs/architecture.md: revision never changes Canonical Content).
 private static func replacePlainHideHtmlRequest(
     itemID: HistoryItemID,
     expected: ContentVersion,
@@ -46,7 +46,7 @@ private static func replacePlainHideHtmlRequest(
 }
 
 /// Builds a raw capture whose representations are exactly the given set,
-/// carrying the given lineage hint and observation (docs/02-domain.md §9.3
+/// carrying the given lineage hint and observation (docs/architecture.md
 /// lane 1: the hint is an observation, not authenticated provenance).
 private static func capture(
     representations: [HistoryRepresentation],
@@ -66,7 +66,7 @@ private static func capture(
     )
 }
 
-/// WS4 (docs/06-cross-cutting.md §8): "Revise an item, export its paste
+/// WS4 (docs/testing.md): "Revise an item, export its paste
 /// payload, and capture that payload with its hint. Exact Effective Content
 /// equality must coalesce into the hinted item while preserving Canonical
 /// Content and Content Version." This test closes the full scenario:
@@ -111,9 +111,9 @@ private static func capture(
     )
 
     // ── (2) Revise: replace plain-text bytes and HIDE the html type ──
-    // One decision per Canonical type (docs/03a-instruction-set.md §5). The
+    // One decision per Canonical type (docs/architecture.md). The
     // proposed Effective Content is plain-ONLY with the NEW bytes; the html
-    // Canonical representation is retained for lineage (docs/02-domain.md
+    // Canonical representation is retained for lineage (docs/architecture.md
     // §2.6; RevisionDecisionAction.hide doc).
     let revisedText = "ws4 revised effective"
     let reviseReceipt = try await history.perform(.revise(
@@ -147,7 +147,7 @@ private static func capture(
     // ── (3) Read the paste payload ──
     // WS4: "export its paste payload" — the payload carries current Effective
     // Content only, plus a lineage hint pointing at the item
-    // (docs/03b-instruction-set.md §9).
+    // (docs/architecture.md).
     let payload = try await history.pastePayload(for: itemID)
     // WS4: the payload reference names the current (version-2) Content Version.
     #expect(
@@ -183,7 +183,7 @@ private static func capture(
     // WS4: "capture that payload with its hint" — a raw capture whose
     // representations are EXACTLY payload.representations and whose origin
     // carries lineageHint: payload.lineageHint. The lineage lane
-    // (docs/02-domain.md §9.3 lane 1) confirms byte-set-equality to the hinted
+    // (docs/architecture.md lane 1) confirms byte-set-equality to the hinted
     // item's current Effective Content → coalesces into the SAME item.
     let recaptureObservedAt = Date(timeIntervalSinceReferenceDate: 700_040_500)
     let recaptureSource = "com.example.ws4.recapture"
@@ -215,7 +215,7 @@ private static func capture(
     )
     // WS4: "preserving … Content Version" — the lineage lane coalesces a copy
     // record, never a revision; Content Version stays at 2
-    // (docs/02-domain.md §9.5: coalescing result).
+    // (docs/architecture.md: coalescing result).
     #expect(
         coalescedReference.contentVersion.rawValue == 2,
         "WS4 (§9.3 lane 1): lineage-lane coalesce preserves Content Version 2"
@@ -223,7 +223,7 @@ private static func capture(
 
     // Storage side, through the INDEPENDENT container (no production test
     // seam): no new row, copyCount 2, Content Version still 2, and Canonical
-    // Content unchanged (both representations retained, docs/02-domain.md D2).
+    // Content unchanged (both representations retained, docs/architecture.md D2).
     let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     // WS4: "no new row" — the re-capture was absorbed.
@@ -248,7 +248,7 @@ private static func capture(
     #expect(row.lastSource == recaptureSource)
     // WS4: "preserving Canonical Content" — both Canonical representations are
     // intact, byte-exact, in normalized order ("public.html" before
-    // "public.utf8-plain-text", docs/02-domain.md §2.1). Coalescing never
+    // "public.utf8-plain-text", docs/architecture.md). Coalescing never
     // rewrites Canonical Content (D2).
     let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
     #expect(
@@ -269,7 +269,7 @@ private static func capture(
     )
 }
 
-/// WS4 counter-case (docs/02-domain.md §9.3 lane 1): "Containment is
+/// WS4 counter-case (docs/architecture.md lane 1): "Containment is
 /// insufficient in this lane; equality prevents a spoofed hint from discarding
 /// representations." A re-capture carrying the same lineage hint but whose
 /// plain-text bytes differ by ONE byte from the payload's Effective Content
@@ -325,7 +325,7 @@ private static func capture(
 
     // Act: re-capture carrying the SAME lineage hint but with plain-text bytes
     // that differ by ONE byte from the payload's Effective Content. The lineage
-    // lane requires byte-set-EQUALITY, not containment (docs/02-domain.md §9.3
+    // lane requires byte-set-EQUALITY, not containment (docs/architecture.md
     // lane 1), so the mismatched hint cannot coalesce. The Canonical lane
     // (§9.3 lane 2) also fails: the mismatched bytes do not appear in the
     // retained Canonical set. Result: a new item is inserted.

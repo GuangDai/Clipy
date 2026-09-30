@@ -1,5 +1,5 @@
-/// WS18 — Pagination and cursor expiry (docs/06-cross-cutting.md §8 WS18;
-/// docs/04-coherence.md §6): cursor pagination across pages with no overlap or
+/// WS18 — Pagination and cursor expiry (docs/testing.md WS18;
+/// docs/storage.md): cursor pagination across pages with no overlap or
 /// gap, cursor expiry after an intervening commit (`.snapshotExpired`), cursor
 /// shape mismatch against a different query shape or limit, and the
 /// pinned/unpinned two-lane fetch with anchor-based continuation.
@@ -10,11 +10,11 @@
 /// directly — the page is the authoritative read result (04 §2), so no
 /// independent second `SQLite connection` is needed for read-page assertions.
 ///
-/// Spec: docs/06-cross-cutting.md §8 WS18; cursor semantics:
-/// docs/04-coherence.md §6 (cursor binds complete query shape + page
+/// Spec: docs/testing.md WS18; cursor semantics:
+/// docs/storage.md (cursor binds complete query shape + page
 /// ChangePosition + last-row ordering anchor + process marker; shape mismatch,
 /// generation mismatch, or position mismatch → `.snapshotExpired`); recent-page
-/// fetch: docs/05-authority-kernel.md §14.1 (scalar-only two-lane fetch).
+/// fetch: docs/storage.md (scalar-only two-lane fetch).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -51,7 +51,7 @@ private static func captureItems(
     return ids
 }
 
-/// WS18 (docs/06-cross-cutting.md §8): browse with a small limit resumes the
+/// WS18 (docs/testing.md): browse with a small limit resumes the
 /// continuation page with no overlap or gap across the full result set. The
 /// cursor binds the snapshot position, so every page reports the same
 /// ChangePosition as long as no commit intervenes (04 §6).

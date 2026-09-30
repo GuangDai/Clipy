@@ -1,5 +1,5 @@
 /// Direct cursor-codec proofs for the opaque, process-local pagination token
-/// (docs/04-coherence.md §6; docs/05-authority-kernel.md §16).
+/// (docs/storage.md; docs/storage.md).
 ///
 /// These tests use the package-only codec seam deliberately: callers cannot
 /// mint or inspect `HistoryPageCursor`, while HistoryStorage must prove every

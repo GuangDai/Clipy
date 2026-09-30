@@ -1,6 +1,6 @@
 /// WS15Composed — Thumbnail round trip where fixtures allow
-/// (docs/06-cross-cutting.md §8 WS15; docs/04-coherence.md §9;
-/// docs/03b-instruction-set.md §9): capture a REAL PNG (a minimal valid
+/// (docs/testing.md WS15; docs/storage.md;
+/// docs/architecture.md): capture a REAL PNG (a minimal valid
 /// 1×1 image) through the composed stack, fetch its encoded thumbnail
 /// through the public `ClipboardHistory.thumbnail`, decode it through the
 /// REAL `ThumbnailStore` (eager rasterization off the MainActor), and prove the
@@ -30,7 +30,7 @@ struct WS15ComposedThumbnailRoundTripTests {
         Data(base64Encoded: png1x1Base64)!
     }
 
-    /// WS15 (docs/06-cross-cutting.md §8): the composed round trip — a
+    /// WS15 (docs/testing.md): the composed round trip — a
     /// `public.png` capture frozen from a private pasteboard, its
     /// thumbnail fetched through the public seam, the encoded PNG decoded
     /// by the real `ThumbnailStore` (decode off the MainActor via

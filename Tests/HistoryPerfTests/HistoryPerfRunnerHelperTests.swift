@@ -1,5 +1,5 @@
 /// Direct proofs for the pure HistoryPerfRunner measurement helpers and the
-/// Part VI §9 workload coverage map (docs/06-cross-cutting.md §9;
+/// Part VI §9 workload coverage map (docs/testing.md;
 /// V1-Verified/04 `perf-helpers-no-unit-tests-and-no-coverage-map`).
 import Foundation
 import Testing

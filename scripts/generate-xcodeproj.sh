@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regenerate ClipyApp.xcodegen project deterministically with a pinned XcodeGen.
 # The library target graph stays SwiftPM-owned (Package.swift); XcodeGen owns
-# only the application/composition target (docs/01-architecture.md §9 item 6).
+# only the application/composition target (docs/architecture.md item 6).
 set -euo pipefail
 
 XCODEGEN_VERSION="2.45.4"

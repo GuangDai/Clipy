@@ -1,10 +1,10 @@
 /// ContentProjection / ContentProjector — the bounded durable projection of
 /// current Effective Content that backs list/search reads without decoding
 /// content bytes.
-/// Owning spec: docs/05-authority-kernel.md §15 (projection rules), §6.1
+/// Owning spec: docs/storage.md (projection rules), §6.1
 /// (the `ContentProjection` value and capture-side projection step), §3.1
 /// (the projection columns of `HistoryItemRow`); bounds and the truncation
-/// rule: docs/06-cross-cutting.md §2 ("Truncating title/search projection is
+/// rule: docs/testing.md ("Truncating title/search projection is
 /// allowed at a deterministic Unicode boundary").
 ///
 /// Capture projection uses initial Effective Content (Canonical Content with
@@ -17,18 +17,18 @@ import Foundation
 import HistoryCore
 import HistoryDomain
 
-// MARK: - Projected value (docs/05-authority-kernel.md §6.1, §15)
+// MARK: - Projected value (docs/storage.md, §15)
 
 /// The durable bounded projection of one Effective Content state.
-/// docs/05-authority-kernel.md §6.1, §15
+/// docs/storage.md, §15
 ///
 /// `title` and `searchBody` obey the Part VI stored-projection bounds
 /// (`HistoryLimits.maximumStoredTitleUTF8Bytes`,
 /// `HistoryLimits.maximumStoredSearchBodyUTF8Bytes`) by construction:
 /// `ContentProjector` truncates at a deterministic Unicode boundary
-/// (docs/06-cross-cutting.md §2), and every row-read path re-verifies the
+/// (docs/testing.md), and every row-read path re-verifies the
 /// scalar fields it consumes
-/// (docs/05-authority-kernel.md §4). `effectiveTypeIdentifiers` is the sorted,
+/// (docs/storage.md). `effectiveTypeIdentifiers` is the sorted,
 /// unique, non-empty type summary of the projected content.
 internal struct ContentProjection: Sendable {
     /// First eligible textual line, otherwise eligible reference metadata or
@@ -49,10 +49,10 @@ internal struct StoredProjectionSize: Equatable, Sendable {
     let searchBodyUTF8Bytes: Int
 }
 
-// MARK: - Projector (docs/05-authority-kernel.md §15)
+// MARK: - Projector (docs/storage.md)
 
 /// Pure, deterministic projection from Effective Content to its bounded
-/// durable `ContentProjection`. docs/05-authority-kernel.md §15
+/// durable `ContentProjection`. docs/storage.md
 ///
 /// The projector is a namespace of pure functions — no actor, clock, or I/O.
 /// Image bytes are never decoded for title/search (§15). Exact plain-text
@@ -60,7 +60,7 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 /// URL/file reference metadata without following the reference. Other
 /// encoding-unspecified, abstract, and structured text formats remain opaque.
 internal enum ContentProjector {
-    // MARK: Stored projection validation (docs/05-authority-kernel.md §4)
+    // MARK: Stored projection validation (docs/storage.md)
 
     /// Decodes the bounded literal title bytes without Foundation's encoding
     /// interpretation. Empty bytes are a valid empty title; a leading U+FEFF
@@ -155,7 +155,7 @@ internal enum ContentProjector {
     // MARK: Projection
 
     /// Projects one Effective Content state to its bounded durable value.
-    /// docs/05-authority-kernel.md §15
+    /// docs/storage.md
     ///
     /// - Title: the first line (in deterministic representation order, then
     ///   line order) whose whitespace-trimmed form is non-empty, trimmed and
@@ -175,10 +175,10 @@ internal enum ContentProjector {
     ///   type sequence can contain repeats and need not be globally sorted.
     ///
     /// `content` must be a normalized, non-normalized-empty Effective Content
-    /// value as produced by `effectiveContent(of:)` or capture preparation;
+    /// value as produced by the current immutable content snapshot or capture preparation;
     /// the projector relies on that invariant rather than re-validating.
     /// `limits` is the fixed `HistoryLimits.standard` profile in production
-    /// (docs/06-cross-cutting.md §2); focused tests inject smaller bounds.
+    /// (docs/testing.md); focused tests inject smaller bounds.
     internal static func project(
         _ content: EffectiveContent,
         limits: HistoryLimits = .standard
@@ -208,7 +208,7 @@ internal enum ContentProjector {
             // Build the durable corpus directly under its hard byte bound.
             // Joining all decoded representations first lets transient memory
             // scale with arbitrarily large capture bytes even though the
-            // stored value is bounded (docs/06-cross-cutting.md §9, WL3).
+            // stored value is bounded (docs/testing.md, WL3).
             guard containsNonWhitespace(in: text) else { continue }
             if hasSearchBodyPart {
                 guard appendNormalizedUTF8Prefix(
@@ -463,7 +463,7 @@ internal enum ContentProjector {
         return typeIdentifiers[0]
     }
 
-    // MARK: Deterministic Unicode-boundary truncation (docs/06-cross-cutting.md §2)
+    // MARK: Deterministic Unicode-boundary truncation (docs/testing.md)
 
     /// Truncates `text` to at most `limit` UTF-8 bytes at a Character
     /// (extended grapheme cluster) boundary — the deterministic Unicode

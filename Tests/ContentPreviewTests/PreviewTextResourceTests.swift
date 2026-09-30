@@ -16,15 +16,17 @@ struct PreviewTextResourceTests {
     #if DEBUG
     @Test(.serialized, arguments: [false, true])
     @MainActor
-    func synchronousTextWorkDoesNotBlockANewerPreview(cancelOlderRender: Bool) async {
+    func synchronousTextWorkKeepsRasterRenderingAvailableAndQueuesMoreText(cancelOlderRender: Bool) async throws {
         let renderer = ContentPreview()
         let started = DispatchSemaphore(value: 0)
         let resume = DispatchSemaphore(value: 0)
+        let png = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="))
         let older = ContentPreviewDebugInstrumentation.$textRenderDidStart.withValue({
             started.signal()
             // A synchronous parser/native-font call cannot suspend to make
             // its actor available. Keep this worker synchronously occupied.
-            _ = resume.wait(timeout: .now() + 5)
+            _ = Self.waitForSignal(resume, until: .now() + 5)
         }) {
             Task {
                 await renderer.renderHistoryPane([
@@ -35,33 +37,70 @@ struct PreviewTextResourceTests {
         let startDeadline = ContinuousClock.now.advanced(by: .seconds(3))
         var didStart = false
         while !didStart, ContinuousClock.now < startDeadline {
-            didStart = started.wait(timeout: .now()) == .success
+            didStart = Self.waitForSignal(started, until: .now())
             if !didStart { try? await Task.sleep(for: .milliseconds(10)) }
         }
         if cancelOlderRender { older.cancel() }
-        var newerOutcome: PreviewOutcome?
-        let newer = Task {
-            newerOutcome = await renderer.renderHistoryPane([
+        var imageOutcome: PreviewOutcome?
+        let image = Task { imageOutcome = await renderer.rasterizePNGForDisplay(png) }
+        var queuedTextOutcome: PreviewOutcome?
+        let queuedText = Task {
+            queuedTextOutcome = await renderer.renderHistoryPane([
                 PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("newer".utf8))
             ])
         }
+        var busySnapshot: ContentPreviewDebugSnapshot?
+        let observation = Task {
+            while !Task.isCancelled {
+                busySnapshot = await renderer.debugSnapshot()
+                if busySnapshot?.queuedTextJobs == 1 { return }
+                await Task.yield()
+            }
+        }
         let deadline = ContinuousClock.now.advanced(by: .seconds(1))
-        while newerOutcome == nil, ContinuousClock.now < deadline {
+        while (imageOutcome == nil || busySnapshot?.queuedTextJobs != 1), ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(10))
         }
-        let completedWhileOlderWorkerWasOccupied = newerOutcome
+        let imageWhileTextWasOccupied = imageOutcome
+        let snapshotWhileTextWasOccupied = busySnapshot
+        let textBeforeCancellation = queuedTextOutcome
+        queuedText.cancel()
+        let cancellationDeadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while queuedTextOutcome == nil, ContinuousClock.now < cancellationDeadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let cancelledBeforeOlderWorkerWasReleased = queuedTextOutcome
         // Join both jobs even on failure so an actor-blocking regression
         // reports its result instead of hanging the test process.
         resume.signal()
         let olderOutcome = await older.value
-        await newer.value
+        await image.value
+        await queuedText.value
+        observation.cancel()
+        await observation.value
         #expect(didStart)
-        #expect(completedWhileOlderWorkerWasOccupied == .content(.text(PreviewText(text: "newer", wasTruncated: false))))
+        #expect(snapshotWhileTextWasOccupied?.queuedTextJobs == 1)
+        #expect(textBeforeCancellation == nil)
+        #expect(cancelledBeforeOlderWorkerWasReleased == .failed(.cancelled))
+        if let imageWhileTextWasOccupied, case .content(.raster(let raster)) = imageWhileTextWasOccupied {
+            #expect(raster.width == 1 && raster.height == 1)
+        } else {
+            Issue.record("The independent raster slot must remain available while the text worker is occupied")
+        }
         #expect(olderOutcome == (cancelOlderRender
             ? .failed(.cancelled) : .content(.text(PreviewText(text: "older", wasTruncated: false)))))
         let settled = await renderer.debugSnapshot()
         #expect(settled.activeJobs == 0)
         #expect(settled.retainedSourceBytes == 0)
+        #expect(settled.queuedTextJobs == 0)
+        let retry = await renderer.renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("retry".utf8))
+        ])
+        #expect(retry == .content(.text(PreviewText(text: "retry", wasTruncated: false))))
+    }
+
+    private static func waitForSignal(_ semaphore: DispatchSemaphore, until deadline: DispatchTime) -> Bool {
+        semaphore.wait(timeout: deadline) == .success
     }
     #endif
 

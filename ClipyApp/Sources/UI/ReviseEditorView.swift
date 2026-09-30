@@ -6,10 +6,10 @@
 /// concurrency (03a §5 `RevisionRequest.expected`), so an edit based on a
 /// superseded state fails typed as `.staleContent` (03b §10), which this
 /// view surfaces without dismissing or replacing the user's draft.
-/// Owning spec: docs/03a-instruction-set.md §5 (`RevisionDraft`,
+/// Owning spec: docs/architecture.md (`RevisionDraft`,
 /// `RevisionDecision`, `.incoherentRevisionDraft`); detail DTOs
-/// docs/03b-instruction-set.md §9; Main-actor UI docs/01-architecture.md §6;
-/// roadmap: docs/roadmap/05-presentationui.md (step 9).
+/// docs/architecture.md; Main-actor UI docs/architecture.md;
+/// roadmap: docs/interface.md (step 9).
 import ClipboardFormats
 import Foundation
 import HistoryCore

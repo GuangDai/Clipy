@@ -2,18 +2,18 @@
 /// for `HistoryItemRow.canonicalSignatureBlob`, the durable scalar metadata
 /// used alongside Canonical bytes to build authoritative Signature Index
 /// coverage in the current hard-capped profile.
-/// Owning spec: docs/05-authority-kernel.md §3.1 (column semantics), §4
+/// Owning spec: docs/storage.md (column semantics), §4
 /// (versioned storage codecs), §12–§13 (Signature Index lifecycle and
-/// startup); gates: docs/06-cross-cutting.md §7.3 (codec round trip) and
+/// startup); gates: docs/testing.md (codec round trip) and
 /// §7.4 (corruption rejection).
 import Foundation
 import HistoryCore
 import HistoryDomain
 
-// MARK: - Wire values (docs/05-authority-kernel.md §4)
+// MARK: - Wire values (docs/storage.md)
 
 /// Versioned wire value of the Canonical signature blob.
-/// docs/05-authority-kernel.md §4
+/// docs/storage.md
 ///
 /// `formatVersion` is exactly 1 for every blob `SignatureBlobCodec` writes;
 /// decode rejects any other version.
@@ -22,11 +22,11 @@ internal struct SignatureBlobV1: Codable, Sendable {
     internal let entries: [StoredSignatureEntryV1]
 }
 
-/// One stored signature entry. docs/05-authority-kernel.md §4
+/// One stored signature entry. docs/storage.md
 ///
 /// Signature evidence only: it accelerates dedup candidacy and never
 /// completes a match by itself — byte-exact confirmation decides every match
-/// (docs/02-domain.md §2.2, D7).
+/// (docs/architecture.md, D7).
 internal struct StoredSignatureEntryV1: Codable, Sendable {
     internal let typeIdentifier: String
     internal let fingerprint: UInt64
@@ -41,11 +41,11 @@ internal struct StoredSignatureEntryV1: Codable, Sendable {
     }
 }
 
-// MARK: - Codec (docs/05-authority-kernel.md §4)
+// MARK: - Codec (docs/storage.md)
 
 /// Encodes validated Canonical signature entries to their durable blob and
 /// decodes the blob back with the full §4 check set, failing closed with
-/// `CodecRejection`. docs/05-authority-kernel.md §4
+/// `CodecRejection`. docs/storage.md
 internal enum SignatureBlobCodec {
     /// The only blob version this codec reads or writes (§4: "known blob
     /// version (exactly 1 for each V1 blob)").
@@ -163,7 +163,7 @@ internal enum SignatureBlobCodec {
         }
     }
 
-    // MARK: Bidirectional coverage (docs/05-authority-kernel.md §4)
+    // MARK: Bidirectional coverage (docs/storage.md)
 
     /// The §4 fingerprint/signature coverage check: every Canonical
     /// representation has a signature entry and every signature entry
@@ -223,7 +223,7 @@ internal enum SignatureBlobCodec {
         }
     }
 
-    // MARK: Authoritative index coverage (docs/05-authority-kernel.md §12–§13)
+    // MARK: Authoritative index coverage (docs/storage.md)
 
     /// Proves that signature entries are authoritative negative dedup
     /// evidence for the current hard-capped Signature Index build paths.
@@ -306,7 +306,7 @@ internal enum SignatureBlobCodec {
     /// format. Production callers use `encode(_:)`, which builds the wire
     /// value from validated Domain values; this entry point exists so tests
     /// can craft decodable-but-invalid blobs through the exact production
-    /// serializer (docs/06-cross-cutting.md §7.4).
+    /// serializer (docs/testing.md).
     internal static func encodeWire(_ wire: SignatureBlobV1) throws -> Data {
         do {
             return try CodecWireFormat.makeEncoder().encode(wire)

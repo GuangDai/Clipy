@@ -1,5 +1,5 @@
 /// §9 V2-02 R-active retention workloads: the Record 3 measurement halves
-/// (`docs/v2/V2-02-retention.md` Record 3) that the projection-maintenance
+/// (`docs/storage.md` Record 3) that the projection-maintenance
 /// push lanes (WL1a capture scaling, WL4 mass eviction) do not cover —
 /// capture composition with R1+R2 active (`RET-PERF-1`/`RET-PERF-3`), the
 /// revise-path expansion with R2+R3 active (`RET-PERF-1`'s revise half,

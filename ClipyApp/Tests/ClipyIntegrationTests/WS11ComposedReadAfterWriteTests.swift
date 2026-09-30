@@ -1,5 +1,5 @@
 /// WS11Composed — Receipt read-after-write through the composed app stack
-/// (docs/06-cross-cutting.md §8 WS11; docs/04-coherence.md §3): after every
+/// (docs/testing.md WS11; docs/storage.md): after every
 /// committed outcome family, the relevant composed read — the REAL
 /// `HistoryViewState` (its rows via the observe loop) plus the purpose
 /// reads behind it — reflects that commit without any manual refresh. Each
@@ -15,7 +15,7 @@ import Testing
 
 struct WS11ComposedReadAfterWriteTests {
 
-    /// WS11 (docs/06-cross-cutting.md §8; 04 §3): one store; each committed
+    /// WS11 (docs/testing.md; 04 §3): one store; each committed
     /// outcome family is immediately visible — insert, coalesce, placePinned,
     /// revise, remove, clear, setRetentionPolicy — with the observed page
     /// replacing rows (04 §5) and no notification waiting anywhere.

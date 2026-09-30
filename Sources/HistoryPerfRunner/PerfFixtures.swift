@@ -2,10 +2,10 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 
-// MARK: - Fixture types (docs/06-cross-cutting.md §9)
+// MARK: - Fixture types (docs/testing.md)
 
 /// Machine context that must accompany any recorded perf fixture
-/// (docs/06-cross-cutting.md §9: "machine metadata").
+/// (docs/testing.md: "machine metadata").
 struct MachineMetadata: Codable, Sendable {
     let osVersion: String
     let architecture: String
@@ -69,7 +69,7 @@ struct WorkloadCoverageExpectation: Sendable {
 /// The expected asymptotic response to the dimension varied by a workload.
 /// A linear workload's theoretical ratio is its large/small scale span; a
 /// constant workload should remain independent of that span and therefore has
-/// a theoretical ratio of one (docs/06-cross-cutting.md §9).
+/// a theoretical ratio of one (docs/testing.md).
 enum WorkloadGrowthExpectation: Sendable {
     case constant
     case linear
@@ -155,7 +155,7 @@ let section9WorkloadCoverage: [String: WorkloadCoverageExpectation] = [
         bulletLabel: "5",
         bulletNumbers: [5]
     ),
-    // V2-02 R-active lanes (docs/v2/V2-02-retention.md Record 3): the
+    // V2-02 R-active lanes (docs/storage.md Record 3): the
     // capture-composition and revise-path expansion halves of RET-PERF-1
     // (with RET-PERF-3's zero-decode capture planning) ride the §9
     // bullets 1-2 capture-commit family, exactly as the spec measures them
@@ -244,7 +244,7 @@ let section9WorkloadEnvelopes: [String: WorkloadComplexityEnvelope] = [
         bound: 6,
         headroomPolicy: .standard
     ),
-    // V2-02 R-active lanes (docs/v2/V2-02-retention.md Record 3
+    // V2-02 R-active lanes (docs/storage.md Record 3
     // RET-PERF-1/2/3): the same 3× span / 6× bound / standard 2× linear
     // headroom as the retentionMassEviction/clearUnpinned siblings — the
     // expansion pass's O(retained) scalar sweep must reject quadratic

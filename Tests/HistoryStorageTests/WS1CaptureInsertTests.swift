@@ -1,9 +1,9 @@
-/// WS1 — Raw capture insert (docs/06-cross-cutting.md §8 WS1): the
+/// WS1 — Raw capture insert (docs/testing.md WS1): the
 /// commit/receipt/storage side of submitting a normalized raw text capture to
 /// an empty store through the public `SQLiteHistory.perform(.capture(_:))`
 /// and the real `HistoryAuthority` commit path.
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS1's
+/// Phasing (docs/testing.md, WS-clause phasing note): WS1's
 /// observed-page clause is a step-7 (reads + observation) clause and is NOT
 /// asserted here; this file closes the step-5 clauses — the `.committed`
 /// receipt with `.inserted(reference)`, the initial Content Version, Change
@@ -18,7 +18,7 @@ import Testing
 
 struct WS1CaptureInsertTests {
 
-/// WS1 (docs/06-cross-cutting.md §8): one raw text capture on an empty store
+/// WS1 (docs/testing.md): one raw text capture on an empty store
 /// commits once, returns `.inserted(reference)` at the initial Content
 /// Version and Change Position 1, and persists exactly one row carrying the
 /// full Canonical bytes plus the correct initial occurrence/projection, with
@@ -45,7 +45,7 @@ struct WS1CaptureInsertTests {
         return
     }
     // WS1: Change Position 1 — the first commit moves the singleton 0 → 1
-    // (docs/05-authority-kernel.md §3.2).
+    // (docs/storage.md).
     #expect(commit.position.rawValue == 1)
     // WS1: `.inserted(reference)` for a new item on an empty store.
     guard case let .inserted(reference) = commit.outcome else {
@@ -53,7 +53,7 @@ struct WS1CaptureInsertTests {
         return
     }
     // WS1: Content Version 1 — the reference names the initial Effective
-    // Content state (docs/02-domain.md: versions start at 1).
+    // Content state (docs/architecture.md: versions start at 1).
     #expect(reference.contentVersion.rawValue == 1)
 
     // Storage side, through the INDEPENDENT container (no production test
@@ -75,7 +75,7 @@ struct WS1CaptureInsertTests {
 
     // WS1: "correct initial occurrence" — first and last observation both
     // equal `observedAt`, count 1, and the observed source is both first and
-    // last (docs/05-authority-kernel.md §9 create-stamping).
+    // last (docs/storage.md create-stamping).
     #expect(row.firstCopiedAt == observedAt)
     #expect(row.lastCopiedAt == observedAt)
     #expect(row.copyCount == 1)
@@ -94,7 +94,7 @@ struct WS1CaptureInsertTests {
     #expect(row.pinOrdinal == nil)
 
     // WS1: "Change Position 1" — the durable singleton matches the receipt's
-    // position (one transaction, docs/06-cross-cutting.md §7.1).
+    // position (one transaction, docs/testing.md).
     let position = try WSSupport.fetchPosition(container)
     #expect(position.rawValue == 1)
 }

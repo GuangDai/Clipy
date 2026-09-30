@@ -1,5 +1,5 @@
 /// WS10Composed — Clear atomicity through the composed app stack
-/// (docs/06-cross-cutting.md §8 WS10; docs/02-domain.md §12): with pinned
+/// (docs/testing.md WS10; docs/architecture.md): with pinned
 /// and unpinned items present, `.clear(.unpinned)` removes the complete
 /// unpinned set in ONE commit and preserves the pins; a later `.clear(.all)`
 /// removes every remaining row in one commit. Each clear's receipt is
@@ -14,7 +14,7 @@ import Testing
 
 struct WS10ComposedClearTests {
 
-    /// WS10 (docs/06-cross-cutting.md §8): clear-scenario committed through
+    /// WS10 (docs/testing.md): clear-scenario committed through
     /// the composed interaction surface — `viewState.clear(.unpinned)` /
     /// `.clear(.all)` (the footer-menu actions, 03b §12) — with the final
     /// position arithmetic proving both clears were SEPARATE single commits

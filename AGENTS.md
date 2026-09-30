@@ -1,409 +1,60 @@
-# AGENTS.md — Clipy (Greenfield Clipboard Manager for macOS)
+# Clipy 开发说明
 
-Guidance for AI coding agents working in this repository. Read this before making
-any change. The design documents under `docs/` are authoritative; this file is
-only a map.
+本文件说明仓库入口、实现约束和工作方式。当前产品说明集中在 [docs/README.md](docs/README.md)，实现细节以源码、模块清单和实际 CI 结果核对。
 
-## 1. Project overview
+## 沟通和验证
 
-Clipy is a **from-zero macOS clipboard-history application**, a greenfield
-redesign implemented against a consolidated design specification in `docs/`
-(`docs/00-overview.md` through `docs/06-cross-cutting.md`, plus `docs/roadmap/`
-and the living status file `docs/PROGRESS.md`).
+使用自然的简体中文，先回答实际问题。说明完成的修改和验证结果；不要把代码阅读、测试存在或旧 CI 的成功当作当前修改已验证。
 
-The v1 product captures clipboard values, coalesces repeat copies, lists and
-searches retained history, pins and reorders items, removes or clears items,
-appends immutable content revisions, produces paste payloads, and produces
-thumbnails.
+用户明确要求只通过 CI 验证，禁止下载或运行本地 Swift、编译器解析、构建和测试。启动 CI 后只能使用 `gh run watch <run-id> --exit-status` 等待，不写轮询脚本，也不反复执行 `gh run list` / `gh run view` 查状态。结束后读取对应日志和产物；等待期间继续审查和修复代码。可以并行派出多个 subagent，按文件所有权避免互相覆盖。
 
-**Implementation policy (user direction, 2026-08-24):** keep work on the
-product and its direct tests. Do not add or reintroduce policy locks/ratchets,
-hash or checksum validation, routing/registry layers, artificial boundary
-machinery, repository rules/scanners, gates, ledgers/snapshots, or certificate,
-signing, notarization, and release-identity machinery. Do not turn a product
-change into governance infrastructure. Older documents describing retired
-examples of those mechanisms are historical records, not instructions to
-recreate them. Existing product code such as module access control, the
-Gateway's admitted operations, and xxh3's clipboard-dedup candidate lookup may
-be maintained when directly required by behavior; this paragraph forbids
-inventing new enforcement or orchestration around them.
+## 产品与模块
 
-**Current storage direction (user approval, 2026-09-07):** implement
-`docs/v2/V2-09-multilevel-storage.md`: replace SwiftData and its ten-model
-schema with system SQLite3 metadata/indexes and immutable UUID-named blob
-files. Keep one HistoryAuthority writer and atomic History/Gateway commits;
-do not add dual writing, an ORM emulating ModelContext, legacy-store reading,
-migrations, or automatic deletion of an existing store. Titles/search bodies
-remain exact UTF-8 Data. Preserve byte-exact candidate confirmation, corrupt-
-value rejection, immutable revisions, ContentVersion and ChangePosition.
-Remove full-store resident signature/ID indexes and search corpora; use bounded
-queries and purpose-specific content reads. NSCache/NSPurgeableData hold only
-rebuildable derived values; mappedIfSafe is a hint, not a zero-copy guarantee.
-The SwiftData references elsewhere in this map describe the pre-replacement
-implementation, not a requirement to retain it. Historical migration chapters
-remain records, not instructions to restore compatibility machinery.
+Clipy 是 macOS 26+、arm64 剪贴板历史应用，使用 Swift 6 语言模式、complete strict concurrency、Xcode 26 / Swift 6.2。SwiftPM 模块图在 `Package.swift`，应用、CLI 和宿主测试目标在 `ClipyApp/project.yml`。生成的 `.xcodeproj` 是构建产物，修改后重新生成，不手工编辑。
 
-**Platform and toolchain:**
+| 路径 | 职责 |
+| --- | --- |
+| `Sources/HistoryCore` | public History 协议、封闭操作集、DTO、身份、版本和类型化失败 |
+| `Sources/HistoryDomain` | package 纯领域事实、内容和规划器 |
+| `Sources/HistoryStorage` | `SQLiteHistory`、唯一 `HistoryAuthority` writer、SQLite、内容文件、搜索、Gateway、缩略图 |
+| `Sources/PasteboardAdapter` | NSPasteboard 读取、轮询、写入与来源提示 |
+| `Sources/ClipboardFormats` | 精确开放格式标识与编码事实 |
+| `Sources/ContentPreview` | 有界文本 / 图片 / 地址渲染，不拥有 History、窗口或缓存 |
+| `Sources/ClipyCLIContract` | 有界 JSON 协议，不执行产品操作 |
+| `Sources/LocalAutomation` | 本地 Unix socket 客户端、服务与传输 |
+| `ClipyApp/Sources` | 组合、原生窗口、SwiftUI、捕获和复制、设置、App Intents 与内置工作流 |
+| `ClipyApp/Tools/clipyctl` | 随应用打包的 CLI |
 
-- macOS 26+ only (`platforms: [.macOS(.v26)]`), arm64.
-- Swift 6 language mode with **complete strict concurrency** everywhere.
-- SwiftPM owns the library graph (root `Package.swift`, swift-tools-version 6.2).
-- XcodeGen owns the app target (`ClipyApp/project.yml`); the generated
-  `.xcodeproj` is a build artifact — regenerate, never hand-edit.
-- Building or testing the code requires a Mac with Xcode 26 / Swift 6.2.
-  Correctness CI intentionally consists of the SwiftPM and generated-app
-  build/test lanes; there is no separate static-source or symbol-snapshot lane.
+`HistoryPerfRunner`、`HistoryRestartProbe`、`PreviewAccessProbeRunner` 是测量或测试程序。UI 没有独立 SwiftPM PresentationUI 库，资源位于 `ClipyApp/Resources`。
 
-**Historical baseline (2026-08-24, `master` through PR #44):** steps 0–9 are
-done and CI-green (scaffold + build/tests, `HistoryCore` public surface,
-`HistoryDomain` pure core, dependency pins, schema v1 + codecs,
-`HistoryAuthority` capture/mutations/reads/observation/thumbnail, product
-wiring: PasteboardAdapter, PresentationUI, ClipyApp composition); the V2
-M1 schema migration plus V2-02 retention slices R.1–R.6 are landed
-(`docs/v2/V2-PROGRESS.md`). The 2026-08-22 REVIEW remediation is under
-way: CI lane split (PR #2), normal-path correctness batches (PR #3–#7),
-and the External Gateway ladder X.2–X.7 (public contract, V3 schema +
-deny-by-default bootstrap, X.4 audit/admin substrate, X.5 denial/
-admission, X-HCR V4 substrate + atomic-evidence proofs, X.6 positive
-reads/writes + the public connection-bound `ExternalHistoryFacade`, and
-X.7 App Intents composition — six intents behind one async app-owned ingress
-provider registered before store open; it contains the one connection-bound
-facade and joins positive external removal to the existing panel purge owner,
-`supportedModes = [.background]`,
-output-only entities, no `EntityQuery`, confined to `ClipyApp/Sources`).
-The Batch 37 running-app journey also requires the two filtered history rows
-to expose stable per-item identifiers, button roles, and distinguishable
-alpha/beta labels before its keyboard-selection/paste proof (PR #39, merge
-`5ee1963`; final PR/master correctness 32696012215 attempt 2/32696647481).
-`DEC-RET-READ` and its bounded Settings consumer/persistent readback closure
-landed in PR #32 (merge `1c221e6`; master run 32678654503).
-`DEC-PREVIEW-TARGET` and the concrete package-only `ContentPreview` deep
-module landed in PR #33 (merge `ffd0e9f`; final PR run 32682438863; master
-run 32682682345).
-GOV-1's manual exact/scale caller landed in PR #34 (merge `f48d87f`; PR run
-32684566664; master run 32684916238). Its same-SHA manual run 32685185124 has
-Exact A/B green with all 13 thresholds passing and the full 5,000-row scale
-admission green; both remain record-only evidence. Batch 33's Card 9B
-external-remove purge and bounded Card 15C/15D accessibility leaves landed in
-PR #35 (merge `10decae`; final PR run 32688665740; master run 32688965362
-attempt 2). Batch 34's first running-app XCUI panel tracer and independent
-unsigned Release archive identity source contract landed in PR #36 (merge
-`2bc4a8e`; final PR run 32691964885 attempt 2; master run 32692472789). The
-XCUI leaf is green; Card 16A remains Partial pending a protected-tag archive.
-Batch 35's generic Local Automation enrollment rejection landed in PR #37
-(merge `dd433d9`; final PR run 32693281604; master run 32693554157). Batch 36
-implemented the internal credential authentication kernel in PR #38 (merge
-`1834eca`; final PR run 32694144024 attempt 2; master run 32694673199) without
-publishing an ingress or transport. Batch 38 adds the approved immutable-
-revision disclosure literal and a running-app Settings safety journey in PR
-#40 (merge `c89f2ba`; master run 32699272489): the real Settings scene exposes
-Launch at Login and requires a destructive confirmation before one newly
-enabled age limit can apply. The editor disclosure remains source/literal
-evidence because the runner's attached SwiftUI sheet exposes only an empty
-public AX dialog; the Settings journey does not establish ServiceManagement's
-signed four-state runtime matrix or the complete unified-retention workflow.
-Batch 39 landed in PR #41 (merge `87db3d6`; final PR/master correctness
-32705015919/32705436579): count and V2 retention controls share one Retention
-surface with exact no-change semantics; the internal authenticated Local
-Automation browsePreview leaf and a four-process retention restart tracer are
-green; Search Clear/focus is a running-app proof; and ThumbnailStore product
-knobs/counters are contracted to owner-test scope. The AXPress cell still
-skips without runner Accessibility authorization and remains unproved.
-Batch 40 landed through PRs #42–#44 (merges `cb3de0d`, `00c3fee`,
-`5ea8794`; product-head/final-master correctness 32712455441/32715020428):
-it closes bounded product leaves for item-ID collision recovery, paged count
-and selection reconciliation, typed Preview Retry, mutation pending state,
-32-row cooperative search cancellation, authoritative App Intent entity
-facts, visible Pause/Resume and denied-access recovery, count-retention purge,
-panel geometry/lifecycle, and pasteboard-marker characterization. PR #43 kept
-the Authority cancellation proof functional with a 64-row two-chunk fixture;
-PR #44 made the Settings Clear proof join its real observation boundary before
-starting its publication deadline. Real TCC/VoiceOver/FKA, time-bounded Pause,
-Spaces/sleep-wake, signed runtime, client transport/custody, and synchronous
-native matcher preemption remain open.
-Both dispatch-only physical-evidence cells are green on `master` as of
-2026-08-23: the General pasteboard cross-process run 32632263996 and the
-Card 6B APFS ENOSPC capture-transaction run 32636093920 (the latter via
-the §16 stamped-plan capacity admission added in PR #25 — Core Data
-raises an uncatchable `NSInternalInconsistencyException` instead of an
-out-of-space error when an external-storage interim file cannot be
-created on a full volume). Manual signed-runtime run 32573198119 is also
-green on `master`, within the bounded proof scope described in §7.
-Post-step-9 additions: the perf/AB helper proofs live in the separate
-`HistoryPerfTests` target/lane (the default `swift test` skips them), and the
-panel is a Maccy-style AppDelegate-owned floating `NSPanel` (Carbon ⇧⌘C
-summon, cursor/status-item/center/last-position placement, content-fitting
-height up to the persisted height ceiling without an aesthetic minimum, a
-dwell-driven transient floating 340 pt preview pane beside the panel,
-hover selection arbitrated by a mouse/keyboard input mode, and 44/56 pt
-image-row thumbnails; user-resizable within `PanelGeometry`'s min/max
-bounds with the settled size persisted across opens as the height
-ceiling, and row density / preview auto-open as user preferences under
-Settings ▸ Appearance; plus a header type/pinned row filter, row drag-out
-via `HistoryViewState.dragItemProvider`, a Space quick-look overlay, a
-footer keep-open pin, a status-item right-click menu (`StatusItemMenu`),
-source-app icons injected through the public `SourceIconProvider` seam,
-and a Settings ▸ Privacy capture ignore list (`CaptureIgnoreList`)) —
-no longer a SwiftUI `MenuBarExtra` window.
-Check `docs/PROGRESS.md` and the REVIEW status document
-(`docs/reviews/2026-08-22-clipy-maccy-deep-review/10-implementation-status.md`)
-for the exact landed state before assuming a feature exists.
+## 内容与存储
 
-## 2. Architecture and module layout
+使用系统 SQLite3 元数据 / 索引和不可变 UUID blob 文件，不恢复 SwiftData。一个 `HistoryAuthority` 写入者原子提交 History、Gateway、变更位置和逻辑用量；内容文件先发布，再提交数据库引用。物理清理独立于用户提交，不改变回执或位置。
 
-Downward-only dependency graph; one public History boundary. The public seam is
-the `ClipboardHistory` protocol in `HistoryCore` (`Sources/HistoryCore/
-ClipboardHistory.swift`). Callers express a `HistoryAction` or request
-purpose-specific DTOs; they never see SwiftData, Domain state, fingerprints, or
-canonical content internals.
+不添加双写、ORM / ModelContext 仿真、旧存储读取、迁移、自动修复或删除现有用户存储。标题和搜索正文保持精确 UTF-8 Data。保存原始表示拼写与字节；领域层同一系统项目的类型去重使用 Unicode 规范等价规则，不修改原始拼写。
 
-```text
-ClipyApp (XcodeGen app, composition root and native SwiftUI/AppKit UI)
-├── Sources/UI ───────────→ HistoryCore + ClipboardFormats + ContentPreview
-├── PasteboardAdapter ─────→ HistoryCore
-└── HistoryStorage ────────→ HistoryCore + ClipboardFormats
-          │                → HistoryDomain
-          ├───────────────→ xxh3 (vendored C, package-internal)
-          └───────────────→ Fuse (external SPM, fuzzy search)
-HistoryDomain ─────────────→ HistoryCore
-ClipboardFormats ──────────→ Foundation only (package-only stable facts)
-ContentPreview ────────────→ ClipboardFormats + CoreGraphics + ImageIO
-                             (package-only bounded transient renderer)
-ClipyCLIContract ──────────→ Foundation only (package-only pure wire contract)
-HistoryRestartProbe ───────→ HistoryCore + HistoryStorage (test evidence only)
-PreviewAccessProbeRunner ──→ ContentPreview (DEBUG-only test evidence only)
-```
+xxh3 仅查找剪贴板去重候选，候选必须再字节确认。UUID 独立于指纹。修订不可变；`ContentVersion` 只在 Effective Content 字节改变时前进，`ChangePosition` 每个非空 History Commit 恰好前进一次。观察输出权威替换快照，游标绑定查询与快照。
 
-| Target | Surface | Role |
-|---|---|---|
-| `ClipboardFormats` | Public app-used identifiers; Foundation-only | Open-world exact identifiers and package-only declared string-codec facts; no purpose policy, registry, plugin, cache, or decoder |
-| `ContentPreview` | Public concrete renderer/values; internal implementation | Exact preview source selection, fixed resource profiles, text codecs, eager ImageIO decode, bounded inert text/BGRA8 artifacts; no History/reference/lifecycle/cache/plugin ownership |
-| `ClipyCLIContract` | Package-only, Foundation-only, no product | X.8 bounded UTF-8 JSON request/reply codec and stable exit classes; no executable, standard-stream I/O, transport, credential, Gateway/History access, or fabricated result |
-| `HistoryCore` | Public, Foundation-only | `ClipboardHistory` protocol, IDs/tokens, closed `HistoryAction` set, request/response DTOs, receipts, typed failures, `HistoryLimits.standard` |
-| `HistoryDomain` | `package` access, Foundation-only, pure | Content lineage, complete action facts, seven pure planners, typed mutation plans. No I/O, actors, clocks, UUID/Date generation, or async |
-| `HistoryStorage` | Public concrete `SwiftDataHistory` + internal implementation | Sole SwiftData authority, schema/codecs, `HistoryAuthority` actor (single writer), fact loaders, Signature Index, read projections, observation plumbing, thumbnail single-flight |
-| `PasteboardAdapter` | Public adapter | NSPasteboard observation/writes ↔ `HistoryCore` raw values. No Domain state, no fingerprints |
-| `ClipyApp` | App module, including `Sources/UI` | Native SwiftUI/AppKit views, view state over History DTOs, preview lifecycle, concrete construction, paste orchestration, App Intents, and DI |
-| `xxh3` | Package-internal C | 64-bit representation fingerprints (vendored xxHash v0.8.3) |
-| `HistoryPerfRunner` | Executable | Part VI §9 performance-runner scaffold (fixtures populate at step 8) |
-| `HistoryRestartProbe` | Test evidence executable target | Card 1C-1 three-process public-API restart tracer; no declared package product |
-| `PreviewAccessProbeRunner` | Test evidence executable target | PLAY-TIER-1A decoder access-mode probe child (docs/v2/V2-08-decoder-access-modes.md); DEBUG-only, no declared package product |
+读取按用途取得有界事实和必要表示；不添加全库常驻 ID / signature 索引或搜索语料。NSCache / NSPurgeableData 只保存可重建派生值，`mappedIfSafe` 不保证零拷贝。优先降低时间复杂度，只接受小幅空间代价；并发工作和队列必须有实际资源边界。
 
-**Current implementation shape (docs/01-architecture.md §3/§6/§8):**
+## 实现要求
 
-- Single write authority: `HistoryAuthority` is the only component that creates
-  or uses writable `ModelContext`s; one fresh context per isolated operation,
-  `ModelContext.transaction` is the sole commit primitive.
-- Only immutable `Sendable` values cross module/actor boundaries. `@Model`,
-  `ModelContext`, `PersistentIdentifier`, `NSImage`, `CGImage` never cross.
-- Caller-visible History values, concrete library entry points, and the
-  app-used format/preview values are `public`. UI is internal to ClipyApp.
-  Cross-target implementation vocabulary uses Swift
-  `package` access. `@Model` types are internal to `HistoryStorage`.
-- Accessing a closed `HistoryAction` set: adding an action is an owned source
-  change and must make compiler-exhaustive switches fail until handled.
-- No application-owned `.shared`/`.current` service locators, no
-  `@unchecked Sendable`, no `nonisolated(unsafe)`. Preserve this directly in
-  code; do not build a scanner or policy layer for it.
-  The only framework-owned exception is one composition-root
-  `AppDependencyManager.shared.add(dependency:)` registration; hosted tests use
-  standalone `AppDependencyManager()` instances.
-- Two-stage dedup: xxh3 signature candidates, then byte-exact confirmation; a
-  fingerprint is evidence, never identity. `HistoryItemID` is independent of
-  SwiftData identity and content hashes.
-- Coherence tokens: `ContentVersion` advances only when Effective Content bytes
-  change; `ChangePosition` advances exactly once per non-empty History Commit.
-  Observation returns authoritative snapshots (state, not event deltas).
+调用者可见边界使用 `public`，跨模块实现词汇使用 `package`，模块内使用 `internal` / `private`。HistoryCore、HistoryDomain 只依赖 Foundation；Domain 不做 I/O、actor、时钟、UUID 生成或 async。跨 actor / 模块只传不可变 Sendable 值，AppKit / SwiftUI 操作属于 MainActor。
 
-## 3. Repository layout
+不使用应用自建 `.shared` / `.current` 服务定位器、`@unchecked Sendable` 或 `nonisolated(unsafe)`。App Intents 的框架依赖注册保留在组合入口。添加 HistoryAction 时更新所有编译器穷尽分支。
 
-```text
-Package.swift                 SwiftPM manifest (the single target-graph truth)
-Sources/<Target>/             one dir per SwiftPM target
-Sources/xxh3/                 vendored xxHash C source (+ VENDORED.md pin record)
-Tests/<Target>Tests/          SwiftPM test targets mirroring each library
-ClipyApp/                     XcodeGen spec, app sources, hosted integration tests
-docs/                         the design specification (00–06), AUDIT.md, PROGRESS.md
-docs/roadmap/                 implementation roadmap, one doc per module
-scripts/                      CI build/test, evidence, and diagnostic helpers
-.github/workflows/            correctness, manual/reusable performance
-                              and runtime evidence workflows
-```
+损坏值明确拒绝，不静默修复或忽略解码异常。失败不能泄露 SQL、凭据或剪贴板正文。产品不访问网络、外部服务或遥测；明确的本地导出、工作流和用户发起的打开动作保留其当前行为。
 
-## 4. Build and test commands
+修复实际产品问题及直接测试。不添加策略锁、ratchet、hash / checksum 校验、routing / registry 层、人造边界、仓库扫描器、gates、账本 / snapshots，或证书、签名、公证、发布身份机制。现有模块访问控制和 Gateway 授权可按产品行为维护，但不在外面再加治理层。
 
-All Swift/Xcode commands require **macOS 26 arm64 with Xcode 26** (the CI
-runner image; enforced in every workflow job).
+依赖只有 vendored xxHash v0.8.3 和 `Package.swift` 固定 revision 的 Fuse 1.4.0；不额外添加第三方依赖。历史 release / runtime 工作流不用于普通修复。
 
-```sh
-# SwiftPM build + test (Swift 6 strict concurrency)
-swift build
-swift test                                    # default lane: functional tests only (skips HistoryPerfTests)
-swift test --filter 'HistoryPerfTests\.'      # local performance helper suite
+## 测试和 CI
 
-# App project (macOS only)
-xcodegen generate --spec ClipyApp/project.yml     # or bash scripts/generate-xcodeproj.sh
-xcodebuild -project ClipyApp/ClipyApp.xcodeproj -scheme ClipyApp \
-  -configuration Debug -destination 'platform=macOS,arch=arm64' \
-  CODE_SIGNING_ALLOWED=NO test
+使用 Swift Testing，测试放在所属模块。存储语义用真实 `SQLiteHistory` 和私有临时目录；scripted History 只用于 SwiftUI 预览。App 的 presentation / integration 测试由 XcodeGen 管理；真实 UI journeys 使用 `ClipyUITests`。
 
-# Manual Release runtime evidence (ad-hoc signature only; macOS CI equivalent)
-bash scripts/ci/run_signed_runtime.sh \
-  signed-runtime-logs DerivedData-SignedRuntime \
-  "${TMPDIR:-/tmp}/xcodegen-2.45.4"
-```
+保留用户结果、原始字节、事务回滚、版本一致性、取消、资源边界、分页与重开证明。删除固定常量 / 文案快照、源码扫描、实现步骤镜像、重复下层测试和无真实行为的断言。不通过删除失败语义测试、增加 sleep 或扩大超时掩盖问题。异步测试前置条件失败立即退出，分页循环不能在超时后无界重试。
 
-**Correctness CI semantics:**
+常规 CI 是 `.github/workflows/correctness.yml`：SwiftPM 功能 lane 与四个 App / GUI 分片并行，同一桌面 GUI 串行。第四片包含两个宿主 bundle 和其余 / 新增 UI classes，分组以 `scripts/ci/run_app_correctness.sh` 为准。SwiftPM 显式 `--skip 'HistoryPerfTests\.'`；裸 swift test 没有默认排除性能 tests。编译器警告视为 CI 失败。
 
-- `SwiftPM build + test` runs the strict-concurrency package build and the
-  functional SwiftPM suite.
-- Four `App build + GUI tests` jobs independently regenerate/build the app
-  and run disjoint GUI test groups on separate macOS runners. The fourth also
-  runs the hosted integration tests and all remaining/new GUI test classes.
-- SwiftPM and the four app jobs run in parallel (five jobs total). GUI tests
-  within each runner remain serial because they share the system pasteboard
-  and desktop. Static regex/import/dependency scans,
-  SwiftLint, vendor/source scans, generated-project comparison, test-selection
-  scans, and HistoryCore symbol generation/comparison are deliberately not
-  correctness jobs. Architectural restrictions in §2/§5 remain design and
-  review obligations; executable behavior is protected by compiler and tests.
-
-**No hash validation.** CI orchestration, generated-project handling, change
-detection, cache coordination, artifact naming, test selection, and handoff
-must not introduce SHA/checksum/content-hash verification or hash-derived
-state. The existing package-internal xxh3 operation is only the product's
-clipboard-dedup candidate filter; it is not identity or infrastructure and
-must not be reused outside that behavior.
-
-**Do not over-design defensively.** Respond to observed product failures with
-the smallest direct implementation and focused test. Do not build speculative
-scanners, routing/protocol layers, state machines, fallback paths, policy
-documents, or duplicated enforcement infrastructure.
-
-**Compiler warnings are CI failures.** SwiftPM logs are scanned for diagnostics;
-the two XcodeGen-owned app/test targets set Swift and Clang warnings as errors
-without forcing those settings onto external package targets. Runtime framework
-logs are not parsed as compiler output. Write warning-free code.
-
-## 5. Code style guidelines
-
-- Swift 6 mode, complete strict concurrency, zero warnings. Design for
-  actor isolation explicitly; the greenfield targets ban every escape hatch.
-- Access control discipline: `public` only for the caller-visible seam;
-  `package` for cross-target implementation vocabulary; `internal`/`private`
-  inside storage. `@Model` types stay internal to `HistoryStorage` and never
-  appear in a `public` or `package` signature.
-- Foundation-only in `HistoryCore` and `HistoryDomain`. Domain code is pure:
-  no I/O, no actors, no clocks, no UUID/Date generation, no async — clocks and
-  ID sources are package-only injected dependencies.
-- Match the spec's vocabulary (`HistoryAction`, `HistoryCommit`,
-  `ChangePosition`, `Effective Content`, `CanonicalContent`, `StampedPlan`,
-  `DomainRejection`, …) instead of inventing synonyms.
-- Comments in this repo are dense and cite spec sections (e.g. `05 §9`,
-  `02 §5.4`). Follow that convention when changing behavior-bearing code.
-- Keep commit/PR descriptions concise and behavior-focused; do not create a
-  tracking ledger or traceability framework for a change.
-
-## 6. Testing instructions
-
-- Test framework: Swift Testing (`swift test`), test targets mirror owners:
-  `HistoryCoreTests`, `HistoryDomainTests`, `HistoryStorageTests`,
-  `ContentPreviewTests`,
-  `PasteboardAdapterTests` (SwiftPM), plus `ClipyPresentationTests` and
-  `ClipyIntegrationTests` hosted by the app (XcodeGen-only, not in
-  `Package.swift`) and the XcodeGen-only `ClipyUITests` running-app tracer.
-  Presentation tests live in `ClipyApp/Tests/PresentationTests`; all UI
-  localization lives in `ClipyApp/Resources`. There is no PresentationUI
-  library or separate SwiftPM UI resource bundle.
-  `HistoryPerfTests` (SwiftPM) holds the perf/AB
-  measurement-helper proofs for the `HistoryPerfRunner` executable; the
-  PR/push correctness lane skips it (`--skip 'HistoryPerfTests\.'`). Its
-  reusable workflow is dormant until a future explicitly requested caller is
-  deliberately added.
-- Persistence tests use the real `SwiftDataHistory` with an **in-memory**
-  `ModelContainer` — there is no second fake writer implementation. A scripted
-  `ClipboardHistory` double is allowed only for SwiftUI previews, never as a
-  substitute for storage semantic tests.
-- Determinism: a package-only forced-collision fingerprint double
-  (`Tests/HistoryStorageTests/Fixtures/ForcedCollisionFingerprint.swift`) drives
-  dedup-collision tests; a deterministic concurrency harness +
-  transaction-injection seam (`Tests/HistoryStorageTests/ConcurrencyHarness/`)
-  drives ordering proofs.
-- Tests that create temp on-disk stores must create the store directories
-  upfront to keep CoreData file-status noise out of CI log scans.
-- Walking-skeleton examples WS1–WS21 (`docs/06-cross-cutting.md` §8) and Part VI
-  proofs (§7.x) name the acceptance tests per roadmap step; WS test files are
-  named `WS<N>…Tests.swift`. Roadmap steps 5–6 close commit-side clauses;
-  read/observation clauses close at step 7.
-
-## 7. CI and deployment
-
-- `.github/workflows/correctness.yml` is the only push/PR workflow. It runs
-  **SwiftPM build + test** alongside four **App build + GUI tests** shards.
-  Job steps delegate to `scripts/ci/`; `run_app_correctness.sh` accepts an
-  optional sixth argument (`1`–`4`), while its existing five-argument form
-  still runs the full hosted/UI suite. Each shard uploads its own results.
-- The exact-matcher and scale-admission workflows remain reusable
-  `workflow_call` modules and run only through the dedicated manual
-  `workflow_dispatch` caller after same-SHA correctness succeeds. They never
-  run on push or pull request. The performance helper/proof workflow remains
-  reusable-only with no caller.
-- `.github/workflows/package-app.yml` is the manual packaging lane: after the
-  same-SHA correctness admission it builds one unsigned Release `Clipy.app`
-  (`CODE_SIGNING_ALLOWED=NO`) via `scripts/ci/package_app.sh` and uploads the
-  zipped bundle as an artifact. It runs only on `workflow_dispatch`.
-- `scripts/diagnostic_scan.py` owns the narrow log profiles. Every macOS job
-  invokes the shared macOS 26/arm64 runner contract.
-- Do not add, extend, or invoke certificate, signing, notarization, protected-
-  tag, archive-identity, or release-attestation machinery unless the user asks
-  for that exact release operation. Existing manual historical workflows are
-  outside ordinary implementation work.
-
-## 8. Existing dependencies
-
-- **xxHash v0.8.3** is vendored in `Sources/xxh3/` behind
-  `clipy_xxh3_64bits`. Package-internal, no product surface.
-- **Fuse 1.4.0** pinned by exact revision
-  (`26ba868691b2d8b7bf2b1322951eb591be70ccca`) in `Package.swift` — the
-  2.0.0-rc.x pre-release is deliberately **not** used (`docs/AUDIT.md` §4b).
-  Confined to `HistoryStorage` (inside the `SearchWorker` actor).
-  Note: `maxPatternLength` is a dead parameter in Fuse 1.4.0, so the
-  64-character fuzzy-query bound (Fuse 1.4.0's single-`Int` bitap ceiling) is
-  enforced by `SearchWorker` itself.
-- Neither dependency may appear in a public signature.
-- No other third-party dependencies. Do not add any without a design-doc change
-  (`docs/roadmap/07-external-deps.md`).
-
-## 9. Security and data-safety considerations
-
-- Clipboard content is sensitive: `HistoryCore`/`HistoryDomain` handle raw
-  bytes only as `Data` values; large blobs use `.externalStorage` attributes in
-  the SwiftData schema; content blobs must not cross actor boundaries as
-  anything but immutable `Sendable` values.
-- The four versioned blob codecs (`CanonicalBlobV1`, `SignatureBlobV1`,
-  `EffectiveTypeIdentifiersBlobV1`, `RevisionStateBlobV1`) decode with
-  exhaustive checks and **fail closed** (`CodecRejection` → typed persistence
-  failure). Preserve that behavior; never silently ignore decode anomalies.
-- No network access, no external services, no telemetry anywhere in v1.
-- The architecture restrictions in §2/§5 remain review requirements. Do not
-  reintroduce retired regex/static-source or symbol-snapshot machinery as a
-  substitute for compiler-visible design and focused behavioral tests.
-
-## 10. Where to look before changing things
-
-- `docs/00-overview.md` — v1 truth: what is included/excluded, load-bearing
-  decisions, spec precedence.
-- `docs/01-architecture.md` — target graph, isolation model, forbidden
-  dependencies, and build/test checks.
-- `docs/02-domain.md` … `docs/06-cross-cutting.md` — per-part semantics.
-- `docs/roadmap/README.md` §3 — implementation order and step status.
-- `docs/PROGRESS.md` — landed steps, CI evidence, notable deviations, and open
-  spec questions (e.g. the pin-ordinal compaction question flagged for step 6).
-- `docs/AUDIT.md` — design audit history; behavior changes may need a §3 entry.
-- `docs/reviews/2026-08-22-clipy-maccy-deep-review/10-implementation-status.md`
-  — historical REVIEW implementation status. It can help avoid repeating old
-  work, but do not turn new work into ledger maintenance.
-- `docs/reviews/2026-08-22-clipy-maccy-deep-review/11-ai-todo-map-2026-08-23.md`
-  — AI-generated point-in-time audit + todo map (2026-08-23, baseline
-  `cda2ba0` → `a3e6774`). It is historical; current product behavior and the
-  owning specifications win when it drifts.
+只按真实构建和测试证据报告结果。打包成功不代替 correctness；skip 不算对应行为通过。完整执行入口和性能测量范围见 [docs/testing.md](docs/testing.md)。

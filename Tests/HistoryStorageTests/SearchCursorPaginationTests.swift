@@ -1,5 +1,5 @@
-/// Search continuation coverage for docs/04-coherence.md §6 and
-/// docs/05-authority-kernel.md §14.2. These facade-driven tests complement
+/// Search continuation coverage for docs/storage.md and
+/// docs/storage.md These facade-driven tests complement
 /// WS18's `.recent` cursor proofs by exercising every frozen search mode,
 /// both search ordering-anchor families, and position expiry after a commit.
 import Foundation

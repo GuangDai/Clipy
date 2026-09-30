@@ -97,7 +97,7 @@ func largePinnedCountStillProducesConstantSizeRelocations(pinnedCount: Int) thro
     }
 }
 
-/// Lane-1 equality (docs/02-domain.md §9.3.1) must hold for hinted items
+/// Lane-1 equality (docs/architecture.md) must hold for hinted items
 /// whose Effective Content carries several representations with
 /// non-trivial payloads, and must not depend on fingerprint evidence —
 /// the dictionary-keyed comparison consults bytes only.
@@ -168,7 +168,7 @@ func largePinnedCountStillProducesConstantSizeRelocations(pinnedCount: Int) thro
 
 /// The same multi-representation shape with ONE differing representation
 /// must refuse the lineage lane: byte-set equality is all-or-nothing
-/// (docs/02-domain.md §9.3.1).
+/// (docs/architecture.md).
 @Test func lineageHintWithOneDifferingRepresentationFallsThrough() throws {
     let largeText = String(repeating: "lineage", count: 512)
     let differingText = String(repeating: "mutated", count: 512)

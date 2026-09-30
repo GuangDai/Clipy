@@ -1,14 +1,14 @@
 /// HistoryViewStateTests — the panel view-state acceptance suite against a
-/// scripted `ClipboardHistory` double (docs/01-architecture.md §6; docs/
+/// scripted `ClipboardHistory` double (docs/architecture.md; docs/
 /// roadmap/05-presentationui.md). These pin the VIEW-STATE semantics, not
-/// storage semantics (docs/01-architecture.md §4): observation is snapshot
-/// replacement (docs/04-coherence.md §5 — an incoming `HistoryPage` REPLACES
+/// storage semantics (docs/architecture.md): observation is snapshot
+/// replacement (docs/storage.md — an incoming `HistoryPage` REPLACES
 /// rows, never appends), pagination is one-shot `browse` whose
 /// `.snapshotExpired` failure falls back to the observed first page and
-/// resumes from its cursor (docs/03a-instruction-set.md §7; docs/
+/// resumes from its cursor (docs/architecture.md; docs/
 /// 04-coherence.md §6), search edits debounce into a restarted observation,
 /// and mutating interactions swallow typed failures into `failure`
-/// (docs/03b-instruction-set.md §10).
+/// (docs/architecture.md).
 ///
 /// All waits poll on stable conditions — a state that stays true once true —
 /// through `pollUntil`, so the suite stays deterministic apart from the
@@ -26,7 +26,7 @@ struct HistoryViewStateTests {
     /// `activate()` applies the observed first page and its lanes: rows are
     /// the page's rows (replacement, not append), pinned/unpinned lanes
     /// split by `pinnedPosition`, and the page's `next` cursor drives
-    /// `hasNextPage` (docs/04-coherence.md §5; docs/
+    /// `hasNextPage` (docs/storage.md; docs/
     /// 03b-instruction-set.md §8).
     @Test func activateAppliesObservedFirstPageAndDerivedState() async {
         let firstPage = fixturePage(
@@ -70,7 +70,7 @@ struct HistoryViewStateTests {
         #expect(state.pageLimit == 25)
 
         // The observation request carries the current kind and page limit
-        // (docs/03a-instruction-set.md §7).
+        // (docs/architecture.md).
         let requests = await history.observeRequests
         #expect(requests.count == 1)
         #expect(requests.first?.kind == .recent)
@@ -943,7 +943,7 @@ struct HistoryViewStateTests {
     }
 
     /// A search-mode change restarts observation immediately in the new mode
-    /// (docs/03a-instruction-set.md §7) — the request that lands carries the
+    /// (docs/architecture.md) — the request that lands carries the
     /// exact text with the new mode.
     @Test func searchModeChangeRestartsObservationInNewMode() async {
         let firstPage = fixturePage(
@@ -1035,7 +1035,7 @@ struct HistoryViewStateTests {
     }
 
     /// When `perform` throws a typed failure, the mutation methods store it
-    /// into `failure` instead of throwing (docs/03b-instruction-set.md §10)
+    /// into `failure` instead of throwing (docs/architecture.md)
     /// — the action was still forwarded and recorded.
     @Test func mutatingInteractionsStoreTypedFailuresIntoFailure() async {
         let history = ScriptedHistory(
@@ -1767,7 +1767,7 @@ struct HistoryViewStateTests {
     }
 
     /// `requestPaste(_:)` hands the reference to the composition-root
-    /// `onPaste` hook (docs/01-architecture.md §5.6) — the view state never
+    /// `onPaste` hook (docs/architecture.md) — the view state never
     /// touches NSPasteboard.
     @Test func requestPasteHandsTheReferenceToOnPaste() async {
         let firstPage = fixturePage(
@@ -1798,7 +1798,7 @@ struct HistoryViewStateTests {
     // MARK: - Configured-policy read (V2-07 §5.2/§6.3; SPEC-IMPL-003)
 
     /// `retentionConfiguration()` is a thin passthrough to the public seam —
-    /// the settings tabs' panel-open read (docs/v2/V2-07-ux.md §6.3, a
+    /// the settings tabs' panel-open read (docs/interface.md, a
     /// one-shot read per §4.2.2; audit SPEC-IMPL-003): the scripted
     /// configured-policy value comes back unchanged and the read reaches the
     /// seam exactly once. Configured policy only — no live usage value

@@ -1,5 +1,5 @@
 /// Direct pure-planner proofs for pin/remove/clear/revision invariants D2–D4,
-/// D12, D15–D16, and D18 (docs/02-domain.md §10–§11, §14).
+/// D12, D15–D16, and D18 (docs/architecture.md, §14).
 import Foundation
 import HistoryCore
 import Testing

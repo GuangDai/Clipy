@@ -3,9 +3,9 @@
 /// (Part V §8), read forwarding and the subscribe-before-query observation
 /// loop (Part V §14; Part IV §5), `open` startup (Part V §13), and public
 /// failure translation (Part V §16).
-/// Owning spec: docs/05-authority-kernel.md §2 (public concrete adapter and
-/// internal actors); coherence: docs/04-coherence.md (Part IV); implementation
-/// sequence: docs/roadmap/03-historystorage.md (steps 5–8).
+/// Owning spec: docs/storage.md (public concrete adapter and
+/// internal actors); coherence: docs/storage.md (Part IV); implementation
+/// sequence: docs/storage.md (steps 5–8).
 ///
 /// `SQLiteHistory` is a value of six actor references plus the immutable,
 /// `Sendable` App Intents connection identity accepted during startup and,
@@ -33,12 +33,12 @@ internal enum ObservationDebugInstrumentation {
 }
 #endif
 
-// MARK: - SQLiteHistory (docs/v2/V2-09-multilevel-storage.md §2)
+// MARK: - SQLiteHistory (docs/storage.md)
 
 /// The production `ClipboardHistory` adapter, backed by SQLite metadata and
 /// immutable content files (V2-09 §2–§6).
 ///
-/// Owning spec: docs/05-authority-kernel.md §2.
+/// Owning spec: docs/storage.md
 ///
 /// The facade holds exactly the six internal actors of the Part V §2
 /// isolation tree — `HistoryAuthority` (sole writer and the serialization
@@ -60,25 +60,25 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     internal static let captureCandidateIDAttemptLimit = 8
 
     /// Sole writer; also serializes source snapshot capture and observer
-    /// registration (docs/05-authority-kernel.md §2).
+    /// registration (docs/storage.md).
     ///
     /// The six actor fields are `internal`, not the Part V §2 snippet's
     /// `private`: the deterministic concurrency harness (WS12/WS15,
-    /// docs/roadmap/03-historystorage.md step-5 note) installs suspension
+    /// docs/storage.md step-5 note) installs suspension
     /// handlers on the facade's own Authority from `@testable` tests, which
     /// requires same-module visibility. Cross-module surface is unchanged —
     /// `internal` members of a public struct are not reachable outside the
-    /// HistoryStorage module (docs/01-architecture.md §8), so the §2
+    /// HistoryStorage module (docs/architecture.md), so the §2
     /// isolation contract is preserved (deviation recorded in
-    /// docs/PROGRESS.md).
+    /// docs/testing.md).
     internal let authority: HistoryAuthority
 
     /// Prepares raw captures outside the commit interval
-    /// (docs/05-authority-kernel.md §6.1).
+    /// (docs/storage.md).
     internal let ingestPreparation: IngestPreparationActor
 
     /// Resolves revision drafts against a preparation snapshot outside the
-    /// commit interval (docs/05-authority-kernel.md §6.2).
+    /// commit interval (docs/storage.md).
     internal let revisionPreparation: RevisionPreparationActor
 
     /// Evaluates bounded search batches on its own SQLite read connection.
@@ -90,7 +90,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     private let storeLocation: HistoryStoreLocation
 
     /// Owns the thumbnail flight table and its worker
-    /// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).
+    /// (docs/storage.md; docs/storage.md).
     internal let thumbnailService: ThumbnailService
 
     /// Owns process-local external admission/rate state and delegates every
@@ -111,7 +111,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     /// Assembles the facade from its six actors and startup-validated external
     /// identity. Construction is internal to
     /// `open(configuration:)` — there is no other way to obtain a
-    /// `SQLiteHistory` (docs/05-authority-kernel.md §2).
+    /// `SQLiteHistory` (docs/storage.md).
     private init(
         authority: HistoryAuthority,
         ingestPreparation: IngestPreparationActor,
@@ -134,7 +134,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         self.storeRootLease = storeRootLease
     }
 
-    // MARK: Open (docs/05-authority-kernel.md §2, §13)
+    // MARK: Open (docs/storage.md, §13)
 
     /// Opens (or creates) the store and returns the ready facade.
     ///
@@ -167,7 +167,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     /// Package-owned deterministic capture-ID seam. Production always enters
     /// through the public overload above; storage semantic tests inject fixed
     /// candidates without exposing entropy configuration to callers
-    /// (docs/01-architecture.md §4; Card 2B-2).
+    /// (docs/architecture.md; Card 2B-2).
     internal static func open(
         configuration: HistoryConfiguration,
         limits: HistoryLimits = .standard,
@@ -267,7 +267,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         )
     }
 
-    // MARK: Closed action dispatch (docs/05-authority-kernel.md §8)
+    // MARK: Closed action dispatch (docs/storage.md)
 
     /// Performs one mutating History Action through the closed §8 switch:
     /// capture is prepared off the Authority and then committed by it, a
@@ -278,7 +278,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     ///
     /// Actor-thrown failures propagate unchanged as typed `HistoryFailure`s
     /// (§16); every v1 action path is implemented as of roadmap step 6
-    /// (docs/roadmap/03-historystorage.md), and the V2-02
+    /// (docs/storage.md), and the V2-02
     /// `.setRetentionPolicies` case is implemented by the R.6 policy sweep
     /// (`V2-02` §4.4; `V2-roadmap` §6).
     public func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
@@ -349,9 +349,9 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         }
     }
 
-    // MARK: Reads (docs/05-authority-kernel.md §14)
+    // MARK: Reads (docs/storage.md)
 
-    /// One-shot browse (docs/05-authority-kernel.md §14.1–§14.2).
+    /// One-shot browse (docs/storage.md).
     ///
     /// A `.recent` page, including the recent-equivalent empty-search shape,
     /// is read entirely inside one Authority interval from scalar projection
@@ -393,7 +393,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     }
 
     /// Observes the current first page for one query
-    /// (docs/05-authority-kernel.md §14.4; docs/04-coherence.md §5).
+    /// (docs/storage.md; docs/storage.md).
     ///
     /// The facade owns the Part IV §5 subscribe-before-query algorithm: the
     /// invalidation continuation is registered with the Authority BEFORE any
@@ -539,7 +539,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     }
 
     /// The paste payload for one retained item
-    /// (docs/05-authority-kernel.md §14.3): the Authority fetches exactly one
+    /// (docs/storage.md): the Authority fetches exactly one
     /// row and maps its current Effective Content plus the current reference
     /// and lineage hint.
     public func pastePayload(
@@ -566,7 +566,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         try await authority.backup(to: directory)
     }
 
-    /// The authoritative configured retention state (docs/v2/V2-07-ux.md
+    /// The authoritative configured retention state (docs/interface.md
     /// §5.2/§6.3 — the settings panel-open read; audit SPEC-IMPL-003): the
     /// Authority reads both durable singletons inside one serialized,
     /// non-suspending interval — the v1 count from the position singleton
@@ -583,7 +583,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
 
     /// An encoded thumbnail for one item at one Effective Content state,
     /// sized to `pixels`; `nil` when the item has no thumbnailable content
-    /// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).
+    /// (docs/storage.md; docs/storage.md).
     ///
     /// The facade supplies production Authority operations to the §9 deep
     /// module. `ThumbnailService` first joins or installs an exact-key
@@ -592,7 +592,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     /// performs only a scalar dimension/existence/version fence before sharing
     /// that task. Thus concurrent identical requests hydrate one bounded image
     /// source, no database handle crosses an actor boundary, and completed
-    /// bytes are not retained (docs/04-coherence.md §9).
+    /// bytes are not retained (docs/storage.md).
     public func thumbnail(
         for item: HistoryItemReference,
         pixels: PixelSize
@@ -628,13 +628,13 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         return error
     }
 
-    // MARK: Observation first page (docs/04-coherence.md §5)
+    // MARK: Observation first page (docs/storage.md)
 
     /// The fresh first-page query of `observe`'s subscribe-before-query loop — a
     /// cursorless `browse` for the observation's query shape; observation
-    /// intentionally has no cursor (docs/03a-instruction-set.md §7). The
+    /// intentionally has no cursor (docs/architecture.md). The
     /// loop reuses it for the phase-1 recheck requeries and for every
-    /// phase-2 replacement page (docs/04-coherence.md §5). Empty search uses
+    /// phase-2 replacement page (docs/storage.md). Empty search uses
     /// the same scalar recent path as one-shot browse (03b §8). Every page,
     /// including a replacement, rechecks its source position after off-actor
     /// search evaluation so superseded results are discarded before yield

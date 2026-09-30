@@ -3,7 +3,7 @@ import SwiftUI
 
 /// Visual steps and editable rule text are two presentations of the existing
 /// tree. Text stays a separate draft until a complete parse can replace it.
-/// Owning semantics: docs/v2/V2-13-workflow-rule-syntax.md.
+/// Owning semantics: docs/automation.md.
 struct WorkflowStepsWorkspaceEditor: View {
     let workflowID: UUID
     @Binding var steps: [BuiltInAutomationStep]

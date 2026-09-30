@@ -1,16 +1,16 @@
 /// CanonicalBlobV1 / CanonicalBlobCodec — the versioned wire value and codec
 /// for `HistoryItemRow.canonicalBlob`, the immutable Canonical representations
 /// including per-representation fingerprint evidence.
-/// Owning spec: docs/05-authority-kernel.md §3.1 (column semantics) and §4
-/// (versioned storage codecs); gates: docs/06-cross-cutting.md §7.3 (codec
+/// Owning spec: docs/storage.md (column semantics) and §4
+/// (versioned storage codecs); gates: docs/testing.md (codec
 /// round trip) and §7.4 (corruption rejection).
 import Foundation
 import HistoryCore
 import HistoryDomain
 
-// MARK: - Wire values (docs/05-authority-kernel.md §4)
+// MARK: - Wire values (docs/storage.md)
 
-/// Versioned wire value of the Canonical blob. docs/05-authority-kernel.md §4
+/// Versioned wire value of the Canonical blob. docs/storage.md
 ///
 /// `formatVersion` is exactly 1 for every blob `CanonicalBlobCodec` writes;
 /// decode rejects any other version.
@@ -20,7 +20,7 @@ internal struct CanonicalBlobV1: Codable, Sendable {
 }
 
 /// One stored Canonical representation: its bytes plus the xxh3-64
-/// fingerprint evidence computed at ingest (docs/05-authority-kernel.md §3.1,
+/// fingerprint evidence computed at ingest (docs/storage.md,
 /// §4). Fingerprint correctness is not re-verified at decode (§4, D7).
 internal struct StoredCanonicalRepresentationV1: Codable, Sendable {
     internal let typeIdentifier: String
@@ -36,11 +36,11 @@ internal struct StoredCanonicalRepresentationV1: Codable, Sendable {
     }
 }
 
-// MARK: - Codec (docs/05-authority-kernel.md §4)
+// MARK: - Codec (docs/storage.md)
 
 /// Encodes validated `CanonicalContent` to its durable blob and decodes the
 /// blob back with the full §4 check set, failing closed with
-/// `CodecRejection`. docs/05-authority-kernel.md §4
+/// `CodecRejection`. docs/storage.md
 internal enum CanonicalBlobCodec {
     /// The only blob version this codec reads or writes (§4: "known blob
     /// version (exactly 1 for each V1 blob)").
@@ -180,7 +180,7 @@ internal enum CanonicalBlobCodec {
     /// format. Production callers use `encode(_:)`, which builds the wire
     /// value from validated Domain values; this entry point exists so tests
     /// can craft decodable-but-invalid blobs through the exact production
-    /// serializer (docs/06-cross-cutting.md §7.4).
+    /// serializer (docs/testing.md).
     internal static func encodeWire(_ wire: CanonicalBlobV1) throws -> Data {
         do {
             return try CodecWireFormat.makeEncoder().encode(wire)

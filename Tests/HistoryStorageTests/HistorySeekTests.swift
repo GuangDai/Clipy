@@ -5,7 +5,7 @@ import Testing
 
 /// A retained ID locates a fresh query page without persisting a process-local
 /// cursor. All reads use the real store and the public browse boundary.
-/// Owning specification: docs/03a-instruction-set.md §7 / docs/04-coherence.md §6.
+/// Owning specification: docs/architecture.md / docs/storage.md
 struct HistorySeekTests {
     private static let searchKinds: [HistoryBrowseKind] = [
         .search(text: "alpha", mode: .exact),

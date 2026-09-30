@@ -1,5 +1,5 @@
 /// Thumbnail single-flight service + its owned decode worker
-/// (docs/04-coherence.md §9; docs/05-authority-kernel.md §14.5).
+/// (docs/storage.md; docs/storage.md).
 ///
 /// The `SQLiteHistory` facade's `thumbnail(for:pixels:)` pipeline enters
 /// this service before source hydration. The service atomically joins or
@@ -13,7 +13,7 @@
 /// The flight entry is removed when its task completes, and completed bytes
 /// are NOT retained by HistoryStorage.
 ///
-/// The version fence (WS15, docs/06-cross-cutting.md §8): ImageIO decode
+/// The version fence (WS15, docs/testing.md): ImageIO decode
 /// occurs only after all SwiftData objects and context have been released —
 /// the facade guarantees that by construction: `thumbnailSource` returns one
 /// immutable selection and the facade passes only its `Data` into this
@@ -27,30 +27,30 @@
 /// returned under an old key (§9).
 ///
 /// Only immutable `Sendable` values cross actor boundaries: `Data` in,
-/// `ThumbnailPayload` out (docs/01-architecture.md §6; Part VI §6).
+/// `ThumbnailPayload` out (docs/architecture.md; Part VI §6).
 import Foundation
 import HistoryCore
 import ImageIO
 import UniformTypeIdentifiers
 
-// MARK: - Single-flight key (docs/04-coherence.md §9)
+// MARK: - Single-flight key (docs/storage.md)
 
 /// The single-flight key: one flight per (item reference, pixel dimensions).
 /// The reference carries both the item ID and the Content Version
 /// (`HistoryItemReference`), so two requests for the same item at different
 /// Effective Content states produce different flights and different payloads,
 /// and a stale-reference result cannot be misapplied to a newer row
-/// (docs/04-coherence.md §9; WS15).
+/// (docs/storage.md; WS15).
 internal struct ThumbnailFlightKey: Sendable, Hashable {
     internal let item: HistoryItemReference
     internal let pixels: PixelSize
 }
 
-// MARK: - WS15 suspension point (docs/06-cross-cutting.md §8)
+// MARK: - WS15 suspension point (docs/testing.md)
 
 /// Named suspension point of `ThumbnailService` for the deterministic
 /// concurrency harness (`SuspensionGate` in HistoryStorageTests; WS15).
-/// docs/roadmap/03-historystorage.md step-5 note (concurrency harness).
+/// docs/storage.md step-5 note (concurrency harness).
 ///
 /// Test seam, compiled in always and harmless in production: the handler is
 /// `nil` unless a test installs one via @testable, so the point is a no-op
@@ -61,20 +61,20 @@ internal enum ThumbnailServiceSuspensionPoint: String, Sendable {
     /// At decode entry, after the source-inclusive flight is installed — the
     /// WS15 fence-to-decode window: a revision committing here changes the
     /// item "during decode", and the result must stay tagged with the verified
-    /// old reference (docs/04-coherence.md §9).
+    /// old reference (docs/storage.md).
     case decodeEntry = "ThumbnailService.thumbnail.entry"
 }
 
-// MARK: - ThumbnailService (docs/04-coherence.md §9)
+// MARK: - ThumbnailService (docs/storage.md)
 
 /// Owns the thumbnail flight table and its decode worker
-/// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).
+/// (docs/storage.md; docs/storage.md).
 ///
 /// Single-flight, not a completed-result cache: an existing in-flight
 /// source-to-decode `Task` for the exact key is shared, and on completion
 /// (success, failure, OR cancellation) the entry is removed. Completed bytes
 /// are NOT retained (§9 step 7; the G1 completed-thumbnail cache is deferred,
-/// docs/06-cross-cutting.md §3).
+/// docs/testing.md).
 ///
 /// The actor holds the flight dictionary and the owned `ThumbnailWorker`; the
 /// worker owns no state, so every decode is independent and only immutable
@@ -109,10 +109,10 @@ package actor ThumbnailService {
 
     package init() {}
 
-    // MARK: Roadmap-owned test seam (docs/roadmap/03-historystorage.md step-5 note; WS15)
+    // MARK: Roadmap-owned test seam (docs/storage.md step-5 note; WS15)
 
     /// Installs (or clears) the suspension handler the deterministic
-    /// concurrency harness drives for WS15 (docs/06-cross-cutting.md §8).
+    /// concurrency harness drives for WS15 (docs/testing.md).
     /// Test seam — `nil` in production, compiled in always, set via
     /// @testable; see `ThumbnailServiceSuspensionPoint`.
     internal func setSuspensionHandler(
@@ -256,10 +256,10 @@ package actor ThumbnailService {
     }
 }
 
-// MARK: - ThumbnailWorker (docs/05-authority-kernel.md §14.5; §9 step 6)
+// MARK: - ThumbnailWorker (docs/storage.md; §9 step 6)
 
 /// The off-Authority ImageIO decode worker
-/// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9 step 6).
+/// (docs/storage.md; docs/storage.md step 6).
 ///
 /// Owns no state: every decode is independent and only immutable `Sendable`
 /// values cross the actor boundary (`Data` in, `ThumbnailPayload` out). The
@@ -328,7 +328,7 @@ internal actor ThumbnailWorker {
         }
 
         // Primary-image index (audit
-        // docs/reviews/2026-08-20-clipy-maccy-audit/03-apple-platform.md
+        // docs/testing.md
         // §7 APL-C-06): a HEIF/HEIC container may carry auxiliary images
         // and designate a primary image other than index 0, so forcing 0
         // can decode the wrong image. CGImageSourceGetPrimaryImageIndex

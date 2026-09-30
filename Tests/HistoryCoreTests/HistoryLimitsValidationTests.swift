@@ -1,5 +1,5 @@
 /// Package-seam validation tests for custom HistoryLimits profiles
-/// (docs/06-cross-cutting.md §2). Production uses `.standard`; focused tests
+/// (docs/testing.md). Production uses `.standard`; focused tests
 /// exercise every admission relation through the validated package initializer.
 import Testing
 @testable import HistoryCore

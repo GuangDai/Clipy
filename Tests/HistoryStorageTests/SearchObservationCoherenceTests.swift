@@ -1,4 +1,4 @@
-/// Search-observation coherence coverage for docs/04-coherence.md §5/§7.
+/// Search-observation coherence coverage for docs/storage.md
 /// The existing WS12 position-recheck seam deterministically proves that a
 /// search page evaluated at an older position is discarded and recomputed
 /// before the first yield when a commit lands before the race-closing recheck.

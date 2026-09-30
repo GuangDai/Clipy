@@ -1,5 +1,5 @@
-/// Bounded projection tests (docs/05-authority-kernel.md §15;
-/// docs/06-cross-cutting.md §2, §9). Projection must discard whitespace-only
+/// Bounded projection tests (docs/storage.md;
+/// docs/testing.md, §9). Projection must discard whitespace-only
 /// representations and construct the stored corpus without first materializing
 /// an unbounded joined body.
 import Foundation

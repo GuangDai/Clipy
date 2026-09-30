@@ -1,5 +1,5 @@
 /// AppCompositionTests — the composition root's process-side guarantees
-/// (docs/roadmap/06-clipyapp.md "Acceptance"; docs/01-architecture.md §8
+/// (docs/architecture.md "Acceptance"; docs/architecture.md
 /// no-second-writer, §5.6 paste orchestration; AppComposition.swift):
 ///
 /// - `AppComposition.open(storeURL:)` rejects a second open over the same

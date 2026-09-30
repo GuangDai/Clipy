@@ -108,7 +108,7 @@ extension HistoryTypeFilter {
 
 /// The composition-root seam that loads one source application's icon by
 /// bundle identifier. `NSWorkspace` is AppKit and PresentationUI must not
-/// import it (docs/01-architecture.md §6 keeps PresentationUI
+/// import it (docs/architecture.md keeps PresentationUI
 /// Foundation/SwiftUI-only), so the app injects this value-typed loader
 /// instead. `.none` keeps previews and tests icon-free without a nil store.
 struct SourceIconProvider: Sendable {

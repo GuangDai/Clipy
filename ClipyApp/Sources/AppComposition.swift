@@ -2,10 +2,10 @@
 /// that constructs the production `SQLiteHistory`, the pasteboard
 /// adapter and observer, and the panel view state, and the ONLY coordinator
 /// of the History → pasteboard hand-off.
-/// Owning spec: docs/01-architecture.md §2 (ClipyApp composition-root row),
+/// Owning spec: docs/architecture.md (ClipyApp composition-root row),
 /// §5.6 (paste orchestration), §8 (no second writer, no service locator);
-/// caller example docs/03b-instruction-set.md §12; store startup
-/// docs/05-authority-kernel.md §2/§13; roadmap docs/roadmap/06-clipyapp.md
+/// caller example docs/architecture.md; store startup
+/// docs/storage.md; roadmap docs/architecture.md
 /// (step 9b).
 import AppKit
 import Foundation
@@ -14,7 +14,7 @@ import HistoryStorage
 import LocalAutomation
 import PasteboardAdapter
 
-// MARK: - Composition error (docs/roadmap/06-clipyapp.md acceptance)
+// MARK: - Composition error (docs/architecture.md acceptance)
 
 /// The one failure vocabulary ClipyApp owns itself. Everything
 /// storage-related stays `HistoryFailure` (03b §10); this error exists only
@@ -131,7 +131,7 @@ struct WorkspaceActivityState: Sendable, Equatable {
     }
 }
 
-// MARK: - AppComposition (docs/01-architecture.md §2, §5.6, §8)
+// MARK: - AppComposition (docs/architecture.md, §5.6, §8)
 
 /// The assembled application object: the opened store, the pasteboard
 /// adapter and its observer, and the panel's view state, wired together

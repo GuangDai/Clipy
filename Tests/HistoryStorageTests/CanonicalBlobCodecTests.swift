@@ -1,7 +1,7 @@
 /// Canonical blob codec gates: encode→decode round trips of valid values
-/// (docs/06-cross-cutting.md §7.3) and one rejection test per Part V §4
-/// decode check for the Canonical blob (docs/06-cross-cutting.md §7.4;
-/// owning spec docs/05-authority-kernel.md §4), plus the §16 failure mapping
+/// (docs/testing.md) and one rejection test per Part V §4
+/// decode check for the Canonical blob (docs/testing.md;
+/// owning spec docs/storage.md), plus the §16 failure mapping
 /// of the shared `CodecRejection` vocabulary.
 import Foundation
 import HistoryCore
@@ -29,7 +29,7 @@ private func storedRepresentation(
 
 /// A valid multi-representation Canonical value whose fingerprints span the
 /// full `UInt64` range (including `UInt64.max`): the wire format must
-/// round-trip fingerprint evidence exactly (docs/02-domain.md §2.2).
+/// round-trip fingerprint evidence exactly (docs/architecture.md).
 private func makeCanonical() throws -> CanonicalContent {
     try CanonicalContent(representations: [
         CanonicalRepresentation(
@@ -58,7 +58,7 @@ private func makeCanonical() throws -> CanonicalContent {
 
 /// Small bounds so the §4 byte/count checks run without large fixtures.
 /// Production decode uses the fixed `HistoryLimits.standard` profile
-/// (docs/06-cross-cutting.md §2); the codec's `limits` parameter is the seam.
+/// (docs/testing.md); the codec's `limits` parameter is the seam.
 private func makeLimits(
     representations: Int = 2,
     typeIdentifierUTF8Bytes: Int = 16,
@@ -93,7 +93,7 @@ private func makeLimits(
     )!
 }
 
-// MARK: - Round trips (docs/06-cross-cutting.md §7.3)
+// MARK: - Round trips (docs/testing.md)
 
 @Test func roundTripPreservesContentAndFingerprintEvidence() throws {
     let canonical = try makeCanonical()
@@ -102,7 +102,7 @@ private func makeLimits(
     let decoded = try CanonicalBlobCodec.decode(blob)
 
     // Canonical equality ignores fingerprints by design
-    // (docs/02-domain.md §2.2/§2.3)...
+    // (docs/architecture.md)...
     #expect(decoded == canonical)
     // ...so the fingerprint evidence is asserted explicitly, at value level
     // and at the byte level.
@@ -114,7 +114,7 @@ private func makeLimits(
 }
 
 @Test func roundTripPreservesNonASCIITypeIdentifiers() throws {
-    // Stable Unicode scalar order (docs/02-domain.md §2.1): 'c' (U+0063)
+    // Stable Unicode scalar order (docs/architecture.md): 'c' (U+0063)
     // precedes '日' (U+65E5).
     let canonical = try CanonicalContent(representations: [
         CanonicalRepresentation(
@@ -142,7 +142,7 @@ private func makeLimits(
     #expect(try CanonicalBlobCodec.encode(canonical) == CanonicalBlobCodec.encode(canonical))
 }
 
-// MARK: - Corruption rejection (docs/06-cross-cutting.md §7.4, Part V §4)
+// MARK: - Corruption rejection (docs/testing.md, Part V §4)
 
 @Test func decodeRejectsMalformedBytes() {
     #expect(throws: CodecRejection.malformedBlob) {
@@ -306,7 +306,7 @@ private func makeLimits(
     }
 }
 
-// MARK: - Failure mapping (docs/05-authority-kernel.md §16)
+// MARK: - Failure mapping (docs/storage.md)
 
 @Test func rejectionsMapToPersistenceFailures() {
     // Every decode rejection is a corrupt persisted value...

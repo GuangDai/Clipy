@@ -1,6 +1,6 @@
 /// ThumbnailStore.swift — panel-side thumbnail fetch and bounded,
-/// reference-exact decoded-image retention (docs/01-architecture.md §5.7;
-/// docs/04-coherence.md §9; roadmap 05).
+/// reference-exact decoded-image retention (docs/architecture.md;
+/// docs/storage.md; roadmap 05).
 ///
 /// History returns encoded, `Sendable` PNG bytes (03b §9); this store retains
 /// ContentPreview's eager, framework-neutral raster only under the exact
@@ -19,7 +19,7 @@ import HistoryCore
 import SwiftUI
 
 /// Thumbnail fetch + bounded reference-exact retention (docs/
-/// 01-architecture.md §5.7; docs/04-coherence.md §9). One instance per
+/// 01-architecture.md §5.7; docs/storage.md). One instance per
 /// browsing surface, owned by the panel's history list.
 @MainActor @Observable
 final class ThumbnailStore {
@@ -322,7 +322,7 @@ final class ThumbnailStore {
         guard entries[item] == nil, inFlight[item] == nil else {
             #if DEBUG
             // The duplicate-request signal of DEC-THUMB-CACHE G1's
-            // "identical requests" numerator (docs/06-cross-cutting.md §3):
+            // "identical requests" numerator (docs/testing.md):
             // the row asked again while an answer was already retained
             // (`.rejectedRetained`) or a flight was still pending
             // (`.rejectedInFlight`).
@@ -511,7 +511,7 @@ final class ThumbnailStore {
     /// Cheap UTI heuristic gating prefetch: true when any of the row's type
     /// identifiers is in the frozen v1 ImageIO-decodable set. This is a
     /// prefetch filter only — History remains the fail-closed authority on
-    /// what is thumbnailable (docs/04-coherence.md §9).
+    /// what is thumbnailable (docs/storage.md).
     static func likelyThumbnailable(_ typeIdentifiers: [String]) -> Bool {
         typeIdentifiers.contains { thumbnailableTypeIdentifiers.contains($0) }
     }
@@ -791,7 +791,7 @@ final class ThumbnailStore {
 }
 
 #if DEBUG
-/// DEC-THUMB-CACHE G1 evidence sink (docs/06-cross-cutting.md §3 G1;
+/// DEC-THUMB-CACHE G1 evidence sink (docs/testing.md G1;
 /// docs/reviews/2026-08-22-clipy-maccy-deep-review/
 /// 05-evidence-and-open-questions.md §6 "Completed thumbnail cache" row and
 /// §5.5's reporting floors; 11 §4.7). Batch 39 contracted the store's

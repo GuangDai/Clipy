@@ -1,13 +1,13 @@
 /// Strong semantic mutation plan — the Domain's declarative output for one
 /// accepted action: one ordered list of mutations plus a package outcome
-/// vocabulary. Owning spec: docs/02-domain.md §7. Foundation + HistoryCore
-/// only; pure values, no version/position minting (docs/02-domain.md §1, §4).
+/// vocabulary. Owning spec: docs/architecture.md Foundation + HistoryCore
+/// only; pure values, no version/position minting (docs/architecture.md, §4).
 import Foundation
 import HistoryCore
 
 /// One semantic change in a plan; each case carries the complete payload for
 /// that kind of change.
-/// docs/02-domain.md §7
+/// docs/architecture.md
 ///
 /// Case payload rules (plan invariants 2–9, see `MutationPlan`):
 /// - `create`: the ID does not already exist in the facts (invariant 2).
@@ -69,7 +69,7 @@ package enum HistoryMutation: Sendable {
 
 /// Payload of `HistoryMutation.create`: a new item's identity, canonical
 /// content, and first occurrence.
-/// docs/02-domain.md §7
+/// docs/architecture.md
 package struct NewHistoryItem: Sendable {
     package let id: HistoryItemID
     package let canonical: CanonicalContent
@@ -77,7 +77,7 @@ package struct NewHistoryItem: Sendable {
 }
 
 /// Why an item leaves the retained history.
-/// docs/02-domain.md §7
+/// docs/architecture.md
 package enum RetirementReason: Sendable {
     case userRemoval
     case clear
@@ -85,9 +85,9 @@ package enum RetirementReason: Sendable {
 }
 
 /// The Domain's ordered plan for one accepted action.
-/// docs/02-domain.md §7
+/// docs/architecture.md
 ///
-/// Plan invariants (docs/02-domain.md §7):
+/// Plan invariants (docs/architecture.md):
 /// 1. `mutations` is non-empty.
 /// 2. A create ID does not already exist in the facts.
 /// 3. `recordCopy` carries the final folded occurrence; Storage does not
@@ -130,7 +130,7 @@ package struct MutationPlan: Sendable {
 
 /// Package outcome vocabulary, mapped mechanically to the public receipt
 /// outcome in Part III.
-/// docs/02-domain.md §7
+/// docs/architecture.md
 package enum PlannedOutcome: Sendable {
     case inserted(HistoryItemID)
     case coalesced(HistoryItemID)
@@ -152,7 +152,7 @@ package enum PlannedOutcome: Sendable {
 
 /// The planner verdict for one action: either nothing changes, or one
 /// ordered plan commits.
-/// docs/02-domain.md §7
+/// docs/architecture.md
 package enum PlanningResult: Sendable {
     case unchanged
     case commit(MutationPlan)

@@ -1,18 +1,18 @@
 /// PlannersCapture.swift — the capture and retention pure planners plus the
-/// Canonical containment relation. Owning spec: docs/02-domain.md §8 (planner
+/// Canonical containment relation. Owning spec: docs/architecture.md (planner
 /// contracts), §9 (deduplication), §12 (retention and hard capacity), §14
 /// (invariants D1–D19). Pure value planning only: no I/O, no clocks, no UUID,
-/// Content Version, or Change Position minting (docs/02-domain.md §1, §4) —
+/// Content Version, or Change Position minting (docs/architecture.md, §4) —
 /// the plan describes mutations declaratively and Storage stamps tokens.
 import Foundation
 import HistoryCore
 
 /// Byte-exact Canonical containment: true when every incoming
 /// `(typeIdentifier, bytes)` pair appears in `existing`.
-/// docs/02-domain.md §9.2
+/// docs/architecture.md
 ///
 /// `CanonicalRepresentation` equality and hashing use `content` only
-/// (docs/02-domain.md §2.3), so fingerprint evidence never completes this
+/// (docs/architecture.md), so fingerprint evidence never completes this
 /// decision (D7). Containment is a partial order, not an equivalence: it
 /// preserves "rich copy absorbs a later plain-only copy" while refusing
 /// hash-only matches.
@@ -92,15 +92,15 @@ package func confirmLineageCapture(
 
 /// Plans one capture from the confirmed winner: insert-or-coalesce and
 /// same-commit retention victim selection.
-/// docs/02-domain.md §8, §9, §12
+/// docs/architecture.md, §9, §12
 ///
 /// Storage supplies the lineage winner or the complete Canonical reduction,
 /// using the pure helpers above in that order (02 §9.3, D8–D9). Insert occurs
 /// only when neither lane confirms a match.
 ///
 /// A coalescing winner receives one `.recordCopy` carrying the complete
-/// folded occurrence of docs/02-domain.md §3.1 (D11); count overflow throws
-/// `.capacityExceeded(.copyCount)` (docs/02-domain.md §13). Retention runs on
+/// folded occurrence of docs/architecture.md (D11); count overflow throws
+/// `.capacityExceeded(.copyCount)` (docs/architecture.md). Retention runs on
 /// the projected post-insert / post-coalesce inventory (D14): pinned items
 /// are exempt (D13), the primary item is never its own victim, and eviction
 /// follows `lastCopiedAt` ascending, then `HistoryItemID` bytes ascending.
@@ -121,7 +121,7 @@ package func planCapture(
         let existing = winner.occurrence
         let (foldedCount, overflow) = existing.count.addingReportingOverflow(1)
         guard !overflow else {
-            // Checked occurrence arithmetic fails closed (docs/02-domain.md §13).
+            // Checked occurrence arithmetic fails closed (docs/architecture.md).
             throw DomainRejection.capacityExceeded(.copyCount)
         }
         let advancesRecency = capture.observedAt >= existing.lastCopiedAt
@@ -142,14 +142,14 @@ package func planCapture(
         // for this prepared business ID. Only the insert lane consumes
         // the prepared candidate; a coalescing winner above deliberately
         // ignores it. Storage catches this package rejection and remints —
-        // the Domain never generates identity (docs/02-domain.md §1/§4).
+        // the Domain never generates identity (docs/architecture.md).
         guard !facts.candidateIDExists else {
             throw DomainRejection.candidateItemIDCollision(
                 capture.candidateID
             )
         }
 
-        // docs/02-domain.md §3.1: a new item initializes all first/last values
+        // docs/architecture.md: a new item initializes all first/last values
         // from the accepted capture and sets count = 1.
         let occurrence = CopyOccurrence(
             firstCopiedAt: capture.observedAt,

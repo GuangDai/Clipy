@@ -1,9 +1,9 @@
 /// Content lineage values: content representations, fingerprint and signature
 /// evidence, Canonical and Effective Content, content revisions, and the
 /// Effective Content derivation.
-/// Owning spec: docs/02-domain.md §2. Immutable pure values and functions —
+/// Owning spec: docs/architecture.md Immutable pure values and functions —
 /// no I/O, actors, clocks, UUID generation, or version minting
-/// (docs/02-domain.md §1, §4).
+/// (docs/architecture.md, §4).
 import Foundation
 import HistoryCore
 
@@ -29,10 +29,10 @@ package struct ContentRepresentationKey: Sendable, Hashable {
     }
 }
 
-// MARK: - Content representation (docs/02-domain.md §2.1)
+// MARK: - Content representation (docs/architecture.md)
 
 /// One typed byte representation of clipboard content.
-/// docs/02-domain.md §2.1
+/// docs/architecture.md
 ///
 /// Equality uses Swift String equality (Unicode canonical equivalence) for
 /// `typeIdentifier` and byte-exact Data equality for `bytes`. A normalized
@@ -58,10 +58,10 @@ package struct ContentRepresentation: Sendable, Hashable {
     }
 }
 
-// MARK: - Fingerprint and signature evidence (docs/02-domain.md §2.2)
+// MARK: - Fingerprint and signature evidence (docs/architecture.md)
 
 /// An xxh3-64 fingerprint over one representation's bytes.
-/// docs/02-domain.md §2.2
+/// docs/architecture.md
 ///
 /// Evidence only: a fingerprint is not identity and is never sufficient for
 /// Copy Coalescing (D7). A collision may add a candidate; Storage must prove
@@ -76,7 +76,7 @@ package struct ContentFingerprint: Sendable, Hashable {
 }
 
 /// One Canonical representation's signature entry.
-/// docs/02-domain.md §2.2
+/// docs/architecture.md
 ///
 /// Derived from a Canonical representation and used by the Signature Index
 /// for candidate generation. Signature evidence only accelerates candidacy;
@@ -103,10 +103,10 @@ package struct ContentSignatureEntry: Sendable, Hashable {
     }
 }
 
-// MARK: - Canonical Content (docs/02-domain.md §2.3)
+// MARK: - Canonical Content (docs/architecture.md)
 
 /// One Canonical representation together with its fingerprint evidence.
-/// docs/02-domain.md §2.3
+/// docs/architecture.md
 ///
 /// Custom equality and hashing use `content` only — fingerprints never
 /// participate in either (§2.2, D7).
@@ -129,26 +129,26 @@ package struct CanonicalRepresentation: Sendable, Hashable {
 }
 
 /// Rejection of a proposed Canonical Content value.
-/// docs/02-domain.md §2.3
+/// docs/architecture.md
 ///
 /// Thrown only by the validating `CanonicalContent` initializer when input
 /// violates the normalized-set requirements of §2.1. Preparation
 /// (Part V §6.1) already sorts, deduplicates, and filters representations, so
 /// a throw here is a defensive backstop against invalid construction.
 package enum CanonicalContentRejection: Error, Sendable, Equatable {
-    /// The representation list was empty. docs/02-domain.md §2.1, §2.3
+    /// The representation list was empty. docs/architecture.md, §2.3
     case emptyRepresentations
-    /// A type identifier appeared more than once. docs/02-domain.md §2.1, §2.3
+    /// A type identifier appeared more than once. docs/architecture.md, §2.3
     case duplicateTypeIdentifier(String)
-    /// A representation carried zero-length bytes. docs/02-domain.md §2.1, §2.3
+    /// A representation carried zero-length bytes. docs/architecture.md, §2.3
     case emptyBytes(typeIdentifier: String)
     /// The list was not sorted by type identifier in the stable Unicode
-    /// scalar order. docs/02-domain.md §2.1, §2.3
+    /// scalar order. docs/architecture.md, §2.3
     case nonNormalizedOrder
 }
 
 /// The immutable ingest-lineage root of a history item.
-/// docs/02-domain.md §2.3
+/// docs/architecture.md
 ///
 /// Created only for a new History Item; preserved on Copy Coalescing; never
 /// replaced by a revision; never changed by pinning, retention, or
@@ -161,7 +161,7 @@ package struct CanonicalContent: Sendable, Hashable {
     package let representations: [CanonicalRepresentation]
     package var pasteboardItemCount: Int { (representations.last?.content.pasteboardItemIndex ?? -1) + 1 }
 
-    /// The one validating initializer. docs/02-domain.md §2.3
+    /// The one validating initializer. docs/architecture.md
     ///
     /// Accepts already-prepared representations and verifies the
     /// normalized-set requirements of §2.1: the list is non-empty, type
@@ -211,11 +211,11 @@ func normalizedRepresentationKeys(
     return seen
 }
 
-// MARK: - Effective Content (docs/02-domain.md §2.4)
+// MARK: - Effective Content (docs/architecture.md)
 
 /// The single content state used for display, search, paste, editing, and
 /// thumbnails.
-/// docs/02-domain.md §2.4
+/// docs/architecture.md
 ///
 /// Distinct from Canonical Content even when their bytes currently match.
 /// Storage resolves the active lineage before constructing operation facts
@@ -245,10 +245,10 @@ package struct EffectiveContent: Sendable, Hashable {
     }
 }
 
-// MARK: - Content Revision (docs/02-domain.md §2.5)
+// MARK: - Content Revision (docs/architecture.md)
 
 /// One immutable, append-only revision of an item's Effective Content.
-/// docs/02-domain.md §2.5
+/// docs/architecture.md
 ///
 /// A v1 revision stores a complete Effective Content snapshot, not a sparse
 /// action map: the active revision alone contains every byte required to

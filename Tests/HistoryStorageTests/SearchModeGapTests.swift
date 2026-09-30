@@ -1,4 +1,4 @@
-/// Focused fixtures for the remaining docs/03b-instruction-set.md §8 search
+/// Focused fixtures for the remaining docs/architecture.md search
 /// mode clauses: regexp body presentation, fuzzy unpinned total ordering, and
 /// non-ASCII UTF-16 range translation through the public history facade.
 import Foundation

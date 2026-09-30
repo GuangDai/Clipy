@@ -1,5 +1,5 @@
 /// Explicit binary audit-payload contract for the X.4 Gateway substrate.
-/// Owning spec: `docs/v2/V2-05-external-gateway.md` §4.4.
+/// Owning spec: `docs/automation.md` §4.4.
 ///
 /// This codec intentionally does not use synthesized `Codable` or an
 /// extensible container. Every field and tag is spelled out below. Multi-byte

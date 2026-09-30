@@ -1,5 +1,5 @@
 # XcodeGen spec for the ClipyApp application target and its hosted
-# hosted integration/presentation bundles (docs/01-architecture.md §9 item 6: the app
+# hosted integration/presentation bundles (docs/architecture.md item 6: the app
 # target is XcodeGen-owned; the library graph stays SwiftPM-owned).
 # Regenerate from the repo root with:
 #   xcodegen generate --spec ClipyApp/project.yml

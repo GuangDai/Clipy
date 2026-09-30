@@ -1,28 +1,28 @@
 /// PasteboardAdapter — NSPasteboard ↔ HistoryCore raw-value translation:
-/// the capture freeze (docs/03a-instruction-set.md §4; docs/01-architecture.md
-/// §5.1), the paste write (docs/03b-instruction-set.md §9; docs/04-coherence.md
-/// §8; docs/01-architecture.md §5.6), and the source/lineage observation.
-/// Owning roadmap: docs/roadmap/04-pasteboardadapter.md.
+/// the capture freeze (docs/architecture.md; docs/architecture.md
+/// §5.1), the paste write (docs/architecture.md; docs/storage.md
+/// §8; docs/architecture.md), and the source/lineage observation.
+/// Owning roadmap: docs/testing.md.
 ///
-/// AppKit is confined to this target (docs/01-architecture.md §2/§8). The
+/// AppKit is confined to this target (docs/architecture.md). The
 /// adapter is deliberately dumb: it never constructs `CanonicalContent`,
 /// never fingerprints, and never touches persistence — every
 /// dedup/coalescing/OCC decision stays behind `ClipboardHistory`
-/// (docs/01-architecture.md §3 "Must not own", roadmap 04 negative
+/// (docs/architecture.md "Must not own", roadmap 04 negative
 /// acceptance).
 ///
 /// Isolation: the whole translation surface is confined to the main actor.
 /// `NSPasteboard` and `NSWorkspace` are AppKit values that are not
 /// `Sendable`, so the adapter keeps them main-actor-isolated and only
 /// immutable `Sendable` values (`ClipboardCapture`, `PastePayload`) cross
-/// actor boundaries (docs/01-architecture.md §6 boundary rule). Main-actor
+/// actor boundaries (docs/architecture.md boundary rule). Main-actor
 /// isolation also provides this struct's `Sendable` conformance without
 /// ever claiming the stored `NSPasteboard` reference itself is Sendable —
 /// the sanctioned alternative to the banned concurrency escape hatches
-/// (docs/01-architecture.md §8).
+/// (docs/architecture.md).
 ///
 /// Failure vocabulary (audit SPEC-IMPL-005,
-/// docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md):
+/// docs/testing.md):
 /// the freeze distinguishes "nothing retainable" (nil) from "declared but
 /// unavailable" (`CaptureOutcome.declaredUnavailable`), and the write throws
 /// `PasteboardWriteFailure` when an item refuses a staged representation or
@@ -90,7 +90,7 @@ public struct PasteboardAdapter {
     #endif
 
     /// Freezes the current pasteboard contents into a raw capture
-    /// (docs/03a-instruction-set.md §4; docs/01-architecture.md §5.1) —
+    /// (docs/architecture.md; docs/architecture.md) —
     /// the convenience half of `captureOutcome(observedAt:)` that returns
     /// only a complete freeze. Production capture flows through
     /// `PasteboardObserver`, which delivers the full outcome; direct
@@ -113,8 +113,8 @@ public struct PasteboardAdapter {
     }
 
     /// Freezes the current pasteboard contents into a raw capture PLUS the
-    /// record of what could not be frozen (docs/03a-instruction-set.md §4;
-    /// docs/01-architecture.md §5.1; audit SPEC-IMPL-005).
+    /// record of what could not be frozen (docs/architecture.md;
+    /// docs/architecture.md; audit SPEC-IMPL-005).
     ///
     /// - Every retainable typed representation preserves its pasteboard item
     ///   index, exact type identifier and bytes. Item order is never flattened
@@ -136,7 +136,7 @@ public struct PasteboardAdapter {
     ///   representations; an absent hint payload is an absent hint, never
     ///   an unavailability record.
     /// - If the item's DECLARED types contain one of the six exclusion
-    ///   markers (docs/05-authority-kernel.md §6.1), the adapter returns an
+    ///   markers (docs/storage.md), the adapter returns an
     ///   explicit concealed outcome before calling `data(forType:)` for any
     ///   type. The outcome carries no capture, so no caller can accidentally
     ///   submit sibling bytes that were intentionally not read.
@@ -364,8 +364,8 @@ public struct PasteboardAdapter {
     }
 
     /// Writes the payload's Effective Content representations plus the
-    /// lineage hint equal to the item ID (docs/03b-instruction-set.md §9;
-    /// docs/04-coherence.md §8; docs/01-architecture.md §5.6).
+    /// lineage hint equal to the item ID (docs/architecture.md;
+    /// docs/storage.md; docs/architecture.md).
     ///
     /// Every representation and the `com.clipy.lineageHint` metadata are
     /// first staged on separate, unbound `NSPasteboardItem`s in item-index
@@ -376,7 +376,7 @@ public struct PasteboardAdapter {
     /// end-to-end proof lives in HistoryStorage, not this target). The write
     /// is a framework side effect owned by the composition root's paste
     /// orchestration and is intentionally outside any History transaction
-    /// (docs/04-coherence.md §8).
+    /// (docs/storage.md).
     ///
     /// Failure is explicit, never silent (audit SPEC-IMPL-005; the 03b §12
     /// caller example already writes `try ... write(payload)`). A staging

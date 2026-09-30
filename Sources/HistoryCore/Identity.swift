@@ -1,10 +1,10 @@
 /// Public identity and coherence values: item/revision IDs, content versions,
 /// change positions, and item references.
-/// Owning spec: docs/03a-instruction-set.md §2. Foundation-only.
+/// Owning spec: docs/architecture.md Foundation-only.
 import Foundation
 
 /// Stable identity of one retained history item.
-/// docs/03a-instruction-set.md §2
+/// docs/architecture.md
 ///
 /// The raw UUID is observable for logging, pasteboard lineage encoding, and
 /// stable persistence. Value construction also supports app-owned previews;
@@ -42,7 +42,7 @@ public struct HistoryItemID:
 }
 
 /// Stable identity of one revision of a retained history item.
-/// docs/03a-instruction-set.md §2
+/// docs/architecture.md
 ///
 /// Constructing this value does not append a revision; HistoryStorage owns
 /// that operation. App-owned previews may construct immutable examples.
@@ -60,7 +60,7 @@ public struct RevisionID: Sendable, Hashable, Comparable {
 }
 
 /// Version of an item's Effective Content state; monotonically increasing.
-/// docs/03a-instruction-set.md §2
+/// docs/architecture.md
 ///
 /// Versions use checked arithmetic and never wrap. `.initial` and
 /// `successor()` are package-only so versioning is minted centrally.
@@ -80,7 +80,7 @@ public struct ContentVersion: Sendable, Hashable, Comparable {
 }
 
 /// Position of one change in the history's global change order.
-/// docs/03a-instruction-set.md §2
+/// docs/architecture.md
 ///
 /// Positions use checked arithmetic and never wrap. Advancement remains
 /// package-only; constructing a value does not change the store's position.
@@ -100,7 +100,7 @@ public struct ChangePosition: Sendable, Hashable, Comparable {
 }
 
 /// Reference to one retained item at one Effective Content state.
-/// docs/03a-instruction-set.md §2
+/// docs/architecture.md
 ///
 /// UI thumbnail/detail/edit work should retain the reference rather than an
 /// ID alone.

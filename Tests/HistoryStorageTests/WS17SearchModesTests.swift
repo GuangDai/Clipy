@@ -1,5 +1,5 @@
-/// WS17 — Search modes and matched ranges (docs/06-cross-cutting.md §8 WS17;
-/// docs/03b-instruction-set.md §8 — the frozen search behavior). Facade-driven
+/// WS17 — Search modes and matched ranges (docs/testing.md WS17;
+/// docs/architecture.md — the frozen search behavior). Facade-driven
 /// via `history.browse(HistoryBrowseRequest(kind:limit:))`: the three frozen
 /// search modes — exact (case-insensitive literal substring, title-then-body),
 /// regexp (`NSRegularExpression`, 1,000-Character prefixes, unsafe-pattern
@@ -9,7 +9,7 @@
 /// `.invalidInput(.invalidSearchTerm)`.
 ///
 /// All mode behavior is frozen by 03b §8 and fixture-locked here. The
-/// implementation under test is `SearchWorker.page` (docs/05-authority-kernel.md
+/// implementation under test is `SearchWorker.page` (docs/storage.md
 /// §14.2), wired through the public facade. Every assertion cites 03b §8 +
 /// WS17. Deterministic fixed timestamps are monotone per scenario.
 import Foundation

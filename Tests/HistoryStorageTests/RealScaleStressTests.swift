@@ -1,15 +1,15 @@
 /// Real-scale storage stress slice (fixture suite B): the walking-skeleton
-/// semantics of docs/06-cross-cutting.md §8 re-proven against the real-scale
+/// semantics of docs/testing.md re-proven against the real-scale
 /// `clipy-fixtures-v1` payloads instead of hand-written strings — bulk text
 /// capture at ~180 commits, the 256 KiB stored-search-body boundary, the
 /// 1,024-byte stored-title boundary, 4K/8K thumbnail production, and a
 /// 120-capture retention storm against a cap of 50.
 ///
-/// Owning spec sections per test are cited inline: docs/02-domain.md §10/§12/
+/// Owning spec sections per test are cited inline: docs/architecture.md/
 /// §13 (coalescing, retention, one position advance per commit),
-/// docs/03b-instruction-set.md §8/§9 (frozen search behavior, thumbnail DTO),
-/// docs/05-authority-kernel.md §14.2/§15 (search corpus snapshot, projection
-/// truncation), docs/06-cross-cutting.md §2 (the fixed bounds table).
+/// docs/architecture.md (frozen search behavior, thumbnail DTO),
+/// docs/storage.md (search corpus snapshot, projection
+/// truncation), docs/testing.md (the fixed bounds table).
 ///
 /// Fixture payloads come from the `clipy-fixtures-v1` release tree (see
 /// `Support/FixtureCatalog.swift` in this target). The whole suite is gated
@@ -140,8 +140,8 @@ private static func captureText(
 
 // MARK: - (1) Bulk text capture
 
-/// Real-scale WS1/WS2 stress (docs/06-cross-cutting.md §8 WS1/WS2;
-/// docs/02-domain.md §13 D6): 180 distinct real-text captures — cycling all
+/// Real-scale WS1/WS2 stress (docs/testing.md WS1/WS2;
+/// docs/architecture.md D6): 180 distinct real-text captures — cycling all
 /// nine text fixtures with advancing slices — commit in order at Change
 /// Positions 1…180 (one advance per commit, no retention below the 200-item
 /// policy), and a byte-identical re-capture of the first payload COALESCES
@@ -219,8 +219,8 @@ private static func captureText(
 
 // MARK: - (2) Stored-search-body and stored-title boundaries
 
-/// The 256 KiB stored-search-body boundary (docs/06-cross-cutting.md §2;
-/// docs/05-authority-kernel.md §15, §14.2; docs/03b-instruction-set.md §8).
+/// The 256 KiB stored-search-body boundary (docs/testing.md;
+/// docs/storage.md, §14.2; docs/architecture.md).
 ///
 /// `text/searchbody-300kb.txt` is 300 KiB of pure-ASCII prose (pinned by the
 /// manifest checksum), so its stored search body is exactly the first
@@ -309,8 +309,8 @@ private static func captureText(
     #expect(canonical.representations.map(\.content.bytes) == [Data(fullText.utf8)])
 }
 
-/// The 1,024-byte stored-title boundary (docs/06-cross-cutting.md §2;
-/// docs/05-authority-kernel.md §15): `text/title-over-1kib.txt` is one
+/// The 1,024-byte stored-title boundary (docs/testing.md;
+/// docs/storage.md): `text/title-over-1kib.txt` is one
 /// 1,200-byte ASCII line, so the projected title is its first 1,024 bytes —
 /// truncated at a deterministic Unicode boundary (06 §2), never more. Both
 /// the durable row and the public browse read agree on the truncated value.
@@ -398,8 +398,8 @@ private static func expectThumbnailPayload(
     )
 }
 
-/// Real-scale 4K thumbnail production (docs/04-coherence.md §9;
-/// docs/03b-instruction-set.md §9; docs/06-cross-cutting.md §2): a real
+/// Real-scale 4K thumbnail production (docs/storage.md;
+/// docs/architecture.md; docs/testing.md): a real
 /// 3840×2160 `public.png` capture (fixture `images/photo4k-a.png`, 848 KiB)
 /// thumbnails successfully at the TOP of the permitted dimension range
 /// (2,048×2,048 — 06 §2 `thumbnailDimensionRange` 1…2,048) and at a
@@ -438,7 +438,7 @@ private static func expectThumbnailPayload(
     #expect(largeBytes > smallBytes)
 }
 
-/// Real-scale 8K thumbnail downsampling (docs/04-coherence.md §9 step 6):
+/// Real-scale 8K thumbnail downsampling (docs/storage.md step 6):
 /// fixture `images/huge-8k.png` (7680×4320, 3.1 MiB — the largest raster in
 /// the tree) yields a valid 256×256 PNG thumbnail. `ThumbnailService`
 /// downsamples through `CGImageSourceCreateThumbnailAtIndex`, so the source
@@ -488,8 +488,8 @@ private static func expectThumbnailPayload(
 
 // MARK: - (5) Retention stress
 
-/// Real-scale WS9/WS21 retention storm (docs/06-cross-cutting.md §8 WS9;
-/// docs/02-domain.md §12/§13): with the user policy lowered to 50 unpinned,
+/// Real-scale WS9/WS21 retention storm (docs/testing.md WS9;
+/// docs/architecture.md): with the user policy lowered to 50 unpinned,
 /// 120 distinct real-text captures retire the oldest unpinned item inside
 /// each committing capture (never the primary, never a pinned item — D13/
 /// D19), leaving exactly 50 unpinned survivors — the NEWEST 50 unpinned

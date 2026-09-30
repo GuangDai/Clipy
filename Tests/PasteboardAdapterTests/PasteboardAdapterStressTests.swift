@@ -2,12 +2,12 @@
 /// the capture freeze and paste write proven against the real-scale
 /// `fixtures-v1` payloads — 4K image bytes, 5 MiB text, a rapid write
 /// burst under changeCount polling, and concealed 5 MiB content.
-/// Owning spec: docs/03a-instruction-set.md §4 (capture freeze),
-/// docs/03b-instruction-set.md §9 (paste write / lineage hint),
-/// docs/04-coherence.md §8 (paste coherence),
-/// docs/05-authority-kernel.md §6.1 (concealment markers),
-/// docs/01-architecture.md §5.1/§5.6; roadmap
-/// docs/roadmap/04-pasteboardadapter.md.
+/// Owning spec: docs/architecture.md (capture freeze),
+/// docs/architecture.md (paste write / lineage hint),
+/// docs/storage.md (paste coherence),
+/// docs/storage.md (concealment markers),
+/// docs/architecture.md; roadmap
+/// docs/testing.md.
 ///
 /// Fixture payloads come from the `clipy-fixtures-v1` release tree (see
 /// `FixtureCatalog.swift` in this target). The whole suite is gated with

@@ -1,5 +1,5 @@
 /// MatchHighlightingTests — search-match highlighting acceptance
-/// (docs/03b-instruction-set.md §8; docs/roadmap/05-presentationui.md).
+/// (docs/architecture.md; docs/interface.md).
 ///
 /// Matched ranges are UTF-16 offsets into the annotated string (the row title
 /// when `search.snippet == nil`, else the snippet excerpt). These tests pin
@@ -111,7 +111,7 @@ struct MatchHighlightingTests {
 
     /// A range covering an emoji's full surrogate pair (2 UTF-16 units)
     /// highlights the emoji itself — offset math must count code units, not
-    /// Characters (docs/03b-instruction-set.md §8).
+    /// Characters (docs/architecture.md).
     @Test func supplementaryPlaneRangeCountsUTF16CodeUnits() {
         let text = "🎉 party"
         let result = MatchHighlighting.highlighted(

@@ -119,23 +119,28 @@ public struct ContentPreviewDebugSnapshot: Equatable, Sendable {
     package let activeJobs: Int
     package let retainedSourceBytes: Int
     package let queuedRasterJobs: Int
+    package let queuedTextJobs: Int
 }
 #endif
 
 /// One concrete renderer; no protocol/registry/plugin/cache. The actor keeps
-/// native decode off the MainActor and owns one native slot plus in-flight
-/// accounting; it owns no completed artifact cache.
+/// decoding off the MainActor and owns one raster slot and one text slot plus
+/// in-flight accounting; it owns no completed artifact cache.
 public actor ContentPreview {
-    /// Preserve the old single-decoder resource ceiling while allowing text
-    /// work to overtake a slow native rasterization. Waiters carry no content;
-    /// their caller tasks retain their own immutable snapshots.
-    private var rasterizationActive = false
-    private struct RasterizationWaiter {
+    /// One decoded text document can coexist with one native rasterization,
+    /// preserving the previous resource ceiling. Waiting never starts decoding
+    /// or segmentation. Waiters carry no content; their callers keep snapshots.
+    private enum RenderSlot: Int, Sendable { case raster, text }
+    private struct RenderWaiter {
         let id: UUID
         let deadline: ContinuousClock.Instant
         let continuation: CheckedContinuation<PreviewFailure?, Never>
     }
-    private var rasterizationWaiters: [RasterizationWaiter] = []
+    private struct RenderSlotState {
+        var active = false
+        var waiters: [RenderWaiter] = []
+    }
+    private var renderSlots = [RenderSlotState(), RenderSlotState()]
 
     #if DEBUG
     private var debugActiveJobs = 0
@@ -257,14 +262,12 @@ public actor ContentPreview {
         }
         #endif
         guard !Task.isCancelled else { return .failed(.cancelled) }
-        if case .image = kind {
-            if let failure = await acquireRasterizationSlot() {
-                return .failed(Task.isCancelled ? .cancelled : failure)
-            }
-            defer { releaseRasterizationSlot() }
-            return await renderOffActor(representation, kind: kind, maximumInputBytes: maximumInputBytes,
-                                        profile: profile, textConfiguration: textConfiguration)
+        let slot: RenderSlot
+        if case .image = kind { slot = .raster } else { slot = .text }
+        if let failure = await acquireRenderSlot(slot) {
+            return .failed(Task.isCancelled ? .cancelled : failure)
         }
+        defer { releaseRenderSlot(slot) }
         return await renderOffActor(representation, kind: kind, maximumInputBytes: maximumInputBytes,
                                     profile: profile, textConfiguration: textConfiguration)
     }
@@ -301,7 +304,8 @@ public actor ContentPreview {
     #if DEBUG
     public func debugSnapshot() -> ContentPreviewDebugSnapshot {
         ContentPreviewDebugSnapshot(activeJobs: debugActiveJobs, retainedSourceBytes: debugRetainedSourceBytes,
-                                    queuedRasterJobs: rasterizationWaiters.count)
+                                    queuedRasterJobs: renderSlots[RenderSlot.raster.rawValue].waiters.count,
+                                    queuedTextJobs: renderSlots[RenderSlot.text.rawValue].waiters.count)
     }
     #endif
 
@@ -343,21 +347,21 @@ public actor ContentPreview {
         )
     }
 
-    private func acquireRasterizationSlot() async -> PreviewFailure? {
+    private func acquireRenderSlot(_ slot: RenderSlot) async -> PreviewFailure? {
         guard !Task.isCancelled else { return .cancelled }
-        guard rasterizationActive else {
-            rasterizationActive = true
+        guard renderSlots[slot.rawValue].active else {
+            renderSlots[slot.rawValue].active = true
             return nil
         }
         let id = UUID()
-        // A native image decoder can remain busy after cancellation. Keep
-        // the native concurrency ceiling, but let subsequent requests reach
-        // the existing retryable renderer failure (01 §6; review PRV-1).
+        // ImageIO, FileWrapper deserialization, strict text decoding, and
+        // native font fallback can remain busy after cancellation. Keep each
+        // resource ceiling while allowing a queued request to fail and retry.
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         let timeout = Task {
             do { try await Task.sleep(until: deadline, clock: .continuous) }
             catch { return }
-            finishRasterizationWaiter(id, failure: .renderer)
+            finishRenderWaiter(id, slot: slot, failure: .renderer)
         }
         defer { timeout.cancel() }
         return await withTaskCancellationHandler {
@@ -368,27 +372,27 @@ public actor ContentPreview {
                     continuation.resume(returning: .cancelled)
                     return
                 }
-                rasterizationWaiters.append(RasterizationWaiter(
+                renderSlots[slot.rawValue].waiters.append(RenderWaiter(
                     id: id, deadline: deadline, continuation: continuation
                 ))
             }
         } onCancel: {
-            Task { await self.finishRasterizationWaiter(id, failure: .cancelled) }
+            Task { await self.finishRenderWaiter(id, slot: slot, failure: .cancelled) }
         }
     }
 
-    private func finishRasterizationWaiter(_ id: UUID, failure: PreviewFailure) {
-        guard let index = rasterizationWaiters.firstIndex(where: { $0.id == id }) else {
+    private func finishRenderWaiter(_ id: UUID, slot: RenderSlot, failure: PreviewFailure) {
+        guard let index = renderSlots[slot.rawValue].waiters.firstIndex(where: { $0.id == id }) else {
             // A waiter already handed the slot owns it and releases it via
             // renderRepresentation's defer, even if it was just cancelled.
             return
         }
-        rasterizationWaiters.remove(at: index).continuation.resume(returning: failure)
+        renderSlots[slot.rawValue].waiters.remove(at: index).continuation.resume(returning: failure)
     }
 
-    private func releaseRasterizationSlot() {
-        while !rasterizationWaiters.isEmpty {
-            let waiter = rasterizationWaiters.removeFirst()
+    private func releaseRenderSlot(_ slot: RenderSlot) {
+        while !renderSlots[slot.rawValue].waiters.isEmpty {
+            let waiter = renderSlots[slot.rawValue].waiters.removeFirst()
             // Recheck at handoff: actor scheduling must not let a delayed
             // timeout admit native work after its acquisition deadline.
             guard ContinuousClock.now < waiter.deadline else {
@@ -398,7 +402,7 @@ public actor ContentPreview {
             waiter.continuation.resume(returning: nil)
             return
         }
-        rasterizationActive = false
+        renderSlots[slot.rawValue].active = false
     }
 
     private static func renderRaster(

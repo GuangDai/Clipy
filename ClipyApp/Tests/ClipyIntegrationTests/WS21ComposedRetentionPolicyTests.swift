@@ -1,5 +1,5 @@
 /// WS21Composed — Retention policy through the composed settings surface
-/// (docs/06-cross-cutting.md §8 WS21; docs/02-domain.md §12; V2-02):
+/// (docs/testing.md WS21; docs/architecture.md; V2-02):
 /// `viewState.applyMaximumUnpinnedItems(_:)` (the settings' Apply) sets a
 /// satisfied value to `.unchanged`, lowers the cap to retire the excess
 /// oldest unpinned items in ONE commit (`.retentionPolicySet(removedCount:)`,
@@ -16,7 +16,7 @@ import Testing
 
 struct WS21ComposedRetentionPolicyTests {
 
-    /// WS21 (docs/06-cross-cutting.md §8): satisfied set → `.unchanged`;
+    /// WS21 (docs/testing.md): satisfied set → `.unchanged`;
     /// lowered set → the excess oldest unpinned retired in the same
     /// commit; restart keeps the durable policy value (05 §2: an existing
     /// store ignores the configuration's initial value).

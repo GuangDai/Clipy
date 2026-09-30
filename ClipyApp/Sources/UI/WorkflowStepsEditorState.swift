@@ -8,7 +8,7 @@ enum WorkflowStepsDisplayMode: String, CaseIterable {
 
 /// One workflow window retains rule-text drafts independently of its selected
 /// workflow or display mode. Only a successful explicit Apply changes steps.
-/// Owning semantics: docs/v2/V2-13-workflow-rule-syntax.md.
+/// Owning semantics: docs/automation.md.
 @MainActor @Observable
 final class WorkflowStepsEditorState {
     private var drafts: [UUID: WorkflowStepsEditorDraft] = [:]

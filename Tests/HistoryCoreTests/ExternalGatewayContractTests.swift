@@ -1,6 +1,6 @@
 /// Durable Gateway raw discriminators, including rejection of unknown values.
-/// Owning spec: docs/v2/V2-05-external-gateway.md §3.3/§7.1–§7.3;
-/// roadmap: docs/v2/V2-roadmap.md X.2.
+/// Owning spec: docs/automation.md;
+/// roadmap: docs/testing.md X.2.
 import Foundation
 import Testing
 @testable import HistoryCore

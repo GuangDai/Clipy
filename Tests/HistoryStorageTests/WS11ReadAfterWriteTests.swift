@@ -1,11 +1,11 @@
-/// WS11 — Receipt read-after-write (docs/06-cross-cutting.md §8 WS11;
-/// docs/04-coherence.md §3): after every committed outcome family, the
+/// WS11 — Receipt read-after-write (docs/testing.md WS11;
+/// docs/storage.md): after every committed outcome family, the
 /// relevant public read — browse, details, pastePayload — observes that
 /// commit's position/reference/state immediately, with no notification
 /// waiting or manual refresh.
 ///
 /// This file is ALSO the public-side §7.2 fresh-context-visibility evidence
-/// (docs/06-cross-cutting.md §7.2; docs/roadmap/03-historystorage.md §7.2):
+/// (docs/testing.md; docs/storage.md):
 /// a read that begins after a `.committed` receipt, through a fresh
 /// SQLite read transaction over the same store, sees the committed transaction
 /// immediately — the BLOCKER proof WS11 rests on. It is the public-facade
@@ -24,7 +24,7 @@ import Testing
 
 struct WS11ReadAfterWriteTests {
 
-/// A `.replace` revision request (docs/03a-instruction-set.md §5) for the
+/// A `.replace` revision request (docs/architecture.md) for the
 /// single `public.utf8-plain-text` representation, OCC-tokened at `expected`.
 private static func replaceTextRequest(
     itemID: HistoryItemID,
@@ -43,7 +43,7 @@ private static func replaceTextRequest(
     )
 }
 
-/// WS11 (docs/06-cross-cutting.md §8; docs/04-coherence.md §3): every
+/// WS11 (docs/testing.md; docs/storage.md): every
 /// committed outcome family — insert, coalesce, placePinned, revise, remove,
 /// clear, and setRetentionPolicy — is observable through the relevant public
 /// read immediately after the `.committed` receipt, with no notification
@@ -396,7 +396,7 @@ private static func replaceTextRequest(
     )
 }
 
-/// WS11 / §7.2 (docs/06-cross-cutting.md §8 WS11, §7.2; docs/04-coherence.md
+/// WS11 / §7.2 (docs/testing.md WS11, §7.2; docs/storage.md
 /// §3, §5): the first page yielded by `observe` after a `.committed` receipt
 /// carries a position >= the commit's, proving fresh-context visibility
 /// through the observation path. Observe yields pages forever; the stream is

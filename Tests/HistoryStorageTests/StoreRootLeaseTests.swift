@@ -1,5 +1,5 @@
 /// StoreRootLeaseTests — the DATA-7a cross-process single-writer lease proof
-/// (REVIEW docs/reviews/2026-08-22-clipy-maccy-deep-review/01-findings.md
+/// (REVIEW docs/testing.md
 /// DATA-7; 04-tdd-remediation-playbook.md PLAY-DISK-0B;
 /// 11-ai-todo-map-2026-08-23.md §4.5).
 ///

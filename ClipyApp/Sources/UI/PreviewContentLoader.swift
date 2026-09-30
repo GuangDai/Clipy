@@ -1,13 +1,13 @@
 /// PreviewContentLoader.swift — metadata and selected-representation reads,
 /// rendering, and exact-reference publication for both preview surfaces.
 ///
-/// Owning spec: docs/01-architecture.md §5.2/§6 (main-actor UI over
+/// Owning spec: docs/architecture.md (main-actor UI over
 /// HistoryCore DTOs only — no AppKit, no SwiftData, no MainActor image
-/// decode), §5.7 (image handling); docs/03b-instruction-set.md §9
+/// decode), §5.7 (image handling); docs/architecture.md
 /// (Effective Content representations); review TYPE-2 / 08 §7 (structured
 /// and encoding-unspecified text stays opaque; exact plain siblings win).
 /// Async load law: audit
-/// docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md
+/// docs/testing.md
 /// §SPEC-IMPL-007 and 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1
 /// (exact-reference fence; late results never publish).
 import ContentPreview

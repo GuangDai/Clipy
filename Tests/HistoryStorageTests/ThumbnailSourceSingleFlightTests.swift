@@ -2,7 +2,7 @@
 /// receives source/validation operations from the facade; these tests freeze
 /// success, nil, failure, and removal at the deep seam so duplicate source
 /// hydration cannot hide behind a successful shared ImageIO decode.
-/// docs/04-coherence.md §9;
+/// docs/storage.md;
 /// V1-Verified `thumbnail-source-full-image-copy`.
 import Foundation
 import HistoryCore

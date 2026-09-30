@@ -1,6 +1,6 @@
 /// AppPasteOrchestrationTests — the paste-orchestration guarantee in
-/// composed form (docs/01-architecture.md §5.6; docs/03b-instruction-set.md
-/// §9/§12; docs/04-coherence.md §8; roadmap 06-clipyapp.md "Acceptance"):
+/// composed form (docs/architecture.md; docs/architecture.md
+/// §9/§12; docs/storage.md; roadmap 06-clipyapp.md "Acceptance"):
 /// a paste selection traveling the app's real wiring —
 /// `viewState.onPaste` → the composition's owned copy lane →
 /// `pastePayload(for:)` → `adapter.write` — lands the item's current

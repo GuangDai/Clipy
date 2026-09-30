@@ -122,7 +122,9 @@ public struct HistorySearchExpression: Sendable, Hashable {
             let hasSyntax = value.isEmpty || value.contains {
                 $0.isWhitespace || $0 == "(" || $0 == ")" || $0 == "\""
             }
-            let looksLikeCondition = field == nil && value.split(separator: ":", maxSplits: 1).first.map {
+            let looksLikeCondition = field == nil && value.split(
+                separator: ":", maxSplits: 1, omittingEmptySubsequences: false
+            ).first.map {
                 ["app", "source", "source-id", "date", "before", "after", "type", "is"].contains($0.lowercased())
             } == true && value.contains(":")
             let looksLikeOperator = field == nil && ["AND", "OR", "NOT"].contains(value.uppercased())

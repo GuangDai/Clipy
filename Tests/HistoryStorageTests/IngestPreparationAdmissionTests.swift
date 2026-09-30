@@ -1,5 +1,5 @@
 /// Direct admission-branch and cross-layer invariant canaries for capture
-/// preparation (docs/05-authority-kernel.md §6.1 steps 1–7).
+/// preparation (docs/storage.md steps 1–7).
 import Foundation
 import HistoryCore
 import Testing

@@ -11,13 +11,13 @@
 /// window's geometry. A Space-triggered
 /// quick-look overlay (`HistoryQuickLookOverlay`) can cover the whole
 /// surface.
-/// Owning spec: docs/01-architecture.md §5.2/§5.4/§5.6/§5.7 (gesture →
+/// Owning spec: docs/architecture.md (gesture →
 /// action, browse, paste hand-off via `requestPaste`, thumbnail), §6
 /// (main-actor UI built only from HistoryCore DTOs);
-/// docs/03b-instruction-set.md §10 (typed failures surfaced via
-/// `FailurePresentation`); docs/04-coherence.md §5 (observation lifecycle:
+/// docs/architecture.md (typed failures surfaced via
+/// `FailurePresentation`); docs/storage.md (observation lifecycle:
 /// activate/deactivate, snapshot replacement); UX principles and
-/// accessibility per docs/v2/V2-07-ux.md §3/§9.
+/// accessibility per docs/interface.md
 import Foundation
 import HistoryCore
 import SwiftUI

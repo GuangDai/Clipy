@@ -1,9 +1,9 @@
 /// ClipyAppMain.swift — the @main entry point: the LSUIElement menu-bar
 /// agent shape (set in project.yml — no Dock icon), the Settings scene, and
 /// the scene-level wiring to the AppDelegate-owned surfaces.
-/// Owning spec: docs/01-architecture.md §2 (composition-root row) and §6
+/// Owning spec: docs/architecture.md (composition-root row) and §6
 /// (main actor owns views and window behavior); paste wiring lives in
-/// AppComposition (01 §5.6); roadmap docs/roadmap/06-clipyapp.md (step 9b).
+/// AppComposition (01 §5.6); roadmap docs/architecture.md (step 9b).
 ///
 /// Maccy replication note: the browsing surface is NO LONGER a SwiftUI
 /// `MenuBarExtra` window — a menu-bar-extra window cannot be summoned or

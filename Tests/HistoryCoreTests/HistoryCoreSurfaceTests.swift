@@ -1,6 +1,6 @@
 /// HistoryCore surface tests (roadmap step 1): `HistoryLimits.standard`
-/// against the docs/06-cross-cutting.md §2 table row-for-row; `ContentVersion`
-/// and `ChangePosition` minting behavior per docs/03a-instruction-set.md §2;
+/// against the docs/testing.md table row-for-row; `ContentVersion`
+/// and `ChangePosition` minting behavior per docs/architecture.md;
 /// and deterministic UUID-byte ordering.
 ///
 /// Package-only members (`.initial`, `.zero`, `successor()`, the package
@@ -10,7 +10,7 @@ import Foundation
 import Testing
 @testable import HistoryCore
 
-// MARK: - HistoryLimits.standard (docs/06-cross-cutting.md §2 table)
+// MARK: - HistoryLimits.standard (docs/testing.md table)
 
 @Test func historyLimitsStandardMatchesPartVITableRowForRow() {
     let limits = HistoryLimits.standard
@@ -38,7 +38,7 @@ import Testing
     #expect(limits.maximumEncodedThumbnailBytes == 16 * 1_048_576) // 16 MiB
 }
 
-// MARK: - Identity coherence values (docs/03a-instruction-set.md §2)
+// MARK: - Identity coherence values (docs/architecture.md)
 
 @Test func contentVersionInitialAndSuccessor() {
     #expect(ContentVersion.initial.rawValue == 1)

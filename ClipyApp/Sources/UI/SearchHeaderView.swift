@@ -1,10 +1,10 @@
 /// SearchHeaderView.swift — the panel's query surface: the rounded search
 /// field, ordinary search modes (⌘1/⌘2/⌘3), explicit advanced expressions,
 /// history-wide metadata filters, and directly removable active conditions.
-/// Owning spec: docs/01-architecture.md §5.4 (browse/search flow);
-/// docs/03a-instruction-set.md §7 (search modes);
-/// docs/06-cross-cutting.md §2 (fuzzy 64-Character query bound);
-/// accessibility per docs/v2/V2-07-ux.md §9.
+/// Owning spec: docs/architecture.md (browse/search flow);
+/// docs/architecture.md (search modes);
+/// docs/testing.md (fuzzy 64-Character query bound);
+/// accessibility per docs/interface.md
 import Foundation
 import HistoryCore
 import SwiftUI

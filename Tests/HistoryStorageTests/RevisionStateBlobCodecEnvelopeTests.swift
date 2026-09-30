@@ -169,7 +169,7 @@ extension RevisionStateBlobCodecTests {
     }
 }
 
-/// §7.4: a zero Content Version (docs/05-authority-kernel.md §3.1: always at
+/// §7.4: a zero Content Version (docs/storage.md: always at
 /// least 1).
 @Test func decodeRejectsZeroContentVersion() {
     #expect(throws: CodecRejection.invalidContentVersion(found: 0)) {

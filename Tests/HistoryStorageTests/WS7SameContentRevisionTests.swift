@@ -1,17 +1,17 @@
-/// WS7 — Same-content revision no-op (docs/06-cross-cutting.md §8 WS7): the
+/// WS7 — Same-content revision no-op (docs/testing.md WS7): the
 /// commit/receipt/storage side of submitting a replace or revert whose
 /// proposed Effective Content equals the item's current bytes through the
 /// public `SQLiteHistory.perform(.revise(_:))` and the real two-phase
-/// OCC-safe revision path (docs/05-authority-kernel.md §6.2, §9) whose Domain
-/// planning turns a byte-equal proposal into `.unchanged` (docs/02-domain.md
+/// OCC-safe revision path (docs/storage.md, §9) whose Domain
+/// planning turns a byte-equal proposal into `.unchanged` (docs/architecture.md
 /// §2.5 rule 7, §11 step 5).
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS7's
+/// Phasing (docs/testing.md, WS-clause phasing note): WS7's
 /// no-observation-emission clause is a step-7 (reads + observation) clause
 /// and is NOT asserted here; this file closes the step-6 clauses — the
-/// `.unchanged` receipt (docs/03a-instruction-set.md §6: no position, no
+/// `.unchanged` receipt (docs/architecture.md: no position, no
 /// invalidation, not a History Commit), no appended revision, and no Content
-/// Version / Change Position advance (docs/02-domain.md §13 `.unchanged` row:
+/// Version / Change Position advance (docs/architecture.md `.unchanged` row:
 /// preserve, no commit, no advance) — with the durable row/singleton state
 /// seen through an INDEPENDENT second `SQLite connection` over the same on-disk
 /// store (see `WSSupport`).
@@ -23,7 +23,7 @@ import Testing
 
 struct WS7SameContentRevisionTests {
 
-/// WS7 scenario A (docs/06-cross-cutting.md §8): a `.replace` draft whose
+/// WS7 scenario A (docs/testing.md): a `.replace` draft whose
 /// single `.inheritCanonical` decision proposes exactly the current
 /// Effective bytes of a Canonical-state item is a no-op — `.unchanged`
 /// receipt, the revision lineage stays empty, and neither `contentVersionRaw`
@@ -65,7 +65,7 @@ struct WS7SameContentRevisionTests {
     )))
 
     // WS7: "Expect `.unchanged`" — no History Commit, no position, no
-    // invalidation (docs/03a-instruction-set.md §6).
+    // invalidation (docs/architecture.md).
     guard case .unchanged = receipt else {
         Issue.record("WS7(A): expected a .unchanged receipt, got \(receipt)")
         return
@@ -99,7 +99,7 @@ struct WS7SameContentRevisionTests {
     #expect(lineage.revisions.isEmpty)
     #expect(lineage.activeRevisionID == nil)
 
-    // WS7: "no Content Version … advance" (docs/02-domain.md §13 `.unchanged`
+    // WS7: "no Content Version … advance" (docs/architecture.md `.unchanged`
     // row: preserve).
     #expect(row.contentVersionRaw == 1)
 
@@ -113,7 +113,7 @@ struct WS7SameContentRevisionTests {
     #expect(details.revisions.isEmpty)
 }
 
-/// WS7 scenario B (docs/06-cross-cutting.md §8): a `.revert(to: .canonical)`
+/// WS7 scenario B (docs/testing.md): a `.revert(to: .canonical)`
 /// on a Canonical-state item proposes exactly the current Effective bytes and
 /// is likewise a no-op — `.unchanged` receipt, empty lineage, and neither
 /// token advances. (A revert-to-canonical after real revisions DOES append —
@@ -168,7 +168,7 @@ struct WS7SameContentRevisionTests {
     #expect(lineage.revisions.isEmpty)
     #expect(lineage.activeRevisionID == nil)
 
-    // WS7: "no Content Version … advance" (docs/02-domain.md §13).
+    // WS7: "no Content Version … advance" (docs/architecture.md).
     #expect(row.contentVersionRaw == 1)
 
     // WS7: "no … Change Position advance" (§13).
@@ -176,7 +176,7 @@ struct WS7SameContentRevisionTests {
     #expect(position.rawValue == 1)
 }
 
-/// WS7 scenario C (docs/06-cross-cutting.md §8): after a byte-changing
+/// WS7 scenario C (docs/testing.md): after a byte-changing
 /// replace commits (Content Version 2, one stored revision, Change
 /// Position 2), a second `.replace` proposing exactly those now-current bytes
 /// at `expected: 2` is again a no-op — `.unchanged`, the one revision remains
@@ -264,7 +264,7 @@ struct WS7SameContentRevisionTests {
     let activeRevisionID = try #require(lineage.activeRevisionID)
     #expect(activeRevisionID == revision.id)
 
-    // WS7: "no Content Version … advance" (docs/02-domain.md §13) — the row
+    // WS7: "no Content Version … advance" (docs/architecture.md) — the row
     // still holds the successor version the real revision minted.
     #expect(row.contentVersionRaw == 2)
 

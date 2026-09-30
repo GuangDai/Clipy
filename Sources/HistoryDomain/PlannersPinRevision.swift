@@ -1,17 +1,17 @@
 /// PlannersPinRevision.swift — the pure planners for pin placement, unpin,
-/// remove, clear, and revision. Owning spec: docs/02-domain.md §8 (planner
+/// remove, clear, and revision. Owning spec: docs/architecture.md (planner
 /// surface), §10 (pinned order), §11 (revision planning and OCC); plan shape
 /// and invariants per §7 and §14.
 ///
 /// Imports Foundation + HistoryCore only. The Domain has no I/O, actor, clock,
-/// UUID generator, cache, or async method (docs/02-domain.md §1), and it never
+/// UUID generator, cache, or async method (docs/architecture.md), and it never
 /// mints `ContentVersion`/`ChangePosition` tokens — plans describe semantic
 /// mutations declaratively and `HistoryStorage` stamps tokens mechanically
-/// (docs/02-domain.md §4, §13).
+/// (docs/architecture.md, §13).
 import Foundation
 import HistoryCore
 
-// MARK: - Pin placement (docs/02-domain.md §10)
+// MARK: - Pin placement (docs/architecture.md)
 
 /// Plans first pin or reorder from target/anchor ordinal point facts. Error
 /// priority stays target missing, self anchor, then invalid anchor (02 §10;
@@ -71,7 +71,7 @@ package func planPinnedPlacement(
     ))
 }
 
-// MARK: - Unpin (docs/02-domain.md §10)
+// MARK: - Unpin (docs/architecture.md)
 
 /// Unpin changes the target and the later ordinal suffix only (02 §10).
 /// Missing target remains .notFound; an existing unpinned item is unchanged.
@@ -90,7 +90,7 @@ package func planUnpin(
     ]))
 }
 
-// MARK: - Remove (docs/02-domain.md §5.4, §8)
+// MARK: - Remove (docs/architecture.md, §8)
 
 /// Pinned removal first unpins/compacts with the same compact relocation,
 /// then retires the now-unpinned target (02 §10, D12/D15). Relocation changes
@@ -112,11 +112,11 @@ package func planRemove(
     return .commit(MutationPlan(outcome: .removed(count: 1), mutations: mutations))
 }
 
-// MARK: - Clear (docs/02-domain.md §5.4, §8)
+// MARK: - Clear (docs/architecture.md, §8)
 
 /// Plans the removal of the complete item set selected by a clear scope.
 ///
-/// docs/02-domain.md §8. `facts.affectedCount` counts the complete scope selected by
+/// docs/architecture.md `facts.affectedCount` counts the complete scope selected by
 /// `scope` at the Authority linearization point (§5.4), so the planner does
 /// not re-interpret the scope: it retires exactly the affected set in one
 /// commit. There is no partial clear. `scope` is part of the planner surface
@@ -146,11 +146,11 @@ package func planClear(
     ))
 }
 
-// MARK: - Revision (docs/02-domain.md §11)
+// MARK: - Revision (docs/architecture.md)
 
 /// Plans appending one new Effective Content revision to an item.
 ///
-/// docs/02-domain.md §8, §11. Both intents (`.replace` and `.revert`) arrive
+/// docs/architecture.md, §11. Both intents (`.replace` and `.revert`) arrive
 /// here fully resolved by `HistoryStorage` preparation: `prepared` already
 /// carries the complete proposed Effective Content, so a revert mints a NEW
 /// revision from historical Effective Content and never repoints an old one
@@ -264,7 +264,7 @@ private func pinRelocation(itemID: HistoryItemID, previous: Int?,
 
 /// Revalidates proposed Effective Content at the Domain level.
 ///
-/// docs/02-domain.md §11 step 4: the content must be normalized per §2.1 —
+/// docs/architecture.md step 4: the content must be normalized per §2.1 —
 /// non-empty, no empty-bytes representation, at most one representation per
 /// canonically equivalent type identifier, sorted by type identifier in stable
 /// Unicode scalar order — and must contain only Canonical representation types.

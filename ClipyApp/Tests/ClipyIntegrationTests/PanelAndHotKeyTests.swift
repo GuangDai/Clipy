@@ -354,7 +354,7 @@ struct GlobalHotKeyTests {
         hotKey.unregister()  // idempotent teardown
     }
 
-    /// S-6 (docs/reviews/2026-08-20-clipy-maccy-audit/01-standards.md): the
+    /// S-6 (docs/testing.md): the
     /// Carbon handler no longer assumes main-thread delivery — it checks
     /// `Thread.isMainThread` and block-hops through `DispatchQueue.main.sync`
     /// otherwise. The C callback is file-private and only Carbon can invoke

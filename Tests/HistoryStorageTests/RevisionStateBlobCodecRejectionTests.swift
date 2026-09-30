@@ -7,7 +7,7 @@ import HistoryDomain
 @testable import HistoryStorage
 
 extension RevisionStateBlobCodecTests {
-// MARK: - Corruption rejection (docs/06-cross-cutting.md §7.4)
+// MARK: - Corruption rejection (docs/testing.md)
 
 /// §7.4: foreign bytes are not a decodable v1 container.
 @Test func decodeRejectsMalformedBlob() throws {
@@ -175,7 +175,7 @@ extension RevisionStateBlobCodecTests {
 }
 
 /// §7.4: empty revision content — every revision stores a complete,
-/// non-empty Effective Content snapshot (docs/02-domain.md §2.5).
+/// non-empty Effective Content snapshot (docs/architecture.md).
 @Test func decodeRejectsEmptyRevisionContent() throws {
     let canonical = try makeCanonical()
     let blob = try wireBlob(
@@ -209,5 +209,5 @@ extension RevisionStateBlobCodecTests {
 }
 
 /// §7.4: a repeated type identifier inside one revision is a duplicate, not
-/// a choice (docs/02-domain.md §2.1).
+/// a choice (docs/architecture.md).
 }

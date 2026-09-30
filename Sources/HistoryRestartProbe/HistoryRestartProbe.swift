@@ -9,7 +9,7 @@
 /// (`11-ai-todo-map-2026-08-23.md` §4.3; `V2-02-retention.md` §8.1/§12).
 /// The full-disk cells (pressureCapture plus the Card 6B pressureRevise
 /// trio and the openFullVolume/openSeededFullVolume pair) run only on the
-/// dispatch-only APFS ENOSPC lane (`docs/05-authority-kernel.md` §16): a
+/// dispatch-only APFS ENOSPC lane (`docs/storage.md` §16): a
 /// filled volume must refuse a positive-demand capture and an 8 MiB
 /// `.replace` revision through the stamped-plan admission —
 /// `.temporarilyUnavailable(.insufficientDiskSpace)` with every seed byte
@@ -837,7 +837,7 @@ private func validationFixtureTable() throws -> [ValidationFixture] {
         ),
         // 3 — one capture carrying two representations: the same PNG plus
         // text. Canonical/effective order follows the stable Unicode
-        // scalar sort (docs/02-domain.md §2.1) — "public.png" sorts before
+        // scalar sort (docs/architecture.md) — "public.png" sorts before
         // "public.utf8-plain-text" — even though the capture input listed
         // the text first; the textual representation still owns the title.
         ValidationFixture(
@@ -1877,7 +1877,7 @@ private func verifySeed(storeURL: URL) async throws {
     diagnostic("verify-seed.projection-verified")
 }
 
-/// Full-disk revise cell (doc 11 §4.3 Card 6B; `docs/05-authority-kernel.md`
+/// Full-disk revise cell (doc 11 §4.3 Card 6B; `docs/storage.md`
 /// §16), under-pressure half. Before publishing readiness this child commits
 /// the lane's dedicated 8 MiB patternA blob (position 3) and records its
 /// public identity, so the parent's fill starts only with the seed table

@@ -1,14 +1,14 @@
 /// HistoryViewState.swift — the panel's single observable view-state holder
-/// over HistoryCore DTOs (docs/01-architecture.md §6; docs/roadmap/
+/// over HistoryCore DTOs (docs/architecture.md; docs/roadmap/
 /// 05-presentationui.md). It never sees SwiftData, Domain state, or
 /// fingerprints — only the public DTO seam.
 ///
-/// Observation is snapshot replacement, not deltas (docs/04-coherence.md §5):
+/// Observation is snapshot replacement, not deltas (docs/storage.md):
 /// every incoming `HistoryPage` REPLACES `rows`. The held page is ordinary
-/// caller state, not a cache tier (docs/04-coherence.md §11). Additional
-/// pages are one-shot `browse` requests (docs/03a-instruction-set.md §7) in a
+/// caller state, not a cache tier (docs/storage.md). Additional
+/// pages are one-shot `browse` requests (docs/architecture.md) in a
 /// three-page window. Cursor expiration restarts the current observation
-/// from page one (docs/04-coherence.md §6).
+/// from page one (docs/storage.md).
 import ClipboardFormats
 import ContentPreview
 import Foundation
@@ -45,11 +45,11 @@ struct HistorySurfacePurge: Equatable, Sendable {
 }
 
 /// View state over HistoryCore DTOs — the ONLY state holder for the browsing
-/// panel (docs/01-architecture.md §6; roadmap 05).
+/// panel (docs/architecture.md; roadmap 05).
 ///
 /// Mutation methods (`pin`, `unpin`, `remove`, `clear`) do not throw: they
 /// forward the `HistoryAction` to `perform` and store any typed
-/// `HistoryFailure` into `failure` (docs/03b-instruction-set.md §10), where
+/// `HistoryFailure` into `failure` (docs/architecture.md), where
 /// the observation loop that committed the mutation also refreshes `rows`.
 /// The detail/revise/retention methods are thin `async throws` passthroughs
 /// because their callers (details pane, settings) own retry presentation.
@@ -58,7 +58,7 @@ final class HistoryViewState {
 
     // MARK: - Injected state
 
-    /// The public History seam (docs/03a-instruction-set.md §3). Production
+    /// The public History seam (docs/architecture.md). Production
     /// passes `SQLiteHistory`; SwiftUI previews pass the scripted
     /// `PreviewClipboardHistory`.
     let history: any ClipboardHistory
@@ -71,7 +71,7 @@ final class HistoryViewState {
     var filePreviewSettings: FilePreviewSettings?
 
     /// Rows per browse/observation page. Default 50 — inside the Part VI
-    /// page/observation row-limit range 1…500 (docs/06-cross-cutting.md §2).
+    /// page/observation row-limit range 1…500 (docs/testing.md).
     let pageLimit: Int
 
     // MARK: - Observed panel state
@@ -133,7 +133,7 @@ final class HistoryViewState {
         }
     }
 
-    /// The search evaluation mode (docs/03a-instruction-set.md §7). A change
+    /// The search evaluation mode (docs/architecture.md). A change
     /// restarts observation immediately.
     var searchMode: SearchMode = .fuzzy {
         didSet {
@@ -179,7 +179,7 @@ final class HistoryViewState {
         return searchSourceResolver.applications
     }
 
-    /// Composition-root paste hand-off (docs/01-architecture.md §5.6): the
+    /// Composition-root paste hand-off (docs/architecture.md): the
     /// view state never touches the pasteboard; it hands the reference to the
     /// app, which resolves the payload and writes it. Default no-op so
     /// previews need no wiring.
@@ -687,14 +687,14 @@ final class HistoryViewState {
                 self.finishPagination(requestToken)
             } catch {
                 // browse throws typed HistoryFailure at the storage boundary
-                // (docs/03a-instruction-set.md §3); an untyped error has no
+                // (docs/architecture.md); an untyped error has no
                 // panel vocabulary and is swallowed.
                 self?.finishPagination(requestToken)
             }
         }
     }
 
-    // MARK: - Interactions (docs/03a-instruction-set.md §5; 03b §12)
+    // MARK: - Interactions (docs/architecture.md; 03b §12)
 
     /// Hands a paste request to the composition root (docs/
     /// 01-architecture.md §5.6); the view state never touches NSPasteboard.
@@ -785,7 +785,7 @@ final class HistoryViewState {
 
     // MARK: - Thin async passthroughs (callers own presentation)
 
-    /// Full detail for one item (docs/03b-instruction-set.md §9).
+    /// Full detail for one item (docs/architecture.md).
     func details(for id: HistoryItemID) async throws -> HistoryDetails {
 #if DEBUG
         if failNextEditorDetailsReadForTesting {
@@ -796,7 +796,7 @@ final class HistoryViewState {
         return try await history.details(for: id)
     }
 
-    /// Appends an immutable content revision (docs/03a-instruction-set.md §5).
+    /// Appends an immutable content revision (docs/architecture.md).
     func revise(_ request: RevisionRequest) async throws -> HistoryReceipt {
         try await performRevision(request, beforePurge: nil)
     }
@@ -891,7 +891,7 @@ final class HistoryViewState {
     }
 
     /// Applies the V2-02 age/storage/revision policy dimensions
-    /// (docs/v2/V2-02-retention.md §3.1).
+    /// (docs/storage.md).
     func applyRetentionPolicies(
         _ policies: HistoryRetentionPolicies
     ) async throws -> HistoryReceipt {
@@ -956,7 +956,7 @@ final class HistoryViewState {
         return received
     }
 
-    /// The authoritative configured retention state (docs/v2/V2-07-ux.md
+    /// The authoritative configured retention state (docs/interface.md
     /// §5.2/§6.3) — the settings tabs' panel-open read, so every control
     /// opens at its persisted value instead of a neutral prefill (audit
     /// SPEC-IMPL-003). Configured policy only; no usage readout exists on
@@ -1075,7 +1075,7 @@ final class HistoryViewState {
                 }
             } catch {
                 // The frozen Part III stream failure is untyped
-                // (docs/03a-instruction-set.md §3): implementations still
+                // (docs/architecture.md): implementations still
                 // throw HistoryFailure, so cast to recover the typed
                 // vocabulary. Cancellation is not a panel failure.
                 guard !Task.isCancelled,

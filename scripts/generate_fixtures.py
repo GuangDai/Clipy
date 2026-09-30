@@ -22,11 +22,11 @@ binds image content to ``--seed``). The tarball pins mtime/uid/gid/uname and
 gzip mtime so it is reproducible too.
 
 Coverage rationale (HistoryAuthority+DetailAndThumbnail.swift,
-``thumbnailImageTypeIdentifiers``, docs/04-coherence.md §9): the frozen v1
+``thumbnailImageTypeIdentifiers``, docs/storage.md): the frozen v1
 ImageIO-decodable UTI set is png / jpeg / tiff / heic / heif / gif / bmp. All
 except HEIC/HEIF are generated here; HEIC/HEIF cannot be encoded by Pillow and
 are recorded in the manifest as deliberately uncovered. Limit-driven sizes
-cite docs/06-cross-cutting.md §2 (``HistoryLimits.standard``): searchbody is
+cite docs/testing.md (``HistoryLimits.standard``): searchbody is
 300 KiB to straddle the 256 KiB stored-search-body bound, title-over-1kib
 exceeds the 1,024-byte stored-title bound.
 
@@ -70,7 +70,7 @@ UNCOMPRESSED_BUDGET = 60 * 1024 * 1024
 TARBALL_BUDGET = 40 * 1024 * 1024
 HUGE_PNG_BUDGET = 25 * 1024 * 1024
 
-# docs/06-cross-cutting.md §2 (HistoryLimits.standard) values that drive
+# docs/testing.md (HistoryLimits.standard) values that drive
 # fixture sizing.
 SEARCH_BODY_BOUND = 256 * 1024
 TITLE_BOUND = 1_024

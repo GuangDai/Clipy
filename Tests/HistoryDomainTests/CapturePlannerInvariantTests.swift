@@ -1,5 +1,5 @@
 /// Direct pure-planner proofs for capture invariants D1, D3, D7, D9–D11,
-/// D13–D14, D16, and D18–D19 (docs/02-domain.md §9, §12, §14).
+/// D13–D14, D16, and D18–D19 (docs/architecture.md, §12, §14).
 import Foundation
 import HistoryCore
 import Testing

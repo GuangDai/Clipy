@@ -2,7 +2,7 @@ import Foundation
 
 /// A range expressed in UTF-16 code units, relative to the string it
 /// annotates (a row title or a search snippet).
-/// Owning spec: docs/03b-instruction-set.md §8.
+/// Owning spec: docs/architecture.md
 public struct UTF16TextRange: Sendable, Hashable {
     public let location: Int
     public let length: Int
@@ -16,7 +16,7 @@ public struct UTF16TextRange: Sendable, Hashable {
 /// Presentation evidence for a search-matched row: an optional bounded body
 /// excerpt plus the UTF-16 ranges that matched within the title (when
 /// `snippet == nil`) or within `snippet`.
-/// Owning spec: docs/03b-instruction-set.md §8.
+/// Owning spec: docs/architecture.md
 public struct SearchPresentation: Sendable, Hashable {
     public let snippet: String?
     public let matchedRanges: [UTF16TextRange]
@@ -33,7 +33,7 @@ public struct SearchPresentation: Sendable, Hashable {
 /// One row of a browse or search page. `pinnedPosition` is 0-based within the
 /// pinned group (`nil` when unpinned); `search` is `nil` for recent rows and
 /// carries presentation evidence for search rows.
-/// Owning spec: docs/03b-instruction-set.md §8.
+/// Owning spec: docs/architecture.md
 public struct HistoryRow: Sendable, Hashable {
     public let item: HistoryItemReference
     public let title: String
@@ -71,7 +71,7 @@ public struct HistoryRow: Sendable, Hashable {
 /// A deterministically ordered page of rows, stamped with the change position
 /// it was read at, with cursors to the immediately adjacent pages. Both
 /// directions return rows in the query's normal order, including a short tail.
-/// Owning spec: docs/03b-instruction-set.md §8.
+/// Owning spec: docs/architecture.md
 public struct HistoryPage: Sendable, Hashable {
     public let position: ChangePosition
     public let rows: [HistoryRow]
