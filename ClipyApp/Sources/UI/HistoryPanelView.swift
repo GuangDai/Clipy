@@ -760,7 +760,7 @@ struct HistoryPanelView: View {
                     )
                     // Removal has no transition; invalidated sensitive
                     // content leaves immediately, including during insertion.
-                    .transition(AppMotionArrival.transition(speed: motionSpeed, reduceMotion: reduceMotion))
+                    .transition(AppMotionArrival.transition(reduceMotion: reduceMotion))
                 }
             }
             .animation(

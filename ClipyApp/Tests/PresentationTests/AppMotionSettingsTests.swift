@@ -22,8 +22,9 @@ struct AppMotionSettingsTests {
             #expect(reduced.duration == 0)
         }
         #expect(previous * Double(refreshRate) <= 5)
-        #expect(AppMotionTiming(speed: .fastest, framesPerSecond: refreshRate, reduceMotion: false,
-                                effect: .feedback).animation == nil)
+        let feedback = AppMotionTiming(speed: .fastest, framesPerSecond: refreshRate, reduceMotion: false,
+                                       effect: .feedback)
+        #expect(feedback.duration > 0 && feedback.duration < previous)
         defaults.set(11, forKey: AppMotionSettings.defaultsKey)
         #expect(AppMotionSettings.load(from: defaults) == .fastest)
     }

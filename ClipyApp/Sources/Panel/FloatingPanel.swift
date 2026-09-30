@@ -278,6 +278,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         let duration = isPresented ? 0 : presentationDuration(screen)
         if !isPresented {
             setPresentationAlphaImmediately(duration > 0 ? 0.92 : 1)
+            AppMotionSettings.animateArrival(in: contentView, duration: duration)
         }
         orderFrontRegardless()
         makeKey()
@@ -309,6 +310,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// (the floating preview pane) order out with it.
     override func close() {
         guard isPresented else { return }
+        AppMotionSettings.cancelArrival(in: contentView)
         deferredFocusLossCloseTask?.cancel()
         deferredFocusLossCloseTask = nil
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }

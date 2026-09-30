@@ -32,6 +32,8 @@ struct FloatingPreviewResizeHostedTests {
         let firstFrame = preview.frame
         #expect(preview.isVisible)
         #expect(preview.alphaValue >= 0.9)
+        let layer = try #require(preview.contentView?.layer)
+        #expect(layer.animation(forKey: AppMotionSettings.arrivalAnimationKey) != nil)
         preview.present(beside: main)
         #expect(preview.frame == firstFrame)
         #expect(arrivals == 1)
@@ -44,6 +46,7 @@ struct FloatingPreviewResizeHostedTests {
         preview.present(beside: main)
         #expect(preview.isPresented && preview.isVisible)
         #expect(preview.alphaValue == 1)
+        #expect(layer.animation(forKey: AppMotionSettings.arrivalAnimationKey) == nil)
         #expect(arrivals == 1)
 
         preview.fitToContent(height: 100)
@@ -55,6 +58,9 @@ struct FloatingPreviewResizeHostedTests {
         preview.present(beside: main)
         #expect(arrivals == 2)
         #expect(preview.frame.height == 100)
+        #expect(layer.animation(forKey: AppMotionSettings.arrivalAnimationKey) != nil)
+        preview.dismiss()
+        #expect(layer.animation(forKey: AppMotionSettings.arrivalAnimationKey) == nil)
     }
 
     @Test

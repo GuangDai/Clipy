@@ -199,6 +199,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 #endif
             let duration = presentationDuration(screen ?? mainPanel.screen)
             setPresentationAlphaImmediately(duration > 0 ? 0.92 : 1)
+            AppMotionSettings.animateArrival(in: contentView, duration: duration)
             orderFrontRegardless()
             isPresented = true
             if duration > 0 {
@@ -214,6 +215,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 #if DEBUG
             recordNativeLifecycle("present-invisible-reorder")
 #endif
+            AppMotionSettings.cancelArrival(in: contentView)
             setPresentationAlphaImmediately(1)
             orderFrontRegardless()
         }
@@ -313,6 +315,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 #if DEBUG
         recordNativeLifecycle("dismiss")
 #endif
+        AppMotionSettings.cancelArrival(in: contentView)
         // Explicit retirement wins over modal ownership. Mark the intent
         // closed before ending the sheet so didEndSheet cannot resurrect it.
         isPresented = false

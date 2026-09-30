@@ -103,7 +103,7 @@ struct SearchHeaderView: View {
                 Label(issue, systemImage: "exclamationmark.circle")
                     .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
             }
-            .font(.caption).buttonStyle(.plain).foregroundStyle(.red)
+            .font(.caption).buttonStyle(AppMotionPressStyle()).foregroundStyle(.red)
             .help(issue)
             .accessibilityIdentifier("clipy.search.expression.error")
         } else {
@@ -114,7 +114,7 @@ struct SearchHeaderView: View {
                             Button { openOptions(expressionGuide: true) } label: {
                                 Label(HistorySearchCopy.text("Expression", bundle: copyBundle), systemImage: "chevron.left.forwardslash.chevron.right")
                             }
-                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .buttonStyle(AppMotionPressStyle()).foregroundStyle(.secondary)
                             .accessibilityIdentifier("clipy.search.expression.help")
                         }
                         if viewState.sortOrder != .automatic {
@@ -151,7 +151,7 @@ struct SearchHeaderView: View {
                         viewState.clearFilters()
                         searchFieldFocused.wrappedValue = true
                     } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .buttonStyle(AppMotionPressStyle()).foregroundStyle(.secondary)
                         .accessibilityIdentifier("clipy.search.clear-filters")
                         .accessibilityLabel(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
                         .accessibilityValue(filterSummary)
@@ -175,7 +175,7 @@ struct SearchHeaderView: View {
             .padding(.horizontal, 5)
             .background(Color.accentColor.opacity(0.1), in: Capsule())
         }
-        .buttonStyle(.plain).foregroundStyle(Color.accentColor)
+        .buttonStyle(AppMotionPressStyle()).foregroundStyle(Color.accentColor)
         .accessibilityIdentifier("clipy.search.clear-filter.\(id)")
         .accessibilityLabel(HistorySearchCopy.format("Remove filter: %@", title, bundle: copyBundle))
         .help(title)
@@ -251,7 +251,7 @@ struct SearchHeaderView: View {
                             .frame(width: 24, height: PanelContentFit.searchFieldHeight)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(AppMotionPressStyle())
                     .help(PanelActionsCopy.text("Clear search", bundle: copyBundle))
                     .accessibilityIdentifier("clipy.search.clear")
                     .accessibilityLabel(PanelActionsCopy.text("Clear search", bundle: copyBundle))

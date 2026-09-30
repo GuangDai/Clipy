@@ -118,10 +118,13 @@ struct FloatingPanelFrameHostedTests {
             #expect(panel.isPresented)
             #expect(panel.isVisible)
             #expect(panel.alphaValue >= 0.9)
+            let layer = try #require(panel.contentView?.layer)
+            #expect(layer.animation(forKey: AppMotionSettings.arrivalAnimationKey) != nil)
             panel.close()
             #expect(!panel.isPresented)
             #expect(!panel.isVisible)
             #expect(panel.alphaValue == 1)
+            #expect(layer.animation(forKey: AppMotionSettings.arrivalAnimationKey) == nil)
         }
         #expect(closeCount == 2)
     }

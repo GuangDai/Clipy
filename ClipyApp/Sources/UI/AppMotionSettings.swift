@@ -26,6 +26,7 @@ enum AppMotionEffect: Sendable {
 /// requested animation, not disk I/O or WindowServer presentation latency.
 struct AppMotionTiming: Sendable {
     let duration: TimeInterval
+    static let arrivalScale = 0.975
     private static let curve = (0.2, 0.8, 0.2, 1.0)
 
     init(speed: AppMotionSpeed, framesPerSecond: Int, reduceMotion: Bool,
@@ -40,7 +41,7 @@ struct AppMotionTiming: Sendable {
         switch effect {
         case .presentation: duration = reduceMotion ? 0 : presentation
         case .feedback:
-            duration = reduceMotion || speed == .fastest ? 0 : presentation * 0.5
+            duration = reduceMotion ? 0 : presentation * 0.5
         }
     }
 
@@ -57,6 +58,7 @@ struct AppMotionTiming: Sendable {
 
 enum AppMotionSettings {
     static let defaultsKey = "clipy.appearance.motionSpeed"
+    static let arrivalAnimationKey = "clipy.presentation.arrival"
 
     static func load(from defaults: UserDefaults) -> AppMotionSpeed {
         AppMotionSpeed(rawValue: defaults.integer(forKey: defaultsKey)) ?? .fastest
@@ -81,11 +83,30 @@ enum AppMotionSettings {
             effect: effect
         ).animation
     }
+
+    /// Animate the prepared surface on its backing layer. Window geometry,
+    /// layout and action availability remain immediate throughout the pop-in.
+    @MainActor
+    static func animateArrival(in view: NSView?, duration: TimeInterval) {
+        cancelArrival(in: view)
+        guard duration > 0, let layer = view?.layer else { return }
+        let animation = CABasicAnimation(keyPath: "transform.scale")
+        animation.fromValue = AppMotionTiming.arrivalScale
+        animation.toValue = 1.0
+        animation.duration = duration
+        animation.timingFunction = AppMotionTiming.nativeTimingFunction
+        layer.add(animation, forKey: arrivalAnimationKey)
+    }
+
+    @MainActor
+    static func cancelArrival(in view: NSView?) {
+        view?.layer?.removeAnimation(forKey: arrivalAnimationKey)
+    }
 }
 
 /// Insertion only: disappearing or invalid content leaves immediately. The
 /// small scale settles on the same curve as native window alpha, while the
-/// fastest level omits this decorative movement.
+/// ten levels retain the same movement, including the short fastest level.
 struct AppMotionArrival: ViewModifier {
     let opacity: Double
     let scale: CGFloat
@@ -94,11 +115,27 @@ struct AppMotionArrival: ViewModifier {
         content.opacity(opacity).scaleEffect(scale)
     }
 
-    static func transition(speed: AppMotionSpeed, reduceMotion: Bool) -> AnyTransition {
+    static func transition(reduceMotion: Bool) -> AnyTransition {
         guard !reduceMotion else { return .identity }
         return .asymmetric(insertion: .modifier(
-            active: AppMotionArrival(opacity: 0.92, scale: speed == .fastest ? 1 : 0.985),
+            active: AppMotionArrival(opacity: 0.92, scale: CGFloat(AppMotionTiming.arrivalScale)),
             identity: AppMotionArrival(opacity: 1, scale: 1)
         ), removal: .identity)
+    }
+}
+
+/// Immediate action, short visual acknowledgement. Layout and hit targets
+/// keep their normal size while the label responds to the real button press.
+struct AppMotionPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(AppMotionSettings.defaultsKey) private var motionLevel = AppMotionSpeed.fastest.rawValue
+
+    func makeBody(configuration: Configuration) -> some View {
+        let speed = AppMotionSpeed(rawValue: motionLevel) ?? .fastest
+        return configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(AppMotionSettings.animation(speed: speed, reduceMotion: reduceMotion),
+                       value: configuration.isPressed)
     }
 }
