@@ -328,10 +328,15 @@ internal enum PreviewHTMLRenderer {
                 return
             }
             if tag.name == "head" {
-                headDepth = tag.closing ? max(0, headDepth - 1) : headDepth + 1
+                // Template contents cannot open or close the surrounding
+                // document's head. Their raw-text elements still need the
+                // token-boundary handling above while all text is suppressed.
+                if templateDepth == 0 {
+                    headDepth = tag.closing ? max(0, headDepth - 1) : headDepth + 1
+                }
                 return
             }
-            if tag.name == "body", !tag.closing { headDepth = 0 }
+            if tag.name == "body", !tag.closing, templateDepth == 0 { headDepth = 0 }
             if tag.name == "template" {
                 templateDepth = tag.closing ? max(0, templateDepth - 1) : templateDepth + 1
                 return

@@ -89,16 +89,22 @@ struct PreviewHTMLRendererTests {
         #expect(!text.wasTruncated)
     }
 
-    @Test func linksImagesAndActiveContentNeverSupplyExternalContent() throws {
-        let html = """
+    @Test(arguments: [
+        ("""
         <p><a href="https://example.invalid/private" onclick="danger()">Read me</a>
         <img src="file:///private/secret" onerror="danger()"></p>
         <script>if (2 < 3) document.write('secret')</script>
         <STYLE>/* invisible */</STYLE>
         <template>hidden <template>nested</template> remainder</template>
         <p title="a > b &quot;quoted&quot;">Visible</p>
-        """
-        #expect(try rendered(html).text == "Read me\nVisible")
+        """, "Read me\nVisible"),
+        ("<head><template><body>hidden</body></template><title>Secret title</title></head><p>visible</p>",
+         "visible"),
+        ("<head><template></head></template><title>Secret title</title></head><p>visible</p>", "visible"),
+        ("<template><head>hidden</template><p>visible</p>", "visible"),
+    ])
+    func linksImagesAndActiveContentNeverSupplyExternalContent(source: String, expected: String) throws {
+        #expect(try rendered(source).text == expected)
     }
 
     @Test func entitiesDecodeOnceAndUnknownNamesRemainVisible() throws {
