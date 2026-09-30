@@ -654,6 +654,13 @@ struct HistoryPreviewView: View {
                     .accessibilityIdentifier("clipy.preview.information.content")
                     .padding(16)
                     .frame(idealWidth: 240, maxWidth: 360, alignment: .leading)
+                    // The popover has its own responder tree. Handle Escape
+                    // here as well as at the browsing/preview window root.
+                    .onExitCommand {
+                        guard informationItem == row.item else { return }
+                        previewState.isInformationPresented = false
+                        informationItem = nil
+                    }
                 }
                 if observedRow != nil {
                     Button(action: copyDisplayedHistoryItem) {
