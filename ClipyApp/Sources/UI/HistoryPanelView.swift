@@ -523,6 +523,7 @@ struct HistoryPanelView: View {
     /// coalesces and applies it to the hosting window. Nil in previews and
     /// view-only tests leaves the view frameless as before.
     private let onContentFitChange: ((PanelContentFit.Input) -> Void)?
+    private let topNoticeHeight: CGFloat
 
     @State private var surfaceState: HistoryPanelSurfaceState
     @State private var dismissedFailureEpisode: Int?
@@ -548,6 +549,7 @@ struct HistoryPanelView: View {
         keepPanelOpenIsActive: Bool = false,
         onToggleKeepPanelOpen: (() -> Void)? = nil,
         sourceIconProvider: SourceIconProvider = .none,
+        topNoticeHeight: CGFloat = 0,
         onContentFitChange: ((PanelContentFit.Input) -> Void)? = nil
     ) {
         self.init(
@@ -562,6 +564,7 @@ struct HistoryPanelView: View {
             keepPanelOpenIsActive: keepPanelOpenIsActive,
             onToggleKeepPanelOpen: onToggleKeepPanelOpen,
             sourceIcons: SourceIconStore(provider: sourceIconProvider),
+            topNoticeHeight: topNoticeHeight,
             onContentFitChange: onContentFitChange
         )
     }
@@ -588,6 +591,7 @@ struct HistoryPanelView: View {
         keepPanelOpenIsActive: Bool = false,
         onToggleKeepPanelOpen: (() -> Void)? = nil,
         sourceIcons: SourceIconStore?,
+        topNoticeHeight: CGFloat = 0,
         onContentFitChange: ((PanelContentFit.Input) -> Void)? = nil
     ) {
         self.viewState = viewState
@@ -600,6 +604,7 @@ struct HistoryPanelView: View {
         self.onQuit = onQuit
         self.onRequestClose = onRequestClose
         self.onContentFitChange = onContentFitChange
+        self.topNoticeHeight = topNoticeHeight
         _sourceIcons = State(initialValue: sourceIcons)
         _surfaceState = State(
             initialValue: surfaceState ?? HistoryPanelSurfaceState(
@@ -946,6 +951,7 @@ struct HistoryPanelView: View {
             usesPinnedGrouping: viewState.sortOrder == .automatic,
             isFilterChipVisible: viewState.isSearchStatusVisible,
             isFailureBannerVisible: isFailureBannerVisible,
+            topNoticeHeight: topNoticeHeight,
             prefersFullHeight:
                 !surfaceState.detailsPath.isEmpty
                     || surfaceState.resolvedQuickLookReference(

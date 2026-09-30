@@ -14,6 +14,7 @@ import SwiftUI
 /// back to the delegate (01 §8: PresentationUI never sees AppKit).
 struct PanelRootView: View {
     @State private var readingPositionNoticeDismissed = false
+    @State private var topNoticeHeight: CGFloat = 0
     let appDelegate: AppDelegate
     @Environment(\.locale) private var locale
 
@@ -29,6 +30,63 @@ struct PanelRootView: View {
 
     var body: some View {
         let _ = locale
+        VStack(spacing: 0) {
+            if hasTopNotices {
+                VStack(spacing: 8) {
+                    if showsReadingPositionNotice { readingPositionNotice }
+                    if captureAccessNeedsAttention {
+                        captureAccessBanner(appDelegate.captureAccessState)
+                    }
+                    if let pasteFailure = appDelegate.pasteFailure {
+                        pasteFailureBanner(pasteFailure)
+                    }
+                    if let captureNotice = appDelegate.captureNotice {
+                        captureNoticeBanner(captureNotice)
+                    }
+                }
+                .padding(8)
+                // Measure only the notices' natural width-dependent height;
+                // fitting the window must not compress and remeasure them.
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.size.height
+                } action: { height in
+                    let height = height.isFinite ? max(0, height) : 0
+                    if topNoticeHeight != height { topNoticeHeight = height }
+                }
+            }
+            panelContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: hasTopNotices, initial: true) { _, visible in
+            if !visible, topNoticeHeight != 0 { topNoticeHeight = 0 }
+        }
+        .environment(\.workflowExecutionQueue, appDelegate.composition?.workflowRunner.executionQueue)
+        .environment(\.searchHistoryStore, appDelegate.composition?.searchHistoryStore)
+        .environment(\.openSearchSavingSettings, {
+            NSApp.activate()
+            openSettings()
+        })
+        .environment(\.historyBrowsingPreferences, appDelegate.composition?.historyBrowsingPreferences)
+        // The panel window is transparent; only rounded content corners
+        // remain transparent after the notices take their own layout space.
+        .background { NativePanelBackground() }
+        .onChange(of: appDelegate.composition?.viewState.didLoseReadingPosition) { _, missing in
+            readingPositionNoticeDismissed = false
+            if missing == true {
+                appDelegate.composition?.historyBrowsingPreferences.clearReadingPosition(for: .panel)
+            }
+        }
+        .onAppear {
+            appDelegate.installSettingsOpenOperation {
+                NSApp.activate()
+                openSettings()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var panelContent: some View {
         Group {
             if let composition = appDelegate.composition,
                let surfaceState = appDelegate.panelSurfaceState {
@@ -61,6 +119,7 @@ struct PanelRootView: View {
                         // builds from this public provider.
                         sourceIconProvider:
                             SourceIconProviderFactory.makeProvider(),
+                        topNoticeHeight: topNoticeHeight,
                         // The analytic content-fit demand flows back to the
                         // AppKit owner, which coalesces and fits the
                         // window's height (`FloatingPanel.fitToContent`).
@@ -76,52 +135,11 @@ struct PanelRootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .environment(\.workflowExecutionQueue, appDelegate.composition?.workflowRunner.executionQueue)
-        .environment(\.searchHistoryStore, appDelegate.composition?.searchHistoryStore)
-        .environment(\.openSearchSavingSettings, {
-            NSApp.activate()
-            openSettings()
-        })
-        .environment(\.historyBrowsingPreferences, appDelegate.composition?.historyBrowsingPreferences)
-        .overlay(alignment: .top) {
-            if appDelegate.pasteFailure != nil
-                || appDelegate.captureNotice != nil
-                || captureAccessNeedsAttention
-                || showsReadingPositionNotice {
-                VStack(spacing: 8) {
-                    if showsReadingPositionNotice { readingPositionNotice }
-                    if captureAccessNeedsAttention {
-                        captureAccessBanner(appDelegate.captureAccessState)
-                    }
-                    if let pasteFailure = appDelegate.pasteFailure {
-                        pasteFailureBanner(pasteFailure)
-                    }
-                    if let captureNotice = appDelegate.captureNotice {
-                        captureNoticeBanner(captureNotice)
-                    }
-                }
-                .padding(8)
-            }
-        }
-        // The panel window is transparent; the content carries the
-        // solid background; only the rounded corners remain transparent.
-        .background { NativePanelBackground() }
-        .onChange(of: appDelegate.composition?.viewState.didLoseReadingPosition) { _, missing in
-            readingPositionNoticeDismissed = false
-            if missing == true {
-                appDelegate.composition?.historyBrowsingPreferences.clearReadingPosition(for: .panel)
-            }
-        }
-        .onAppear {
-            // Republish the documented public OpenSettingsAction to the
-            // delegate so the pure-AppKit status-item menu can open the
-            // same Settings scene through the same action. Idempotent:
-            // every appearance installs an equivalent fresh capture.
-            appDelegate.installSettingsOpenOperation {
-                NSApp.activate()
-                openSettings()
-            }
-        }
+    }
+
+    private var hasTopNotices: Bool {
+        appDelegate.pasteFailure != nil || appDelegate.captureNotice != nil
+            || captureAccessNeedsAttention || showsReadingPositionNotice
     }
 
     private var showsReadingPositionNotice: Bool {

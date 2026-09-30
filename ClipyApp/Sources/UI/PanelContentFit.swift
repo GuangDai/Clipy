@@ -69,6 +69,9 @@ enum PanelContentFit {
         var isFilterChipVisible = false
         /// The browsing column's typed-failure banner.
         var isFailureBannerVisible = false
+        /// Root notices occupy normal layout above the browsing column.
+        /// The root reports their natural height only when it changes.
+        var topNoticeHeight: CGFloat = 0
         /// A pushed destination (Details/editor) or the quick-look overlay
         /// fills the whole panel: row-derived shrink-to-fit would clip it.
         /// While set the demand is the full persisted ceiling
@@ -224,7 +227,11 @@ enum PanelContentFit {
         if input.isFailureBannerVisible {
             height += failureBannerHeight
         }
-        return height
+        let notices = input.topNoticeHeight.isFinite ? max(0, input.topNoticeHeight) : 0
+        // Notices take space above the reading floor, instead of consuming
+        // its row slots. The existing native owner still applies the ceiling
+        // and the visible-screen limit to this complete demand.
+        return notices > 0 ? max(height, minimumHeight) + notices : height
     }
 
     /// Retain the five-row floor even for an older, lower saved ceiling.

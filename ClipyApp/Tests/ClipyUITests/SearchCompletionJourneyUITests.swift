@@ -44,6 +44,12 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         ))
         try require(panel.waitForExistence(timeout: 20), app.debugDescription)
         try require(search.waitForExistence(timeout: 5), app.debugDescription)
+        let accessNotice = app.descendants(matching: .any)["clipy.capture.access.banner"]
+        try require(accessNotice.waitForExistence(timeout: 5), app.debugDescription)
+        try require(waitUntil {
+            search.isHittable && accessNotice.frame.maxY <= search.frame.minY
+                && app.buttons["clipy.capture.access.recovery"].isHittable
+        }, "The denied-access notice must occupy space above the editable search field.\n" + app.debugDescription)
         try require(!popup.exists, "An empty focused search must leave list navigation available.")
 
         // A bare field-like spelling remains ordinary Exact text.

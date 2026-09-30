@@ -154,7 +154,9 @@ struct FloatingPanelFrameHostedTests {
 
         // The actual available display remains the last clamp even when
         // it is shorter than the toolbar-and-five-row floor.
-        let shortSafeFrame = NSRect(x: 0, y: 0, width: 500, height: PanelGeometry.minimumHeight / 2)
+        let shortSafeFrame = NSRect(x: 0, y: panel.frame.minY,
+                                    width: 500, height: PanelGeometry.minimumHeight / 2)
+        #expect(panel.isReachable(in: [shortSafeFrame]))
         panel.fitToVisibleFrames([shortSafeFrame])
         #expect(panel.frame.height == shortSafeFrame.height)
         #expect(shortSafeFrame.contains(panel.frame))

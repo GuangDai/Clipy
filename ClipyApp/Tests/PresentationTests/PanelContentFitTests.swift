@@ -117,6 +117,20 @@ struct PanelContentFitTests {
         )
     }
 
+    @Test func rootNoticesAddSpaceAboveTheReadingFloorWithinTheExistingCeiling() {
+        var input = PanelContentFit.Input()
+        input.unpinnedRows = [textRow()]
+        let noNoticeDemand = PanelContentFit.idealHeight(input)
+        let noNoticeHeight = PanelContentFit.clampedHeight(noNoticeDemand, ceiling: 420)
+        #expect(noNoticeDemand < PanelContentFit.minimumHeight)
+        input.topNoticeHeight = 58
+        let noticeDemand = PanelContentFit.idealHeight(input)
+        #expect(PanelContentFit.clampedHeight(noticeDemand, ceiling: 420) == noNoticeHeight + input.topNoticeHeight)
+        #expect(PanelContentFit.clampedHeight(noticeDemand, ceiling: noNoticeHeight + 20) == noNoticeHeight + 20)
+        input.topNoticeHeight = 0
+        #expect(PanelContentFit.idealHeight(input) == noNoticeDemand)
+    }
+
     @Test func theIdealClampsAtThePersistedCeiling() {
         var input = PanelContentFit.Input()
         input.unpinnedRows = (0 ..< 40).map { _ in textRow() }

@@ -99,6 +99,21 @@ struct NativePanelResponseMeasurementTests {
 
         // A second disposable graph measures the production preparation
         // path independently of the genuinely unprepared cold window above.
+        // Disable dwell in the appearance snapshot before hosting exists,
+        // so its initial preference callback cannot open the preview first.
+        let appearanceDefaults = UserDefaults.standard
+        let originalAutoOpenPreference = appearanceDefaults.object(
+            forKey: PanelAppearanceSettings.previewAutoOpenDefaultsKey
+        )
+        appearanceDefaults.set(false, forKey: PanelAppearanceSettings.previewAutoOpenDefaultsKey)
+        defer {
+            if let originalAutoOpenPreference {
+                appearanceDefaults.set(originalAutoOpenPreference,
+                                       forKey: PanelAppearanceSettings.previewAutoOpenDefaultsKey)
+            } else {
+                appearanceDefaults.removeObject(forKey: PanelAppearanceSettings.previewAutoOpenDefaultsKey)
+            }
+        }
         let preparedComposition = AppComposition.makeForTesting(
             history: history,
             adapter: PasteboardAdapter(pasteboard: ComposedSupport.makePasteboard()),
@@ -107,10 +122,12 @@ struct NativePanelResponseMeasurementTests {
             captureAccessBehaviorProvider: { .allowed }
         )
         let preparedOwner = AppDelegate()
+        preparedOwner.previewState.isAutoOpenPreferenceEnabled = false
         preparedOwner.installCompositionForTesting(preparedComposition)
         let preparedProbe = NativePanelDisplayTickProbe()
         defer {
             preparedProbe.stop()
+            previewProbe.stop()
             preparedOwner.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
         }
         let clock = ContinuousClock()
@@ -127,12 +144,33 @@ struct NativePanelResponseMeasurementTests {
         #expect(!preparedComposition.viewState.hasAuthoritativeFirstPage)
         #expect(preparedComposition.viewState.rows.isEmpty)
         #expect(preparedOwner.panelSurfaceState?.isSessionActive == false)
+        #expect(!preparedOwner.previewState.isOpen)
+        #expect(preparedOwner.previewState.previewedItem == nil)
         #expect(preparedOwner.floatingPreviewLoader == nil)
         let preparedFirst = try await preparedProbe.measure(window: preparedPanel) {
             preparedOwner.openPanelForTesting()
             return preparedPanel
         }
         try #require(preparedFirst).report("first-summon-after-hidden-window-setup")
+        try #require(await ComposedSupport.waitFor {
+            preparedComposition.viewState.hasAuthoritativeFirstPage
+        })
+        try #require(!preparedOwner.previewState.isAutoOpenPreferenceEnabled)
+        try #require(!preparedOwner.previewState.isOpen && preparedOwner.previewState.previewedItem == nil)
+        try #require(!preparedPreview.isPresented && !preparedPreview.isVisible)
+        try #require(preparedOwner.floatingPreviewLoader == nil)
+        preparedOwner.previewState.handleSelectionChange(first, isExplicit: true)
+        let preparedPreviewFirst = try await previewProbe.measure(window: preparedPreview, action: {
+            preparedOwner.previewState.togglePreview(for: first)
+            return preparedPreview
+        }, isReady: {
+            preparedOwner.previewState.previewedItem == first && preparedPreview.parent === preparedPanel
+        })
+        try #require(preparedPreviewFirst).report("first-preview-after-hidden-window-setup")
+        #expect(preparedPreview.isPresented)
+        #expect(preparedOwner.previewState.previewedItem == first)
+        preparedProbe.stop()
+        previewProbe.stop()
         preparedOwner.applicationWillTerminate(Notification(name: NSApplication.willTerminateNotification))
         #expect(preparedPanel.contentView == nil)
         #expect(preparedPreview.contentView == nil)
