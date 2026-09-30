@@ -110,7 +110,9 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         HistoryJourneyControls.select(imageRow, in: app)
         let image = preview.descendants(matching: .any)["clipy.preview.image"]
         XCTAssertTrue(waitUntil { preview.exists && image.exists && image.isHittable }, app.debugDescription)
-        XCTAssertEqual(preview.frame.height, panel.frame.height, accuracy: 2,
+        let previewWindow = app.descendants(matching: .any)["clipy.panel.floatingPreview"]
+        XCTAssertTrue(previewWindow.exists, app.debugDescription)
+        XCTAssertEqual(previewWindow.frame.height, panel.frame.height, accuracy: 2,
                        "The image preview must keep the History panel's actual height.\n\(app.debugDescription)")
         // The floating pane sits beside the panel: capture the whole app so
         // the attachment shows both windows.
