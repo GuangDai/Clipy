@@ -41,6 +41,8 @@
 
 快捷键定义及冲突检查在 [`PanelShortcutSettings.swift`](../ClipyApp/Sources/UI/PanelShortcutSettings.swift)。编辑文本时 Delete、Space 等保留正常输入作用。快捷键是否可用取决于当前界面、选择和操作状态。用户可以启用保持打开，使面板在成功复制后继续显示。
 
+预览面板获得焦点后，Esc 先关闭信息浮层或 Quick Look；没有这些浮层时，关闭预览和整个历史列表。输入法组合、文件确认和原生 sheet 保留各自的取消行为。信息浮层也提供 SwiftUI 关闭按钮。
+
 ## 查询、详情与修改
 
 [`HistoryViewState.swift`](../ClipyApp/Sources/UI/HistoryViewState.swift) 持有当前 query、filter、sort、观察任务和三页窗口。搜索输入在 20 ms 内合并，输入时立即退役旧行；显式 Clear / refresh 立即重启请求。所有异步读结果在应用前检查 request generation、取消和版本，较晚返回的旧请求不得覆盖新状态。替换查询加载期间保持窗口高度，收到权威结果后在下一轮 MainActor 调整内容高度，不额外等待固定计时器。

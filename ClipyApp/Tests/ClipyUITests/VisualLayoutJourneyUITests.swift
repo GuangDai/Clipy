@@ -27,8 +27,20 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.sqlite").path
+        let lifecycle = directory.appendingPathComponent("preview-lifecycle.log")
+        try Data().write(to: lifecycle)
+        app.launchEnvironment["CLIPY_FILE_PREVIEW_LIFECYCLE_PATH"] = lifecycle.path
         app.launch()
-        defer { app.terminate() }
+        defer {
+            app.terminate()
+            if let events = try? String(contentsOf: lifecycle, encoding: .utf8), !events.isEmpty {
+                print("CLIPY_VISUAL_PREVIEW_LIFECYCLE\n\(events)")
+                let attachment = XCTAttachment(string: events)
+                attachment.name = "preview-lifecycle.log"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
         let rows = panel.descendants(matching: .any).matching(NSPredicate(
@@ -108,6 +120,14 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil { !informationContent.exists }, app.debugDescription)
         XCTAssertTrue(panel.exists && imageRow.exists, "Escape must dismiss information without closing History: \(app.debugDescription)")
+
+        // Once the topmost information is gone, Escape from the focused
+        // preview closes the whole History interaction, just like the list.
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil { !panel.exists && !preview.exists }, app.debugDescription)
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(waitUntil { rows.count == 3 && imageRow.exists }, app.debugDescription)
 
         imageRow.rightClick()
         let showDetails = app.menuItems["Show Details"]

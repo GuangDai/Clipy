@@ -14,6 +14,7 @@
 /// ordering and can never outlive it. Showing it preserves the browsing
 /// surface's focus; an intentional click enables native text-copy commands.
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 /// The floating preview window. Prepared once the app graph opens and reused;
@@ -27,6 +28,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     private let previewState: PreviewPaneState
     private let defaults: UserDefaults
     private let presentationDuration: @MainActor (NSScreen?) -> TimeInterval
+    private let onExitCommand: @MainActor () -> Void
     private let motionPresentation = AppMotionPresentation()
     private var placement: PreviewPlacement = .trailing
     private var lastParentFrame: NSRect?
@@ -49,6 +51,10 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         self.previewState = rootView.appDelegate.previewState
         self.defaults = defaults
         self.presentationDuration = presentationDuration
+        self.onExitCommand = { [weak appDelegate = rootView.appDelegate] in
+            guard let appDelegate else { return }
+            FloatingPreviewRootView.handleExitCommand(appDelegate: appDelegate)
+        }
         super.init(
             contentRect: NSRect(
                 x: 0, y: 0,
@@ -126,6 +132,25 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     override var canBecomeMain: Bool { false }
 
     override func sendEvent(_ event: NSEvent) {
+        if event.type == .keyDown, event.keyCode == UInt16(kVK_Escape) {
+            let responder = firstResponder
+            let hasMarkedText = (responder as? NSTextInputClient)?.hasMarkedText() ?? false
+            let unmodified = event.modifierFlags.intersection([
+                .command, .control, .option, .shift,
+            ]).isEmpty
+#if DEBUG
+            let responderClass = responder.map { NSStringFromClass(type(of: $0)) } ?? "nil"
+            recordPreviewLifecycle("native-preview-escape-entry responder_class=\(responderClass) responder_is_window=\(responder === self) responder_is_host=\(responder === contentView) unmodified=\(unmodified) marked_text=\(hasMarkedText) information=\(previewState.isInformationPresented) confirmation=\(previewState.isFileConfirmationPresented) attached_sheet=\(attachedSheet != nil) parent_sheet=\(parent?.attachedSheet != nil)")
+#endif
+            if unmodified, !hasMarkedText, !previewState.isFileConfirmationPresented,
+               attachedSheet == nil, parent?.attachedSheet == nil {
+                onExitCommand()
+#if DEBUG
+                recordPreviewLifecycle("native-preview-escape-handled")
+#endif
+                return
+            }
+        }
         if event.type == .leftMouseDown {
             mouseDownScreenX = convertPoint(toScreen: event.locationInWindow).x
             if !isKeyWindow { makeKey() }
@@ -361,6 +386,26 @@ struct FloatingPreviewRootView: View {
         )
     }
 
+    @MainActor
+    static func handleExitCommand(appDelegate: AppDelegate) {
+        if appDelegate.previewState.isInformationPresented {
+#if DEBUG
+            recordPreviewLifecycle("preview-exit-information")
+#endif
+            appDelegate.previewState.isInformationPresented = false
+        } else if appDelegate.panelSurfaceState?.quickLookReference != nil {
+#if DEBUG
+            recordPreviewLifecycle("preview-exit-quick-look")
+#endif
+            appDelegate.panelSurfaceState?.quickLookReference = nil
+        } else {
+#if DEBUG
+            recordPreviewLifecycle("preview-exit-history-panel")
+#endif
+            appDelegate.closePanel()
+        }
+    }
+
     var body: some View {
         Group {
             if let composition = appDelegate.composition,
@@ -405,13 +450,7 @@ struct FloatingPreviewRootView: View {
             }
         }
         .onExitCommand {
-            if appDelegate.previewState.isInformationPresented {
-                appDelegate.previewState.isInformationPresented = false
-            } else if appDelegate.panelSurfaceState?.quickLookReference != nil {
-                appDelegate.panelSurfaceState?.quickLookReference = nil
-            } else {
-                appDelegate.closePanel()
-            }
+            Self.handleExitCommand(appDelegate: appDelegate)
         }
         // The preview and browsing panel share an active interaction session,
         // including keyboard focus transferred by a click inside the preview.
