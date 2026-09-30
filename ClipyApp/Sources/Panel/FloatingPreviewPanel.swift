@@ -78,8 +78,8 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         // `clipy.preview.root` in the accessibility tree (CI preview journeys).
         setAccessibilityIdentifier("clipy.panel.floatingPreview")
 
-        let hostingView = NSHostingView(rootView: AppMotionSurface(
-            presentation: motionPresentation, content: rootView.appLanguage()
+        let hostingView = NSHostingView(rootView: rootView.appLanguage().modifier(
+            AppMotionSurface(presentation: motionPresentation)
         ))
         hostingView.sizingOptions = []
         hostingView.wantsLayer = true

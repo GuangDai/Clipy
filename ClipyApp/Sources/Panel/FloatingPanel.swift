@@ -162,8 +162,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         // applied at open. The bounds only constrain interactive resizes.
         applyResizeLimits()
 
-        let hostingView = NSHostingView(rootView: AppMotionSurface(
-            presentation: motionPresentation, content: rootView.appLanguage()
+        let hostingView = NSHostingView(rootView: rootView.appLanguage().modifier(
+            AppMotionSurface(presentation: motionPresentation)
         ))
         hostingView.sizingOptions = []
         hostingView.wantsLayer = true

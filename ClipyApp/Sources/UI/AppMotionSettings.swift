@@ -106,9 +106,8 @@ final class AppMotionPresentation {
     }
 }
 
-struct AppMotionSurface<Content: View>: View {
+struct AppMotionSurface: ViewModifier {
     let presentation: AppMotionPresentation
-    let content: Content
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var playbackTrigger: UInt = 0
 
@@ -117,7 +116,7 @@ struct AppMotionSurface<Content: View>: View {
         var opacity = 1.0
     }
 
-    var body: some View {
+    func body(content: Content) -> some View {
         // The @Sendable frame closure captures immutable values, never the
         // MainActor state or History. Only these two visual modifiers update.
         let request = presentation.requestGeneration
