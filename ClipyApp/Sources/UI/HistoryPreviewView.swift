@@ -304,7 +304,8 @@ struct HistoryPreviewView: View {
             loader.clear()
         }
         .alert(PreviewCopy.text("Load File Contents?"), isPresented: Binding(
-            get: { fileConfirmationPresented }, set: setFileConfirmationPresented
+            get: { fileConfirmationPresented },
+            set: { presented in setFileConfirmationPresented(presented) }
         )) {
             Button(PreviewCopy.text("Load File")) {
                 guard loader.requestedItem == targetItem else { return }
