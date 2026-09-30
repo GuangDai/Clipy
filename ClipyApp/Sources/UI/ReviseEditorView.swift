@@ -231,6 +231,7 @@ struct ReviseEditorView: View {
                 draft.setReplacementText(result, for: identity.typeIdentifier,
                     pasteboardItemIndex: identity.pasteboardItemIndex)
             }
+            .appLanguage()
         }
         .onAppear {
             readFence.resume()

@@ -765,6 +765,8 @@ struct BuiltInAutomationSettingsView: View {
             Button(text("Manage workflows…")) { showsWorkflows = true }
                 .accessibilityIdentifier("clipy.settings.workflows.manage")
         }
-        .sheet(isPresented: $showsWorkflows) { BuiltInAutomationView(history: history) }
+        .sheet(isPresented: $showsWorkflows) {
+            BuiltInAutomationView(history: history).appLanguage()
+        }
     }
 }

@@ -179,9 +179,9 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
         let action = app.menuItems["Import workflow…"]
         try require(action.waitForExistence(timeout: 5), app.debugDescription)
         action.click()
-        // Native AppKit panel buttons expose their text through title;
-        // SwiftUI's confirmation buttons may expose it through label.
-        let open = app.buttons.matching(NSPredicate(
+        // Native panels expose title, and their Touch Bar mirrors can have
+        // the same text. Only the button inside the modal sheet can be clicked.
+        let open = app.sheets.buttons.matching(NSPredicate(
             format: "title IN %@ OR label IN %@", ["Open", "Import"], ["Open", "Import"]
         )).firstMatch
         try require(waitUntil { open.exists && open.isHittable }, app.debugDescription)
@@ -196,13 +196,13 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
         let action = app.menuItems["Export workflow…"]
         try require(action.waitForExistence(timeout: 5), app.debugDescription)
         action.click()
-        let save = app.buttons.matching(NSPredicate(
+        let save = app.sheets.buttons.matching(NSPredicate(
             format: "title IN %@ OR label IN %@", ["Save", "Export"], ["Save", "Export"]
         )).firstMatch
         try require(waitUntil { save.exists && save.isHittable }, app.debugDescription)
         // Find the native filename field by its proposed filename instead of
         // depending on an undocumented AppKit accessibility identifier.
-        let filename = app.textFields.matching(NSPredicate(
+        let filename = app.sheets.textFields.matching(NSPredicate(
             format: "value BEGINSWITH %@ AND identifier != %@", workflowName, "clipy.workflow.name"
         )).firstMatch
         try require(filename.waitForExistence(timeout: 5), app.debugDescription)

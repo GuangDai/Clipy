@@ -37,7 +37,9 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         let gap = app.textFields["clipy.settings.preview.panel-gap"]
         set("0", in: gap, app: app)
         let complete = revealCompleteToggle(in: app)
-        if (complete.value as? String) == "1" { complete.click() }
+        if try XCTUnwrap(toggleValue(complete), "The complete-text control must expose its current state") {
+            complete.click()
+        }
         let count = app.textFields["clipy.settings.preview.character-count"]
         set("6", in: count, app: app)
         let screenshot = XCTAttachment(screenshot: settings.screenshot())
@@ -102,7 +104,10 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         var settings = openAppearance(in: app)
         let custom = app.switches["clipy.settings.preview.custom-width"]
         reveal(custom, in: app)
-        if (custom.value as? String) != "1" { custom.click() }
+        let customIsOn = try XCTUnwrap(toggleValue(custom), "The custom-width control must expose its current state")
+        if !customIsOn {
+            custom.click()
+        }
         let width = app.textFields["clipy.settings.preview.panel-width"]
         set("100", in: width, app: app)
         let widthError = app.descendants(matching: .any)["clipy.settings.preview.width-error"]
@@ -157,7 +162,7 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         let reset = app.buttons["clipy.settings.preview.reset"]
         reveal(reset, in: app)
         reset.click()
-        XCTAssertTrue(waitUntil { !width.exists && (custom.value as? String) == "0" })
+        XCTAssertTrue(waitUntil { !width.exists && self.toggleValue(custom) == false }, app.debugDescription)
         settings.buttons["_XCUI:CloseWindow"].click()
     }
 
@@ -201,6 +206,26 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
     @MainActor
     private func value(_ element: XCUIElement) -> String {
         (element.value as? String) ?? element.label
+    }
+
+    @MainActor
+    private func toggleValue(_ element: XCUIElement) -> Bool? {
+        // XCUIElement.value preserves the control's AX representation. Native
+        // switches can return NSNumber even when text fields return String.
+        let raw = element.value
+        if let text = raw as? String {
+            switch text {
+            case "0": return false
+            case "1": return true
+            default: return nil
+            }
+        }
+        guard let number = raw as? NSNumber else { return nil }
+        switch number.doubleValue {
+        case 0: return false
+        case 1: return true
+        default: return nil
+        }
     }
 
     @MainActor
