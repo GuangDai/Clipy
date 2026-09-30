@@ -7,7 +7,7 @@
 /// `Tests/HistoryStorageTests/WS12ObservationRaceTests.swift`).
 ///
 /// Also pins the composed debounce behavior (V2-07 §4 feel): a search edit
-/// restarts observation ONCE, 250 ms later, into the search query shape.
+/// coalesces edits before restarting observation into the search query shape.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -65,7 +65,7 @@ struct WS12ComposedObservationTests {
 
     /// WS12 composed debounce companion (docs/storage.md; V2-07
     /// §4): a search edit re-observes under the new query shape after the
-    /// 250 ms debounce — the loop restarts (kind `.search`) and its first
+    /// input-coalescing window — the loop restarts (kind `.search`) and its first
     /// replacement page contains the matching row, then a NEW commit while
     /// still searching reaches the same loop (one query shape, one stream).
     ///

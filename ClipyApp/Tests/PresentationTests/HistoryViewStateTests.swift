@@ -627,38 +627,6 @@ struct HistoryViewStateTests {
         state.deactivate()
     }
 
-    /// Search-field edits debounce into ONE restarted observation carrying
-    /// the final text in the current mode; the rapid intermediate edit is
-    /// folded away.
-    @Test func searchTextEditsDebounceIntoOneRestartedObservation() async {
-        let firstPage = fixturePage(
-            rows: [fixtureRow(id: "00000000-0000-0000-0000-000000000051", title: "stable-row")],
-            next: nil
-        )
-        let history = ScriptedHistory(observedFirstPage: firstPage)
-        let state = HistoryViewState(history: history)
-        state.activate()
-        #expect(await pollUntil { await history.observeRequests.count == 1 })
-
-        // Two rapid edits in the same MainActor turn must fold into
-        // a single restart whose query is the FINAL text.
-        state.searchText = "cl"
-        state.searchText = "clipy"
-        #expect(await pollUntil { await history.observeRequests.count >= 2 })
-
-        let requests = await history.observeRequests
-        #expect(requests.count == 2)
-        #expect(requests.last?.kind == .search(text: "clipy", mode: .fuzzy))
-        #expect(state.isSearchActive)
-
-        // Settle past a full debounce window: no third restart materializes.
-        try? await Task.sleep(for: .milliseconds(400))
-        #expect(await history.observeRequests.count == 2)
-
-        state.deactivate()
-        await history.finishObservation()
-    }
-
     /// SwiftUI controls may write their current binding value again while
     /// mounting or taking focus. An equal draft/mode is not a new search
     /// intent and must not cancel the live observation or arm a debounce.

@@ -10,6 +10,7 @@ Clipy 是 macOS 26 及以上、Apple Silicon 上的剪贴板历史应用。当�
 | [storage.md](storage.md) | SQLite、内容文件、事务、保留策略与备份 |
 | [search.md](search.md) | 搜索语义、过滤、排序、分页与复杂度 |
 | [interface.md](interface.md) | 捕获、浮动面板、设置、历史工作区与交互状态 |
+| [motion-performance.md](motion-performance.md) | 十档统一动画、Hyprland / Apple 官方研究与响应测量范围 |
 | [formats-preview.md](formats-preview.md) | 格式事实、预览、缩略图与本地文件读取 |
 | [automation.md](automation.md) | 内置工作流、App Intents、Local Automation 与 clipyctl |
 | [testing.md](testing.md) | 构建、测试、CI、性能测量与验证边界 |

@@ -387,7 +387,7 @@ final class AppearanceJourneyUITests: XCTestCase {
         let labeledChoice = control.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@", title)
         ).firstMatch
-        if labeledChoice.waitForExistence(timeout: 2) {
+        if labeledChoice.exists {
             labeledChoice.click()
             return
         }
