@@ -63,7 +63,7 @@ struct SearchExpressionStorageTests {
         #expect(try await ids("before:2026-09-26 OR after:2026-09-28", in: history) == [afterRange, before])
     }
 
-    @Test func applicationAndDateReferToMostRecentCopyAfterCoalescing() async throws {
+    @Test func applicationsIncludeEarlierCopiesWhileDatesUseTheMostRecentCopy() async throws {
         let history = try await WSSupport.makeHistory()
         let firstDay = try utcDate(2026, 9, 25)
         let item = try await capture("copied twice", in: history, date: firstDay, source: "com.apple.Safari")
@@ -71,10 +71,11 @@ struct SearchExpressionStorageTests {
             "copied twice", observedAt: firstDay.addingTimeInterval(86_400), source: "com.apple.Notes"
         )))
 
-        #expect(try await ids("app:safari", in: history).isEmpty)
+        #expect(try await ids("app:safari", in: history) == [item])
         #expect(try await ids("date:2026-09-25", in: history).isEmpty)
         #expect(try await ids("app:NOTES AND date:2026-09-26", in: history) == [item])
-        #expect(try await ids(#"app:"com.apple.Notes" NOT app:safari"#, in: history) == [item])
+        #expect(try await ids(#"app:"com.apple.Notes" NOT app:safari"#, in: history).isEmpty)
+        #expect(try await ids("source-id:com.apple.Safari AND source-id:com.apple.Notes", in: history) == [item])
         let page = try await search("app:notes", in: history)
         #expect(page.rows.first?.search == nil)
     }

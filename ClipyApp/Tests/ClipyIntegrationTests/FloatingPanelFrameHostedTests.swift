@@ -99,7 +99,7 @@ struct FloatingPanelFrameHostedTests {
         panel.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: panel))
         #expect(changes.count == 1)
         #expect(changes.savedCeiling == 300)
-        #expect(panel.frame.height == 100)
+        #expect(panel.frame.height == PanelGeometry.minimumHeight)
     }
 
     @Test
@@ -150,6 +150,14 @@ struct FloatingPanelFrameHostedTests {
         let largerSafeFrame = NSRect(x: 0, y: 0, width: 500, height: 400)
         panel.fitToVisibleFrames([largerSafeFrame])
         #expect(panel.frame == NSRect(x: 200, y: 200, width: 300, height: 200))
+        #expect(PanelGeometry.persistedSize(from: .standard) == saved)
+
+        // The actual available display remains the last clamp even when
+        // it is shorter than the toolbar-and-five-row floor.
+        let shortSafeFrame = NSRect(x: 0, y: 0, width: 500, height: PanelGeometry.minimumHeight / 2)
+        panel.fitToVisibleFrames([shortSafeFrame])
+        #expect(panel.frame.height == shortSafeFrame.height)
+        #expect(shortSafeFrame.contains(panel.frame))
         #expect(PanelGeometry.persistedSize(from: .standard) == saved)
     }
 
@@ -313,7 +321,7 @@ struct FloatingPanelFrameHostedTests {
     }
 
     @Test
-    func compactUsableUserSizePersistsWithoutAnAestheticFloor() throws {
+    func aLegacySmallHeightCeilingStaysSavedWhilePresentationUsesTheFiveRowFloor() throws {
         let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
         let visibleFrame = screen.visibleFrame
         try #require(visibleFrame.width >= 721)
@@ -340,7 +348,7 @@ struct FloatingPanelFrameHostedTests {
             )
         )
 
-        // A user-owned 200×40 size stays small across settle and reopen.
+        // Preserve a usable old ceiling while displaying the five-row floor.
         var settledFrame = panel.frame
         settledFrame.size = NSSize(width: 200, height: 40)
         panel.setFrame(settledFrame, display: false)
@@ -349,7 +357,7 @@ struct FloatingPanelFrameHostedTests {
         )
 
         #expect(panel.frame.width == 200)
-        #expect(panel.frame.height == 40)
+        #expect(panel.frame.height == PanelGeometry.minimumHeight)
         let persisted = PanelGeometry.persistedSize(from: .standard)
         #expect(persisted.contentWidth == 200)
         #expect(persisted.height == 40)
@@ -365,7 +373,7 @@ struct FloatingPanelFrameHostedTests {
             )
         )
         #expect(panel.frame.width == 200)
-        #expect(panel.frame.height == 40)
+        #expect(panel.frame.height == PanelGeometry.minimumHeight)
     }
 
     @Test(arguments: [false, true])
@@ -481,9 +489,9 @@ struct FloatingPanelFrameHostedTests {
         #expect(panel.frame.height == 200)
         #expect(panel.frame.maxY == top)
 
-        // A short demand remains short, with no aesthetic minimum.
+        // A short demand leaves room for the toolbar and five compact rows.
         panel.fitToContent(idealHeight: 10)
-        #expect(panel.frame.height == 10)
+        #expect(panel.frame.height == PanelGeometry.minimumHeight)
         #expect(panel.frame.maxY == top)
 
         // Above the persisted ceiling (the default 420 with no persisted
@@ -602,7 +610,7 @@ struct FloatingPanelFrameHostedTests {
 
     /// The floating preview pane follows a content-fit height change: the
     /// panel's frame-change hook re-places it at the pure geometry's frame
-    /// (same side logic and top alignment, independently measured content).
+    /// (same height, side logic and top alignment).
     @Test
     func floatingPreviewFollowsAFittedMainPanelHeight() throws {
         let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
@@ -646,17 +654,17 @@ struct FloatingPanelFrameHostedTests {
         defer { preview.dismiss() }
         preview.present(beside: panel)
         #expect(preview.frame.height == panel.frame.height)
-        preview.fitToContent(height: 74)
-        #expect(preview.frame.height == 74)
+        preview.contentView?.layoutSubtreeIfNeeded()
+        #expect(preview.frame.height == panel.frame.height)
 
         panel.fitToContent(idealHeight: 200)
         #expect(panel.frame.height == 200)
-        #expect(preview.frame.height == 74)
+        #expect(preview.frame.height == panel.frame.height)
+        #expect(appDelegate.previewState.availablePreviewHeight == panel.frame.height)
         #expect(preview.frame.maxY == panel.frame.maxY)
         let expected = PopupPositionGeometry.floatingPreviewFrame(
             beside: panel.frame,
-            in: visibleFrame,
-            previewHeight: 74
+            in: visibleFrame
         )
         #expect(preview.frame == expected.frame)
     }
@@ -685,7 +693,7 @@ struct FloatingPanelFrameHostedTests {
         let saved = PanelGeometry.persistedSize(from: .standard)
         #expect(saved.contentWidth == 500)
         #expect(saved.height == 420)
-        #expect(panel.frame.height == 10)
+        #expect(panel.frame.height == PanelGeometry.minimumHeight)
         // Future content can still grow into the user's original ceiling.
         panel.fitToContent(idealHeight: 600)
         #expect(panel.frame.height == 420)
@@ -746,7 +754,7 @@ struct FloatingPanelFrameHostedTests {
         defer { panel.close() }
         panel.fitToContent(idealHeight: 80)
         panel.open(at: .center, statusItemButtonScreenFrame: nil)
-        #expect(panel.frame.height == 80)
+        #expect(panel.frame.height == PanelGeometry.minimumHeight)
         // AppKit may align window origins to a backing pixel.
         #expect(abs(panel.frame.midX - visible.midX) <= 1)
         #expect(abs(panel.frame.midY - visible.midY) <= 1)
@@ -773,7 +781,7 @@ struct FloatingPanelFrameHostedTests {
         defer { panel.close() }
         panel.fitToContent(idealHeight: 80)
         panel.open(at: .lastPosition, statusItemButtonScreenFrame: nil)
-        #expect(panel.frame.height == 80)
+        #expect(panel.frame.height == PanelGeometry.minimumHeight)
         #expect(abs(panel.frame.maxY - (visible.minY + 200)) <= 1)
         let positioned = panel.frame
         panel.close()

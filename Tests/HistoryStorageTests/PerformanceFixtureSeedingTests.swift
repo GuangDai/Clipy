@@ -116,6 +116,7 @@ struct PerformanceFixtureSeedingTests {
             #expect(try WSSupport.fetchRows(failedContainer).isEmpty)
             #expect(try WSSupport.fetchPosition(failedContainer).rawValue == 0)
         }
+        #expect(try await history.sourceApplications(.init()).applications.isEmpty)
 
         let retry = try await history.seedPerformanceFixture(rowCount: 3) { index in
             Self.capture(index: index, bodyBytes: Self.batchedFixtureBodyBytes)
@@ -128,12 +129,14 @@ struct PerformanceFixtureSeedingTests {
             Self.capture(index: 0, bodyBytes: Self.batchedFixtureBodyBytes)
         ))
         guard case .committed(let commit) = coalesced,
-              case .coalesced = commit.outcome
+              case .coalesced(let item) = commit.outcome
         else {
             Issue.record("expected retry's seeded index to coalesce")
             return
         }
         #expect(commit.position.rawValue == 2)
+        let sources = try await history.copySources(for: item.id, expectedCopyCount: 2, offset: 0)
+        #expect(sources.sources.map(\.count) == [2])
     }
 
     private struct PublicValidation: Sendable {
@@ -177,6 +180,16 @@ struct PerformanceFixtureSeedingTests {
             storeURL: storeURL,
             maximumUnpinned: 200
         )
+        #expect(try await history.sourceApplications(.init()).applications == ["performance-fixture-test"])
+        let sourcePage = try await history.browse(.init(kind: .recent, limit: 100,
+            filter: .init(sourceApplicationIDs: ["performance-fixture-test"])))
+        #expect(sourcePage.rows.count == 65)
+        #expect(sourcePage.rows.allSatisfy { $0.copyCount == 1 && $0.sourceCount == 1 })
+        for row in [sourcePage.rows.first, sourcePage.rows.last].compactMap({ $0 }) {
+            let sources = try await history.copySources(for: row.item.id, expectedCopyCount: 1, offset: 0)
+            #expect(sources.sources.map(\.application) == ["performance-fixture-test"])
+            #expect(sources.sources.map(\.count) == [1])
+        }
         let coalescedReceipt = try await history.perform(.capture(
             Self.capture(index: 0, bodyBytes: Self.batchedFixtureBodyBytes)
         ))

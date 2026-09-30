@@ -52,6 +52,7 @@ internal enum SQLiteHistorySchema {
                 """)
             defer { detachedOwnership.finalize() }
             guard try detachedOwnership.step() else { throw HistoryFailure.persistence(.openStore) }
+            try createSourceApplicationIndex(in: database)
             return
         }
 
@@ -65,6 +66,17 @@ internal enum SQLiteHistorySchema {
         // No nested transaction: startup's one write transaction includes the
         // DDL and the business singleton/bootstrap rows supplied by its owners.
         for sql in statements { try database.execute(sql) }
+        try createSourceApplicationIndex(in: database)
+    }
+
+    /// Rebuildable optimizer index for the global source vocabulary and exact
+    /// per-item source matching. Existing stores gain it directly, with no
+    /// data transformation or compatibility/migration state (V2-09 §4).
+    private static func createSourceApplicationIndex(in database: SQLiteDatabase) throws {
+        try database.execute("""
+            CREATE INDEX IF NOT EXISTS copy_sources_application
+            ON copy_sources(application, itemID) WHERE application IS NOT NULL
+            """)
     }
 
     private static let statements = [

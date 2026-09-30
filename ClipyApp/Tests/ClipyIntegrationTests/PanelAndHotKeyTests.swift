@@ -91,14 +91,16 @@ struct FloatingPanelMarkedTextEventTests {
     /// boolean supplied straight to the decision helper. It proves direct
     /// responder delivery and deliberately does not claim a physical CJK
     /// input source, InputMethodKit process, or WindowServer key sequence.
-    @Test("marked Escape and Return bypass window-level product actions")
+    @Test("marked keys and active search candidates precede panel actions")
     func markedKeysAreDeliveredDirectlyToTheTextResponder() throws {
         let appDelegate = AppDelegate()
         var submissionCount = 0
+        var completionActive = true
         let panel = FloatingPanel(
             rootView: PanelRootView(appDelegate: appDelegate),
             previewState: appDelegate.previewState,
             isSelectionSubmissionEnabled: { true },
+            isSearchCompletionActive: { completionActive },
             onSubmitSelection: { submissionCount += 1 },
             onClosed: {}
         )
@@ -134,6 +136,26 @@ struct FloatingPanelMarkedTextEventTests {
             UInt16(kVK_Escape), UInt16(kVK_Return),
         ])
         #expect(submissionCount == 0)
+
+        responder.unmarkText()
+        try #require(!responder.hasMarkedText())
+        appDelegate.previewState.isInformationPresented = true
+        NSApp.sendEvent(returnKey)
+        NSApp.sendEvent(escape)
+        #expect(responder.receivedKeyCodes == [
+            UInt16(kVK_Escape), UInt16(kVK_Return),
+            UInt16(kVK_Return), UInt16(kVK_Escape),
+        ])
+        #expect(submissionCount == 0)
+        #expect(appDelegate.previewState.isInformationPresented)
+        #expect(panel.isPresented)
+
+        completionActive = false
+        NSApp.sendEvent(returnKey)
+        #expect(submissionCount == 1)
+        NSApp.sendEvent(escape)
+        #expect(!appDelegate.previewState.isInformationPresented)
+        #expect(panel.isPresented)
     }
 
     private func keyDown(

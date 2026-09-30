@@ -55,6 +55,13 @@ internal indirect enum PreparedSearchExpression {
     }
 
     func match(_ row: SearchCorpusRow) -> (matches: Bool, presentation: SearchWorker.DeferredSearchPresentation?) {
+        match(row, anySource: { _, _, predicate in row.lastSource.map(predicate) ?? false })
+    }
+
+    private func match(
+        _ row: SearchCorpusRow,
+        anySource: (HistoryItemID, String?, (String) -> Bool) throws -> Bool
+    ) rethrows -> (matches: Bool, presentation: SearchWorker.DeferredSearchPresentation?) {
         switch self {
         case .all: return (true, nil)
         case .noMatch: return (false, nil)
@@ -72,24 +79,36 @@ internal indirect enum PreparedSearchExpression {
             }
             return (false, nil)
         case .application(let matcher):
-            return (row.lastSource.map { matcher.firstMatch(in: $0) != nil } ?? false, nil)
+            return (try anySource(row.id, nil) { matcher.firstMatch(in: $0) != nil }, nil)
         case .sourceID(let identifier):
-            return (row.lastSource.map { $0.utf8.elementsEqual(identifier.utf8) } ?? false, nil)
+            return (try anySource(row.id, identifier) { $0.utf8.elementsEqual(identifier.utf8) }, nil)
         case .copiedDate(let from, let until):
             return ((from.map { row.lastCopiedAt >= $0 } ?? true)
                     && (until.map { row.lastCopiedAt < $0 } ?? true), nil)
         case .type(let type): return (HistoryFilterSQL.admits(row, filter: HistoryFilter(type: type)), nil)
         case .pinned: return (row.pinOrdinal != nil, nil)
-        case .not(let child): return (!child.match(row).matches, nil)
+        case .not(let child): return (try !child.match(row, anySource: anySource).matches, nil)
         case .and(let lhs, let rhs):
-            let left = lhs.match(row)
+            let left = try lhs.match(row, anySource: anySource)
             guard left.matches else { return (false, nil) }
-            let right = rhs.match(row)
+            let right = try rhs.match(row, anySource: anySource)
             return (right.matches, right.matches ? (left.presentation ?? right.presentation) : nil)
         case .or(let lhs, let rhs):
-            let left = lhs.match(row)
-            return left.matches ? left : rhs.match(row)
+            let left = try lhs.match(row, anySource: anySource)
+            if left.matches { return left }
+            return try rhs.match(row, anySource: anySource)
         }
+    }
+
+    /// SQL search evaluates source leaves against ANY recorded copy source.
+    /// Negation wraps that complete Boolean, not an individual source row.
+    /// Other leaves keep their existing pure matcher/presentation behavior.
+    func match(
+        _ row: SearchCorpusRow, sources: SQLiteExpressionSources
+    ) throws -> (matches: Bool, presentation: SearchWorker.DeferredSearchPresentation?) {
+        try match(row, anySource: { item, identifier, predicate in
+            try sources.contains(item, identifier: identifier, matching: predicate)
+        })
     }
 }
 
@@ -98,7 +117,8 @@ extension SearchWorker {
         _ expression: PreparedSearchExpression,
         in corpus: SearchCorpusSnapshot,
         directive: ScanDirective,
-        work: SearchWorkCounter? = nil
+        work: SearchWorkCounter? = nil,
+        sources: SQLiteExpressionSources? = nil
     ) async throws -> EvaluationResult {
         var evaluated: [EvaluatedRow] = []
         var tracker = OrderPreservingScanTracker(directive: directive)
@@ -112,7 +132,7 @@ extension SearchWorker {
 #if DEBUG
             processed += 1
 #endif
-            let result = expression.match(row)
+            let result = try sources.map { try expression.match(row, sources: $0) } ?? expression.match(row)
             guard result.matches else { continue }
             work?.matchesFound += 1
 #if DEBUG

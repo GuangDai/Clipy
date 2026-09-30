@@ -76,14 +76,14 @@ enum PanelGeometry {
     /// The narrowest browsing column the user can resize to.
     static let minimumContentWidth: CGFloat = 0
 
-    /// No aesthetic size floor. Content determines the fitted height, and
-    /// the user's saved size is only a ceiling (V2-11).
-    static let minimumHeight: CGFloat = 0
+    /// The browsing panel keeps five compact rows beneath the toolbar.
+    /// Native screen fitting can temporarily use less space on a short display.
+    static let minimumHeight: CGFloat = PanelContentFit.minimumHeight
 
     /// A saved browsing width must retain space for the search field and
     /// its two adjacent controls. A saved ceiling must show the toolbar.
-    /// These validate preferences only: content-fit measurements retain the
-    /// zero floor above, including short transient content (V2-11, PAN-1).
+    /// These validate saved preferences only. Keep older usable ceilings
+    /// intact in UserDefaults; live fitting applies the five-row floor.
     static var minimumPersistedContentWidth: CGFloat {
         3 * PanelContentFit.searchFieldHeight
             + 2 * PanelTheme.spacingXSmall
@@ -133,7 +133,7 @@ enum PanelGeometry {
                 forKey: panelHeightDefaultsKey,
                 in: defaults,
                 fallback: height,
-                minimum: minimumHeight
+                minimum: 0
             ), fallback: height)
         )
     }

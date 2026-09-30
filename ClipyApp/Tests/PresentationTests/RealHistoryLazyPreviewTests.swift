@@ -135,6 +135,10 @@ struct RealHistoryLazyPreviewTests {
 /// Observes caller demand while every operation runs against real SQLite.
 /// It neither fabricates content nor supplies an alternate persistence writer.
 private actor PreviewReadRecorder: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await history.sourceApplications(request)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         try await history.backup(to: directory)
     }

@@ -49,3 +49,23 @@ func searchQueryIdentityPreservesTheOriginalScalarSequence(mode: SearchMode) {
     #expect(HistoryBrowseRequest(kind: composed, limit: 10) != HistoryBrowseRequest(kind: decomposed, limit: 10))
     #expect(HistoryObservationRequest(kind: composed, limit: 10) != HistoryObservationRequest(kind: decomposed, limit: 10))
 }
+
+@Test(arguments: [SearchMode.exact, .fuzzy, .regexp, .expression])
+func independentConditionParticipatesInBrowseAndObservationIdentity(mode: SearchMode) throws {
+    let composed = try HistorySearchExpression.parse("source-id:com.example.\u{e9}")
+    let decomposed = try HistorySearchExpression.parse("source-id:com.example.e\u{301}")
+    let kind = HistoryBrowseKind.search(text: "outer text", mode: mode)
+    let first = HistoryBrowseRequest(kind: kind, limit: 10, conditionExpression: composed)
+    let changed = HistoryBrowseRequest(kind: kind, limit: 10, conditionExpression: decomposed)
+    #expect(first != changed)
+    #expect(Set([first, changed]).count == 2)
+    #expect(first != HistoryBrowseRequest(kind: kind, limit: 10))
+    #expect(HistoryBrowseRequest(kind: kind, limit: 10)
+            == HistoryBrowseRequest(kind: kind, limit: 10, conditionExpression: nil))
+
+    let observation = HistoryObservationRequest(kind: kind, limit: 10, conditionExpression: composed)
+    let changedObservation = HistoryObservationRequest(kind: kind, limit: 10, conditionExpression: decomposed)
+    #expect(observation != changedObservation)
+    #expect(Set([observation, changedObservation]).count == 2)
+    #expect(observation != HistoryObservationRequest(kind: kind, limit: 10))
+}

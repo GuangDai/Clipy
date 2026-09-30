@@ -1,6 +1,6 @@
 /// PanelContentFit.swift — the panel's analytic content-height oracle
-/// (Maccy's content-fitting popup: the panel is exactly as tall as its
-/// displayed content, up to the persisted height ceiling).
+/// (content-fitting popup: the panel retains room for five compact records
+/// below its toolbar, then grows with content up to the saved height ceiling).
 /// SwiftUI List laziness makes runtime measurement unreliable, so the
 /// ideal height is COMPUTED from the same sources of truth the views use:
 /// PanelTheme metrics for slots/padding, the hoisted list-row insets the
@@ -178,9 +178,13 @@ enum PanelContentFit {
     /// existing clamp instead of a new parameter.
     static let fullHeightDemand: CGFloat = .greatestFiniteMagnitude
 
-    /// No fixed window floor. Empty states contribute their own compact
-    /// message, just as a real row contributes its content height (V2-11).
-    static let minimumHeight: CGFloat = 0
+    /// Five compact, default-font record rows below the existing toolbar,
+    /// plus the same bottom slack as the content-fit calculation. Optional
+    /// filters, banners and pagination add demand above this natural floor.
+    static let minimumHeight: CGFloat = headerHeight + bottomSlack + 5 * rowHeight(
+        RowDescriptor(isImageRow: false, snippetLineCount: 0),
+        density: .compact, fontSize: .medium
+    )
     static let emptyStateHeight: CGFloat = 52
 
     /// The ideal content height for the displayed rows and chrome: header
@@ -223,7 +227,8 @@ enum PanelContentFit {
         return height
     }
 
-    /// A user-controlled ceiling, with no aesthetic minimum.
+    /// Retain the five-row floor even for an older, lower saved ceiling.
+    /// The native owner applies the visible-screen bound after this fit.
     static func clampedHeight(_ ideal: CGFloat, ceiling: CGFloat) -> CGFloat {
         min(max(ideal, minimumHeight), max(ceiling, minimumHeight))
     }

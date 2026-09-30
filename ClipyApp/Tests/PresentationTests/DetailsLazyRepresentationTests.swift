@@ -140,6 +140,10 @@ struct DetailsLazyRepresentationTests {
 }
 
 private actor DetailsReadRecorder: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await history.sourceApplications(request)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         try await history.backup(to: directory)
     }

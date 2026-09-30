@@ -98,7 +98,7 @@ extension HistorySearchDefinition {
     func apply(to viewState: HistoryViewState) {
         // These synchronous edits retire earlier requests before any can
         // begin executing. Refresh submits the final intent without debounce.
-        viewState.searchMode = mode
+        viewState.searchMode = mode == .expression ? .fuzzy : mode
         viewState.typeFilter = typeFilter
         viewState.showsPinnedOnly = pinnedOnly
         var appliedFilters = filters

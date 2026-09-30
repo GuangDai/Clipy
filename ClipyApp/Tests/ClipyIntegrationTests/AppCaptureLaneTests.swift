@@ -702,6 +702,10 @@ private actor FirstCaptureLowDiskFailingHistory: ClipboardHistory {
         try await base.browse(request)
     }
 
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await base.sourceApplications(request)
+    }
+
     func observe(
         _ request: HistoryObservationRequest
     ) async -> AsyncThrowingStream<HistoryPage, Error> {
@@ -881,6 +885,10 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
         try await base.browse(request)
+    }
+
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await base.sourceApplications(request)
     }
 
     func observe(

@@ -5,10 +5,10 @@
 /// geometry never changes for preview.
 ///
 /// Geometry (PopupPositionGeometry.floatingPreviewFrame): preferred width, the
-/// rendered content's height, top edges aligned, trailing
+/// main panel's actual height, top edges aligned, trailing
 /// side when the screen's visible frame has room, otherwise leading; clamped into the
 /// visible frame. Placement applies with an instant, non-animated
-/// `setFrame`; only a newly shown window has a short alpha transition.
+/// `setFrame`; a newly shown pane reveals its SwiftUI content from the inner edge.
 ///
 /// The pane is a CHILD window of the main panel, so it follows the parent's
 /// ordering and can never outlive it. Showing it preserves the browsing
@@ -24,7 +24,6 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 
     /// Whether the pane is currently on screen.
     private(set) var isPresented = false
-    private var contentHeight: CGFloat?
     private let previewState: PreviewPaneState
     private let defaults: UserDefaults
     private let presentationDuration: @MainActor (NSScreen?) -> TimeInterval
@@ -35,13 +34,6 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     private var resizedAnchor: (innerEdge: CGFloat, width: CGFloat, gap: CGFloat, placement: PreviewPlacement)?
     private var mouseDownScreenX: CGFloat?
     private var widthResize: (pointerX: CGFloat, frame: NSRect, placement: PreviewPlacement)?
-
-    func fitToContent(height: CGFloat) {
-        guard height.isFinite, height > 0, contentHeight != height else { return }
-        contentHeight = height
-        guard widthResize == nil else { return }
-        if let parent, isPresented { present(beside: parent) }
-    }
 
     init(
         rootView: FloatingPreviewRootView,
@@ -84,9 +76,9 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         // `clipy.preview.root` in the accessibility tree (CI preview journeys).
         setAccessibilityIdentifier("clipy.panel.floatingPreview")
 
-        let hostingView = NSHostingView(rootView: rootView.appLanguage().modifier(
-            AppMotionSurface(presentation: motionPresentation)
-        ))
+        var presentationRoot = rootView
+        presentationRoot.motionPresentation = motionPresentation
+        let hostingView = NSHostingView(rootView: presentationRoot.appLanguage())
         hostingView.sizingOptions = []
         hostingView.wantsLayer = true
         contentView = hostingView
@@ -160,15 +152,19 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         (parent as? FloatingPanel)?.previewDidResignKey()
     }
 
+    /// A new exact target appears immediately, even during a slow reveal.
+    /// Frame following alone keeps the original presentation uninterrupted.
+    func cancelArrival() {
+        motionPresentation.cancel()
+    }
+
     /// Shows the pane beside `mainPanel` (or re-positions an already
     /// visible pane), without animating geometry. Recomputing the frame on every
-    /// call keeps the pane aligned to the main panel while retaining its
-    /// independently measured content height.
+    /// call keeps the pane aligned with the main panel's actual height.
     func present(beside mainPanel: NSWindow) {
         guard widthResize == nil else { return }
-        // Loading confirmed file bytes changes the content height while the
-        // native alert is closing. Preserve the latest demand without moving
-        // its owner until AppKit retires the sheet; didEndSheet applies it.
+        // The main panel can move or resize while this pane owns a sheet.
+        // Apply its current frame only after AppKit retires the sheet.
         guard attachedSheet == nil else {
             return
         }
@@ -185,7 +181,6 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
             beside: mainPanel.frame,
             in: mainPanel.screen?.visibleFrame,
             previewWidth: width,
-            previewHeight: contentHeight,
             gap: gap,
             preferredPlacement: resizedAnchor?.placement,
             preferredInnerEdge: resizedAnchor?.innerEdge
@@ -195,11 +190,15 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
             setFrame(placement.frame, display: isPresented)
         }
         publishDisplayedGeometry()
+        if !isPresented {
+            // Adding an ordered child can reveal it synchronously. Set the
+            // SwiftUI start pose before that first native visibility change.
+            motionPresentation.play(duration: presentationDuration(screen ?? mainPanel.screen))
+        }
         if mainPanel.childWindows?.contains(self) != true {
             mainPanel.addChildWindow(self, ordered: .above)
         }
         if !isPresented {
-            motionPresentation.play(duration: presentationDuration(screen ?? mainPanel.screen))
             orderFrontRegardless()
             isPresented = true
         } else if shouldRestoreOrdering {
@@ -211,8 +210,8 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     }
 
     func windowDidEndSheet(_ notification: Notification) {
-        // Return from AppKit's sheet-end callback before applying content
-        // measured while its owner was modal. Recheck the current intent;
+        // Return from AppKit's sheet-end callback before following a parent
+        // frame changed while its owner was modal. Recheck the current intent;
         // a close must win over this deferred fit.
         Task { @MainActor [weak self] in
             await Task.yield()
@@ -268,6 +267,9 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     }
 
     private func publishDisplayedGeometry() {
+        if previewState.availablePreviewHeight != frame.height {
+            previewState.availablePreviewHeight = frame.height
+        }
         if previewState.displayedPreviewWidth != frame.width {
             previewState.displayedPreviewWidth = frame.width
         }
@@ -326,6 +328,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 /// update without retaining a fading copy of the previously selected item.
 struct FloatingPreviewRootView: View {
     let appDelegate: AppDelegate
+    var motionPresentation: AppMotionPresentation?
     @Environment(\.layoutDirection) private var layoutDirection
 
     private var resizePaddingEdge: Edge.Set {
@@ -357,7 +360,19 @@ struct FloatingPreviewRootView: View {
         }
     }
 
+    @ViewBuilder
     var body: some View {
+        if let motionPresentation {
+            previewContent.modifier(PreviewMotionSurface(
+                presentation: motionPresentation,
+                isOnLeadingSide: appDelegate.previewState.isPreviewOnLeadingSide
+            ))
+        } else {
+            previewContent
+        }
+    }
+
+    private var previewContent: some View {
         Group {
             if let composition = appDelegate.composition,
                appDelegate.previewState.isOpen,
@@ -367,16 +382,12 @@ struct FloatingPreviewRootView: View {
                     previewState: appDelegate.previewState,
                     sourceIcons: sourceIcons,
                     maximumHeight: appDelegate.previewState.availablePreviewHeight,
+                    fillsAvailableHeight: true,
                     preparedLoader: appDelegate.floatingPreviewLoader
                 )
                 .padding(resizePaddingEdge, PreviewWidthResizeHandle.thickness)
                 .id(item)
-                .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { geometry in
-                    geometry.size.height.rounded(.up)
-                } action: { height in
-                    appDelegate.floatingPreviewContentHeightDidChange(height, for: item)
-                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 // Retargeting removes the old content immediately, including
                 // sensitive text and pending file confirmations.
                 .transition(.identity)

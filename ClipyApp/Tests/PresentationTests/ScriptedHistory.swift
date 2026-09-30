@@ -35,6 +35,17 @@ import Testing
 /// - `retentionConfiguration` returns the scripted configured-policy value
 ///   and records the request count (V2-07 §6.3's panel-open read).
 actor ScriptedHistory: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        guard (1...32).contains(request.limit) else { throw HistoryFailure.invalidInput(.invalidPageLimit) }
+        guard let observedFirstPage else { throw HistoryFailure.temporarilyUnavailable(.factProof) }
+        let position = observedFirstPage.position
+        guard request.cursor == nil else { throw HistoryFailure.snapshotExpired(current: position) }
+        let applications = Array(Set(observedFirstPage.rows.compactMap(\.lastSource).filter { !$0.isEmpty }))
+            .sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+        guard applications.count <= request.limit else { throw HistoryFailure.temporarilyUnavailable(.factProof) }
+        return HistorySourceApplicationPage(position: position, applications: applications)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         throw HistoryBackupFailure.writeFailed
     }
@@ -318,6 +329,11 @@ actor ScriptedHistory: ClipboardHistory {
 /// unscripted references, or throws a scripted failure — and records every
 /// request so prefetch idempotence and negative caching are observable.
 actor ThumbnailScriptHistory: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        // Encoded PNG fixtures supply no retained application observations.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         throw HistoryBackupFailure.writeFailed
     }
@@ -436,6 +452,11 @@ actor ThumbnailScriptHistory: ClipboardHistory {
 /// already suspended would replace the first continuation (leaking it), so
 /// tests keep one selection per ID.
 actor PausablePreviewHistory: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        // Scripted representations do not establish application occurrences.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         throw HistoryBackupFailure.writeFailed
     }

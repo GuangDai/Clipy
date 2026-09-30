@@ -16,6 +16,11 @@ public struct HistorySearchExpressionError: Error, Sendable, Equatable {
     /// Zero-based Character offset in the original expression.
     public let offset: Int
 
+    public init(reason: Reason, offset: Int) {
+        self.reason = reason
+        self.offset = offset
+    }
+
     public var message: String {
         switch reason {
         case .queryTooLong: "The expression is too long."

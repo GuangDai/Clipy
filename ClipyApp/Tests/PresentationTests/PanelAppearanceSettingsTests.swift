@@ -153,13 +153,12 @@ struct PanelAppearanceSettingsTests {
 
     @Test("height clamps at, below, and above the resizable bounds")
     func heightClampsIntoBounds() {
-        // A short user size is meaningful; there is no aesthetic floor.
         #expect(PanelGeometry.minimumHeight == PanelContentFit.minimumHeight)
         #expect(PanelGeometry.clampedHeight(420) == 420)
         #expect(PanelGeometry.clampedHeight(1_000) == 1_000)
-        #expect(PanelGeometry.clampedHeight(10) == 10)
+        #expect(PanelGeometry.clampedHeight(10) == 160)
+        #expect(PanelGeometry.clampedHeight(160) == 160)
         #expect(PanelGeometry.clampedHeight(2_000) == 2_000)
-        #expect(PanelGeometry.clampedHeight(420) == PanelGeometry.height)
     }
 
     @Test func finitePreferencesClampToDefaults() {
@@ -211,7 +210,7 @@ struct PanelAppearanceSettingsTests {
         #expect(size.height == PanelGeometry.height)
     }
 
-    @Test("collapsed stored dimensions recover without imposing a content-fit floor",
+    @Test("collapsed stored dimensions recover while live fitting retains five rows",
           arguments: [0.0, 0.001, 1.0, 10.0, -1.0])
     func collapsedStoredDimensionsRecover(value: Double) throws {
         let (defaults, suiteName) = try makeDefaults()
@@ -222,7 +221,7 @@ struct PanelAppearanceSettingsTests {
         let size = PanelGeometry.persistedSize(from: defaults)
         #expect(size.contentWidth == PanelGeometry.contentWidth)
         #expect(size.height == PanelGeometry.height)
-        #expect(PanelContentFit.clampedHeight(1, ceiling: size.height) == 1)
+        #expect(PanelContentFit.clampedHeight(1, ceiling: size.height) == 160)
         #expect(PanelContentFit.clampedHeight(200, ceiling: size.height) == 200)
     }
 
@@ -235,6 +234,22 @@ struct PanelAppearanceSettingsTests {
         let size = PanelGeometry.persistedSize(from: defaults)
         #expect(size.contentWidth == 500)
         #expect(size.height == 40)
+    }
+
+    @Test("an older usable ceiling is not rewritten until the user resizes")
+    func liveFloorPreservesTheStoredCeiling() throws {
+        let (defaults, suiteName) = try makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        PanelGeometry.persistSize(contentWidth: 500, height: 140, to: defaults)
+
+        let saved = PanelGeometry.persistedSize(from: defaults)
+        #expect(saved.height == 140)
+        #expect(PanelGeometry.clampedHeight(saved.height) == 160)
+        #expect(PanelContentFit.clampedHeight(92, ceiling: saved.height) == 160)
+        #expect(defaults.double(forKey: PanelGeometry.panelHeightDefaultsKey) == 140)
+
+        PanelGeometry.persistSize(contentWidth: saved.contentWidth, height: 200, to: defaults)
+        #expect(PanelGeometry.persistedSize(from: defaults).height == 200)
     }
 
     /// One fresh, empty UserDefaults suite per test — the same isolation

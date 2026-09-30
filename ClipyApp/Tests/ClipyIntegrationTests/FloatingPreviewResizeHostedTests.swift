@@ -46,14 +46,18 @@ struct FloatingPreviewResizeHostedTests {
         #expect(preview.isPresented && preview.isVisible)
         #expect(arrivals == 1)
 
-        preview.fitToContent(height: 100)
-        #expect(preview.frame.height == 100)
+        let resizedMainHeight = PanelGeometry.minimumHeight + 40
+        main.setFrame(NSRect(x: main.frame.minX, y: main.frame.maxY - resizedMainHeight,
+                             width: main.frame.width, height: resizedMainHeight), display: false)
+        preview.present(beside: main)
+        #expect(preview.frame.height == main.frame.height)
+        #expect(owner.previewState.availablePreviewHeight == main.frame.height)
         #expect(arrivals == 1)
         preview.dismiss()
         #expect(!preview.isVisible)
         preview.present(beside: main)
         #expect(arrivals == 2)
-        #expect(preview.frame.height == 100)
+        #expect(preview.frame.height == main.frame.height)
         preview.dismiss()
         #expect(!preview.isPresented && !preview.isVisible)
     }
@@ -66,10 +70,11 @@ struct FloatingPreviewResizeHostedTests {
         try #require(visible.height >= 500)
         let owner = AppDelegate()
         let pointer = NSEvent.mouseLocation
+        let initialHeight = PanelGeometry.minimumHeight + 20
         let main = NSWindow(
             contentRect: NSRect(x: visible.minX,
-                                y: pointer.y < visible.midY ? visible.maxY - 100 : visible.minY,
-                                width: 360, height: 100),
+                                y: pointer.y < visible.midY ? visible.maxY - initialHeight : visible.minY,
+                                width: 360, height: initialHeight),
             styleMask: [.borderless], backing: .buffered, defer: false
         )
         main.isReleasedWhenClosed = false
@@ -84,7 +89,6 @@ struct FloatingPreviewResizeHostedTests {
             owner.previewState.panelClosed()
             main.close()
         }
-        preview.fitToContent(height: 180)
         preview.present(beside: main)
         alert.beginSheetModal(for: preview) { _ in }
         try #require(await ComposedSupport.waitFor { preview.attachedSheet === alert.window })
@@ -93,12 +97,19 @@ struct FloatingPreviewResizeHostedTests {
         #expect(!owner.previewState.isFileConfirmationPresented)
         #expect(owner.previewState.pointerSurfacesContainingPointer?().contains(.preview) == true)
         let modalOwnerFrame = preview.frame
-        preview.fitToContent(height: 74)
-        preview.fitToContent(height: 160)
+        var resizedMainFrame = main.frame
+        // Keep the parent's origin fixed so native child-window movement
+        // cannot itself reposition the modal owner during this resize.
+        resizedMainFrame.size.height = PanelGeometry.minimumHeight + 10
+        main.setFrame(resizedMainFrame, display: false)
+        preview.present(beside: main)
+        resizedMainFrame.size.height = PanelGeometry.minimumHeight
+        main.setFrame(resizedMainFrame, display: false)
+        preview.present(beside: main)
         #expect(preview.frame == modalOwnerFrame)
         preview.endSheet(alert.window)
         try #require(await ComposedSupport.waitFor {
-            preview.attachedSheet == nil && preview.frame.height == 160
+            preview.attachedSheet == nil && preview.frame.height == main.frame.height
         })
         #expect(preview.isPresented && preview.isVisible)
 
@@ -121,7 +132,9 @@ struct FloatingPreviewResizeHostedTests {
             sheetCompletionObserved = true
         }
         try #require(await ComposedSupport.waitFor { preview.attachedSheet === alert.window })
-        preview.fitToContent(height: 112)
+        resizedMainFrame.size.height = PanelGeometry.minimumHeight + 10
+        main.setFrame(resizedMainFrame, display: false)
+        preview.present(beside: main)
         preview.endSheet(alert.window)
         try #require(await ComposedSupport.waitFor {
             sheetCompletionObserved && preview.attachedSheet == nil
@@ -170,26 +183,32 @@ struct FloatingPreviewResizeHostedTests {
         #expect(appDelegate.previewState.displayedPreviewWidth == preview.frame.width)
         #expect(appDelegate.previewState.isResizingPreview)
         #expect(defaults.object(forKey: PanelGeometry.floatingPreviewWidthDefaultsKey) == nil)
+        #expect(main.frame == originalMain)
 
-        // Content changes during drag cannot move the handle vertically.
-        preview.fitToContent(height: 100)
+        // A parent resize during drag cannot move the handle vertically;
+        // releasing it resumes following the parent's actual height.
+        let resizedMainHeight = PanelGeometry.minimumHeight + 40
+        main.setFrame(NSRect(x: main.frame.minX, y: main.frame.maxY - resizedMainHeight,
+                             width: main.frame.width, height: resizedMainHeight), display: false)
+        let resizedMain = main.frame
+        preview.present(beside: main)
         #expect(preview.frame.height == original.height)
         preview.finishWidthResize()
         #expect(!appDelegate.previewState.isResizingPreview)
         #expect(preview.frame.width == original.width + 80)
-        #expect(preview.frame.height == 100)
+        #expect(preview.frame.height == main.frame.height)
         #expect(PanelGeometry.persistedFloatingPreviewWidth(from: defaults) == original.width + 80)
         #expect(defaults.bool(forKey: PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey))
-        #expect(main.frame == originalMain)
+        #expect(main.frame == resizedMain)
 
         preview.dismiss()
         preview.present(beside: main)
         #expect(preview.frame.width == original.width + 80)
-        #expect(main.frame == originalMain)
+        #expect(main.frame == resizedMain)
         preview.adjustWidth(by: 20)
         #expect(preview.frame.width == original.width + 100)
         #expect(PanelGeometry.persistedFloatingPreviewWidth(from: defaults) == original.width + 100)
-        #expect(main.frame == originalMain)
+        #expect(main.frame == resizedMain)
     }
 
     @Test func dismissalDuringDragDoesNotSaveAnUnfinishedWidth() async throws {
@@ -287,7 +306,9 @@ struct FloatingPreviewResizeHostedTests {
         #expect(beforeRelease.width == initialWidth - 64)
         preview.finishWidthResize()
         #expect(preview.frame == beforeRelease)
-        preview.fitToContent(height: 100)
+        preview.contentView?.layoutSubtreeIfNeeded()
+        preview.present(beside: main)
+        #expect(preview.frame == beforeRelease)
         #expect(preview.frame.minX == beforeRelease.minX)
         #expect(preview.frame.width == beforeRelease.width)
 
@@ -296,7 +317,7 @@ struct FloatingPreviewResizeHostedTests {
         preview.present(beside: main)
         #expect(preview.frame == PopupPositionGeometry.floatingPreviewFrame(
             beside: main.frame, in: visible,
-            previewWidth: beforeRelease.width, previewHeight: 100, gap: 0
+            previewWidth: beforeRelease.width, gap: 0
         ).frame)
     }
 

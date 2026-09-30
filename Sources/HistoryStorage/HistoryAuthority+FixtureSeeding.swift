@@ -129,7 +129,11 @@ extension HistoryAuthority {
             _ = try executeStampedPlan(
                 stamped,
                 expectedPreviousPosition: expectedPreviousPosition,
-                in: database
+                in: database,
+                initialCopySources: preparedItems.map { prepared in
+                    (itemID: prepared.domain.candidateID, application: prepared.domain.origin.sourceApplication,
+                     copiedAt: prepared.domain.observedAt)
+                }
             )
             return nextPosition
         }

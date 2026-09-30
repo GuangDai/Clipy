@@ -1,6 +1,6 @@
 /// FloatingPreviewPlacementTests — the floating preview pane's pure
 /// side-picking and clamping geometry (`PopupPositionGeometry.floatingPreviewFrame`):
-/// preferred width (340pt by default), content-driven height within the screen, trailing
+/// preferred width (340pt by default), the main panel's actual height, trailing
 /// side when the visible frame has room (width + gap), otherwise
 /// leading, always clamped into the visible frame.
 import AppKit
@@ -177,21 +177,21 @@ struct FloatingPreviewPlacementTests {
         #expect(placement.frame.width == PanelGeometry.floatingPreviewWidth)
     }
 
-    @Test func shortContentDoesNotGrowToAnArbitraryMinimum() {
-        let panel = NSRect(x: 100, y: 600, width: 360, height: 111)
+    @Test func aShortMainPanelKeepsThePreviewAtItsActualHeight() {
+        let panel = NSRect(x: 100, y: 600, width: 360, height: PanelGeometry.minimumHeight)
         let preview = PopupPositionGeometry.floatingPreviewFrame(
-            beside: panel, in: mainFrame, previewHeight: 62
+            beside: panel, in: mainFrame
         ).frame
-        #expect(preview.height == 62)
+        #expect(preview.height == panel.height)
         #expect(preview.maxY == panel.maxY)
         #expect(mainFrame.contains(preview))
     }
 
     @Test func shortScreenLimitsPreviewHeightAndKeepsItVisible() {
         let screen = NSRect(x: -800, y: -400, width: 800, height: 300)
-        let panel = NSRect(x: -790, y: -220, width: 360, height: 111)
+        let panel = NSRect(x: -790, y: -220, width: 360, height: 600)
         let preview = PopupPositionGeometry.floatingPreviewFrame(
-            beside: panel, in: screen, previewHeight: 600
+            beside: panel, in: screen
         ).frame
         #expect(preview.height == 300)
         #expect(screen.contains(preview))

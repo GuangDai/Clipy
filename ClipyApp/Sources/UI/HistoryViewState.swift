@@ -159,19 +159,40 @@ final class HistoryViewState {
     private(set) var isSourceSearchTooBroad = false
     private(set) var sourceResolutionError: HistorySearchExpressionError?
     private var parsedSearchExpression: HistorySearchExpression?
-    private var resolvedExpressionText: String?
+    private var compiledSearchQuery: HistorySearchQueryCompilation?
+    private var resolvedSearchExpression: HistorySearchExpression?
     private var resolvedSourceApplicationIDs: [String]?
     private let searchSourceResolver: SourceApplicationSearchResolver
 
     private func validateSearchExpression() {
         expressionValidationError = nil
         parsedSearchExpression = nil
-        guard searchMode == .expression, !searchText.isEmpty else { return }
+        compiledSearchQuery = nil
+        guard !searchText.isEmpty else { return }
+        // Large literal fuzzy drafts keep their existing 64-character
+        // execution view. Discovering a dollar elsewhere in that draft runs
+        // in the asynchronous preparation below, outside MainActor.
+        let limit = HistoryLimits.standard.maximumSearchTermUTF8Bytes
+        guard searchText.utf8.prefix(limit + 1).count <= limit else { return }
         do {
-            parsedSearchExpression = try HistorySearchExpression.parse(searchText)
+            let compiled = try HistorySearchQueryCompiler.compile(searchText)
+            compiledSearchQuery = compiled
+            parsedSearchExpression = compiled.expression
         } catch {
             expressionValidationError = error
         }
+    }
+
+    var hasWrappedSearchConditions: Bool { parsedSearchExpression != nil }
+
+    var sourceCompletionPosition: ChangePosition? {
+        if let observedPosition, let latestReceiptPosition { return max(observedPosition, latestReceiptPosition) }
+        return observedPosition ?? latestReceiptPosition
+    }
+
+    func sourceApplicationsForCompletion() async -> [SourceApplicationSearchResolver.Application] {
+        await searchSourceResolver.prepare()
+        return searchSourceResolver.applications
     }
 
     func searchSourceApplications() async -> [SourceApplicationSearchResolver.Application] {
@@ -527,16 +548,20 @@ final class HistoryViewState {
     /// mode switch (03b §8; 06 §2).
     private var admittedKind: HistoryBrowseKind {
         guard !searchText.isEmpty else { return .recent }
+        let literalText = compiledSearchQuery?.literalText ?? searchText
+        guard !literalText.isEmpty else { return .recent }
         switch searchMode {
-        case .expression:
-            return .search(text: resolvedExpressionText ?? searchText, mode: .expression)
         case .exact, .regexp:
-            return .search(text: searchText, mode: searchMode)
-        case .fuzzy:
+            return .search(text: literalText, mode: searchMode)
+        case .fuzzy, .expression:
+            // Old saved mode values follow the current wrapped syntax too;
+            // they never re-enable interpretation of bare source:/type: text.
             let limit = HistoryLimits.standard.maximumFuzzyQueryCharacters
-            return .search(text: String(searchText.prefix(limit)), mode: .fuzzy)
+            return .search(text: String(literalText.prefix(limit)), mode: .fuzzy)
         }
     }
+
+    private var admittedCondition: HistorySearchExpression? { resolvedSearchExpression ?? parsedSearchExpression }
 
     // MARK: - Lifecycle
 
@@ -623,6 +648,7 @@ final class HistoryViewState {
         // under or storage will (correctly) fail it as `.snapshotExpired`.
         let kind = admittedKind
         let filter = historyFilter
+        let condition = admittedCondition
         let order = sortOrder
         let limit = pageLimit
         let generation = observationGeneration
@@ -631,7 +657,8 @@ final class HistoryViewState {
         paginationTask = Task { [weak self] in
             do {
                 let page = try await history.browse(
-                    HistoryBrowseRequest(kind: kind, limit: limit, cursor: cursor, filter: filter, sortOrder: order)
+                    HistoryBrowseRequest(kind: kind, limit: limit, cursor: cursor, filter: filter, sortOrder: order,
+                                         conditionExpression: condition)
                 )
                 guard let self,
                       self.paginationRequestToken == requestToken,
@@ -1005,7 +1032,7 @@ final class HistoryViewState {
         rows = []
         resetPageWindow()
         clearQueryFailure()
-        resolvedExpressionText = nil
+        resolvedSearchExpression = nil
         resolvedSourceApplicationIDs = nil
         unresolvedSearchSources = []
         isSourceSearchTooBroad = false
@@ -1032,8 +1059,10 @@ final class HistoryViewState {
             guard !Task.isCancelled,
                   await self?.prepareSearchConditions() == true, !Task.isCancelled,
                   let kind = self?.admittedKind, let filter = self?.historyFilter else { return }
+            let condition = self?.admittedCondition
             let stream = await history.observe(
-                HistoryObservationRequest(kind: kind, limit: limit, filter: filter, sortOrder: order)
+                HistoryObservationRequest(kind: kind, limit: limit, filter: filter, sortOrder: order,
+                                          conditionExpression: condition)
             )
             do {
                 var restoreTarget = itemID
@@ -1053,7 +1082,7 @@ final class HistoryViewState {
                         do {
                             restoredPage = try await history.browse(HistoryBrowseRequest(
                                 kind: kind, limit: limit, filter: filter, sortOrder: order,
-                                startAround: target
+                                startAround: target, conditionExpression: condition
                             ))
                             targetWasRemoved = false
                         } catch HistoryFailure.notFound(_) {
@@ -1061,7 +1090,8 @@ final class HistoryViewState {
                             // conditions all return the same explicit result.
                             // Read a fresh first page, without relaxing filters.
                             restoredPage = try await history.browse(HistoryBrowseRequest(
-                                kind: kind, limit: limit, filter: filter, sortOrder: order
+                                kind: kind, limit: limit, filter: filter, sortOrder: order,
+                                conditionExpression: condition
                             ))
                             targetWasRemoved = true
                         }
@@ -1103,6 +1133,30 @@ final class HistoryViewState {
     /// cursor requests reuse its exact IDs and expression, including while
     /// application metadata changes or new History pages arrive.
     private func prepareSearchConditions() async -> Bool {
+        if compiledSearchQuery == nil, !searchText.isEmpty {
+            let text = searchText
+            let compiling = Task.detached {
+                try Task.checkCancellation()
+                let result = try HistorySearchQueryCompiler.compile(text)
+                try Task.checkCancellation()
+                return result
+            }
+            do {
+                let result = try await withTaskCancellationHandler {
+                    try await compiling.value
+                } onCancel: { compiling.cancel() }
+                guard !Task.isCancelled else { return false }
+                compiledSearchQuery = result
+                parsedSearchExpression = result.expression
+            } catch let error as HistorySearchExpressionError {
+                guard !Task.isCancelled else { return false }
+                expressionValidationError = error
+                isLoadingFirstPage = false
+                return false
+            } catch {
+                return false
+            }
+        }
         let expression = parsedSearchExpression
         let filters = searchFilters
         if !(expression?.applicationTerms.isEmpty ?? true)
@@ -1123,11 +1177,8 @@ final class HistoryViewState {
         if let expression, !expression.applicationTerms.isEmpty {
             do {
                 let resolution = try searchSourceResolver.resolve(expression)
-                resolvedExpressionText = resolution.expression.serialized
+                resolvedSearchExpression = resolution.expression
                 unresolved.append(contentsOf: resolution.unresolvedNames)
-                if let resolvedExpressionText {
-                    _ = try HistorySearchExpression.parse(resolvedExpressionText)
-                }
             } catch {
                 sourceResolutionError = error
             }

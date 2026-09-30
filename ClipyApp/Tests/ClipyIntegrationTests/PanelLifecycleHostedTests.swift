@@ -794,6 +794,10 @@ actor LifecycleObservationHistory: ClipboardHistory {
         throw CancellationError()
     }
 
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        throw CancellationError()
+    }
+
     func observe(
         _ request: HistoryObservationRequest
     ) async -> AsyncThrowingStream<HistoryPage, Error> {

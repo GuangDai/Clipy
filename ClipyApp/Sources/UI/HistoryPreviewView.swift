@@ -34,6 +34,7 @@ struct HistoryPreviewView: View {
 
     private let sourceIcons: SourceIconStore?
     private var maximumHeight: CGFloat? = nil
+    private var fillsAvailableHeight = false
     @State private var contentWidth: CGFloat = PanelGeometry.floatingPreviewWidth
     @State private var metadataHeight: CGFloat = 0
     @State private var fileHeaderHeight: CGFloat = 0
@@ -75,12 +76,14 @@ struct HistoryPreviewView: View {
         previewState: PreviewPaneState,
         sourceIcons: SourceIconStore? = nil,
         maximumHeight: CGFloat? = nil,
+        fillsAvailableHeight: Bool = false,
         preparedLoader: PreviewContentLoader? = nil
     ) {
         self.viewState = viewState
         self.previewState = previewState
         self.sourceIcons = sourceIcons
         self.maximumHeight = maximumHeight
+        self.fillsAvailableHeight = fillsAvailableHeight
         selectionSource = .paneState
         _loader = State(
             initialValue: preparedLoader ?? PreviewContentLoader(
@@ -160,7 +163,9 @@ struct HistoryPreviewView: View {
         maximumHeight.map { max(0, $0 - metadataHeight - fileHeaderHeight) }
     }
 
-    private var flexibleHeight: CGFloat? { maximumHeight == nil ? .infinity : nil }
+    private var flexibleHeight: CGFloat? {
+        fillsAvailableHeight || maximumHeight == nil ? .infinity : nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -407,7 +412,8 @@ struct HistoryPreviewView: View {
             case .content(.text(_, let wasTruncated)):
                 VStack(spacing: 0) {
                     PreviewTextBody(segments: loader.textSegments, groups: loader.textSegmentGroups,
-                        maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) })
+                        maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) },
+                        fillsAvailableHeight: fillsAvailableHeight)
                     .id(targetItem)
                     // The body scrolls independently; the disclosure stays
                     // visible and never becomes part of selectable content.

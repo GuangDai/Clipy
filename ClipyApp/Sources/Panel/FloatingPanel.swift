@@ -62,6 +62,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     private let onPanelClosed: () -> Void
     private let onSubmitSelection: () -> Void
     private let isSelectionSubmissionEnabled: () -> Bool
+    private let isSearchCompletionActive: @MainActor () -> Bool
     private let presentationDuration: @MainActor (NSScreen?) -> TimeInterval
     private let motionPresentation = AppMotionPresentation()
 
@@ -111,6 +112,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         rootView: PanelRootView,
         previewState: PreviewPaneState,
         isSelectionSubmissionEnabled: @escaping () -> Bool = { true },
+        isSearchCompletionActive: @escaping @MainActor () -> Bool = { false },
         onSubmitSelection: @escaping () -> Void = {},
         isKeepOpenActive: @escaping () -> Bool = { false },
         onDidChangeScreen: @escaping () -> Void = {},
@@ -120,6 +122,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     ) {
         self.previewState = previewState
         self.isSelectionSubmissionEnabled = isSelectionSubmissionEnabled
+        self.isSearchCompletionActive = isSearchCompletionActive
         self.onSubmitSelection = onSubmitSelection
         self.isKeepOpenActive = isKeepOpenActive
         self.onDidChangeScreen = onDidChangeScreen
@@ -197,6 +200,17 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         let responder = firstResponder
         let hasMarkedText = (responder as? NSTextInputClient)?
             .hasMarkedText() ?? false
+        let isCompletionCommand = event.keyCode == UInt16(kVK_Return)
+            || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
+            || event.keyCode == UInt16(kVK_Escape)
+        if !hasMarkedText, isCompletionCommand,
+           event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+           isSearchCompletionActive(), let responder, responder !== self {
+            // The focused search field owns its candidate before Return can
+            // paste a history row or Escape can dismiss another surface.
+            responder.keyDown(with: event)
+            return
+        }
         if event.keyCode == UInt16(kVK_Escape) {
             let unmodified = event.modifierFlags.intersection([
                 .command, .control, .option, .shift,
@@ -255,7 +269,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         let persisted = PanelGeometry.persistedSize(from: .standard)
         var size = NSSize(
             width: persisted.contentWidth,
-            height: persisted.height
+            height: max(PanelGeometry.minimumHeight, persisted.height)
         )
         // Position the actual compact surface, not its taller saved ceiling.
         // Otherwise center placement ends above center, and cursor/last-position
@@ -469,8 +483,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         let widthChanged = liveResizeStartingSize?.width != frame.width
         let heightChanged = liveResizeStartingSize?.height != frame.height
         // An edge dragged through the toolbar is not a usable future
-        // ceiling. Recover the previous preference, while an untouched
-        // content-fitted dimension remains free to be arbitrarily short.
+        // ceiling. Recover the previous preference; an untouched fitted
+        // dimension keeps its saved height ceiling.
         let contentWidth = widthChanged
             ? PanelGeometry.usableContentWidth(frame.width, fallback: saved.contentWidth)
             : frame.width
@@ -489,9 +503,10 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             to: .standard
         )
         let visibleFrame = screen?.visibleFrame
+        let displayedHeight = max(PanelGeometry.minimumHeight, height)
         let clampedSize = NSSize(
             width: min(contentWidth, visibleFrame?.width ?? contentWidth),
-            height: min(height, visibleFrame?.height ?? height)
+            height: min(displayedHeight, visibleFrame?.height ?? displayedHeight)
         )
         if clampedSize != frame.size {
             var restoredFrame = NSRect(

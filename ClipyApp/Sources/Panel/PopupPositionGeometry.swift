@@ -25,7 +25,7 @@ enum PopupPositionGeometry {
 
     /// The floating preview pane's frame beside the presented main panel
     /// (the redesign's transient preview: preferred width, the main panel's
-    /// measured content height, top edges aligned when the screen allows,
+    /// actual height, top edges aligned when the screen allows,
     /// never a main-panel resize).
     /// The pane goes on the trailing side when the screen's visible frame
     /// has room for width + gap there, otherwise the leading side; the
@@ -35,17 +35,15 @@ enum PopupPositionGeometry {
         beside mainPanelFrame: NSRect,
         in screenVisibleFrame: NSRect?,
         previewWidth: CGFloat = PanelGeometry.floatingPreviewWidth,
-        previewHeight: CGFloat? = nil,
         gap: CGFloat = PanelGeometry.floatingPreviewGap,
         preferredPlacement: PreviewPlacement? = nil,
         preferredInnerEdge: CGFloat? = nil
     ) -> (frame: NSRect, placement: PreviewPlacement) {
-        let desiredHeight = previewHeight ?? mainPanelFrame.height
         let desiredWidth = previewWidth.isFinite ? max(0, previewWidth) : PanelGeometry.floatingPreviewWidth
         let fittedWidth = screenVisibleFrame.map { min(desiredWidth, $0.width) } ?? desiredWidth
         let size = NSSize(
             width: fittedWidth,
-            height: screenVisibleFrame.map { min(desiredHeight, $0.height) } ?? desiredHeight
+            height: screenVisibleFrame.map { min(mainPanelFrame.height, $0.height) } ?? mainPanelFrame.height
         )
         let preferredGap = gap.isFinite ? max(0, gap) : PanelGeometry.floatingPreviewGap
         let availableGap = screenVisibleFrame.map {
@@ -66,8 +64,8 @@ enum PopupPositionGeometry {
             placement = .trailing
         }
 
-        // Top edges align before the screen clamp. A short browsing panel
-        // must not compress the independent preview's controls and content.
+        // Both panes share the browsing panel's actual height; preview
+        // content scrolls inside that fixed viewport.
         var frame = NSRect(
             origin: NSPoint(
                 x: preferredInnerEdge.map {

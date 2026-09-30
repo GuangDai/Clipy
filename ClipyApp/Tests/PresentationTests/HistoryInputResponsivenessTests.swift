@@ -118,6 +118,10 @@ private actor InputObservationHistory: ClipboardHistory {
     func representationMetadata(for item: HistoryItemReference) async throws -> [HistoryRepresentationMetadata] {
         try await base.representationMetadata(for: item)
     }
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await base.sourceApplications(request)
+    }
+
     func copySources(for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int) async throws -> HistoryCopySourcePage {
         try await base.copySources(for: id, expectedCopyCount: expectedCopyCount, offset: offset)
     }

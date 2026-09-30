@@ -41,7 +41,7 @@ enum SearchLibraryCopy {
         case .exact: parts.append(PanelActionsCopy.text("Exact", bundle: bundle))
         case .fuzzy: parts.append(PanelActionsCopy.text("Fuzzy", bundle: bundle))
         case .regexp: parts.append(PanelActionsCopy.text("Regular Expression", bundle: bundle))
-        case .expression: parts.append(HistorySearchCopy.text("Expression", bundle: bundle))
+        case .expression: parts.append(PanelActionsCopy.text("Fuzzy", bundle: bundle))
         }
         switch definition.typeFilter {
         case .all: break

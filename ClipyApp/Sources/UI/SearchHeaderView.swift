@@ -23,8 +23,8 @@ struct SearchHeaderView: View {
     @Environment(\.searchHistoryStore) private var searchHistoryStore
     @State private var showsSearchOptions = false
     @State private var showsExpressionGuide = false
-    @State private var suggestedSources: [String] = []
     @State private var showsSearchLibrary = false
+    @State private var completion: HistorySearchCompletionState
 
     private let viewState: HistoryViewState
     private let searchFieldFocused: Binding<Bool>
@@ -39,7 +39,8 @@ struct SearchHeaderView: View {
         shortcuts: PanelShortcutSettings = PanelShortcutSettings(),
         areShortcutsEnabled: Bool = true,
         onMoveSelection: @escaping (Int) -> Void = { _ in },
-        onSubmitSelection: @escaping () -> Void = {}
+        onSubmitSelection: @escaping () -> Void = {},
+        completion: HistorySearchCompletionState? = nil
     ) {
         self.viewState = viewState
         self.searchFieldFocused = searchFieldFocused
@@ -47,6 +48,7 @@ struct SearchHeaderView: View {
         self.areShortcutsEnabled = areShortcutsEnabled
         self.onMoveSelection = onMoveSelection
         self.onSubmitSelection = onSubmitSelection
+        _completion = State(initialValue: completion ?? HistorySearchCompletionState())
     }
 
     var body: some View {
@@ -59,14 +61,15 @@ struct SearchHeaderView: View {
                 filterMenu
                     .frame(width: 24, height: 24)
             }
-            if hasActiveFilters || viewState.searchMode == .expression || viewState.sortOrder != .automatic {
+            if hasActiveFilters || viewState.hasWrappedSearchConditions || viewState.sortOrder != .automatic {
                 searchStatusRow.frame(height: 15)
             }
         }
+        .zIndex(completion.isPresented ? 20 : 0)
         .background { modeShortcuts }
         .popover(isPresented: $showsSearchOptions, arrowEdge: .bottom) {
             HistorySearchOptionsView(
-                viewState: viewState, suggestedSources: suggestedSources,
+                viewState: viewState, completion: completion,
                 showsExpressionGuide: showsExpressionGuide
             )
         }
@@ -83,6 +86,24 @@ struct SearchHeaderView: View {
         .onChange(of: showsSearchLibrary) { _, isPresented in
             if !isPresented { searchFieldFocused.wrappedValue = true }
         }
+        .onAppear { configureCompletion() }
+        .onDisappear { completion.close() }
+        .onChange(of: searchFieldFocused.wrappedValue) { _, focused in
+            if focused { configureCompletion() }
+            else { completion.setFocused(false) }
+        }
+        .onChange(of: areShortcutsEnabled) { _, enabled in
+            if !enabled { completion.close() }
+            else { configureCompletion() }
+        }
+        .onChange(of: viewState.sourceCompletionPosition) { _, position in
+            completion.updateHistoryPosition(position)
+        }
+    }
+
+    private func configureCompletion() {
+        completion.configure(history: viewState.history) { await viewState.sourceApplicationsForCompletion() }
+        completion.updateHistoryPosition(viewState.sourceCompletionPosition)
     }
 
     private var hasActiveFilters: Bool {
@@ -90,7 +111,6 @@ struct SearchHeaderView: View {
     }
 
     private func openOptions(expressionGuide: Bool = false) {
-        suggestedSources = Array(Set(viewState.rows.compactMap(\.lastSource))).sorted()
         showsExpressionGuide = expressionGuide
         searchFieldFocused.wrappedValue = false
         showsSearchOptions = true
@@ -110,7 +130,7 @@ struct SearchHeaderView: View {
             HStack(spacing: 5) {
                 ScrollView(.horizontal) {
                     HStack(spacing: 5) {
-                        if viewState.searchMode == .expression {
+                        if viewState.hasWrappedSearchConditions {
                             Button { openOptions(expressionGuide: true) } label: {
                                 Label(HistorySearchCopy.text("Expression", bundle: copyBundle), systemImage: "chevron.left.forwardslash.chevron.right")
                             }
@@ -235,7 +255,8 @@ struct SearchHeaderView: View {
                         searchHistoryStore?.recordSubmittedSearch(HistorySearchDefinition(viewState: viewState))
                     }
                     onSubmitSelection()
-                }
+                },
+                completion: completion
             )
             // Keep the editor's width and text position stable as the user
             // enters the first character or clears the query (V2-07 §3).
@@ -274,6 +295,12 @@ struct SearchHeaderView: View {
                     ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: 1)
                 .allowsHitTesting(false)
         }
+        .overlay(alignment: .topLeading) {
+            if completion.isPresented {
+                HistorySearchCompletionView(completion: completion)
+                    .offset(y: PanelContentFit.searchFieldHeight + 4)
+            }
+        }
     }
 
     /// Counts include traversed rows in the complete filtered query. A
@@ -299,10 +326,15 @@ struct SearchHeaderView: View {
                 Text(PanelActionsCopy.text("Exact", bundle: copyBundle)).tag(SearchMode.exact)
                 Text(PanelActionsCopy.text("Fuzzy", bundle: copyBundle)).tag(SearchMode.fuzzy)
                 Text(PanelActionsCopy.text("Regular Expression", bundle: copyBundle)).tag(SearchMode.regexp)
-                Text(HistorySearchCopy.text("Expression", bundle: copyBundle)).tag(SearchMode.expression)
             }
             .pickerStyle(.inline)
             Divider()
+            Button(HistorySearchCopy.text("Insert condition / show suggestions", bundle: copyBundle)) {
+                configureCompletion()
+                completion.requestFromMenu()
+                searchFieldFocused.wrappedValue = true
+            }
+            .accessibilityIdentifier("clipy.search.completion.request")
             Button(HistorySearchCopy.text("Expression guide…", bundle: copyBundle)) {
                 openOptions(expressionGuide: true)
             }
@@ -312,7 +344,7 @@ struct SearchHeaderView: View {
                 case .exact: Image(systemName: "equal")
                 case .fuzzy: Image(systemName: "text.magnifyingglass")
                 case .regexp: Text(".*").font(.system(.body, design: .monospaced).weight(.semibold))
-                case .expression: Image(systemName: "chevron.left.forwardslash.chevron.right")
+                case .expression: Image(systemName: "text.magnifyingglass")
                 }
             }
             .frame(width: 24, height: 24)
@@ -332,7 +364,7 @@ struct SearchHeaderView: View {
         case .exact: return PanelActionsCopy.text("Exact", bundle: copyBundle)
         case .fuzzy: return PanelActionsCopy.text("Fuzzy", bundle: copyBundle)
         case .regexp: return PanelActionsCopy.text("Regular Expression", bundle: copyBundle)
-        case .expression: return HistorySearchCopy.text("Expression", bundle: copyBundle)
+        case .expression: return PanelActionsCopy.text("Fuzzy", bundle: copyBundle)
         }
     }
 
@@ -389,7 +421,7 @@ struct SearchHeaderView: View {
 
     private var searchModeBinding: Binding<SearchMode> {
         Binding<SearchMode>(
-            get: { viewState.searchMode },
+            get: { viewState.searchMode == .expression ? .fuzzy : viewState.searchMode },
             set: { viewState.searchMode = $0 }
         )
     }

@@ -33,7 +33,8 @@ struct HistoryFilterValidationTests {
 
     @Test func metadataSQLAndMatcherAgreeOnLiteralSourcesAndDateBoundaries() throws {
         let database = try SQLiteDatabase(url: nil)
-        try database.execute("CREATE TABLE history_items (lastSource TEXT, lastCopiedAt REAL, pinOrdinal INTEGER)")
+        try database.execute("CREATE TABLE history_items (id INTEGER, lastSource TEXT, lastCopiedAt REAL, pinOrdinal INTEGER)")
+        try database.execute("CREATE TABLE copy_sources (itemID INTEGER, application TEXT)")
         let cases: [(source: String?, filter: HistoryFilter, matches: Bool)] = [
             ("com.Example.Editor", .init(sourceApplication: "EXAMPLE"), true),
             ("com.example.Editor", .init(sourceApplication: "%"), false),
@@ -57,10 +58,14 @@ struct HistoryFilterValidationTests {
         ]
         for testCase in cases {
             try database.execute("DELETE FROM history_items")
+            try database.execute("DELETE FROM copy_sources")
             try database.execute(
-                "INSERT INTO history_items VALUES (?, 100, NULL)",
+                "INSERT INTO history_items VALUES (0, ?, 100, NULL)",
                 bindings: [testCase.source.map(SQLiteValue.text) ?? .null]
             )
+            if let source = testCase.source {
+                try database.execute("INSERT INTO copy_sources VALUES (0, ?)", bindings: [.text(source)])
+            }
             let predicate = HistoryFilterSQL.predicate(testCase.filter)
             let result = try database.prepare(
                 "SELECT count(*) FROM history_items WHERE \(predicate.sql)", bindings: predicate.bindings

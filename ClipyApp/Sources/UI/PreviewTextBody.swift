@@ -5,6 +5,7 @@ struct PreviewTextBody: View {
     let segments: [Substring]
     let groups: [Range<Int>]
     var maximumHeight: CGFloat?
+    var fillsAvailableHeight = false
     @State private var contentHeight: CGFloat?
     #if DEBUG
     var onSegmentMaterialized: ((Int) -> Void)?
@@ -25,6 +26,7 @@ struct PreviewTextBody: View {
                 let height = geometry.size.height.rounded(.up)
                 return maximumHeight.map { min(height, max(0, $0)) } ?? height
             } action: { height in
+                guard !fillsAvailableHeight else { return }
                 guard let maximumHeight else { return }
                 let currentHeight = min(contentHeight ?? maximumHeight, max(0, maximumHeight))
                 // Long content already uses the full viewport. Refinements
@@ -33,7 +35,7 @@ struct PreviewTextBody: View {
                 contentHeight = height
             }
         }
-        .frame(height: maximumHeight.map { min(contentHeight ?? $0, max(0, $0)) })
+        .frame(height: maximumHeight.map { max(0, fillsAvailableHeight ? $0 : min(contentHeight ?? $0, $0)) })
     }
 
     private func textGroup(_ range: Range<Int>) -> some View {

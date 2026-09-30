@@ -775,6 +775,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     in: composition.viewState.displayedRows
                 ) != nil
             },
+            isSearchCompletionActive: { [weak self] in
+                self?.panelSurfaceState?.searchCompletion.consumesPanelCommands ?? false
+            },
             onSubmitSelection: { [weak self] in
                 self?.submitPanelSelection()
             },
@@ -887,8 +890,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingPanelContentFitInput: PanelContentFit.Input?
 
     @ObservationIgnored
-    private var floatingPreviewFitTask: Task<Void, Never>?
-    @ObservationIgnored
     private var configuredPreviewGap = PanelGeometry.persistedFloatingPreviewGap(from: .standard)
     @ObservationIgnored
     private var configuredPreviewWidth = PanelGeometry.persistedFloatingPreviewWidth(from: .standard)
@@ -934,28 +935,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               panel.isPresented,
               floatingPreviewPanel?.isPresented == true
         else { return }
-        updatePreviewHeightCeiling()
         floatingPreviewPanel?.present(beside: panel)
-    }
-
-    func floatingPreviewContentHeightDidChange(_ height: CGFloat, for item: HistoryItemReference) {
-        guard previewState.isOpen, previewState.previewedItem == item else { return }
-        floatingPreviewFitTask?.cancel()
-        floatingPreviewFitTask = Task { @MainActor [weak self] in
-            // Apply window geometry after SwiftUI finishes measuring. The
-            // rendered height is independent of the window proposal, and
-            // repeated measurements in one pass collapse to the latest one.
-            await Task.yield()
-            guard !Task.isCancelled, let self,
-                  self.previewState.isOpen, self.previewState.previewedItem == item else { return }
-            self.floatingPreviewFitTask = nil
-            self.floatingPreviewPanel?.fitToContent(height: height)
-        }
-    }
-
-    private func updatePreviewHeightCeiling() {
-        let saved = PanelGeometry.persistedSize(from: .standard).height
-        previewState.availablePreviewHeight = min(saved, panel?.screen?.visibleFrame.height ?? saved)
     }
 
     /// The preview pane state publishes its show/update/hide transitions
@@ -971,6 +951,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 prepareFloatingPreview(for: nil)
                 return
             }
+            if case .update = transition {
+                floatingPreviewPanel?.cancelArrival()
+            }
             floatingPreviewLoader?.clear()
             if let pendingPreview, pendingPreview.item == item {
                 floatingPreviewLoader = pendingPreview.loader
@@ -980,7 +963,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 floatingPreviewLoader = makePreviewLoader(for: item, viewState: composition.viewState)
             }
             ensureFloatingPreviewWindow()
-            updatePreviewHeightCeiling()
             floatingPreviewPanel?.present(beside: panel)
         case .hide:
             hideFloatingPreviewPane()
@@ -993,8 +975,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prepareFloatingPreview(for: nil)
         floatingPreviewLoader?.clear()
         floatingPreviewLoader = nil
-        floatingPreviewFitTask?.cancel()
-        floatingPreviewFitTask = nil
         floatingPreviewPanel?.dismiss()
     }
 

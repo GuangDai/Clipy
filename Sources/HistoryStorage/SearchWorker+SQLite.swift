@@ -83,8 +83,8 @@ extension SearchWorker {
         let lifetimeDeadline = startedAt.advanced(by: snapshotLifetime)
         // Prepared matchers stay confined to this worker and this request.
         let exact = admitted.mode == .exact ? ExactLiteralMatcher(term: admitted.term) : nil
-        let expression = admitted.expression.map { PreparedSearchExpression($0.root) }
-        let expressionPredicate = admitted.expression.map { HistoryFilterSQL.expressionPredicate($0.root) }
+        let expression = admitted.expressionRoot.map(PreparedSearchExpression.init)
+        let expressionPredicate = admitted.expressionRoot.map(HistoryFilterSQL.expressionPredicate)
         let fuzzy = admitted.mode == .fuzzy ? fuse.createPattern(from: admitted.term) : nil
         let regexp: NSRegularExpression?
         if admitted.mode == .regexp, !admitted.term.isEmpty {
@@ -97,6 +97,10 @@ extension SearchWorker {
             defer { try? database.execute("ROLLBACK") }
             try database.setReadInterruptionDeadline(lifetimeDeadline)
             defer { try? database.setReadInterruptionDeadline(nil) }
+            let expressionSources = expression.map { _ in
+                SQLiteExpressionSources(database: database, limits: limits, deadline: lifetimeDeadline)
+            }
+            defer { expressionSources?.finish() }
 
             let positionStatement = try database.prepare(
                 "SELECT changePosition FROM history_state WHERE key = 'retained-history'"
@@ -148,7 +152,7 @@ extension SearchWorker {
                     target, request: request, admitted: admitted, database: database, position: position,
                     exact: exact, fuzzy: fuzzy, regexp: regexp, expression: expression,
                     expressionPredicate: expressionPredicate, lifetimeDeadline: lifetimeDeadline,
-                    regexpDeadline: &regexpDeadline, work: work
+                    regexpDeadline: &regexpDeadline, work: work, expressionSources: expressionSources
                 )
                 anchor = seek.anchor
                 seekHasPrevious = seek.hasPrevious
@@ -202,7 +206,7 @@ extension SearchWorker {
                     database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
                     includesSearchBody: admitted.requiresSearchBody,
                     expressionPredicate: expressionPredicate,
-                    candidateExpression: admitted.expression.map { PreparedSearchExpression.candidateExpression($0.root) }
+                    candidateExpression: admitted.expressionRoot.flatMap(PreparedSearchExpression.candidateExpression)
                         ?? SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
                     orderedAnchor: isRankedFuzzy ? fuzzyOrderedAnchor : anchor,
                     reversesOrder: reversesOrderedRows || reversesFuzzyPredecessors,
@@ -243,6 +247,13 @@ extension SearchWorker {
                 // not newly introduced SQL batch fetch/yield latency.
                 regexpDeadline = regexpDeadline.advanced(by: fetchStarted.duration(to: clock.now))
                 guard !batch.rows.isEmpty else { break }
+                let conditionStarted = clock.now
+                let matchingRows = try rowsAdmittedByCondition(
+                    batch.rows, admitted: admitted, expression: expression, sources: expressionSources, work: work
+                )
+                // Metadata/source condition evaluation is outside the native
+                // regexp-engine budget, but remains inside snapshot lifetime.
+                regexpDeadline = regexpDeadline.advanced(by: conditionStarted.duration(to: clock.now))
 #if DEBUG
                 processed += batch.rows.count
                 searchDebugProbe.record(
@@ -252,9 +263,9 @@ extension SearchWorker {
                     rowsProcessed: batch.rows.count, rowsTotal: processed,
                     sourceUTF8Bytes: batch.utf8Bytes
                 )
-                let snapshot = SearchCorpusSnapshot(position: position, rows: batch.rows, debugTrace: trace)
+                let snapshot = SearchCorpusSnapshot(position: position, rows: matchingRows, debugTrace: trace)
 #else
-                let snapshot = SearchCorpusSnapshot(position: position, rows: batch.rows)
+                let snapshot = SearchCorpusSnapshot(position: position, rows: matchingRows)
 #endif
                 // Ordered modes need only the page and one adjacent match.
                 // Corruption is rejected in the bounded candidate projections
@@ -270,7 +281,12 @@ extension SearchWorker {
                         direction: hasExplicitOrder || isRankedFuzzy ? .forward : scanDirection
                     )
                     if admitted.term.isEmpty {
-                        evaluation = evaluateRecentEquivalent(in: snapshot, directive: batchDirective, work: work)
+                        if let expression {
+                            evaluation = try await evaluateExpression(expression, in: snapshot, directive: batchDirective,
+                                                                      work: work, sources: expressionSources)
+                        } else {
+                            evaluation = evaluateRecentEquivalent(in: snapshot, directive: batchDirective, work: work)
+                        }
                     } else {
                         switch admitted.mode {
                         case .exact:
@@ -294,7 +310,7 @@ extension SearchWorker {
                                 throw HistoryFailure.persistence(.invariantViolation)
                             }
                             evaluation = try await evaluateExpression(
-                                expression, in: snapshot, directive: batchDirective, work: work
+                                expression, in: snapshot, directive: batchDirective, work: work, sources: expressionSources
                             )
                         }
                     }
@@ -486,7 +502,7 @@ extension SearchWorker {
         exact: ExactLiteralMatcher?, fuzzy: Fuse.Pattern?, regexp: NSRegularExpression?,
         expression: PreparedSearchExpression?, expressionPredicate: (sql: String, bindings: [SQLiteValue])?,
         lifetimeDeadline: ContinuousClock.Instant, regexpDeadline: inout ContinuousClock.Instant,
-        work: SearchWorkCounter
+        work: SearchWorkCounter, expressionSources: SQLiteExpressionSources?
     ) async throws -> (anchor: StoredOrderingAnchor, hasPrevious: Bool, lowestPossibleFuzzyScore: Double) {
         let targetReader = try SQLiteSearchRows(
             database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
@@ -500,7 +516,8 @@ extension SearchWorker {
         guard !targetBatch.rows.isEmpty else { throw HistoryFailure.notFound(id) }
         let targetEvaluation = try await evaluateSeekBatch(
             targetBatch.rows, admitted: admitted, position: position, exact: exact, fuzzy: fuzzy,
-            regexp: regexp, expression: expression, deadline: min(regexpDeadline, lifetimeDeadline), work: work
+            regexp: regexp, expression: expression, deadline: min(regexpDeadline, lifetimeDeadline), work: work,
+            expressionSources: expressionSources, snapshotDeadline: lifetimeDeadline
         )
         guard let target = targetEvaluation.rows.first else { throw HistoryFailure.notFound(id) }
         let anchor = request.sortOrder == .automatic ? target.anchor : HistorySortSQL.anchor(for: target.corpusRow)
@@ -527,7 +544,7 @@ extension SearchWorker {
             database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
             includesSearchBody: admitted.requiresSearchBody,
             expressionPredicate: expressionPredicate,
-            candidateExpression: admitted.expression.map { PreparedSearchExpression.candidateExpression($0.root) }
+            candidateExpression: admitted.expressionRoot.flatMap(PreparedSearchExpression.candidateExpression)
                 ?? SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
             orderedAnchor: predecessorAnchor, reversesOrder: predecessorAnchor != nil,
             completesFuzzyPrefix: false, work: work
@@ -541,7 +558,8 @@ extension SearchWorker {
             guard !batch.rows.isEmpty else { return (anchor, false, lowestPossibleFuzzyScore) }
             let matches = try await evaluateSeekBatch(
                 batch.rows, admitted: admitted, position: position, exact: exact, fuzzy: fuzzy,
-                regexp: regexp, expression: expression, deadline: min(regexpDeadline, lifetimeDeadline), work: work
+                regexp: regexp, expression: expression, deadline: min(regexpDeadline, lifetimeDeadline), work: work,
+                expressionSources: expressionSources, snapshotDeadline: lifetimeDeadline
             )
             for match in matches.rows {
                 if rankedFuzzy {
@@ -561,8 +579,13 @@ extension SearchWorker {
     internal func evaluateSeekBatch(
         _ rows: [SearchCorpusRow], admitted: AdmittedSearchRequest, position: ChangePosition,
         exact: ExactLiteralMatcher?, fuzzy: Fuse.Pattern?, regexp: NSRegularExpression?,
-        expression: PreparedSearchExpression?, deadline: ContinuousClock.Instant, work: SearchWorkCounter
+        expression: PreparedSearchExpression?, deadline: ContinuousClock.Instant, work: SearchWorkCounter,
+        expressionSources: SQLiteExpressionSources? = nil, snapshotDeadline: ContinuousClock.Instant? = nil
     ) async throws -> EvaluationResult {
+        let conditionStarted = ContinuousClock.now
+        let rows = try rowsAdmittedByCondition(rows, admitted: admitted, expression: expression, sources: expressionSources, work: work)
+        let adjustedDeadline = deadline.advanced(by: conditionStarted.duration(to: ContinuousClock.now))
+        let engineDeadline = snapshotDeadline.map { min(adjustedDeadline, $0) } ?? adjustedDeadline
 #if DEBUG
         let corpus = SearchCorpusSnapshot(position: position, rows: rows,
                                           debugTrace: SearchDebugTrace(id: UUID(), startedAt: ContinuousClock.now))
@@ -570,7 +593,12 @@ extension SearchWorker {
         let corpus = SearchCorpusSnapshot(position: position, rows: rows)
 #endif
         let directive = ScanDirective(continuationAnchor: nil, maximumSurvivors: rows.count + 1)
-        if admitted.term.isEmpty { return evaluateRecentEquivalent(in: corpus, directive: directive, work: work) }
+        if admitted.term.isEmpty {
+            if let expression {
+                return try await evaluateExpression(expression, in: corpus, directive: directive, work: work, sources: expressionSources)
+            }
+            return evaluateRecentEquivalent(in: corpus, directive: directive, work: work)
+        }
         switch admitted.mode {
         case .exact:
             return try await evaluateExact(term: admitted.term, in: corpus, directive: directive,
@@ -580,10 +608,27 @@ extension SearchWorker {
                                             preparedPattern: fuzzy, work: work)
         case .regexp:
             return try await evaluateRegexp(term: admitted.term, in: corpus, directive: directive,
-                                             preparedPattern: regexp, sharedEngineDeadline: deadline, work: work)
+                                             preparedPattern: regexp, sharedEngineDeadline: engineDeadline, work: work)
         case .expression:
             guard let expression else { throw HistoryFailure.persistence(.invariantViolation) }
-            return try await evaluateExpression(expression, in: corpus, directive: directive, work: work)
+            return try await evaluateExpression(expression, in: corpus, directive: directive, work: work, sources: expressionSources)
+        }
+    }
+
+    /// The outer literal retains its selected matching mode and relevance.
+    /// The independently parsed DSL condition only admits/rejects a row; its
+    /// own text matches do not replace that literal's highlights or score.
+    private func rowsAdmittedByCondition(
+        _ rows: [SearchCorpusRow], admitted: AdmittedSearchRequest, expression: PreparedSearchExpression?,
+        sources: SQLiteExpressionSources?, work: SearchWorkCounter
+    ) throws -> [SearchCorpusRow] {
+        guard admitted.mode != .expression, !admitted.term.isEmpty,
+              let matcher = expression else { return rows }
+        return try rows.filter { row in
+            try Task.checkCancellation()
+            let result = try sources.map { try matcher.match(row, sources: $0) } ?? matcher.match(row)
+            if !result.matches { work.rowsEvaluated += 1 }
+            return result.matches
         }
     }
 }

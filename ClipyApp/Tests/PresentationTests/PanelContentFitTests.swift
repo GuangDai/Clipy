@@ -66,33 +66,14 @@ struct PanelContentFitTests {
         )
     }
 
-    @Test func emptyContentFitsItsMessage() {
-        // 34pt toolbar + 52pt empty message + 6pt bottom breathing room.
-        #expect(PanelContentFit.idealHeight(PanelContentFit.Input()) == 92)
-        #expect(
-            PanelContentFit.clampedHeight(
-                PanelContentFit.idealHeight(PanelContentFit.Input()),
-                ceiling: PanelGeometry.height
-            ) == 92
-        )
-    }
-
-    @Test func aShortDemandHasNoArtificialFloor() {
-        #expect(PanelContentFit.clampedHeight(32, ceiling: 420) == 32)
-        #expect(PanelGeometry.minimumHeight == 0)
-        #expect(PanelGeometry.minimumContentWidth == 0)
-    }
-
-    @Test func recentOnlyRowsDoNotPayForARedundantSectionHeading() {
+    @Test(arguments: [(0, CGFloat(160)), (1, 160), (3, 160), (5, 160), (6, 184)])
+    func shortListsKeepFiveCompactRowsBelowTheToolbar(rowCount: Int, expectedHeight: CGFloat) {
         var input = PanelContentFit.Input()
-        input.unpinnedRows = [textRow(), textRow(), textRow()]
-        // 34pt toolbar + 3×24pt rows + 6pt breathing room.
-        #expect(PanelContentFit.idealHeight(input) == 112)
-        #expect(
-            PanelContentFit.clampedHeight(
-                PanelContentFit.idealHeight(input), ceiling: 420
-            ) == 112
-        )
+        input.unpinnedRows = Array(repeating: textRow(), count: rowCount)
+        // The empty message still needs 52pt; it does not consume a sixth
+        // record row or raise the five-row floor (34 + 5×24 + 6 = 160).
+        if rowCount == 0 { #expect(PanelContentFit.idealHeight(input) == 92) }
+        #expect(PanelContentFit.clampedHeight(PanelContentFit.idealHeight(input), ceiling: 420) == expectedHeight)
     }
 
     @Test func pinnedAndRecentGroupsShareOneCompactSeparator() {
@@ -142,8 +123,9 @@ struct PanelContentFitTests {
         let ideal = PanelContentFit.idealHeight(input)
         #expect(ideal > 420)
         #expect(PanelContentFit.clampedHeight(ideal, ceiling: 420) == 420)
-        #expect(PanelContentFit.clampedHeight(ideal, ceiling: 40) == 40)
-        #expect(PanelContentFit.clampedHeight(10, ceiling: 420) == 10)
+        #expect(PanelContentFit.clampedHeight(ideal, ceiling: 200) == 200)
+        #expect(PanelContentFit.clampedHeight(ideal, ceiling: 40) == 160)
+        #expect(PanelContentFit.clampedHeight(10, ceiling: 420) == 160)
     }
 
     /// A pushed Details/editor destination or the quick-look overlay fills
@@ -154,17 +136,17 @@ struct PanelContentFitTests {
     @Test func fullHeightDestinationDemandsThePersistedCeiling() {
         var input = PanelContentFit.Input()
         input.unpinnedRows = [textRow(), textRow()]
-        // 34pt toolbar + 2×24pt rows + 6pt slack.
+        // Two rows need only 88pt of content; live fitting retains five rows.
         let rowFit = PanelContentFit.clampedHeight(
             PanelContentFit.idealHeight(input), ceiling: 420
         )
-        #expect(rowFit == 88)
+        #expect(rowFit == 160)
 
         input.prefersFullHeight = true
         let fullHeight = PanelContentFit.idealHeight(input)
         #expect(fullHeight == PanelContentFit.fullHeightDemand)
         #expect(PanelContentFit.clampedHeight(fullHeight, ceiling: 420) == 420)
-        #expect(PanelContentFit.clampedHeight(fullHeight, ceiling: 40) == 40)
+        #expect(PanelContentFit.clampedHeight(fullHeight, ceiling: 40) == 160)
 
         // Popping the destination / dismissing the overlay refits to rows.
         input.prefersFullHeight = false

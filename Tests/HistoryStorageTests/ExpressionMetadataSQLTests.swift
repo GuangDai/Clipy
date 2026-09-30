@@ -84,6 +84,7 @@ struct ExpressionMetadataSQLTests {
             )
             """)
         try database.execute("CREATE TABLE representations (contentID INTEGER, typeKey TEXT)")
+        try database.execute("CREATE TABLE copy_sources (itemID INTEGER, application TEXT)")
         let values: [(String?, Double, Int?, [String])] = [
             (nil, 99, nil, ["public.utf8-plain-text"]),
             ("com.example.Editor", 100, nil, ["public.utf8-plain-text", "public.url"]),
@@ -100,6 +101,9 @@ struct ExpressionMetadataSQLTests {
                            .real(timestamp), pin.map { .integer(Int64($0)) } ?? .null,
                            .integer(Int64(index))]
             )
+            if let source {
+                try database.execute("INSERT INTO copy_sources VALUES (?, ?)", bindings: [.integer(Int64(index)), .text(source)])
+            }
             for type in types {
                 try database.execute("INSERT INTO representations VALUES (?, ?)",
                                      bindings: [.integer(Int64(index)), .text(type)])

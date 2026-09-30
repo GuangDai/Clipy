@@ -354,6 +354,10 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         _ request: HistoryBrowseRequest
     ) async throws -> HistoryPage {
         do {
+            if request.conditionExpression != nil {
+                return try await searchWorker.page(request, store: storeLocation,
+                                                  processMarker: authority.cursorProcessMarker)
+            }
             switch request.kind {
             case .recent:
                 return try await authority.recentPage(
@@ -519,6 +523,16 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         }
     }
 
+    public func sourceApplications(
+        _ request: HistorySourceApplicationRequest
+    ) async throws -> HistorySourceApplicationPage {
+        do {
+            return try await authority.sourceApplications(request)
+        } catch {
+            throw Self.translatedFailure(error)
+        }
+    }
+
     public func representation(
         _ request: HistoryRepresentationRequest
     ) async throws -> HistoryRepresentation {
@@ -635,7 +649,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         for request: HistoryObservationRequest
     ) async throws -> HistoryPage {
         let browseRequest = HistoryBrowseRequest(kind: request.kind, limit: request.limit, filter: request.filter,
-                                                sortOrder: request.sortOrder)
+                                                sortOrder: request.sortOrder, conditionExpression: request.conditionExpression)
         while true {
             try Task.checkCancellation()
             let page = try await browse(browseRequest)

@@ -10,17 +10,20 @@ struct HistorySearchOptionsView: View {
     @Environment(\.locale) private var locale
     @Environment(\.dismiss) private var dismiss
     private let viewState: HistoryViewState
-    private let suggestedSources: [String]
+    private let completion: HistorySearchCompletionState
     @State private var draft: HistorySearchFilters
     @State private var draftSortOrder: HistorySortOrder
     @State private var showsExpressionGuide: Bool
     @State private var isChoosingApplication = false
     @State private var applicationSelectionFailed = false
     @State private var applications: [SourceApplicationSearchResolver.Application] = []
+    @State private var historySources: [HistorySearchSourceCompletionWorker.Suggestion] = []
+    @State private var isLoadingHistorySources = false
+    @State private var historySourceReadFailed = false
 
-    init(viewState: HistoryViewState, suggestedSources: [String], showsExpressionGuide: Bool) {
+    init(viewState: HistoryViewState, completion: HistorySearchCompletionState, showsExpressionGuide: Bool) {
         self.viewState = viewState
-        self.suggestedSources = suggestedSources
+        self.completion = completion
         _draft = State(initialValue: viewState.searchFilters)
         _draftSortOrder = State(initialValue: viewState.sortOrder)
         _showsExpressionGuide = State(initialValue: showsExpressionGuide)
@@ -79,7 +82,23 @@ struct HistorySearchOptionsView: View {
         .padding(16)
         .frame(width: 360)
         .accessibilityIdentifier("clipy.search.options")
-        .task { applications = await viewState.searchSourceApplications() }
+        .task { applications = await viewState.sourceApplicationsForCompletion() }
+        .task(id: SourceSuggestionQuery(prefix: draft.sourceApplication, position: viewState.sourceCompletionPosition)) {
+            historySources = []
+            historySourceReadFailed = false
+            isLoadingHistorySources = true
+            defer { if !Task.isCancelled { isLoadingHistorySources = false } }
+            do {
+                let suggestions = try await completion.historySourceSuggestions(
+                    prefix: draft.sourceApplication, position: viewState.sourceCompletionPosition
+                )
+                guard !Task.isCancelled else { return }
+                historySources = suggestions
+            } catch {
+                guard !Task.isCancelled else { return }
+                historySourceReadFailed = true
+            }
+        }
     }
 
     private var dateControls: some View {
@@ -122,18 +141,26 @@ struct HistorySearchOptionsView: View {
                       prompt: Text(draft.sourceMatch == .applicationName ? "Telegram" : "com.apple.Safari"))
                 .textFieldStyle(.roundedBorder)
                 .accessibilityIdentifier("clipy.search.source.field")
-            HStack {
-                if !suggestedSources.isEmpty {
-                    Menu(text("From loaded history")) {
-                        ForEach(suggestedSources, id: \.self) { source in
-                            Button(sourceTitle(source)) {
-                                draft.sourceApplication = source
-                                draft.sourceMatch = .bundleIdentifier
-                            }
-                        }
-                    }
-                    .accessibilityIdentifier("clipy.search.source.suggestions")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(text("From clipboard history")).font(.caption).foregroundStyle(.secondary)
+                if isLoadingHistorySources { ProgressView().controlSize(.small) }
+                if historySourceReadFailed {
+                    Text(text("Source suggestions could not be loaded."))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
+                ForEach(historySources) { source in
+                    Button(source.displayName == source.bundleID ? source.bundleID : source.displayName + " · " + source.bundleID) {
+                        draft.sourceApplication = source.bundleID
+                        draft.sourceMatch = .bundleIdentifier
+                    }
+                    .buttonStyle(.plain)
+                    .font(.caption)
+                    .lineLimit(1)
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("clipy.search.source.suggestions")
+            HStack {
                 if !applications.isEmpty {
                     Menu(text("Installed applications")) {
                         ForEach(applications) { application in
@@ -174,9 +201,9 @@ struct HistorySearchOptionsView: View {
                 Text(text("The application's identifier could not be read. Enter it above instead."))
                     .font(.caption).foregroundStyle(.red)
             }
-            Text(text("Application names match installed apps by name, ignoring case. Bundle IDs match the latest source exactly, including apps no longer installed."))
+            Text(text("Application names match installed apps by name, ignoring case. Bundle IDs match any retained copy source exactly, including apps no longer installed."))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            Text(text("For multiple applications, use an expression such as source:Telegram OR source:Brave."))
+            Text(text("For multiple applications, use a condition such as $source:Telegram OR source:Brave$."))
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -188,20 +215,24 @@ struct HistorySearchOptionsView: View {
                     .font(.callout).foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(text("Choose Expression in Search Mode to combine conditions. Regular search keeps its existing meaning."))
+            Text(text("Wrap conditions in $…$. Text outside keeps the selected search mode; source:Safari without dollars is plain text."))
                 .font(.caption).foregroundStyle(.secondary)
             syntaxRow("AND · OR · NOT", "Combine conditions; parentheses group them. NOT runs first, then AND, then OR.")
             syntaxRow("\"meeting notes\"", "Quotes keep a phrase together. Adjacent terms mean AND.")
-            syntaxRow("source:Telegram", "Match an installed application's name, ignoring case. app: is also accepted.")
-            syntaxRow("source-id:com.apple.Safari", "Match an exact source bundle identifier, including apps no longer installed.")
+            syntaxRow("$source:Telegram$", "Match an installed application's name, ignoring case. app: is also accepted.")
+            syntaxRow("$source-id:com.apple.Safari$", "Match an exact source bundle identifier, including apps no longer installed.")
             syntaxRow("date:2026-09-26", "Find one UTC day, or a range such as date:2026-09-01..2026-09-26.")
             syntaxRow("after:2026-09-01 before:2026-10-01", "After includes that UTC day; before excludes that day.")
             syntaxRow("type:text · type:images · type:links · is:pinned", "Combine content type and pinned status with other conditions.")
             Text(text("Examples")).font(.subheadline.weight(.medium))
-            example("source:Telegram OR source:Brave")
-            example("(source:Telegram OR source:Brave) AND NOT type:images")
-            example("\"meeting notes\" AND after:2026-09-01")
-            Text(text("Using an example replaces the query and selects Expression mode. Date and application filters still apply."))
+            example("$source:Telegram OR source:Brave$")
+            example("$(source:Telegram OR source:Brave) AND NOT type:images$")
+            example("meeting notes $after:2026-09-01$")
+            Text(text("Use ⌥Esc or Insert condition / show suggestions to open candidates. Arrow keys choose; Tab or Return inserts; Escape dismisses."))
+                .font(.caption).foregroundStyle(.secondary)
+            Text(text("Escape a literal dollar as \\$; numeric amounts such as $10.50$ stay plain text. An unfinished condition stays plain text while you type."))
+                .font(.caption).foregroundStyle(.secondary)
+            Text(text("Using an example replaces the query. The selected search mode, date and application filters still apply."))
                 .font(.caption).foregroundStyle(.secondary)
         }
         .fixedSize(horizontal: false, vertical: true)
@@ -214,14 +245,13 @@ struct HistorySearchOptionsView: View {
         }
     }
 
-    private func sourceTitle(_ identifier: String) -> String {
-        guard let app = applications.first(where: { $0.bundleID == identifier }) else { return identifier }
-        return app.displayName + " · " + identifier
+    private struct SourceSuggestionQuery: Equatable {
+        let prefix: String
+        let position: ChangePosition?
     }
 
     private func example(_ query: String) -> some View {
         Button {
-            viewState.searchMode = .expression
             viewState.searchText = query
             dismiss()
         } label: {

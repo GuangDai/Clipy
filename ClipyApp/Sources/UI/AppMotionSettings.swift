@@ -32,16 +32,19 @@ struct AppMotionTiming: Sendable {
     init(speed: AppMotionSpeed, framesPerSecond: Int, reduceMotion: Bool,
          effect: AppMotionEffect = .presentation) {
         let refreshRate = framesPerSecond > 0 ? framesPerSecond : 60
-        // Levels 1–9 use the same progression on every display; level 10
+        // Levels 1–9 have an even proportional spread, from 900 to 80 ms;
+        // the full-width preview reveal makes that tempo visible. Level 10
         // requests three refresh intervals, leaving room within five frames
         // for the UI handoff. Slower displays never extend it beyond 50 ms.
         let presentation = speed == .fastest
             ? min(0.05, 3 / Double(refreshRate))
-            : 0.075 + Double(9 - speed.rawValue) * 0.045
+            : 0.9 * pow(0.08 / 0.9, Double(speed.rawValue - 1) / 8)
         switch effect {
         case .presentation: duration = reduceMotion ? 0 : presentation
         case .feedback:
-            duration = reduceMotion ? 0 : presentation * 0.5
+            // Keep frequent button feedback brief even at the slowest level,
+            // while retaining the same curve and an ordered ten-level tempo.
+            duration = reduceMotion ? 0 : min(0.12 * sqrt(presentation / 0.9), presentation * 0.6)
         }
     }
 
@@ -142,6 +145,39 @@ struct AppMotionSurface: ViewModifier {
             .onChange(of: request, initial: true) { _, request in
                 // The native owner can request before the hosting view first
                 // mounts. Forward after mounting so the trigger truly changes.
+                playbackTrigger = request
+            }
+    }
+}
+
+/// A drawer emerging from the physical edge beside the history list. The
+/// hosting/window size and content layout stay fixed; only a built-in display
+/// offset changes per frame, within the fixed viewport's clip.
+struct PreviewMotionSurface: ViewModifier {
+    let presentation: AppMotionPresentation
+    let isOnLeadingSide: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var playbackTrigger: UInt = 0
+
+    func body(content: Content) -> some View {
+        let request = presentation.requestGeneration
+        let active = presentation.isActive && !reduceMotion
+        let duration = active ? presentation.duration : 0
+        let awaitingStart = request != playbackTrigger
+        let direction = isOnLeadingSide ? 1.0 : -1.0
+        content
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .keyframeAnimator(initialValue: 1.0, trigger: playbackTrigger) { content, progress in
+                let visibleProgress = active ? (awaitingStart ? 0 : progress) : 1
+                content.visualEffect { effect, geometry in
+                    effect.offset(x: geometry.size.width * CGFloat(direction * (1 - visibleProgress)))
+                }
+            } keyframes: { _ in
+                MoveKeyframe(active ? 0.0 : 1.0)
+                LinearKeyframe(1.0, duration: duration, timingCurve: AppMotionTiming.unitCurve)
+            }
+            .clipped()
+            .onChange(of: request, initial: true) { _, request in
                 playbackTrigger = request
             }
     }

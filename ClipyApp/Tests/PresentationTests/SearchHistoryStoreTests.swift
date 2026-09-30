@@ -138,6 +138,20 @@ struct SearchHistoryStoreTests {
         }
     }
 
+    @Test func savedWrappedConditionsKeepTheirRawTextAndValidateOnlyOutsideRegexp() throws {
+        try withStore { store, defaults in
+            enableAll(store)
+            let query = "^report-[0-9]+ $source-id:com.example.Editor$"
+            let definition = HistorySearchDefinition(query: query, mode: .regexp)
+            #expect(store.saveFavorite(definition) == .saved)
+            let restored = try #require(SearchHistoryStore(defaults: defaults).favorites.first?.definition)
+            #expect(restored.query.utf8.elementsEqual(query.utf8))
+            #expect(restored.mode == .regexp)
+            #expect(store.saveFavorite(.init(query: "$type:missing$", mode: .exact)) == .invalidDefinition)
+            #expect(store.saveFavorite(.init(query: "source:Safari", mode: .expression)) == .saved)
+        }
+    }
+
     @Test func relativeDatesStayRelativeAndIgnoreUnusedCustomDateValues() throws {
         try withStore { store, defaults in
             enableAll(store)
@@ -205,7 +219,7 @@ struct SearchHistoryStoreTests {
             var nonfinite = reversed
             nonfinite.startDate = Date(timeIntervalSinceReferenceDate: .infinity)
             let invalid: [HistorySearchDefinition] = [
-                .init(query: "[", mode: .regexp), .init(query: "(report OR", mode: .expression),
+                .init(query: "[", mode: .regexp), .init(query: "$(report OR$", mode: .fuzzy),
                 .init(filters: reversed), .init(filters: nonfinite),
                 .init(query: String(repeating: "x", count: 16_385), mode: .exact),
             ]

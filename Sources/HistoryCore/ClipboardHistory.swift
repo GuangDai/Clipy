@@ -92,6 +92,13 @@ public protocol ClipboardHistory: Sendable {
         for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
     ) async throws -> HistoryCopySourcePage
 
+    /// Distinct application identifiers from all retained copy occurrences,
+    /// including earlier sources of an item. Each page contains at most 32
+    /// values and no title/body/payload reads; commits expire continuations.
+    func sourceApplications(
+        _ request: HistorySourceApplicationRequest
+    ) async throws -> HistorySourceApplicationPage
+
     /// Reads only the requested representation. The item must still exist at
     /// the supplied Content Version before any payload access. A stale request
     /// throws `.staleContent`; an absent representation throws

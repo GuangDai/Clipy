@@ -77,10 +77,11 @@ public enum HistoryContentType: String, CaseIterable, Sendable, Hashable {
 public struct HistoryFilter: Sendable, Hashable {
     public let type: HistoryContentType
     public let pinnedOnly: Bool
-    /// A literal substring of the last source application's bundle identifier.
+    /// A literal substring of any retained copy source's bundle identifier.
     /// ASCII letters are matched without case; an empty string means all sources.
     public let sourceApplication: String?
-    /// Exact bundle identifiers resolved from an application selection.
+    /// Exact bundle identifiers resolved from an application selection,
+    /// matched against any retained copy source of the item.
     /// `nil` means all sources; an empty list matches no source. This condition
     /// intersects with the optional source substring and the other filters.
     public let sourceApplicationIDs: [String]?
@@ -172,6 +173,9 @@ public struct HistoryBrowseRequest: Sendable, Hashable {
     public let filter: HistoryFilter
     public let cursor: HistoryPageCursor?
     public let sortOrder: HistorySortOrder
+    /// An independent DSL condition intersected with the ordinary text mode
+    /// and filters. It does not change exact, fuzzy, or regexp text semantics.
+    public let conditionExpression: HistorySearchExpression?
     /// Starts a fresh page at this retained item using its current ordering
     /// facts. The first row is the requested item; adjacent cursors continue
     /// normally without repeating this field. No persisted cursor is needed.
@@ -185,7 +189,8 @@ public struct HistoryBrowseRequest: Sendable, Hashable {
         cursor: HistoryPageCursor? = nil,
         filter: HistoryFilter = .all,
         sortOrder: HistorySortOrder = .automatic,
-        startAround: HistoryItemID? = nil
+        startAround: HistoryItemID? = nil,
+        conditionExpression: HistorySearchExpression? = nil
     ) {
         self.kind = kind
         self.limit = limit
@@ -193,6 +198,24 @@ public struct HistoryBrowseRequest: Sendable, Hashable {
         self.cursor = cursor
         self.sortOrder = sortOrder
         self.startAround = startAround
+        self.conditionExpression = conditionExpression
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.kind == rhs.kind && lhs.limit == rhs.limit && lhs.filter == rhs.filter
+            && lhs.cursor == rhs.cursor && lhs.sortOrder == rhs.sortOrder
+            && lhs.startAround == rhs.startAround
+            && equalConditions(lhs.conditionExpression, rhs.conditionExpression)
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(kind)
+        hasher.combine(limit)
+        hasher.combine(filter)
+        hasher.combine(cursor)
+        hasher.combine(sortOrder)
+        hasher.combine(startAround)
+        hashCondition(conditionExpression, into: &hasher)
     }
 }
 
@@ -205,16 +228,49 @@ public struct HistoryObservationRequest: Sendable, Hashable {
     public let limit: Int
     public let filter: HistoryFilter
     public let sortOrder: HistorySortOrder
+    /// An independent DSL condition applied as an AND alongside `kind`.
+    public let conditionExpression: HistorySearchExpression?
 
     public init(
         kind: HistoryBrowseKind,
         limit: Int,
         filter: HistoryFilter = .all,
-        sortOrder: HistorySortOrder = .automatic
+        sortOrder: HistorySortOrder = .automatic,
+        conditionExpression: HistorySearchExpression? = nil
     ) {
         self.kind = kind
         self.limit = limit
         self.filter = filter
         self.sortOrder = sortOrder
+        self.conditionExpression = conditionExpression
     }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.kind == rhs.kind && lhs.limit == rhs.limit && lhs.filter == rhs.filter
+            && lhs.sortOrder == rhs.sortOrder
+            && equalConditions(lhs.conditionExpression, rhs.conditionExpression)
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(kind)
+        hasher.combine(limit)
+        hasher.combine(filter)
+        hasher.combine(sortOrder)
+        hashCondition(conditionExpression, into: &hasher)
+    }
+}
+
+/// DSL literals are evaluated as their original scalar sequences. AST's
+/// String equality must not merge two observation or pagination identities.
+private func equalConditions(_ lhs: HistorySearchExpression?, _ rhs: HistorySearchExpression?) -> Bool {
+    switch (lhs, rhs) {
+    case (.none, .none): true
+    case (.some(let left), .some(let right)): left.serialized.utf8.elementsEqual(right.serialized.utf8)
+    default: false
+    }
+}
+
+private func hashCondition(_ expression: HistorySearchExpression?, into hasher: inout Hasher) {
+    hasher.combine(expression != nil)
+    if let expression { hashLiteralString(expression.serialized, into: &hasher) }
 }

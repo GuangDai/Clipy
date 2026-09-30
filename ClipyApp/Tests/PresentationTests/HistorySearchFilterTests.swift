@@ -8,6 +8,33 @@ import Testing
 /// calendar assertions cover local days whose lengths are not 24 hours.
 @MainActor
 struct HistorySearchFilterTests {
+    @Test(arguments: [(SearchMode.fuzzy, "meting"), (.exact, "meeting"), (.regexp, "^meeting")])
+    func outsideTextKeepsItsModeWhileConditionsMatchAnOlderCopySource(
+        mode: SearchMode, literal: String
+    ) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let date = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let target = try await capture("meeting final", source: "org.example.old", at: date, in: history)
+        _ = try await history.perform(.capture(ClipboardCapture(
+            representations: [.init(typeIdentifier: "public.utf8-plain-text", bytes: Data("meeting final".utf8))],
+            origin: .init(sourceApplication: "org.example.new", lineageHint: nil), observedAt: date.addingTimeInterval(1)
+        )))
+        _ = try await capture("meeting elsewhere", source: "org.example.other", at: date, in: history)
+        _ = try await capture("unrelated", source: "org.example.old", at: date, in: history)
+        let state = HistoryViewState(history: history)
+        state.searchMode = mode
+        state.searchText = literal + " $source-id:org.example.old$"
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil {
+            state.hasAuthoritativeFirstPage && state.rows.map(\.item) == [target]
+        })
+        #expect(state.rows.first?.lastSource == "org.example.new")
+        #expect(state.rows.first?.search != nil)
+        #expect(state.searchMode == mode)
+        #expect(state.failure == nil)
+    }
+
     @Test func metadataFiltersPreserveRegexpAndClearRestoresItsResults() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let calendar = Calendar.current
@@ -105,7 +132,7 @@ struct HistorySearchFilterTests {
         #expect(state.failure == nil)
     }
 
-    @Test func filteredObservationUsesMostRecentCopyDateAndSource() async throws {
+    @Test func filteredObservationUsesMostRecentDateAndEveryRetainedSource() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let calendar = Calendar.current
         let start = calendar.startOfDay(for: Date(timeIntervalSinceReferenceDate: 800_000_000))
@@ -132,7 +159,10 @@ struct HistorySearchFilterTests {
             origin: .init(sourceApplication: "com.example.Browser", lineageHint: nil),
             observedAt: start.addingTimeInterval(1)
         )))
-        try #require(await pollUntil { state.hasAuthoritativeFirstPage && state.rows.isEmpty })
+        try #require(await pollUntil {
+            state.hasAuthoritativeFirstPage && state.rows.map(\.item) == [item]
+                && state.rows.first?.copyCount == 2 && state.rows.first?.lastSource == "com.example.Browser"
+        })
         filters.sourceApplication = "com.example.Browser"
         state.searchFilters = filters
         try #require(await pollUntil {
@@ -191,15 +221,14 @@ struct HistorySearchFilterTests {
         let draft = try await capture("alpha draft", source: nil, at: date, in: history)
         let beta = try await capture("beta final", source: nil, at: date, in: history)
         let state = HistoryViewState(history: history)
-        state.searchMode = .expression
-        state.searchText = "alpha"
+        state.searchText = "$alpha$"
         state.activate()
         defer { state.deactivate() }
         try #require(await pollUntil {
             state.hasAuthoritativeFirstPage && Set(state.rows.map(\.item)) == Set([alpha, draft])
         })
 
-        state.searchText = "(alpha OR"
+        state.searchText = "$(alpha OR$"
         #expect(state.expressionValidationError != nil)
         #expect(state.rows.isEmpty)
         #expect(!state.isLoadingFirstPage)
@@ -208,7 +237,7 @@ struct HistorySearchFilterTests {
         #expect(state.failure == nil)
         let newer = try await capture("beta current", source: nil, at: date.addingTimeInterval(1), in: history)
 
-        state.searchText = "(alpha OR beta) AND NOT draft"
+        state.searchText = "$(alpha OR beta) AND NOT draft$"
         #expect(state.expressionValidationError == nil)
         #expect(state.isLoadingFirstPage)
         try #require(await pollUntil {
@@ -216,11 +245,13 @@ struct HistorySearchFilterTests {
         })
         #expect(state.failure == nil)
 
-        // Syntax belongs to expression mode. Literal search accepts the same
-        // unfinished text, and Clear returns to unfiltered recent history.
-        state.searchText = "(alpha OR"
+        // Closed conditions report syntax errors in every matching mode.
+        // Bare syntax remains ordinary text, and Clear returns to recent history.
+        state.searchText = "$(alpha OR$"
         #expect(state.expressionValidationError != nil)
         state.searchMode = .exact
+        #expect(state.expressionValidationError != nil)
+        state.searchText = "(alpha OR"
         #expect(state.expressionValidationError == nil)
         try #require(await pollUntil { state.hasAuthoritativeFirstPage && state.rows.isEmpty })
         state.clearSearch()
@@ -245,8 +276,7 @@ struct HistorySearchFilterTests {
         _ = try await capture("draft report", source: "org.example.a", at: date.addingTimeInterval(4), in: history)
         _ = try await capture("unrelated source", source: "org.example.c", at: date.addingTimeInterval(5), in: history)
         let state = HistoryViewState(history: history, pageLimit: 2, searchSourceResolver: resolver)
-        let query = "(source:Telegram OR source:Brave) AND NOT draft"
-        state.searchMode = .expression
+        let query = "$(source:Telegram OR source:Brave) AND NOT draft$"
         state.searchText = query
         state.activate()
         defer { state.deactivate() }
@@ -304,15 +334,14 @@ struct HistorySearchFilterTests {
         #expect(HistorySearchCopy.issue(for: state) == nil)
 
         state.clearFilters()
-        state.searchMode = .expression
-        state.searchText = "source:NoSuchApplication"
+        state.searchText = "$source:NoSuchApplication$"
         try #require(await pollUntil {
             state.unresolvedSearchSources == ["NoSuchApplication"] && !state.isLoadingFirstPage
         })
         #expect(state.rows.isEmpty)
         #expect(state.expressionValidationError == nil)
         #expect(state.failure == nil)
-        #expect(state.searchText == "source:NoSuchApplication")
+        #expect(state.searchText == "$source:NoSuchApplication$")
     }
 
     @Test(arguments: [(3, 8, 23), (11, 1, 25)])

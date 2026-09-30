@@ -15,7 +15,25 @@
 
 过滤在存储查询中执行，界面不能只过滤已经加载的一页冒充完整查询。类型、置顶状态、来源和时间过滤与查询、排序共同参与游标身份。标题命中直接高亮标题；正文命中返回最多 322 个 Character 的片段，省略号计入限额。高亮范围是相对于返回标题 / 片段的 UTF-16 整数范围，支持匹配只覆盖复合 Character 中的完整 Unicode 标量。界面用一次标量遍历解析所有边界，时间为 O(n + r log r)，临时空间为 O(r)；越界或截断 surrogate pair 的范围丢弃，不扩展到其他字符。
 
-## 表达式
+## 搜索框中的条件作用域
+
+[`HistorySearchQueryCompiler.swift`](../ClipyApp/Sources/UI/HistorySearchQueryCompiler.swift) 将 `$...$` 内的条件与外部普通搜索文字分开。外部文字继续使用选择的 fuzzy、exact 或 regexp；条件作为独立 `conditionExpression` 与文字结果做 AND，不把整个查询改成 exact。多个条件块各自保留分组，再用 AND 连接；条件之间的普通文字仅去掉各段边缘空白后以一个空格连接，段内原始拼写保留。
+
+```text
+meeting $source:"TextEdit"$
+^https:// $is:pinned$
+$type:images source-id:com.apple.TextEdit$
+source:literal
+$10$
+$10.50$
+\$literalDollar
+```
+
+前两例的文字部分分别遵循当前所选搜索模式；第三例只有条件，第四例没有条件包装，因此 `source:literal` 是普通文字。成对的整数 / 小数金额仍按普通文字搜索，反斜杠美元符 `\$` 表示字面 `$`；条件引号内的 `$` 不结束条件块。未闭合块保留为当前编辑文字，闭合但语法错误的块给出明确解析失败，不静默退回更宽查询。外层包装和组合在建立大中间值前检查 4,096 UTF-8 字节上限。
+
+History 的请求和观察分别携带文字 kind 与 `conditionExpression`；两者一起参与分页和观察身份。只有来源、类型、时间或置顶等元数据条件时不读取正文；条件含文字匹配时仍按需读搜索投影。混合查询保持外部文字模式的匹配和排序。直接 History `.expression` 接口仍接受未加 `$` 的原始表达式，包装语法由应用输入层拥有，不能把外部 API 的所有普通 term 重新解释成条件。
+
+## 条件表达式
 
 [`HistorySearchExpression.swift`](../Sources/HistoryCore/HistorySearchExpression.swift) 是纯解析器。`NOT` 优先于 `AND`，`AND` 优先于 `OR`，相邻条件等同 `AND`。括号改变组合顺序；双引号保留短语，其中可转义反斜杠和双引号。括号与 `NOT` 的嵌套受限制，解析错误包含原文 Character 位置。
 
@@ -27,6 +45,24 @@ source-id:com.apple.TextEdit NOT draft
 ```
 
 支持 `app:` / `source:` 应用名称、精确 `source-id:`、`date:` 单日或范围、`before:`、`after:`、`type:text|images|links|all` 及 `is:pinned`。日期按 UTC 日解释，与机器时区无关。应用名称由应用层读取安装应用元数据并替换成来源 ID，同一次解析中相同名称只匹配一次，解析器本身不查询系统。替换在构造扩张节点前检查 4,096 字节、128 tokens 和 16 层嵌套上限；超出时明确失败，不截断匹配的应用。保存的相对日期搜索定义仍在使用时解析为当时日期，不能永久冻结为首次保存的日期。
+
+来源条件检查项目所有仍保留的复制来源，不限于第一次或最后一次。一个项目先来自 old app、后来又来自 new app，两个来源都可以命中；`NOT source-id:old` 对这个项目为 false，否定的是“任意已记录来源命中”的整体结果。未知来源不命中正条件，但命中该正条件的否定。date / before / after 继续检查项目最近复制时间，不因为来源匹配到旧记录而改用旧记录的时间。
+
+普通 `HistoryFilter.sourceApplication` 保留字面子串和 ASCII 忽略大小写规则，`%` / `_` 是字面字符；精确 `sourceApplicationIDs` 使用 byte-exact 标识。表达式 app / source 的未解析值使用 Unicode 忽略大小写的字面匹配，source-id 使用精确 UTF-8。各条路径的来源范围都统一为 retained `copy_sources`，不改变各自匹配规则。
+
+## 搜索补全
+
+[`HistorySearchCompletionEngine.swift`](../ClipyApp/Sources/UI/HistorySearchCompletionEngine.swift) 按搜索框实际 UTF-16 selection / caret 识别当前条件字段和值；普通外部文本不自动出现字段候选。候选包括字段、AND / OR / NOT、类型值、置顶值、日期和真实来源应用。匹配考虑忽略大小写前缀、有序子序列及短词的一次编辑 / 相邻交换；这是输入辅助，不调用正文搜索，也不是另一个完整表达式 parser。
+
+空查询、刚获得焦点或空条件词不自动抢列表方向键；显式请求补全（Ctrl+Space）在块外插入成对 `$`，在块内列出当前可用字段。type 候选为 text / images / links / all，is 候选为 pinned，日期提供当日 UTC 模板。纯 quoted phrase 不自动给字段建议。接受候选替换 caret 所在整个 term；未闭合块补一个 `$`，已有闭合符不重复。选区按完整字簇扩展，跨 term 的选区或落在半个字簇的 caret 拒绝补全，不切碎 Unicode 内容。
+
+[`HistorySearchCompletionState.swift`](../ClipyApp/Sources/UI/HistorySearchCompletionState.swift) 每个输入框最多显示八条候选，控制候选选择和 replacement range。输入法正在组合时不生成候选、不替换 marked text；输入法命令优先，补全候选其次，列表导航与复制最后。插入经实际 field editor 应用并由正常文字变化回调更新查询，不由候选 owner 越过输入框直接改 History 选择。关闭候选、焦点离开、输入或查询代次变化都会取消旧请求，旧来源结果不得重新打开已关闭候选。
+
+候选存在时方向键选候选、Tab / Return 接受、Esc 先收起候选；没有候选时保留列表及文本输入的原行为。引擎只检查有界输入：最多 8,192 UTF-8 字节、caret 前 4,096 个 UTF-16 unit 和后 512 unit；当前 term 最多 256 unit，匹配 prefix 最多 128 unit，目标最多 1,024 unit。超出输入辅助范围时不给候选，不截断或改变真实查询；History 查询本身仍有独立 4,096 UTF-8 字节限制。
+
+来源候选读取 [`ClipboardHistory.sourceApplications`](../Sources/HistoryCore/ClipboardHistory.swift) 的 `HistorySourceApplicationPage`，默认 / 最大每页 32 个不同 application ID，加一条有限 lookahead。ID 来自所有 retained `copy_sources.application`，排除 nil / 空观察，以字面顺序做 keyset seek 跳过重复；这个读取不打开 title、searchBody 或表示载荷。提交位置变化或另一 History 实例的游标返回 `snapshotExpired`，不会混合不同快照词汇。接口和值定义见 [`HistorySourceApplications.swift`](../Sources/HistoryCore/HistorySourceApplications.swift)，实际读取见 [`HistoryAuthority+SourceApplications.swift`](../Sources/HistoryStorage/HistoryAuthority+SourceApplications.swift)。
+
+补全 worker 在后台分页检查完整来源词汇，只带回八条最佳结果。最多缓存 2,048 个 ID、256 KiB 元数据；更大词汇继续逐页选择候选，不常驻完整集合。应用显示名和标识一起参加候选匹配，选择后写入精确的 source-id 条件。并发提交使分页过期时至多重取一次；连续变化或读取失败显示可重试状态，不用当前可见历史页假造完整来源列表。
 
 ## 存储搜索路径
 
@@ -53,3 +89,5 @@ fuzzy 的 Fuse 固定参数是 threshold 0.7、location 0、distance 100、忽�
 `observe` 先注册失效通知再读取，避免提交落在订阅与首读之间；每次输出完整替换第一页。界面收到新快照会重置旧分页窗口，禁止混合不同 `ChangePosition` 的页。界面的默认页长 50，最多留三页；相邻页由一次 `browse` 请求获取。详细实现入口见 [`HistoryViewState.swift`](../ClipyApp/Sources/UI/HistoryViewState.swift) 和 [`HistoryWorkspacePaging.swift`](../ClipyApp/Sources/UI/HistoryWorkspacePaging.swift)。
 
 性能辅助程序会报告读取行数、投影字节、匹配行数和进程资源；实际测量方法见 [testing.md](testing.md)。有界批次和页面空间是源码约束，运行时间和 RSS 改善需要同输入实测。
+
+包装条件、旧来源查询、来源词汇分页与补全接线尚待本轮 macOS CI。旧版本查询测试通过不能作为此次新接口和交互通过的证据；本文不声明补全、输入法或条件混合查询已经在运行应用验证完成。

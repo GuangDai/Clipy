@@ -151,6 +151,10 @@ private actor BatchReceiptDeliveryHistory: ClipboardHistory {
         try await base.browse(request)
     }
 
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await base.sourceApplications(request)
+    }
+
     func observe(_ request: HistoryObservationRequest) async -> AsyncThrowingStream<HistoryPage, Error> {
         await base.observe(request)
     }

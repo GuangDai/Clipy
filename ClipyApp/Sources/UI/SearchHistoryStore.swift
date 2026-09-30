@@ -234,13 +234,11 @@ final class SearchHistoryStore {
               definition.filters.startDate.timeIntervalSince1970.isFinite,
               definition.filters.endDate.timeIntervalSince1970.isFinite,
               definition.filters.hasValidDates() else { return false }
-        switch definition.mode {
-        case .regexp:
-            return definition.query.isEmpty || (try? NSRegularExpression(pattern: definition.query)) != nil
-        case .expression:
-            return definition.query.isEmpty || (try? HistorySearchExpression.parse(definition.query)) != nil
-        case .exact, .fuzzy: return true
+        guard let compilation = try? HistorySearchQueryCompiler.compile(definition.query) else { return false }
+        if definition.mode == .regexp {
+            return compilation.literalText.isEmpty || (try? NSRegularExpression(pattern: compilation.literalText)) != nil
         }
+        return true
     }
 
     private func editRecords(_ edit: (inout StoredSearches) -> Void) {

@@ -17,7 +17,7 @@ extension SearchWorker {
         guard let source = corpus.rows.first(where: { $0.id == id }) else { throw HistoryFailure.notFound(id) }
         let targetEvaluation = try await evaluateSeekBatch(
             [source], admitted: admitted, position: corpus.position, exact: nil, fuzzy: nil, regexp: nil,
-            expression: admitted.expression.map { PreparedSearchExpression($0.root) },
+            expression: admitted.expressionRoot.map(PreparedSearchExpression.init),
             deadline: ContinuousClock.now.advanced(by: regexpEngineDeadline), work: SearchWorkCounter()
         )
         guard let target = targetEvaluation.rows.first else { throw HistoryFailure.notFound(id) }
@@ -25,11 +25,11 @@ extension SearchWorker {
 
         func adjacentRequest(limit: Int, direction: HistoryPageDirection) throws -> HistoryBrowseRequest {
             let query = HistoryBrowseRequest(kind: request.kind, limit: limit, filter: request.filter,
-                                             sortOrder: request.sortOrder)
+                                             sortOrder: request.sortOrder, conditionExpression: request.conditionExpression)
             let cursor = try Self.mintSearchCursor(at: anchor, direction: direction, request: query,
                                                    position: corpus.position, processMarker: processMarker)
             return HistoryBrowseRequest(kind: query.kind, limit: limit, cursor: cursor, filter: query.filter,
-                                         sortOrder: query.sortOrder)
+                                         sortOrder: query.sortOrder, conditionExpression: query.conditionExpression)
         }
         let before = try await page(adjacentRequest(limit: request.limit, direction: .backward), in: corpus,
                                     continuationAnchor: anchor, processMarker: processMarker)
@@ -82,7 +82,7 @@ extension SearchWorker {
         } else { regexp = nil }
         let fuzzy = admitted.mode == .fuzzy && !admitted.term.isEmpty
             ? fuse.createPattern(from: admitted.term) : nil
-        let expression = admitted.expression.map { PreparedSearchExpression($0.root) }
+        let expression = admitted.expressionRoot.map(PreparedSearchExpression.init)
         // Every batch shares one regexp deadline, as in the SQLite path.
         let regexpDeadline = ContinuousClock.now.advanced(by: regexpEngineDeadline)
         let ordered = corpus.rows.sorted {
@@ -112,7 +112,11 @@ extension SearchWorker {
             let batchDirective = ScanDirective(continuationAnchor: nil, maximumSurvivors: batchRows.count + 1)
             let evaluation: EvaluationResult
             if admitted.term.isEmpty {
-                evaluation = evaluateRecentEquivalent(in: batch, directive: batchDirective)
+                if let expression {
+                    evaluation = try await evaluateExpression(expression, in: batch, directive: batchDirective)
+                } else {
+                    evaluation = evaluateRecentEquivalent(in: batch, directive: batchDirective)
+                }
             } else {
                 switch admitted.mode {
                 case .exact:

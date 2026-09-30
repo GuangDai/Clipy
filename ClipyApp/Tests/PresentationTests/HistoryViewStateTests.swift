@@ -1867,6 +1867,10 @@ private actor PausableMutationHistory: ClipboardHistory {
         return stream
     }
 
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     func copySources(
         for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
     ) async throws -> HistoryCopySourcePage {

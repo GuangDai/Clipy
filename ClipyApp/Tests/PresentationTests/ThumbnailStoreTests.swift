@@ -1077,6 +1077,11 @@ struct ThumbnailStoreTests {
 /// unstructured-task scheduling order. Target-internal (not file-private) so
 /// the ThumbnailMeasurement suite can drive the same parked boundary.
 actor PausableThumbnailHistory: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        // Thumbnail responses contain no application occurrence fixtures.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         throw HistoryBackupFailure.writeFailed
     }

@@ -11,7 +11,8 @@ extension HistoryAuthority {
         _ plan: StampedCommitPlan,
         expectedPreviousPosition: ChangePosition,
         in database: SQLiteDatabase,
-        captureObservation: (application: String?, copiedAt: Date)? = nil
+        captureObservation: (application: String?, copiedAt: Date)? = nil,
+        initialCopySources: [(itemID: HistoryItemID, application: String?, copiedAt: Date)] = []
     ) throws {
         var publishedNewFiles = false
         var committed = false
@@ -44,6 +45,12 @@ extension HistoryAuthority {
                     }
                     try recordCopySource(itemID: item.id, application: captureObservation.application,
                                          copiedAt: captureObservation.copiedAt)
+                }
+                // Bounded fixture seeds contain several initial captures in
+                // one stamped commit. Their source facts use the same helper
+                // and transaction as the ordinary single-capture observation.
+                for source in initialCopySources {
+                    try recordCopySource(itemID: source.itemID, application: source.application, copiedAt: source.copiedAt)
                 }
                 if plan.requiresFinalPinOrderValidation {
                     try validateFinalPinOrder(in: database)

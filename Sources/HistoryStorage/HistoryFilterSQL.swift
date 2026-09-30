@@ -79,7 +79,11 @@ internal enum HistoryFilterSQL {
         var bindings: [SQLiteValue] = []
         if filter.pinnedOnly { clauses.append("pinOrdinal IS NOT NULL") }
         if let source = filter.sourceApplication {
-            clauses.append("instr(lower(lastSource), lower(?)) > 0")
+            clauses.append("""
+                EXISTS (SELECT 1 FROM copy_sources AS source
+                        WHERE source.itemID = history_items.id
+                          AND instr(lower(source.application), lower(?)) > 0)
+                """)
             bindings.append(.text(source))
         }
         if let sourceIDs = filter.sourceApplicationIDs {
@@ -87,7 +91,11 @@ internal enum HistoryFilterSQL {
                 clauses.append("0")
             } else {
                 let placeholders = Array(repeating: "?", count: sourceIDs.count).joined(separator: ",")
-                clauses.append("lastSource IN (\(placeholders))")
+                clauses.append("""
+                    EXISTS (SELECT 1 FROM copy_sources AS source
+                            WHERE source.itemID = history_items.id
+                              AND source.application IN (\(placeholders)))
+                    """)
                 bindings += sourceIDs.map(SQLiteValue.text)
             }
         }
@@ -156,9 +164,12 @@ internal enum HistoryFilterSQL {
             case .noMatch: return ("0", [], true)
             case .text, .application: return ("1", [], false)
             case .sourceID(let identifier):
-                // Unknown sources evaluate to false, so NOT source-id also
-                // includes unknown rows instead of inheriting SQL's NULL.
-                return ("COALESCE(lastSource = ?, 0)", [.text(identifier)], true)
+                // ANY prior copy source can match. EXISTS is Boolean even
+                // for unknown sources, so NOT inverts the complete condition.
+                return ("""
+                    EXISTS (SELECT 1 FROM copy_sources AS source
+                            WHERE source.itemID = history_items.id AND source.application = ?)
+                    """, [.text(identifier)], true)
             case .copiedDate(let from, let until):
                 let result = predicate(HistoryFilter(copiedAfter: from, copiedBefore: until))
                 return (result.sql, result.bindings, true)

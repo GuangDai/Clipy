@@ -158,6 +158,7 @@ final class HistoryPanelSurfaceState {
             // Retire the browsing pane synchronously before navigation or
             // preview dismissal can transfer keyboard focus (UI-7).
             previewState.setBrowsingHistory(detailsPath.isEmpty)
+            if !detailsPath.isEmpty { searchCompletion.close() }
         }
     }
     var selection: HistoryItemID?
@@ -170,6 +171,7 @@ final class HistoryPanelSurfaceState {
     /// never outlive its authoritative row (review Card 9B).
     var quickLookReference: HistoryItemReference?
     let thumbnails: ThumbnailStore
+    let searchCompletion = HistorySearchCompletionState()
     private(set) var appliedPurgeGeneration = 0
     private(set) var sessionGeneration = 0
     private(set) var isSessionActive = false
@@ -305,6 +307,7 @@ final class HistoryPanelSurfaceState {
     /// raw search draft intentionally survives reopen; selection/details/
     /// preview/quick look do not (approved Card 14A close policy).
     func endSession() {
+        searchCompletion.close()
         guard isSessionActive else { return }
         isSessionActive = false
         thumbnails.isSurfaceActive = false
@@ -795,7 +798,8 @@ struct HistoryPanelView: View {
                     )
                     else { return }
                     viewState.requestPasteFromDisplayedRow(selected)
-                }
+                },
+                completion: surfaceState.searchCompletion
             )
             panelActions
         }

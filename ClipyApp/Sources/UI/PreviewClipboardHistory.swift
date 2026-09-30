@@ -71,6 +71,17 @@ struct PreviewClipboardHistory: ClipboardHistory, Sendable {
         throw HistoryFailure.notFound(id)
     }
 
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        guard (1...32).contains(request.limit) else { throw HistoryFailure.invalidInput(.invalidPageLimit) }
+        let position = page?.position ?? .zero
+        guard request.cursor == nil else { throw HistoryFailure.snapshotExpired(current: position) }
+        let applications = Array(Set((page?.rows ?? []).compactMap(\.lastSource).filter { !$0.isEmpty }))
+            .sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+        // This preview defines one complete fixture page, not a paged store.
+        guard applications.count <= request.limit else { throw HistoryFailure.temporarilyUnavailable(.factProof) }
+        return HistorySourceApplicationPage(position: position, applications: applications)
+    }
+
     func details(
         for id: HistoryItemID
     ) async throws -> HistoryDetails {

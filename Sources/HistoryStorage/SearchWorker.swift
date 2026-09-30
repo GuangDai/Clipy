@@ -240,13 +240,13 @@ internal actor SearchWorker {
         // The immutable array entry is the matcher oracle used by owner
         // tests. Production filters SQLite rows before copying each batch.
 #if DEBUG
-        let corpus = request.filter == .all ? inputCorpus : SearchCorpusSnapshot(
+        var corpus = request.filter == .all ? inputCorpus : SearchCorpusSnapshot(
             position: inputCorpus.position,
             rows: inputCorpus.rows.filter { HistoryFilterSQL.admits($0, filter: request.filter) },
             debugTrace: inputCorpus.debugTrace
         )
 #else
-        let corpus = request.filter == .all ? inputCorpus : SearchCorpusSnapshot(
+        var corpus = request.filter == .all ? inputCorpus : SearchCorpusSnapshot(
             position: inputCorpus.position,
             rows: inputCorpus.rows.filter { HistoryFilterSQL.admits($0, filter: request.filter) }
         )
@@ -268,6 +268,15 @@ internal actor SearchWorker {
         // boundary. The worker never trusts the already-materialized corpus
         // to imply that its independently supplied request was admitted.
         let admitted = try AdmittedSearchRequest(request, limits: limits)
+        if admitted.mode != .expression, !admitted.term.isEmpty, let condition = admitted.conditionExpression {
+            let matcher = PreparedSearchExpression(condition.root)
+            let rows = corpus.rows.filter { matcher.match($0).matches }
+#if DEBUG
+            corpus = SearchCorpusSnapshot(position: corpus.position, rows: rows, debugTrace: corpus.debugTrace)
+#else
+            corpus = SearchCorpusSnapshot(position: corpus.position, rows: rows)
+#endif
+        }
         if let target = request.startAround {
             guard request.cursor == nil, continuationAnchor == nil else {
                 throw HistoryFailure.invalidInput(.conflictingPageAnchors)
@@ -317,7 +326,11 @@ internal actor SearchWorker {
                 admitted: admitted, in: corpus, sortOrder: request.sortOrder, directive: directive
             )
         } else if term.isEmpty {
-            evaluation = evaluateRecentEquivalent(in: corpus, directive: directive)
+            if let root = admitted.expressionRoot {
+                evaluation = try await evaluateExpression(PreparedSearchExpression(root), in: corpus, directive: directive)
+            } else {
+                evaluation = evaluateRecentEquivalent(in: corpus, directive: directive)
+            }
         } else {
             switch mode {
             case .exact:
@@ -337,11 +350,11 @@ internal actor SearchWorker {
                     term: term, in: corpus, directive: directive
                 )
             case .expression:
-                guard let expression = admitted.expression else {
+                guard let root = admitted.expressionRoot else {
                     throw HistoryFailure.persistence(.invariantViolation)
                 }
                 evaluation = try await evaluateExpression(
-                    PreparedSearchExpression(expression.root), in: corpus, directive: directive
+                    PreparedSearchExpression(root), in: corpus, directive: directive
                 )
             }
         }
