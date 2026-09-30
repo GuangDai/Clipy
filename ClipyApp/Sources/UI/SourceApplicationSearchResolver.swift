@@ -92,9 +92,13 @@ final class SourceApplicationSearchResolver {
 
     func resolve(_ expression: HistorySearchExpression) -> Resolution {
         var unresolved: [String] = []
+        var unresolvedNames = Set<String>()
+        var matches: [String: [String]] = [:]
         let resolved = expression.replacingApplicationTerms { name in
+            if let identifiers = matches[name] { return identifiers }
             let identifiers = self.identifiers(matching: name)
-            if identifiers.isEmpty, !unresolved.contains(name) { unresolved.append(name) }
+            matches[name] = identifiers
+            if identifiers.isEmpty, unresolvedNames.insert(name).inserted { unresolved.append(name) }
             return identifiers
         }
         return Resolution(expression: resolved, unresolvedNames: unresolved)

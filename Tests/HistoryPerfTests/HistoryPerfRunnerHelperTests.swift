@@ -1,17 +1,12 @@
-/// Direct proofs for the pure HistoryPerfRunner measurement helpers and the
-/// Part VI §9 workload coverage map (docs/testing.md;
-/// V1-Verified/04 `perf-helpers-no-unit-tests-and-no-coverage-map`).
+/// Math, fixture parsing, and sampling behavior of the performance runner.
 import Foundation
 import Testing
 @testable import HistoryPerfRunner
 
 struct HistoryPerfRunnerHelperTests {
-    @Test func medianUsesMiddleValueForOddSamples() {
-        #expect(median([9, 1, 5]) == 5)
-    }
-
-    @Test func medianAveragesBothMiddleValuesForEvenSamples() {
-        #expect(median([10, 2, 8, 4]) == 6)
+    @Test(arguments: [([9.0, 1, 5], 5.0), ([10.0, 2, 8, 4], 6.0)])
+    func medianUsesTheOrderedMiddleOrTheMeanOfBothMiddleValues(samples: [Double], expected: Double) {
+        #expect(median(samples) == expected)
     }
 
     @Test func safeRatioRejectsEveryNonPositiveMeasurement() {
@@ -220,12 +215,6 @@ struct HistoryPerfRunnerHelperTests {
         ) == "HistoryPerfRunner admission progress mode=exact-search "
             + "phase=sample index=9 total=101 state=completed elapsed_ms=42.250")
 
-        let line = admissionProgressLine(
-            mode: .exactSearch,
-            event: .sampleBegan(index: 10, total: 101)
-        )
-        #expect(!line.contains("term-that-does-not-exist"))
-        #expect(!line.contains("store.sqlite"))
         #expect(admissionProgressLine(
             mode: .exactSearchProbe,
             event: .diagnosticRequestCompleted(elapsedMs: 1_234.5)

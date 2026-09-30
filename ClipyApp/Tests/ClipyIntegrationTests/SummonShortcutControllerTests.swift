@@ -20,9 +20,9 @@ struct SummonShortcutControllerTests {
         var registration: SummonHotKeyRegistration? = SummonHotKeyRegistration {
             cleanups += 1
         }
-        weak var releasedRegistration = registration
+        let wasReleased = { [weak registration] in registration == nil }
         registration = nil
-        #expect(releasedRegistration == nil)
+        #expect(wasReleased())
         #expect(cleanups == 1)
 
         var stoppedRegistration: SummonHotKeyRegistration? = SummonHotKeyRegistration {

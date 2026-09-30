@@ -45,7 +45,7 @@ xcodebuild -project ClipyApp/ClipyApp.xcodeproj -scheme ClipyApp \
 
 [`.github/workflows/correctness.yml`](../.github/workflows/correctness.yml) 是 push / PR 常规入口，也支持手动调用。一条 SwiftPM lane 与四条应用 lane 并行，每 job 当前上限 30 分钟，runner 为 `macos-26`。超时是未完成结果，不能当作通过；仅加大上限不能证明不稳定或阻塞测试已修复。
 
-`HistoryPerfTests` 单独验证测量辅助逻辑，不属于功能 correctness lane。性能命令 / 工作流手动运行，不把一次合成性能测量当作所有真实数据的时间上限：
+`HistoryPerfTests` 单独验证测量辅助逻辑，不属于功能 correctness lane。现有 [`performance-proofs.yml`](../.github/workflows/performance-proofs.yml) 支持手动选择 `helpers` 或 `proofs`；前者执行辅助测试，后者测量原有工作负载，二者不在 push / PR 自动运行。报告只按实际测量或操作结果判定，不冻结旧文档条款、工作负载名称和标签。性能命令 / 工作流手动运行，不把一次合成测量当作所有真实数据的时间上限：
 
 ```sh
 swift test --filter 'HistoryPerfTests\.'
@@ -66,4 +66,4 @@ swift build -c release --product HistoryPerfRunner
 
 定位 UI4 超时时先读取该 job 的最后输出、test identifier、耗时与 `xcresult`；区分构建时间、单条阻塞、分片累计耗时和系统界面不可见。脚本分片调整及测试减负必须由下一次完整 macOS CI 的五个 job 结果证实。
 
-当前文档描述源码可见实现及验证入口。[本轮 macOS CI 36656358316](https://github.com/GuangDai/Clipy/actions/runs/36656358316) 已提交，完整验证结论须读取实际终态和测试范围；提交或排队不等于通过。
+当前文档描述源码可见实现及验证入口。完整验证结论须读取实际 CI 终态和测试范围；提交、排队、编译或跳过测试都不等于行为通过。

@@ -601,7 +601,7 @@ struct HCRAtomicAppendTests {
             SeedRecord(sequence: 1, itemID: id, createdAt: epoch),
         ], limits: limits)
         let before = try await Self.snapshot(in: authority)
-        let rawKind = try #require(before.records.first).changeKindRaw
+        let rawKind = (try #require(before.records.first)).kindRaw
         try await authority.withTestDatabase { authority in
             try authority.database.execute("UPDATE history_change_records SET changeKindRaw = 0")
         }

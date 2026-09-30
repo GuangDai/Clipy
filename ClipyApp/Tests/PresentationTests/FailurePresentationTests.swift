@@ -1,6 +1,5 @@
 /// FailurePresentationTests — the typed-failure → user-facing message
-/// mapping (docs/architecture.md; docs/roadmap/
-/// 05-presentationui.md). Every case of the closed `HistoryFailure`
+/// mapping (docs/architecture.md; docs/interface.md). Every case of the closed `HistoryFailure`
 /// vocabulary — including every nested reason/kind of the associated-value
 /// enums — must produce a non-empty message, and the contract-pinned
 /// strings are spot-checked exactly. Public failures never leak raw

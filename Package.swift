@@ -79,8 +79,7 @@ let package = Package(
             dependencies: ["HistoryCore", "HistoryStorage"]
         ),
         .executableTarget(
-            // PLAY-TIER-1A decoder access-mode probe runner (docs/v2/
-            // V2-08-decoder-access-modes.md): one short-lived child per
+            // PLAY-TIER-1A decoder access-mode probe runner (docs/formats-preview.md): one short-lived child per
             // fixture runs the DEBUG-only package `PreviewAccessProbe` so
             // decoder diagnostics on deliberately truncated prefixes
             // (libpng partial-decode error lines — the CI run 32259544566

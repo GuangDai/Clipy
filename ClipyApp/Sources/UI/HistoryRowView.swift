@@ -507,7 +507,7 @@ struct HistoryRowView: View {
     @ViewBuilder
     private var contextMenu: some View {
         if let externalOpener, HistoryExternalOpener.supports(row.typeIdentifiers) {
-            HistoryOpenMenu(item: row.item, opener: externalOpener,
+            HistoryOpenMenu(opener: externalOpener,
                 onFailure: { openFailure = $0 }, options: openOptions,
                 isLoading: isPreparingOpenOptions, failure: openOptionsFailure)
             Divider()

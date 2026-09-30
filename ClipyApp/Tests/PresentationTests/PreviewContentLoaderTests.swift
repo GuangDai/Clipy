@@ -1,6 +1,5 @@
 /// PreviewContentLoaderTests — the preview loader's cancellation /
-/// exact-reference fence (audit docs/reviews/2026-08-20-clipy-maccy-audit/
-/// 02-spec-implementation.md §SPEC-IMPL-007; 05-recommended-target-design.md
+/// exact-reference fence (audit docs/testing.md; 05-recommended-target-design.md
 /// §4.1 PREVIEW-FENCE-1) and its bounded off-MainActor image decode outcome
 /// (01-standards.md §S-2; 02 §SPEC-IMPL-002). Driven through
 /// `PausablePreviewHistory`, which suspends every exact-version metadata read until

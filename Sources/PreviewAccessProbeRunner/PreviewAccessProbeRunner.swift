@@ -2,8 +2,7 @@
 /// DEBUG-only package `PreviewAccessProbe` (Sources/ContentPreview/
 /// PreviewAccessProbe.swift) over ONE fixture for the PLAY-TIER-1A decoder
 /// access-mode characterization (docs/formats-preview.md;
-/// docs/reviews/2026-08-22-clipy-maccy-deep-review/
-/// 04-tdd-remediation-playbook.md §26 TIER row 1).
+/// docs/testing.md TIER row 1).
 ///
 /// Why a child (the HistoryRestartProbe posture): the incremental-range
 /// mode decodes DELIBERATELY TRUNCATED payloads, and framework decoders log

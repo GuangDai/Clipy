@@ -146,8 +146,7 @@ struct RenderStormAndMemoryTests {
         )
     }
 
-    /// Debounce storm (V2-07 §4's 250 ms debounce; docs/
-    /// 03b-instruction-set.md §8 exact-mode literal substring over the
+    /// Debounce storm (V2-07 §4's 250 ms debounce; docs/interface.md exact-mode literal substring over the
     /// bounded stored search body; 04 §5 replacement): 60 synchronous
     /// `searchText` edits collapse into ONE debounced observation restart
     /// whose page answers the FINAL query, and a manual `refresh()` after

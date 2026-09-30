@@ -1,6 +1,5 @@
 /// PreviewClipboardHistory.swift — the scripted `ClipboardHistory` double for
-/// SwiftUI previews ONLY (docs/architecture.md; docs/
-/// 03a-instruction-set.md §3; roadmap 05).
+/// SwiftUI previews ONLY (docs/architecture.md; docs/testing.md; roadmap 05).
 ///
 /// It exists so previews and view-development need no store. It is NOT a
 /// second storage implementation and must never substitute for storage
@@ -179,8 +178,7 @@ struct PreviewClipboardHistory: ClipboardHistory, Sendable {
 
     /// The canned page: pinned lane first (0-based `pinnedPosition`),
     /// then recent rows by descending `lastCopiedAt` — the same order the
-    /// storage read path produces (docs/architecture.md; docs/
-    /// 04-coherence.md §7). `next` is nil: previews show one page.
+    /// storage read path produces (docs/architecture.md; docs/testing.md). `next` is nil: previews show one page.
     private static let populatedPage: HistoryPage = {
         // One row carries search presentation evidence: a bounded body
         // excerpt plus two UTF-16 matched ranges inside it.

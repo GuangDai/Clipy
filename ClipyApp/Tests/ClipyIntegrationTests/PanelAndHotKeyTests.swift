@@ -332,9 +332,9 @@ struct GlobalHotKeyTests {
         )
         defer { replacement.unregister() }
         #expect(!replacement.register(), "a live owner reserves this exact chord")
-        weak var releasedHotKey = hotKey
+        let wasReleased = { [weak hotKey] in hotKey == nil }
         hotKey = nil
-        #expect(releasedHotKey == nil)
+        #expect(wasReleased())
         #expect(replacement.register(), "the destroyed owner leaves neither a hotkey nor a handler")
     }
 

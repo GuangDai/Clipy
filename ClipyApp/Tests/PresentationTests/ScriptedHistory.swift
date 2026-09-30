@@ -27,8 +27,7 @@ import Testing
 ///   replacement, docs/storage.md — the double never sends deltas).
 /// - `browse` answers from a cursor-keyed script: a page, a typed failure such
 ///   as `.snapshotExpired`, or a deterministic non-cooperative suspension
-///   released by the test (docs/architecture.md; docs/
-///   04-coherence.md §6).
+///   released by the test (docs/architecture.md; docs/testing.md).
 /// - `perform` records every action and either throws `performFailure` or
 ///   returns the scripted receipt (`.unchanged` by default).
 /// - `details` throws `.notFound`; `pastePayload` uses an optional scripted
@@ -427,8 +426,7 @@ actor ThumbnailScriptHistory: ClipboardHistory {
 // MARK: - PausablePreviewHistory (preview fence double)
 
 /// A scripted `ClipboardHistory` for `PreviewContentLoader` fence tests
-/// (audit docs/reviews/2026-08-20-clipy-maccy-audit/
-/// 02-spec-implementation.md §SPEC-IMPL-007;
+/// (audit docs/testing.md;
 /// 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1): the exact-version
 /// metadata read reuses `details(for:)`, which records the request, then SUSPENDS until the test resumes it. The fixture's
 /// `PastePayload` supplies metadata and separately requested bytes, but never
@@ -621,8 +619,7 @@ func fixtureRow(
     )
 }
 
-/// One canned page over a named next-cursor token (docs/
-/// 03b-instruction-set.md §8; cursor minting is package-only,
+/// One canned page over a named next-cursor token (docs/interface.md; cursor minting is package-only,
 /// docs/architecture.md).
 func fixturePage(rows: [HistoryRow], next: String?) -> HistoryPage {
     HistoryPage(

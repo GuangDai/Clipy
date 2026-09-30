@@ -1,6 +1,14 @@
 name: Reusable performance helper and proof evidence
 
 on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Performance suite to run
+        required: true
+        default: helpers
+        type: choice
+        options: [helpers, proofs]
   workflow_call:
     inputs:
       suite:

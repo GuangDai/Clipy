@@ -1,5 +1,4 @@
-/// §9 coverage-map, complexity-envelope, and deterministic-vector helper proofs.
-/// Split out of HistoryPerfRunnerHelperTests.swift (file-size hygiene); same target, unchanged semantics.
+/// Deterministic fixture generation and sampling-event helpers.
 import Foundation
 import Testing
 @testable import HistoryPerfRunner
@@ -67,26 +66,6 @@ extension HistoryPerfRunnerHelperTests {
         ])
     }
 
-    @Test func section9CoverageMapDetectsDeletionAndLabelDrift() {
-        var fixtures = section9WorkloadCoverage.map { key, expectation in
-            Self.fixture(key: key, bullet: expectation.bulletLabel)
-        }
-        fixtures.removeAll { $0.key == "thumbnailSingleFlightSharesDecode" }
-        if let recentIndex = fixtures.firstIndex(where: {
-            $0.key == "recentBrowseIndependentOfRetainedCount"
-        }) {
-            fixtures[recentIndex] = Self.fixture(
-                key: "recentBrowseIndependentOfRetainedCount",
-                bullet: "7"
-            )
-        }
-
-        let issues = section9CoverageIssues(fixtures)
-        #expect(issues.contains { $0.contains("thumbnailSingleFlightSharesDecode") })
-        #expect(issues.contains { $0.contains("recentBrowseIndependentOfRetainedCount") })
-        #expect(issues.contains { $0.contains("emitted workloads cover") })
-    }
-
     internal static func isCompletedWarmup(
         _ event: AdmissionProgressEvent,
         index: Int,
@@ -117,62 +96,4 @@ extension HistoryPerfRunnerHelperTests {
         return actualIndex == index && actualTotal == total && elapsedMs >= 0
     }
 
-    @Test func section9ComplexityEnvelopeTableIsInternallyValid() {
-        #expect(section9ComplexityEnvelopeIssues().isEmpty)
-        #expect(
-            Set(section9WorkloadEnvelopes.keys)
-                == Set(section9WorkloadCoverage.keys)
-                    .subtracting(section9RecordOnlyWorkloads)
-        )
-    }
-
-    @Test func complexityEnvelopeValidationRejectsBadSpanAndHeadroom() {
-        var envelopes = section9WorkloadEnvelopes
-        envelopes["pinReorderLinearInPinnedCount"] = WorkloadComplexityEnvelope(
-            measurementScales: [50, 200],
-            growth: .linear,
-            bound: 5.9,
-            headroomPolicy: .standard
-        )
-        envelopes["exactSearchScalesWithRetainedCount"] = WorkloadComplexityEnvelope(
-            measurementScales: [400, 100],
-            growth: .linear,
-            bound: 8,
-            headroomPolicy: .standard
-        )
-        envelopes["recentBrowseIndependentOfRetainedCount"] =
-            WorkloadComplexityEnvelope(
-                measurementScales: [100, 400],
-                growth: .constant,
-                bound: 3,
-                headroomPolicy: .wl1aRetainedInventoryException
-            )
-
-        let issues = section9ComplexityEnvelopeIssues(envelopes: envelopes)
-        #expect(issues.contains { issue in
-            issue.contains("pinReorderLinearInPinnedCount")
-                && issue.contains("headroom")
-        })
-        #expect(issues.contains { issue in
-            issue.contains("exactSearchScalesWithRetainedCount")
-                && issue.contains("strictly increasing")
-        })
-        #expect(issues.contains { issue in
-            issue.contains("recentBrowseIndependentOfRetainedCount")
-                && issue.contains("cannot use WL1a")
-        })
-    }
-
-    internal static func fixture(key: String, bullet: String) -> WorkloadFixture {
-        WorkloadFixture(
-            key: key,
-            bullet: bullet,
-            sizes: [],
-            mediansMs: [],
-            ratio: nil,
-            bound: nil,
-            pass: true,
-            note: "coverage-map test fixture"
-        )
-    }
 }

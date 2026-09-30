@@ -43,8 +43,16 @@ enum AppIntentDependencyRegistration {
     ) -> Provider {
         {
             do {
-                return try await provider()
+                try Task.checkCancellation()
+                let ingress = try await provider()
+                // Awaiting the shared store-open task does not cancel it.
+                // A retired invocation must still stop before using its result.
+                try Task.checkCancellation()
+                return ingress
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
+                try Task.checkCancellation()
                 throw ExternalFailure.temporarilyUnavailable(.storeLocked)
             }
         }

@@ -16,6 +16,7 @@ internal struct RetentionSettingsDraft {
     internal struct LoadRequest: Sendable {
         fileprivate let editGeneration: UInt64
         fileprivate let loadGeneration: UInt64
+        fileprivate let applyGeneration: UInt64
     }
 
     internal struct Submission: Sendable {
@@ -95,6 +96,7 @@ internal struct RetentionSettingsDraft {
     private var countEditGeneration: UInt64 = 0
     private var editGeneration: UInt64 = 0
     private var loadGeneration: UInt64 = 0
+    private var applyGeneration: UInt64 = 0
     private let locale: Locale
     internal private(set) var acceptedSuccessMessage: String?
     internal private(set) var acceptedCountSuccessMessage: String?
@@ -161,7 +163,8 @@ internal struct RetentionSettingsDraft {
         loadGeneration += 1
         acceptedSuccessMessage = nil
         acceptedCountSuccessMessage = nil
-        return LoadRequest(editGeneration: editGeneration, loadGeneration: loadGeneration)
+        return LoadRequest(editGeneration: editGeneration, loadGeneration: loadGeneration,
+                           applyGeneration: applyGeneration)
     }
 
     /// A disappeared Settings surface cannot accept a pending read. Retire
@@ -171,7 +174,14 @@ internal struct RetentionSettingsDraft {
     }
 
     internal func isCurrent(_ request: LoadRequest) -> Bool {
-        request.loadGeneration == loadGeneration
+        request.loadGeneration == loadGeneration && request.applyGeneration == applyGeneration
+    }
+
+    /// An entered Apply may finish after Settings reopens and begins its
+    /// read. The snapshot's storage order is then unknown; read again after
+    /// the receipt rather than let that snapshot replace a confirmed value.
+    internal func requiresReloadAfterApply(_ request: LoadRequest) -> Bool {
+        request.loadGeneration == loadGeneration && request.applyGeneration != applyGeneration
     }
 
     /// Accepts the complete configured snapshot used by both Settings tabs.
@@ -408,6 +418,7 @@ internal struct RetentionSettingsDraft {
         _ submission: Submission,
         successMessage: String
     ) -> Bool {
+        applyGeneration += 1
         configuredPolicies = submission.policies
         ageValueIsDirty = ageValueIsDirty
             && (!submission.ageValueWasDirty || ageDaysText != submission.ageDaysText)
@@ -435,6 +446,7 @@ internal struct RetentionSettingsDraft {
         _ submission: CountSubmission,
         successMessage: String
     ) -> Bool {
+        applyGeneration += 1
         configuredMaximumUnpinnedItems = submission.maximumUnpinnedItems
         if submission.countEditGeneration == countEditGeneration {
             countToggleIsDirty = false

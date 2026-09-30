@@ -33,7 +33,10 @@ struct MaintenanceSettingsView: View {
         .task(id: refreshGeneration) { await refreshLogicalBytes() }
         .task(id: refreshGeneration) { await refreshAllocatedBytes() }
         .task(id: refreshGeneration) { await refreshProcessMemory() }
-        .onDisappear { backupTask?.cancel() }
+        .onDisappear {
+            backupTask?.cancel()
+            refreshGeneration += 1
+        }
     }
 
     private var storageSection: some View {
@@ -210,44 +213,49 @@ struct MaintenanceSettingsView: View {
         }
     }
 
+    // Refresh clicks and disappearance retire results immediately, before
+    // SwiftUI has necessarily delivered cancellation to each independent read.
     private func refreshLogicalBytes() async {
         guard !Task.isCancelled else { return }
+        let request = refreshGeneration
         logicalBytes = nil
         logicalFailed = false
         do {
             let usage = try await history.usage()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, request == refreshGeneration else { return }
             logicalBytes = usage.totalContentBytes
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, request == refreshGeneration else { return }
             logicalFailed = true
         }
     }
 
     private func refreshAllocatedBytes() async {
         guard !Task.isCancelled else { return }
+        let request = refreshGeneration
         allocatedBytes = nil
         allocatedFailed = false
         do {
             let bytes = try await location.allocatedBytes()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, request == refreshGeneration else { return }
             allocatedBytes = bytes
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, request == refreshGeneration else { return }
             allocatedFailed = true
         }
     }
 
     private func refreshProcessMemory() async {
         guard !Task.isCancelled else { return }
+        let request = refreshGeneration
         processMemory = nil
         processMemoryFailed = false
         do {
             let memory = try await location.processMemory()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, request == refreshGeneration else { return }
             processMemory = memory
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, request == refreshGeneration else { return }
             processMemoryFailed = true
         }
     }

@@ -5,8 +5,7 @@
 /// replacement (docs/storage.md — an incoming `HistoryPage` REPLACES
 /// rows, never appends), pagination is one-shot `browse` whose
 /// `.snapshotExpired` failure falls back to the observed first page and
-/// resumes from its cursor (docs/architecture.md; docs/
-/// 04-coherence.md §6), search edits debounce into a restarted observation,
+/// resumes from its cursor (docs/architecture.md; docs/testing.md), search edits debounce into a restarted observation,
 /// and mutating interactions swallow typed failures into `failure`
 /// (docs/architecture.md).
 ///
@@ -26,8 +25,7 @@ struct HistoryViewStateTests {
     /// `activate()` applies the observed first page and its lanes: rows are
     /// the page's rows (replacement, not append), pinned/unpinned lanes
     /// split by `pinnedPosition`, and the page's `next` cursor drives
-    /// `hasNextPage` (docs/storage.md; docs/
-    /// 03b-instruction-set.md §8).
+    /// `hasNextPage` (docs/storage.md; docs/interface.md).
     @Test func activateAppliesObservedFirstPageAndDerivedState() async {
         let firstPage = fixturePage(
             rows: [

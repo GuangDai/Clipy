@@ -196,18 +196,29 @@ struct ClipySettingsView: View {
         let request = retentionDraft.beginLoadRequest()
         hasLoadedRetentionConfiguration = false
         retentionConfigurationFailure = nil
+        let result: Result<HistoryRetentionConfiguration, any Error>
         do {
-            let configuration = try await viewState.retentionConfiguration()
-            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
+            result = .success(try await viewState.retentionConfiguration())
+        } catch {
+            result = .failure(error)
+        }
+        guard !Task.isCancelled else { return }
+        if retentionDraft.requiresReloadAfterApply(request) {
+            // A real Apply result arrived while this read was pending.
+            // Its snapshot may predate that write; replace this one read
+            // through the existing task instead of guessing its order.
+            retentionConfigurationRefreshGeneration += 1
+            return
+        }
+        guard retentionDraft.isCurrent(request) else { return }
+        switch result {
+        case .success(let configuration):
             retentionDraft.acceptLoaded(configuration, requestedAt: request)
             hasLoadedRetentionConfiguration = true
             retentionConfigurationFailure = nil
-        } catch let failure as HistoryFailure {
-            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
-            retentionConfigurationFailure = FailurePresentation.message(for: failure)
-        } catch {
-            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
-            retentionConfigurationFailure = RetentionSettingsCopy.readFailure
+        case .failure(let error):
+            retentionConfigurationFailure = (error as? HistoryFailure)
+                .map { FailurePresentation.message(for: $0) } ?? RetentionSettingsCopy.readFailure
         }
     }
 }

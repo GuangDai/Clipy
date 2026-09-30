@@ -1,7 +1,6 @@
 /// PreviewAccessProbe.swift — PLAY-TIER-1A decoder access-mode
 /// characterization for ContentPreview's ImageIO raster path
-/// (docs/reviews/2026-08-22-clipy-maccy-deep-review/
-/// 04-tdd-remediation-playbook.md §26 TIER row 1; that review's
+/// (docs/testing.md TIER row 1; that review's
 /// 09-tiered-storage-and-unbounded-history.md §5 and §12 DESIGN-TIER-16;
 /// docs/formats-preview.md).
 ///

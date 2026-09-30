@@ -64,8 +64,7 @@ struct MatchHighlightingTests {
 
     // MARK: - Plain pass-through
 
-    /// No ranges → the plain string, attribute-free (docs/
-    /// 03b-instruction-set.md §8: nothing matched, nothing marked).
+    /// No ranges → the plain string, attribute-free (docs/interface.md: nothing matched, nothing marked).
     @Test func noRangesYieldThePlainString() {
         let result = MatchHighlighting.highlighted(
             "Hello, Clipy",

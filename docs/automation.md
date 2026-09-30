@@ -26,7 +26,7 @@
 
 [`ClipboardHistoryIntents.swift`](../ClipyApp/Sources/AppIntents/ClipboardHistoryIntents.swift) 提供搜索、详情、复制、置顶、取消置顶和删除六种后台 intent。依赖在存储打开前通过应用入口注册，解析后使用已有 `AppIntentHistoryIngress` 和 connection-bound `ExternalHistoryFacade`，不在 intent 内另开 writer。
 
-实体是操作返回值，没有枚举历史的 `EntityQuery`。搜索与详情从权威 DTO 建立结果。复制 intent 通过同一 payload 读取和 MainActor PasteboardAdapter 写入系统剪贴板；其余 intent 分别只执行对应 Gateway 操作。外部删除 / 修订与应用缓存、选择和预览失效联动。
+实体是操作返回值，没有枚举历史的 `EntityQuery`。搜索与详情从权威 DTO 建立结果。复制 intent 通过同一 payload 读取和 MainActor PasteboardAdapter 写入系统剪贴板；在实际写入起点再次检查取消，读取后的取消不能覆盖原剪贴板；其余 intent 分别只执行对应 Gateway 操作。外部删除 / 修订与应用缓存、选择和预览失效联动。
 
 ## Local Automation 权限与传输
 

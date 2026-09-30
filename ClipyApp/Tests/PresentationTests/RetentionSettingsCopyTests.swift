@@ -18,9 +18,9 @@ struct RetentionSettingsCopyTests {
         return try #require(Bundle(url: url))
     }
 
-    @Test("receipt plurals preserve zero, one, many and localized grouping",
+    @Test("both receipt localizations preserve plurals and grouped counts",
           arguments: [0, 1, 2, 5_000])
-    func englishReceiptPlurals(_ count: Int) throws {
+    func receiptPlurals(_ count: Int) throws {
         let english = try bundle("en")
         let locale = Locale(identifier: "en_US")
         let digits = count == 5_000 ? "5,000" : String(count)
@@ -38,29 +38,23 @@ struct RetentionSettingsCopyTests {
         #expect(RetentionSettingsCopy.revisionsPruned(
             count, bundle: english, locale: locale
         ) == "\(digits) \(revision) pruned")
-    }
-
-    @Test("Chinese receipt feedback uses its own plural rules and punctuation",
-          arguments: [0, 1, 2, 5_000])
-    func chineseReceiptFeedback(_ count: Int) throws {
         let chinese = try bundle("zh-Hans")
-        let locale = Locale(identifier: "zh_Hans_CN")
-        let digits = count == 5_000 ? "5,000" : String(count)
+        let chineseLocale = Locale(identifier: "zh_Hans_CN")
         let retired = RetentionSettingsCopy.itemsRetired(
-            count, bundle: chinese, locale: locale
+            count, bundle: chinese, locale: chineseLocale
         )
         let pruned = RetentionSettingsCopy.revisionsPruned(
-            count, bundle: chinese, locale: locale
+            count, bundle: chinese, locale: chineseLocale
         )
         #expect(RetentionSettingsCopy.clearedItemsRemoved(
-            count, bundle: chinese, locale: locale
+            count, bundle: chinese, locale: chineseLocale
         ) == "已移除 \(digits) 个项目。")
         #expect(RetentionSettingsCopy.countLimitItemsRemoved(
-            count, bundle: chinese, locale: locale
+            count, bundle: chinese, locale: chineseLocale
         ) == "已完成。已移除 \(digits) 个项目。")
         #expect(RetentionSettingsCopy.appliedSummary(
             retiredPhrase: retired, prunedPhrase: pruned,
-            bundle: chinese, locale: locale
+            bundle: chinese, locale: chineseLocale
         ) == "已完成。已移除 \(digits) 个项目，已清理 \(digits) 个修订版本。")
     }
 

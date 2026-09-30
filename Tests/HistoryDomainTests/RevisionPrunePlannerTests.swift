@@ -24,62 +24,30 @@ private func revisionPolicies(maxRevisions: Int?, maxRevisionBytes: Int?) -> His
     ))
 }
 
-@Test func revisionRetentionCombinesThresholdsAndSkipsAMidListActive() {
-    let revisions = summaries([10, 20, 5, 100])
-    let cases: [(maxCount: Int?, maxBytes: Int?, expected: [UInt8])] = [
-        (nil, nil, []),
-        (4, 135, []),
-        (3, nil, [1]),
-        (2, 105, [1, 2]),
-        (nil, 15, [1, 2, 4]),
-        // The active alone exceeds this threshold; it still survives.
-        (nil, 4, [1, 2, 4]),
+@Test func revisionRetentionSelectsOnlyTheRequiredOldestInactivePrefix() {
+    let cases: [(bytes: [Int], active: Int?, count: Int?, limit: Int?, victims: [Int])] = [
+        ([10, 20, 5, 100], 2, nil, nil, []),
+        ([10, 20, 5, 100], 2, 4, 135, []),
+        ([10, 20, 5, 100], 2, 3, nil, [1]),
+        ([10, 20, 5, 100], 2, 2, 105, [1, 2]),
+        ([10, 20, 5, 100], 2, nil, 15, [1, 2, 4]),
+        // Active content alone can exceed the threshold and must still survive.
+        ([10, 20, 5, 100], 2, nil, 4, [1, 2, 4]),
+        // A large younger victim cannot replace the required oldest prefix.
+        ([10, 100, 5], 2, nil, 15, [1, 2]),
+        // Prefix selection continues past an active revision in the middle.
+        ([10, 10, 10, 10, 10], 2, 2, nil, [1, 2, 4]),
+        // The newly active append participates in both projected totals.
+        ([10, 20, 50], 2, 2, 55, [1, 2]),
+        ([], nil, 1, 1, []),
+        ([10], 0, 1, 1, []),
     ]
-    for scenario in cases {
+    for sample in cases {
+        let revisions = summaries(sample.bytes)
         let selected = planRevisionRetentionExpansion(
-            revisions: revisions, activeRevisionID: revisions[2].id,
-            policies: revisionPolicies(maxRevisions: scenario.maxCount, maxRevisionBytes: scenario.maxBytes)
+            revisions: revisions, activeRevisionID: sample.active.map { revisions[$0].id },
+            policies: revisionPolicies(maxRevisions: sample.count, maxRevisionBytes: sample.limit)
         )
-        #expect(selected == scenario.expected.map(pruneRevisionID))
+        #expect(selected == sample.victims.map { pruneRevisionID(UInt8($0)) })
     }
-}
-
-@Test func revisionRetentionSelectsTheOldestPrefixRatherThanAFewerVictimSubset() {
-    // Removing the 100-byte second revision alone would satisfy the byte
-    // threshold, but the oldest-inactive prefix must also remove the first.
-    let revisions = summaries([10, 100, 5])
-    let selected = planRevisionRetentionExpansion(
-        revisions: revisions, activeRevisionID: revisions[2].id,
-        policies: revisionPolicies(maxRevisions: nil, maxRevisionBytes: 15)
-    )
-    #expect(selected == [revisions[0].id, revisions[1].id])
-}
-
-@Test func revisionRetentionContinuesAfterAnActiveRevisionToMeetTheCountThreshold() {
-    let revisions = summaries([10, 10, 10, 10, 10])
-    let selected = planRevisionRetentionExpansion(
-        revisions: revisions, activeRevisionID: revisions[2].id,
-        policies: revisionPolicies(maxRevisions: 2, maxRevisionBytes: nil)
-    )
-    #expect(selected == [revisions[0].id, revisions[1].id, revisions[3].id])
-}
-
-@Test func revisionRetentionIncludesTheNewActiveInTheProjectedCountAndByteTotals() {
-    // Storage supplies the post-append metadata and makes the new revision
-    // active; the former active is now eligible for the same prefix walk.
-    let revisions = summaries([10, 20, 50])
-    let selected = planRevisionRetentionExpansion(
-        revisions: revisions, activeRevisionID: revisions[2].id,
-        policies: revisionPolicies(maxRevisions: 2, maxRevisionBytes: 55)
-    )
-    #expect(selected == [revisions[0].id, revisions[1].id])
-}
-
-@Test func revisionRetentionKeepsEmptyAndActiveOnlyLineages() {
-    let policies = revisionPolicies(maxRevisions: 1, maxRevisionBytes: 1)
-    #expect(planRevisionRetentionExpansion(revisions: [], activeRevisionID: nil, policies: policies).isEmpty)
-    let activeOnly = summaries([10])
-    #expect(planRevisionRetentionExpansion(
-        revisions: activeOnly, activeRevisionID: activeOnly[0].id, policies: policies
-    ).isEmpty)
 }

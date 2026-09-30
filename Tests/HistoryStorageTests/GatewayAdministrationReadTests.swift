@@ -199,6 +199,41 @@ struct GatewayAdministrationReadTests {
         #expect(try await Self.historyPosition(fixture) == 0)
     }
 
+    @Test("administration reads audit malformed grant chronology before rejecting the projection")
+    func malformedGrantChronologyIsNotPublished() async throws {
+        let fixture = try await Self.makeFixture()
+        let id = ExternalConnectionID(rawValue: Self.enrolledID)
+        try await fixture.authority.publishVerifiedLocalAutomationEnrollment(id, displayName: "Local automation")
+        try await fixture.authority.grantCapability(.organize, to: id)
+        try await fixture.authority.withTestDatabase { authority in
+            try authority.database.execute(
+                "UPDATE grants SET revokedAt = grantedAt - 1 WHERE connectionIDRaw = ?",
+                bindings: [.text(id.rawValue.uuidString)]
+            )
+        }
+        let before = try await Self.snapshot(fixture)
+        await #expect(throws: ExternalFailure.persistence(.invariantViolation)) {
+            _ = try await fixture.authority.connections()
+        }
+        await #expect(throws: ExternalFailure.persistence(.invariantViolation)) {
+            _ = try await fixture.authority.grants(for: id)
+        }
+        let after = try await Self.snapshot(fixture)
+        #expect(after.connections == before.connections)
+        #expect(after.grants == before.grants)
+        let failures = after.operations.suffix(2)
+        #expect(failures.map(\.operationKindRaw) == [
+            ExternalOperationKind.adminReadConnections.rawValue,
+            ExternalOperationKind.adminReadGrants.rawValue,
+        ])
+        #expect(failures.allSatisfy {
+            $0.outcomeRaw == ExternalOutcome.failed.rawValue
+                && $0.failureKindRaw == ExternalFailureKindRaw.persistence.rawValue
+                && $0.changePositionRaw == nil
+        })
+        #expect(try await Self.historyPosition(fixture) == 0)
+    }
+
     @Test("audit since equal to head is empty; above head is an audited denial")
     func auditReadValidatesAgainstFrozenHead() async throws {
         let fixture = try await Self.makeFixture()

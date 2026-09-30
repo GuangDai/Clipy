@@ -1,9 +1,9 @@
-/// X.5 targeted external authorization and audited denial entry points.
-/// Owning spec: `V2-05` §3.1/§5.1/§5.2 and D33–D35.
+/// Authoritative external authorization and audited denial entry points.
+/// Owning documentation: docs/automation.md.
 ///
-/// Both methods run as one non-suspending `HistoryAuthority` interval over a
-/// fresh operation-local context. The Gateway may use a prior snapshot as a
-/// fast-fail hint, but only this live targeted fetch is authoritative.
+/// Each operation runs as one non-suspending `HistoryAuthority` interval on
+/// its SQLite connection. The Gateway may reject from earlier facts, but only
+/// the current connection and its bounded grant rows authorize an operation.
 import Foundation
 import HistoryCore
 
@@ -502,25 +502,24 @@ private extension HistoryAuthority {
         in context: SQLiteDatabase
     ) throws -> Bool {
         let rawID = connection.rawValue
-        let requestedRaw = requestedCapability.rawValue
-        let impliedRaw = requestedCapability == .browse
-            ? ExternalCapability.manage.rawValue
-            : requestedRaw
-        // At most the exact capability plus manage-implies-browse may match;
-        // a third row proves a duplicate without loading unrelated grants.
+        let maximumRows = ExternalLimits.standard.maximumGrantRowsPerConnection
+        // Validate the complete, bounded grant state of this connection. A
+        // matching live grant must not hide an unknown capability, forbidden
+        // kind, or incoherent lifecycle in another grant of the same identity.
+        // The extra row distinguishes an impossible per-connection overflow.
         var rows: [GrantRow] = []
         do {
-            let statement = try context.prepare("SELECT \(GrantRow.columns) FROM grants WHERE connectionIDRaw = ? AND capabilityRaw IN (?, ?) LIMIT 3", bindings: [
-                .text(rawID.uuidString), .integer(Int64(requestedRaw)), .integer(Int64(impliedRaw))
+            let statement = try context.prepare("SELECT \(GrantRow.columns) FROM grants WHERE connectionIDRaw = ? LIMIT ?", bindings: [
+                .text(rawID.uuidString), .integer(Int64(maximumRows + 1))
             ])
+            defer { statement.finalize() }
             while try statement.step() { rows.append(try GrantRow(statement: statement)) }
         } catch is HistoryFailure {
             throw ExternalFailure.persistence(.corruptStoredValue)
         } catch {
             throw ExternalFailure.persistence(.transaction)
         }
-        guard rows.count
-                <= ExternalLimits.standard.maximumGrantRowsPerConnection else {
+        guard rows.count <= maximumRows else {
             throw ExternalFailure.persistence(.invariantViolation)
         }
 

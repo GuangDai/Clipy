@@ -105,4 +105,20 @@ struct AppIntentFailureTests {
         }
         #expect(auditAfter == auditBefore)
     }
+
+    @Test("pinning an absent item reports absence rather than suggesting retry")
+    func missingPinTargetIsItemUnavailable() async throws {
+        let support = try await AppIntentTestSupport.make(grants: [.manage])
+        let before = try await support.history.browse(.init(kind: .recent, limit: 1))
+        let intent = PinItemIntent(itemID: "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+            history: support.ingress, dependencyManager: support.manager)
+
+        await #expect(throws: ClipboardIntentFailure.itemUnavailable) {
+            _ = try await intent.perform()
+        }
+        #expect(try await support.lastAuditOperation() == .managePin)
+        let after = try await support.history.browse(.init(kind: .recent, limit: 1))
+        #expect(after.position == before.position)
+        #expect(after.rows == before.rows)
+    }
 }

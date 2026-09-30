@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run one dormant performance helper/proof suite when a future caller enables it.
+# Run one explicitly selected performance helper or measurement suite in CI.
 set -euo pipefail
 
 suite="${1:?usage: run_performance_proofs.sh <helpers|proofs> <log-dir>}"

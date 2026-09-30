@@ -1,6 +1,5 @@
 /// HistoryViewState.swift — the panel's single observable view-state holder
-/// over HistoryCore DTOs (docs/architecture.md; docs/roadmap/
-/// 05-presentationui.md). It never sees SwiftData, Domain state, or
+/// over HistoryCore DTOs (docs/architecture.md; docs/interface.md). It never sees SwiftData, Domain state, or
 /// fingerprints — only the public DTO seam.
 ///
 /// Observation is snapshot replacement, not deltas (docs/storage.md):
@@ -360,8 +359,7 @@ final class HistoryViewState {
 
     // MARK: - Derived panel state
 
-    /// Rows in the pinned lane (`pinnedPosition != nil`; docs/
-    /// 03b-instruction-set.md §8 — the position is 0-based, display adds one).
+    /// Rows in the pinned lane (`pinnedPosition != nil`; docs/interface.md — the position is 0-based, display adds one).
     var pinnedRows: [HistoryRow] {
         rows.filter { $0.pinnedPosition != nil }
     }
@@ -696,8 +694,7 @@ final class HistoryViewState {
 
     // MARK: - Interactions (docs/architecture.md; 03b §12)
 
-    /// Hands a paste request to the composition root (docs/
-    /// 01-architecture.md §5.6); the view state never touches NSPasteboard.
+    /// Hands a paste request to the composition root (docs/testing.md); the view state never touches NSPasteboard.
     func requestPaste(_ item: HistoryItemReference) {
         onPaste(item)
     }
@@ -1133,8 +1130,7 @@ final class HistoryViewState {
         return true
     }
 
-    /// Applies one observed page as a full replacement (docs/
-    /// 04-coherence.md §5) and resets the bounded navigation window.
+    /// Applies one observed page as a full replacement (docs/testing.md) and resets the bounded navigation window.
     /// The generation bump discards any in-flight
     /// one-shot append whose rows were captured before this replacement.
     private func applyObservedPage(

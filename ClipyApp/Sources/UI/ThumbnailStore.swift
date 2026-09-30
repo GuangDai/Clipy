@@ -18,8 +18,7 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
-/// Thumbnail fetch + bounded reference-exact retention (docs/
-/// 01-architecture.md §5.7; docs/storage.md). One instance per
+/// Thumbnail fetch + bounded reference-exact retention (docs/testing.md; docs/storage.md). One instance per
 /// browsing surface, owned by the panel's history list.
 @MainActor @Observable
 final class ThumbnailStore {
@@ -792,8 +791,7 @@ final class ThumbnailStore {
 
 #if DEBUG
 /// DEC-THUMB-CACHE G1 evidence sink (docs/testing.md G1;
-/// docs/reviews/2026-08-22-clipy-maccy-deep-review/
-/// 05-evidence-and-open-questions.md §6 "Completed thumbnail cache" row and
+/// docs/testing.md "Completed thumbnail cache" row and
 /// §5.5's reporting floors; 11 §4.7). Batch 39 contracted the store's
 /// counters to owner-test package scope; this sink keeps exactly that
 /// posture — package-only, DEBUG-only, never a product knob — while making
