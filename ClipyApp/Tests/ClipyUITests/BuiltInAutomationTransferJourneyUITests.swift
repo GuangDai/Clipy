@@ -15,7 +15,7 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipy-workflow-transfer-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let suffix = String(UUID().uuidString.prefix(8))
         let originalName = "Original transfer \(suffix)"
         let importedName = "Imported transfer \(suffix)"
@@ -23,7 +23,6 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
         let importedInput = "private transfer input \(suffix)"
         let clipboard = "clipboard unchanged by workflow transfer \(suffix)"
         let app = launch(directory: directory, clipboard: clipboard)
-        defer { app.terminate(); NSPasteboard.general.clearContents() }
         let manage = try openWorkflows(in: app)
         let name = app.textFields["clipy.workflow.name"]
         let source = app.textViews["clipy.workflow.source"]
@@ -268,12 +267,14 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
     @MainActor
     private func launch(directory: URL, clipboard: String) -> XCUIApplication {
         NSPasteboard.general.clearContents()
+        addTeardownBlock { @MainActor () async in NSPasteboard.general.clearContents() }
         XCTAssertTrue(NSPasteboard.general.setString(clipboard, forType: .string))
         let app = XCUIApplication()
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.sqlite").path
+        addTeardownBlock { @MainActor () async in app.terminate() }
         app.launch()
         return app
     }

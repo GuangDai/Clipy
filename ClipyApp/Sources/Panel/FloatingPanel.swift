@@ -201,17 +201,10 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             let unmodified = event.modifierFlags.intersection([
                 .command, .control, .option, .shift,
             ]).isEmpty
-#if DEBUG
-            let responderClass = responder.map { String(reflecting: type(of: $0)) } ?? "nil"
-            recordPreviewLifecycle("native-main-escape-entry responder_class=\(responderClass) responder_is_window=\(responder === self) responder_is_host=\(responder === contentView) unmodified=\(unmodified) marked_text=\(hasMarkedText) information=\(previewState.isInformationPresented) confirmation=\(previewState.isFileConfirmationPresented) attached_sheet=\(attachedSheet != nil)")
-#endif
             if unmodified, previewState.isInformationPresented,
                !hasMarkedText, !previewState.isFileConfirmationPresented,
                attachedSheet == nil {
                 previewState.isInformationPresented = false
-#if DEBUG
-                recordPreviewLifecycle("native-main-escape-information-dismissed")
-#endif
                 return
             }
         }

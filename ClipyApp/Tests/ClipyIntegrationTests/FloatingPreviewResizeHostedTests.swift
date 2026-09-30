@@ -111,6 +111,24 @@ struct FloatingPreviewResizeHostedTests {
         try #require(await ComposedSupport.waitFor { preview.attachedSheet == nil })
         #expect(!preview.isPresented && !preview.isVisible)
         #expect(main.childWindows?.contains(preview) != true)
+
+        // A close from the real sheet-completion callback also wins over
+        // geometry queued by didEndSheet in the same native exit pass.
+        preview.present(beside: main)
+        var sheetCompletionObserved = false
+        alert.beginSheetModal(for: preview) { _ in
+            preview.dismiss()
+            sheetCompletionObserved = true
+        }
+        try #require(await ComposedSupport.waitFor { preview.attachedSheet === alert.window })
+        preview.fitToContent(height: 112)
+        preview.endSheet(alert.window)
+        try #require(await ComposedSupport.waitFor {
+            sheetCompletionObserved && preview.attachedSheet == nil
+        })
+        #expect(owner.previewState.isOpen)
+        #expect(!preview.isPresented && !preview.isVisible)
+        #expect(main.childWindows?.contains(preview) != true)
     }
 
     @Test(arguments: [false, true])

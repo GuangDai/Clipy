@@ -293,7 +293,6 @@ struct HistoryPreviewView: View {
             requestRetry()
         }
         .onDisappear {
-            traceFilePreview("view-disappear")
             if informationItem != nil {
                 previewState.isInformationPresented = false
                 informationItem = nil
@@ -309,14 +308,11 @@ struct HistoryPreviewView: View {
             set: { presented in setFileConfirmationPresented(presented) }
         )) {
             Button(PreviewCopy.text("Load File")) {
-                traceFilePreview("confirm-action")
                 guard loader.requestedItem == targetItem else { return }
                 loader.confirmFilePreview()
-                traceFilePreview("confirm-started")
             }
             .accessibilityIdentifier("clipy.preview.file.confirm")
             Button(PreviewCopy.text("Cancel"), role: .cancel) {
-                traceFilePreview("cancel-action")
                 loader.cancelFilePreviewConfirmation()
             }
         } message: {
@@ -331,19 +327,6 @@ struct HistoryPreviewView: View {
     private func setFileConfirmationPresented(_ presented: Bool) {
         fileConfirmationPresented = presented
         previewState.isFileConfirmationPresented = presented
-        traceFilePreview(presented ? "confirmation-on" : "confirmation-off")
-    }
-
-    private func traceFilePreview(_ event: String) {
-#if DEBUG
-        let phase = switch loader.phase {
-        case .loading: "loading"
-        case .content: "content"
-        case .failed: "failed"
-        case .unsupported: "unsupported"
-        }
-        recordPreviewLifecycle("view-\(event) open=\(previewState.isOpen) local_confirmation=\(fileConfirmationPresented) confirmation=\(previewState.isFileConfirmationPresented) pointer_mode=\(previewState.isPointerInteractionActive) phase=\(phase)")
-#endif
     }
 
     /// Return is the same reserved copy command as the history list. Keeping

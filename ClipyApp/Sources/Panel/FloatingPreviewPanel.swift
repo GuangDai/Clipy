@@ -109,11 +109,6 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
                     surfaces.insert(.mainPanel)
                 }
             }
-#if DEBUG
-            if self.attachedSheet != nil || self.parent?.attachedSheet != nil {
-                self.recordNativeLifecycle("pointer-native-sheet-veto")
-            }
-#endif
             return surfaces
         }
         rootView.appDelegate.previewState.pointerIsBetweenSurfaces = { [weak self] in
@@ -138,16 +133,9 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
             let unmodified = event.modifierFlags.intersection([
                 .command, .control, .option, .shift,
             ]).isEmpty
-#if DEBUG
-            let responderClass = responder.map { String(reflecting: type(of: $0)) } ?? "nil"
-            recordPreviewLifecycle("native-preview-escape-entry responder_class=\(responderClass) responder_is_window=\(responder === self) responder_is_host=\(responder === contentView) unmodified=\(unmodified) marked_text=\(hasMarkedText) information=\(previewState.isInformationPresented) confirmation=\(previewState.isFileConfirmationPresented) attached_sheet=\(attachedSheet != nil) parent_sheet=\(parent?.attachedSheet != nil)")
-#endif
             if unmodified, !hasMarkedText, !previewState.isFileConfirmationPresented,
                attachedSheet == nil, parent?.attachedSheet == nil {
                 onExitCommand()
-#if DEBUG
-                recordPreviewLifecycle("native-preview-escape-handled")
-#endif
                 return
             }
         }
@@ -164,17 +152,11 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 
     override func becomeKey() {
         super.becomeKey()
-#if DEBUG
-        recordNativeLifecycle("became-key")
-#endif
         (parent as? FloatingPanel)?.previewDidBecomeKey()
     }
 
     override func resignKey() {
         super.resignKey()
-#if DEBUG
-        recordNativeLifecycle("resigned-key")
-#endif
         (parent as? FloatingPanel)?.previewDidResignKey()
     }
 
@@ -188,9 +170,6 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         // native alert is closing. Preserve the latest demand without moving
         // its owner until AppKit retires the sheet; didEndSheet applies it.
         guard attachedSheet == nil else {
-#if DEBUG
-            recordNativeLifecycle("present-deferred-for-sheet")
-#endif
             return
         }
         // Adding an ordered child can make it visible synchronously. Retain
@@ -213,9 +192,6 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         )
         self.placement = placement.placement
         if frame != placement.frame {
-#if DEBUG
-            recordNativeLifecycle("present-frame-change")
-#endif
             setFrame(placement.frame, display: isPresented)
         }
         publishDisplayedGeometry()
@@ -223,35 +199,27 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
             mainPanel.addChildWindow(self, ordered: .above)
         }
         if !isPresented {
-#if DEBUG
-            recordNativeLifecycle("present-arrival")
-#endif
             motionPresentation.play(duration: presentationDuration(screen ?? mainPanel.screen))
             orderFrontRegardless()
             isPresented = true
         } else if shouldRestoreOrdering {
             // Native sheet ordering may hide an intended-visible owner.
             // Restore ordering without replaying its arrival animation.
-#if DEBUG
-            recordNativeLifecycle("present-invisible-reorder")
-#endif
             motionPresentation.cancel()
             orderFrontRegardless()
         }
     }
 
-    func windowWillBeginSheet(_ notification: Notification) {
-#if DEBUG
-        recordNativeLifecycle("sheet-will-begin")
-#endif
-    }
-
     func windowDidEndSheet(_ notification: Notification) {
-#if DEBUG
-        recordNativeLifecycle("sheet-did-end")
-#endif
-        guard isPresented, previewState.isOpen, let parent, parent.isVisible else { return }
-        present(beside: parent)
+        // Return from AppKit's sheet-end callback before applying content
+        // measured while its owner was modal. Recheck the current intent;
+        // a close must win over this deferred fit.
+        Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self, self.isPresented, self.previewState.isOpen,
+                  let parent = self.parent, parent.isVisible else { return }
+            self.present(beside: parent)
+        }
     }
 
     /// SwiftUI owns the drag gesture; AppKit supplies screen-space pointer
@@ -324,9 +292,6 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     /// Orders the pane out and detaches it from its parent; the instance is
     /// reused on the next `present(beside:)`.
     func dismiss() {
-#if DEBUG
-        recordNativeLifecycle("dismiss")
-#endif
         motionPresentation.cancel()
         // Explicit retirement wins over modal ownership. Mark the intent
         // closed before ending the sheet so didEndSheet cannot resurrect it.
@@ -351,11 +316,6 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         previewState.endPreviewResize()
     }
 
-#if DEBUG
-    private func recordNativeLifecycle(_ event: String) {
-        recordPreviewLifecycle("native-\(event) presented=\(isPresented) visible=\(isVisible) key=\(isKeyWindow) attached_sheet=\(attachedSheet != nil) parent_sheet=\(parent?.attachedSheet != nil) modal=\(NSApp.modalWindow != nil) open=\(previewState.isOpen) confirmation=\(previewState.isFileConfirmationPresented) frame_height=\(frame.height) latest_height=\(contentHeight ?? -1)")
-    }
-#endif
 }
 
 /// The floating preview's content root. Reads the app delegate's
@@ -389,19 +349,10 @@ struct FloatingPreviewRootView: View {
     @MainActor
     static func handleExitCommand(appDelegate: AppDelegate) {
         if appDelegate.previewState.isInformationPresented {
-#if DEBUG
-            recordPreviewLifecycle("preview-exit-information")
-#endif
             appDelegate.previewState.isInformationPresented = false
         } else if appDelegate.panelSurfaceState?.quickLookReference != nil {
-#if DEBUG
-            recordPreviewLifecycle("preview-exit-quick-look")
-#endif
             appDelegate.panelSurfaceState?.quickLookReference = nil
         } else {
-#if DEBUG
-            recordPreviewLifecycle("preview-exit-history-panel")
-#endif
             appDelegate.closePanel()
         }
     }

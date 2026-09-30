@@ -15,10 +15,10 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipy-visual-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        defer { pasteboard.clearContents() }
+        addTeardownBlock { @MainActor () async in pasteboard.clearContents() }
         XCTAssertTrue(pasteboard.setString(
             "Reading notes\nA short paragraph with a second line for the clipboard list.", forType: .string
         ))
@@ -27,20 +27,8 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.sqlite").path
-        let lifecycle = directory.appendingPathComponent("preview-lifecycle.log")
-        try Data().write(to: lifecycle)
-        app.launchEnvironment["CLIPY_FILE_PREVIEW_LIFECYCLE_PATH"] = lifecycle.path
+        addTeardownBlock { @MainActor () async in app.terminate() }
         app.launch()
-        defer {
-            app.terminate()
-            if let events = try? String(contentsOf: lifecycle, encoding: .utf8), !events.isEmpty {
-                print("CLIPY_VISUAL_PREVIEW_LIFECYCLE\n\(events)")
-                let attachment = XCTAttachment(string: events)
-                attachment.name = "preview-lifecycle.log"
-                attachment.lifetime = .keepAlways
-                add(attachment)
-            }
-        }
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
         let rows = panel.descendants(matching: .any).matching(NSPredicate(

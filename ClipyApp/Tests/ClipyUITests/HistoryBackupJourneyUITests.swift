@@ -12,16 +12,17 @@ final class HistoryBackupJourneyUITests: XCTestCase {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("clipy-backup-ui-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         NSPasteboard.general.clearContents()
+        addTeardownBlock { @MainActor () async in NSPasteboard.general.clearContents() }
         XCTAssertTrue(NSPasteboard.general.setString("backup-test", forType: .string))
         let app = XCUIApplication()
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = root.appendingPathComponent("history.sqlite").path
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
+        addTeardownBlock { @MainActor () async in app.terminate() }
         app.launch()
-        defer { app.terminate() }
         let row = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "clipy.history.row."
         )).firstMatch
