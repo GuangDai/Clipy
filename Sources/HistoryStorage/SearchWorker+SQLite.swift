@@ -730,17 +730,18 @@ private final class SQLiteSearchRows {
                 let expressionSQL = expressionPredicate?.sql ?? "1"
                 let expressionBindings = expressionPredicate?.bindings ?? []
                 let candidateSQL: String
-                if candidateExpression == nil {
-                    candidateSQL = "1"
-                } else if prefersSparseCandidates {
+                let candidateBindings: [SQLiteValue]
+                if let candidateExpression, prefersSparseCandidates {
                     candidateSQL = "history_items.rowid IN (SELECT rowid FROM history_search WHERE history_search MATCH ?)"
+                    candidateBindings = [.text(candidateExpression)]
                 } else {
-                    // Dense hits walk the ordering index and probe each row's
-                    // posting membership, stopping after page/lookahead. A
-                    // full candidate IN set would sort the whole dense corpus.
-                    candidateSQL = "EXISTS (SELECT 1 FROM history_search WHERE rowid = history_items.rowid AND history_search MATCH ?)"
+                    // Dense postings cost more to probe for each ordered row
+                    // than the bounded native matcher. Walk the ordering index
+                    // directly; native evaluation still confirms every hit,
+                    // its presentation and the cursor anchor (V2-09 §4).
+                    candidateSQL = "1"
+                    candidateBindings = []
                 }
-                let candidateBindings = candidateExpression.map { [SQLiteValue.text($0)] } ?? []
                 // V2-09 §4: sparse candidates need a temporary ordering
                 // sort. Keep full bodies out of its records: otherwise up
                 // to 4,096 bodies are copied before the first bounded batch

@@ -30,11 +30,11 @@ source-id:com.apple.TextEdit NOT draft
 
 ## 存储搜索路径
 
-[`SearchWorker+SQLite.swift`](../Sources/HistoryStorage/SearchWorker+SQLite.swift) 为每次请求建立自己的只读连接和事务，在事务中捕获 `ChangePosition`。每批最多 32 行、1 MiB 投影 UTF-8 内容；批次之间主动让出执行权并检查取消。请求不持有全库搜索语料、完整匹配 ID 数组或历史载荷。
+[`SearchWorker+SQLite.swift`](../Sources/HistoryStorage/SearchWorker+SQLite.swift) 为每次请求建立自己的只读连接和事务，在事务中捕获 `ChangePosition`。每批最多 32 行、1 MiB 投影 UTF-8 内容；有序页面首批只取页面与相邻命中所需行，连续密集命中时继续按剩余需求收紧，未命中后恢复普通批量。批次之间主动让出执行权并检查取消。标题、正文从严格校验的 SQLite UTF-8 BLOB 同步复制为拥有自身字节的 String，正文 SELECT 在请求内复用。请求不持有全库搜索语料、完整匹配 ID 数组或历史载荷。
 
 [`SQLiteSearchIndex.swift`](../Sources/HistoryStorage/SQLiteSearchIndex.swift) 维护 contentless FTS5 postings。它对标准化 Unicode scalar 的一至三个连续值进行可逆整数编码，提供必要条件候选集；这些值不是内容哈希，也不决定是否真的命中。exact 最多抽取 16 个必要 gram 进行 AND；fuzzy 对有限的查询 scalar 做 OR；简单字面正则可用必要文本，复杂正则回到有界批次扫描。
 
-候选稀疏时从 postings 读取候选，密集时按目标顺序遍历并检查成员。选择稀疏路径只读有限 postings 输出，超过 4,096 个候选便视为密集；不通过完整词汇频次扫描决定路径。FTS 仅减少需要解码和匹配的行，最终匹配仍遵循 Foundation / Fuse 语义。metadata-only 表达式不读取无关搜索正文。
+候选稀疏时从 postings 读取候选；密集时直接按目标顺序读取并执行实际匹配，不再为每行重复查询 FTS 成员关系。选择稀疏路径只读有限 postings 输出，超过 4,096 个候选便视为密集；不通过完整词汇频次扫描决定路径。FTS 仅减少需要解码和匹配的行，最终匹配仍遵循 Foundation / Fuse 语义。metadata-only 表达式不读取无关搜索正文。
 
 ## 复杂度与资源限制
 

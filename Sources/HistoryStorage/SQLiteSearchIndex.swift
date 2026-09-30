@@ -64,7 +64,7 @@ internal enum SQLiteSearchIndex {
     /// mode computes doc counts by traversing the entire posting list, even
     /// for a SELECT 1 existence check, so it is not used on this read path.
     /// Sparse searches visit only candidate items; dense ordered searches
-    /// probe membership while walking recent rows.
+    /// walk recent rows directly and use the native matcher to confirm hits.
     internal static func prefersSparseCandidates(expression: String, in database: SQLiteDatabase) throws -> Bool {
         if expression.contains(" OR ") {
             // Count actual union outputs, including overlap only once. OR

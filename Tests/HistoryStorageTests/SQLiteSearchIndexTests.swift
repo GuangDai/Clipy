@@ -133,7 +133,7 @@ struct SQLiteSearchIndexTests {
         #expect(try await worker.unindexedScore(term: "abcdef", corpus: corpus) == floors[2])
     }
 
-    @Test func sparseCandidateThresholdUsesANDSubsetsAndActualORUnion() async throws {
+    @Test func sparseCandidateThresholdAndDensePagesPreserveNativeMatching() async throws {
         let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
             persistence: .temporary, initialMaximumUnpinnedItems: 5_000
         ))
@@ -141,7 +141,7 @@ struct SQLiteSearchIndexTests {
             let boundary = index < 4_096 ? "bnd" : "lst"
             let half = index < 2_048 ? "lft" : (index < 4_096 ? "rgt" : "")
             return WSSupport.textCapture(
-                "record\(index)\nall \(boundary) \(half)",
+                "all record\(index)\n\(boundary) \(half)",
                 observedAt: Date(timeIntervalSinceReferenceDate: Double(index))
             )
         }
@@ -168,6 +168,86 @@ struct SQLiteSearchIndexTests {
             try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: "aZZZZZZZ", in: authority.database)
         }
         #expect(floor == 0.875)
+
+        // Reuse the real 4,097-posting fixture above. Dense reads encounter
+        // non-candidates at both ends of explicit order and in the pin lane;
+        // the native matcher must reject them and retain exact presentation.
+        let leading = try await history.browse(.init(kind: .recent, limit: 7))
+        let pinned = try #require(leading.rows.last?.item.id)
+        _ = try await history.perform(.placePinned(pinned, at: .last))
+        let newestMiss = try await capture("zzz0", in: history, date: 10_000)
+        _ = try await capture("zzz1", in: history, date: -1)
+        _ = try await history.perform(.placePinned(newestMiss.id, at: .first))
+        try await assertDenseNativePages(in: history)
+    }
+
+    private func assertDenseNativePages(in history: SQLiteHistory) async throws {
+        let queries: [(String, SearchMode)] = [("all", .exact), ("all", .fuzzy), ("alX", .fuzzy)]
+        let expressions = try queries.map { try #require(SQLiteSearchIndex.matchExpression(term: $0.0, mode: $0.1)) }
+        let sparse = try await history.authority.withTestDatabase { authority in
+            try expressions.map { try SQLiteSearchIndex.prefersSparseCandidates(expression: $0, in: authority.database) }
+        }
+        #expect(sparse == [false, false, false])
+        let worker = SearchWorker()
+        for sortOrder in HistorySortOrder.allCases {
+            // The bounded oracle includes nearby misses and more matches
+            // than these pages need. Every older fixture title starts with
+            // the same "all", so it cannot improve the fuzzy floor score.
+            let recent = try await history.browse(.init(kind: .recent, limit: 40, sortOrder: sortOrder))
+            let bodies = try await history.authority.withTestDatabase { authority in
+                let first = try #require(recent.rows.first)
+                let statement = try authority.database.prepare(
+                    "SELECT searchBodyUTF8 FROM history_items WHERE id = ?",
+                    bindings: [.text(first.item.id.rawValue.uuidString)]
+                )
+                defer { statement.finalize() }
+                var result: [HistoryItemID: String] = [:]
+                for (index, row) in recent.rows.enumerated() {
+                    if index > 0 { try statement.reset(bindings: [.text(row.item.id.rawValue.uuidString)]) }
+                    try #require(try statement.step())
+                    result[row.item.id] = try statement.utf8Blob(
+                        at: 0, maximumByteCount: HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes
+                    )
+                }
+                return result
+            }
+            let corpusRows = try recent.rows.map { row in
+                let body = try #require(bodies[row.item.id])
+                return SearchCorpusRow(
+                    id: row.item.id, contentVersion: row.item.contentVersion, title: row.title, searchBody: body,
+                    debugTitleUTF8Bytes: row.title.utf8.count, debugSearchBodyUTF8Bytes: body.utf8.count,
+                    typeIdentifiers: row.typeIdentifiers, lastCopiedAt: row.lastCopiedAt, copyCount: row.copyCount,
+                    lastSource: row.lastSource, pinOrdinal: row.pinnedPosition.map { PinOrdinal(rawValue: $0) },
+                    sourceCount: row.sourceCount
+                )
+            }
+            let corpus = SearchCorpusSnapshot(
+                position: recent.position, rows: corpusRows,
+                debugTrace: SearchDebugTrace(id: UUID(), startedAt: ContinuousClock.now)
+            )
+            for (text, mode) in queries {
+                let kind = HistoryBrowseKind.search(text: text, mode: mode)
+                let oracle = try await worker.page(
+                    .init(kind: kind, limit: 30, sortOrder: sortOrder), in: corpus,
+                    continuationAnchor: nil, processMarker: UUID()
+                )
+                try #require(oracle.rows.count == 30)
+                #expect(oracle.rows.allSatisfy { !$0.title.hasPrefix("zzz") && $0.search?.matchedRanges.isEmpty == false })
+                let first = try await history.browse(.init(kind: kind, limit: 7, sortOrder: sortOrder))
+                #expect(first.rows == Array(oracle.rows.prefix(7)))
+                #expect(first.previous == nil)
+                let forward = try #require(first.next)
+                let second = try await history.browse(.init(kind: kind, limit: 7, cursor: forward, sortOrder: sortOrder))
+                #expect(second.rows == Array(oracle.rows.dropFirst(7).prefix(7)))
+                let backward = try #require(second.previous)
+                let restored = try await history.browse(.init(kind: kind, limit: 7, cursor: backward, sortOrder: sortOrder))
+                #expect(restored.rows == first.rows)
+                let target = oracle.rows[9].item.id
+                let located = try await history.browse(.init(kind: kind, limit: 7, sortOrder: sortOrder, startAround: target))
+                #expect(located.rows == Array(oracle.rows.dropFirst(9).prefix(7)))
+                #expect(located.previous != nil && located.next != nil)
+            }
+        }
     }
 
     @Test func individuallyDenseGramsCanHaveAnEmptyOrSparseIntersection() async throws {

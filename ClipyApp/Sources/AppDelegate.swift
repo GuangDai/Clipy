@@ -465,6 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isTerminating = true
         closePanel()
         hideFloatingPreviewPane()
+        releasePanelWindows()
         stopSummonShortcut()
         panelContentFitTask?.cancel()
         panelContentFitTask = nil
@@ -726,7 +727,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isPanelKeepOpenActive.toggle()
     }
 
-    /// Creates the panel lazily, positions it, and orders it front as key
+    /// Reuses the prepared panel (or creates it before store readiness),
+    /// positions it, and orders it front as key
     /// window. The view state's observation is re-activated per open (the
     /// panel's close deactivates it — browsing state is fresh per summon).
     private func openPanel(at mode: PopupPositionMode) {
@@ -735,36 +737,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !interactionSettings.remembersSearch {
             composition?.viewState.clearSearch()
         }
-        if panel == nil {
-            panel = FloatingPanel(
-                rootView: PanelRootView(appDelegate: self),
-                previewState: previewState,
-                isSelectionSubmissionEnabled: { [weak self] in
-                    guard let self,
-                          let composition = self.composition,
-                          let panelSurfaceState = self.panelSurfaceState,
-                          panelSurfaceState.isAtListRoot
-                    else { return false }
-                    return panelSurfaceState.selectedReference(
-                        in: composition.viewState.displayedRows
-                    ) != nil
-                },
-                onSubmitSelection: { [weak self] in
-                    self?.submitPanelSelection()
-                },
-                isKeepOpenActive: { [weak self] in
-                    self?.isPanelKeepOpenActive ?? false
-                },
-                onDidChangeScreen: { [weak self] in
-                    self?.hideFloatingPreviewPane()
-                },
-                onFrameChanged: { [weak self] in
-                    self?.followMainPanelFrameWithPreview()
-                },
-                presentationDuration: { AppMotionSettings.duration(for: $0) },
-                onClosed: { [weak self] in self?.panelDidClose() }
-            )
-        }
+        ensurePanelWindow()
         if let composition {
             composition.viewState.activate(restoring:
                 composition.historyBrowsingPreferences.readingItemID(for: .panel))
@@ -776,6 +749,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let composition {
             panelSurfaceState?.beginSession(rows: composition.viewState.rows)
         }
+    }
+
+    /// Construct the reusable hosting trees while the graph is ready and
+    /// browsing is inactive. No window is ordered, laid out explicitly, or
+    /// assigned a preview target; the next summon still owns activation.
+    private func preparePanelWindows() {
+        guard !isTerminating, composition != nil else { return }
+        ensurePanelWindow()
+        ensureFloatingPreviewWindow()
+    }
+
+    private func ensurePanelWindow() {
+        guard !isTerminating, panel == nil else { return }
+        panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: self),
+            previewState: previewState,
+            isSelectionSubmissionEnabled: { [weak self] in
+                guard let self,
+                      let composition = self.composition,
+                      let panelSurfaceState = self.panelSurfaceState,
+                      panelSurfaceState.isAtListRoot
+                else { return false }
+                return panelSurfaceState.selectedReference(
+                    in: composition.viewState.displayedRows
+                ) != nil
+            },
+            onSubmitSelection: { [weak self] in
+                self?.submitPanelSelection()
+            },
+            isKeepOpenActive: { [weak self] in
+                self?.isPanelKeepOpenActive ?? false
+            },
+            onDidChangeScreen: { [weak self] in
+                self?.hideFloatingPreviewPane()
+            },
+            onFrameChanged: { [weak self] in
+                self?.followMainPanelFrameWithPreview()
+            },
+            presentationDuration: { AppMotionSettings.duration(for: $0) },
+            onClosed: { [weak self] in self?.panelDidClose() }
+        )
+    }
+
+    private func ensureFloatingPreviewWindow() {
+        guard !isTerminating, floatingPreviewPanel == nil else { return }
+        floatingPreviewPanel = FloatingPreviewPanel(
+            rootView: FloatingPreviewRootView(appDelegate: self),
+            presentationDuration: { AppMotionSettings.duration(for: $0) }
+        )
     }
 
     private func submitPanelSelection() {
@@ -957,12 +979,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 prepareFloatingPreview(for: nil)
                 floatingPreviewLoader = makePreviewLoader(for: item, viewState: composition.viewState)
             }
-            if floatingPreviewPanel == nil {
-                floatingPreviewPanel = FloatingPreviewPanel(
-                    rootView: FloatingPreviewRootView(appDelegate: self),
-                    presentationDuration: { AppMotionSettings.duration(for: $0) }
-                )
-            }
+            ensureFloatingPreviewWindow()
             updatePreviewHeightCeiling()
             floatingPreviewPanel?.present(beside: panel)
         case .hide:
@@ -979,6 +996,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         floatingPreviewFitTask?.cancel()
         floatingPreviewFitTask = nil
         floatingPreviewPanel?.dismiss()
+    }
+
+    private func releasePanelWindows() {
+        // Hosting roots retain this app owner. Retire them, including roots
+        // prepared but never displayed, when their graph lifetime ends.
+        floatingPreviewPanel?.contentView = nil
+        floatingPreviewPanel = nil
+        panel?.contentView = nil
+        panel = nil
+        previewState.pointerSurfacesContainingPointer = nil
+        previewState.pointerIsBetweenSurfaces = nil
+        settingsOpenOperation = nil
     }
 
     /// Bookkeeping after every panel close: reset the keep-open pin (it is
@@ -1127,6 +1156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if composition == nil {
                 installComposition(opened)
+                preparePanelWindows()
 #if CLIPY_UDS_F0
                 startUnixSocketF0ListenerIfRequested()
 #endif
@@ -1295,7 +1325,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Hosted tests substitute only the real composition's system boundaries,
     /// then install it through the same callback wiring as production.
     func installCompositionForTesting(_ composition: AppComposition) {
+        if let installed = self.composition, installed !== composition {
+            closePanel()
+            hideFloatingPreviewPane()
+            releasePanelWindows()
+        }
         installComposition(composition)
+    }
+
+    /// Opts a disposable hosted owner into the same preparation used after
+    /// production store open. Ordinary hosted fixtures retain lazy windows.
+    func preparePanelWindowsForTesting() {
+        preparePanelWindows()
     }
 
     /// Hosted panel-lifecycle entry through the real AppDelegate owner. The
@@ -1316,6 +1357,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     var panelForTesting: FloatingPanel? { panel }
+    var floatingPreviewPanelForTesting: FloatingPreviewPanel? { floatingPreviewPanel }
 
     func waitForPanelContentFitForTesting() async {
         await panelContentFitTask?.value

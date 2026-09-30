@@ -28,7 +28,7 @@
 
 图片使用 ImageIO 缩放并立即物化像素，输出无 `CGImage` / `NSImage`。多帧 / 多页输入显示选定的首张图，同时保留数量用于披露。富文本解析关注正文、字符、段落与声明编码，不在预览里建立网页浏览器或完整富文档执行环境。RTF 的已知字体表可以声明编码；未知跳过段和未使用的 ANSI 备用段不能修改后续正文的字体事实。原始载荷始终能独立读取，预览失败不删除或改变内容。
 
-解析、文本分段和前几段 native 字体准备都在 detached worker 执行；renderer actor 只管理资源计数与 native 图片槽。UTF-16 decoder 通过只读 code unit sequence 处理源 Data，不再创建文档大小的中间数组，仍拒绝奇数字节和未配对 surrogate。
+解析、文本分段和前几段 native 字体准备都在 detached worker 执行；renderer actor 只管理资源计数及图片、文字槽。文本分段、超长组合字素拆分和分组处理中检查取消；RTF 单个 UTF-16 unit 直接追加，普通字符段不再先创建中间数组。UTF-16 decoder 通过只读 code unit sequence 处理源 Data，不再创建文档大小的中间数组，仍拒绝奇数字节和未配对 surrogate。
 
 [`PreviewTextConfiguration.swift`](../Sources/ContentPreview/PreviewTextConfiguration.swift) 默认将 native 布局工作分成 512 个 UTF-16 unit、24 次换行以内的段落单元，短单行段落最多八个成组。超长组合字素可按 scalar 分段，substring 共享原始文本；分组按 scalar 查换行，避免每个小段反复遍历剩余的大组合簇。分段不丢失、归一化或修改字节，也不限制整段内容复制。
 
@@ -40,7 +40,11 @@
 
 应用的 [`ThumbnailStore.swift`](../ClipyApp/Sources/UI/ThumbnailStore.swift) 每个浏览界面默认最多 500 个完成条目与 64 MiB 解码像素，同时包含 negative 结果。有限 recency 用于淘汰较冷条目；SwiftUI render 读取不更新缓存状态。显示中的 raster 与系统可回收冷缓存分开，缓存失效后重建结果，不回退到错误版本。来源图标由 [`SourceIconStore.swift`](../ClipyApp/Sources/UI/SourceIconStore.swift) 单独维护有限缓存。
 
+最后一个显示同一缩略图的行消失时，取消它尚未完成的请求；其他行仍使用的请求继续执行。取消后的迟到结果保留真实完成记录，但不能填入重新出现的行。完成的派生像素仍按原有冷缓存策略保留。
+
 ## 显式本地文件预览
+
+文件读取确认期间，预览保留其窗口，鼠标进入确认框不会触发离开两个浏览窗口后的隐藏。取消、目标失效或关闭清除确认状态；确认本身仍是读取文件的前置条件。
 
 普通 file URL 预览只显示复制的地址。用户明确确认“读取文件”后，应用层 [`LocalFilePreviewLoader.swift`](../ClipyApp/Sources/Preview/LocalFilePreviewLoader.swift) 才访问其目标，结果不写入 History。读取最多 64 MiB，按 64 KiB 分块检查取消，并比较打开前后 descriptor 的大小与修改 / 状态时间。
 

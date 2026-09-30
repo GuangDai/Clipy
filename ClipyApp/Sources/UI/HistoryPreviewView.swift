@@ -254,7 +254,7 @@ struct HistoryPreviewView: View {
                 previewState.isInformationPresented = false
                 self.informationItem = nil
             }
-            fileConfirmationPresented = false
+            setFileConfirmationPresented(false)
             retryItem = nil
             pinRequest = nil
             pinFailure = nil
@@ -285,7 +285,7 @@ struct HistoryPreviewView: View {
                 informationItem = nil
             }
             loader.purgePreview(purge.scope, isPinned: observedRow?.pinnedPosition != nil)
-            if loader.fileLoadConfirmation == nil { fileConfirmationPresented = false }
+            if loader.fileLoadConfirmation == nil { setFileConfirmationPresented(false) }
         }
         // While the main panel has keyboard focus, it republishes ⌘R
         // through the pane state, applied exactly like the Retry button.
@@ -297,13 +297,15 @@ struct HistoryPreviewView: View {
                 previewState.isInformationPresented = false
                 informationItem = nil
             }
-            fileConfirmationPresented = false
+            setFileConfirmationPresented(false)
             retryItem = nil
             pinRequest = nil
             pinFailure = nil
             loader.clear()
         }
-        .alert(PreviewCopy.text("Load File Contents?"), isPresented: $fileConfirmationPresented) {
+        .alert(PreviewCopy.text("Load File Contents?"), isPresented: Binding(
+            get: { fileConfirmationPresented }, set: setFileConfirmationPresented
+        )) {
             Button(PreviewCopy.text("Load File")) {
                 guard loader.requestedItem == targetItem else { return }
                 loader.confirmFilePreview()
@@ -319,6 +321,11 @@ struct HistoryPreviewView: View {
         .background { copyShortcut }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.preview.root")
+    }
+
+    private func setFileConfirmationPresented(_ presented: Bool) {
+        fileConfirmationPresented = presented
+        previewState.isFileConfirmationPresented = presented
     }
 
     /// Return is the same reserved copy command as the history list. Keeping
@@ -426,7 +433,7 @@ struct HistoryPreviewView: View {
                     reference: reference,
                     requestFileLoad: loader.canLoadFilePreview ? {
                         loader.requestFilePreview()
-                        fileConfirmationPresented = loader.fileLoadConfirmation != nil
+                        setFileConfirmationPresented(loader.fileLoadConfirmation != nil)
                     } : nil,
                     maximumHeight: bodyMaximumHeight
                 )

@@ -862,13 +862,15 @@ struct PreviewPaneStateTests {
         #expect(!state.isOpen)
     }
 
-    @Test func informationPopoverKeepsItsPreviewAliveOutsideBothWindowSurfaces() async {
+    @Test(arguments: [false, true])
+    func popoverOrFileConfirmationKeepsItsPreviewAliveOutsideBothWindowSurfaces(fileConfirmation: Bool) async {
         let state = makePointerState()
         defer { state.panelClosed() }
         let item = reference()
         state.togglePreview(for: item)
         state.pointerEntered(.preview)
-        state.isInformationPresented = true
+        if fileConfirmation { state.isFileConfirmationPresented = true }
+        else { state.isInformationPresented = true }
         state.pointerExited(.preview)
         await Task.yield()
         await Task.yield()
@@ -876,16 +878,19 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == item)
         // Escape's first step dismisses information, preserving the preview.
         state.isInformationPresented = false
+        state.isFileConfirmationPresented = false
         #expect(state.isOpen)
     }
 
-    @Test func openingInformationCancelsTheEffectOfAnAlreadyQueuedExit() async {
+    @Test(arguments: [false, true])
+    func openingPopoverOrFileConfirmationRetiresAnAlreadyQueuedExit(fileConfirmation: Bool) async {
         let state = makePointerState()
         defer { state.panelClosed() }
         state.togglePreview(for: reference())
         state.pointerEntered(.preview)
         state.pointerExited(.preview)
-        state.isInformationPresented = true
+        if fileConfirmation { state.isFileConfirmationPresented = true }
+        else { state.isInformationPresented = true }
         await Task.yield()
         await Task.yield()
         #expect(state.isOpen)

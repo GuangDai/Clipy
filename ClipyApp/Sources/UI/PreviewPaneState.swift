@@ -76,6 +76,13 @@ final class PreviewPaneState {
     /// Shared with the panel's Escape action so the topmost information
     /// popover closes before the preview, search, Quick Look, or the panel.
     var isInformationPresented = false
+    /// A file-read confirmation belongs to the visible preview. Leaving its
+    /// two native windows for the attached alert must not hide that owner.
+    var isFileConfirmationPresented = false {
+        didSet {
+            if isFileConfirmationPresented { cancelPendingPointerExit() }
+        }
+    }
 
     /// The item whose content the preview pane renders; `nil` while
     /// closed. Reference-exact (item ID + Content Version) like every other
@@ -129,6 +136,7 @@ final class PreviewPaneState {
         cancelPendingAutoOpen()
         cancelPendingPointerExit()
         isInformationPresented = false
+        isFileConfirmationPresented = false
         if isOpen { closePreview() }
     }
 
@@ -382,6 +390,7 @@ final class PreviewPaneState {
     func panelClosed() {
         cancelPendingAutoOpen()
         cancelPendingPointerExit()
+        isFileConfirmationPresented = false
         pointerPresence = []
         isPointerInteractionActive = false
         currentSelectionReference = nil
@@ -442,7 +451,7 @@ final class PreviewPaneState {
         guard isPointerInteractionActive else { return }
         guard pointerPresence.isEmpty else { return }
         cancelPendingAutoOpen()
-        guard isOpen, !isInformationPresented, !isResizingPreview else { return }
+        guard isOpen, !isInformationPresented, !isFileConfirmationPresented, !isResizingPreview else { return }
         schedulePointerExit()
     }
 
@@ -464,7 +473,7 @@ final class PreviewPaneState {
             pointerPresence = pointerSurfacesContainingPointer()
         }
         guard isOpen, isPointerInteractionActive, pointerPresence.isEmpty,
-              !isInformationPresented else { return }
+              !isInformationPresented, !isFileConfirmationPresented else { return }
         schedulePointerExit()
     }
 
@@ -479,7 +488,7 @@ final class PreviewPaneState {
                 try? await Task.sleep(for: grace)
             }
             guard !Task.isCancelled, let self, self.pointerPresence.isEmpty,
-                  !self.isInformationPresented, !self.isResizingPreview
+                  !self.isInformationPresented, !self.isFileConfirmationPresented, !self.isResizingPreview
             else { return }
             self.pointerExitTask = nil
             if let nativePresence = self.pointerSurfacesContainingPointer?(),
@@ -608,6 +617,7 @@ final class PreviewPaneState {
 
     private func closePreview() {
         cancelPendingPointerExit()
+        isFileConfirmationPresented = false
         isResizingPreview = false
         isOpen = false
         previewedItem = nil
