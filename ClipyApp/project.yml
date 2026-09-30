@@ -172,6 +172,9 @@ schemes:
         ClipyIntegrationTests: [test]
         ClipyPresentationTests: [test]
     test:
+      macroExpansion: ClipyApp
+      environmentVariables:
+        CLIPY_FIXTURES_DIR: "$(CLIPY_FIXTURES_DIR)"
       targets:
         - ClipyIntegrationTests
         - ClipyPresentationTests

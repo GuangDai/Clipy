@@ -93,6 +93,7 @@ xcodebuild \
   -derivedDataPath "$derived_data" \
   -resultBundlePath "$result_dir/app.xcresult" \
   "${test_arguments[@]}" \
+  CLIPY_FIXTURES_DIR="$CLIPY_FIXTURES_DIR" \
   CODE_SIGNING_ALLOWED=NO \
   test 2>&1 | tee "$log_dir/app-build-test.log" || test_exit_code=$?
 
