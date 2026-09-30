@@ -502,6 +502,9 @@ final class PreviewPaneState {
             }
             // Lightweight hide: no manual-close suppression — pointer
             // re-entry re-dwells the current selection and reopens.
+#if DEBUG
+            recordPreviewLifecycle("pointer-exit-hide confirmation=\(self.isFileConfirmationPresented) information=\(self.isInformationPresented)")
+#endif
             self.closePreview()
         }
     }
@@ -616,6 +619,9 @@ final class PreviewPaneState {
     }
 
     private func closePreview() {
+#if DEBUG
+        recordPreviewLifecycle("state-close-preview open=\(isOpen) confirmation=\(isFileConfirmationPresented)")
+#endif
         cancelPendingPointerExit()
         isFileConfirmationPresented = false
         isResizingPreview = false

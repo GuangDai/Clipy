@@ -76,6 +76,13 @@ if [[ "$shard" == 1 || "$shard" == 2 || "$shard" == 3 ]]; then
   done
 fi
 
+# A manual diagnostic call can select one running-app class without rebuilding
+# every unrelated lane. Ordinary correctness keeps the complete shard groups.
+if [[ -n "${CLIPY_CI_UI_TEST_CLASS:-}" ]]; then
+  app_test_scheme="ClipyAppGUI"
+  test_arguments=(-parallel-testing-enabled NO "-only-testing:ClipyUITests/$CLIPY_CI_UI_TEST_CLASS")
+fi
+
 mkdir -p "$log_dir" "$result_dir" "$fixture_root"
 
 bash scripts/generate-xcodeproj.sh \

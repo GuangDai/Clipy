@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [master]
   workflow_dispatch:
+    inputs:
+      ui_test_class:
+        description: Optional GUI test class for focused diagnosis (empty runs full CI)
+        required: false
+        default: ''
+        type: string
   workflow_call:
 
 permissions:
@@ -23,6 +29,7 @@ env:
 jobs:
   spm-build-test:
     name: SwiftPM build + test
+    if: github.event_name != 'workflow_dispatch' || inputs.ui_test_class == ''
     runs-on: macos-26
     timeout-minutes: 30
     env:
@@ -51,19 +58,20 @@ jobs:
           retention-days: 14
 
   xcodeproj:
-    name: App build + GUI tests (${{ matrix.shard }}/4)
+    name: App build + GUI tests (${{ inputs.ui_test_class || format('{0}/4', matrix.shard) }})
     runs-on: macos-26
     timeout-minutes: 30
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.ui_test_class != '' && '[4]' || '[1,2,3,4]') }}
     env:
       HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
       LOG_DIR: ${{ github.workspace }}/ci-logs
       RESULT_BUNDLES: ${{ github.workspace }}/ci-result-bundles
       DERIVED_DATA: ${{ github.workspace }}/DerivedData
+      CLIPY_CI_UI_TEST_CLASS: ${{ inputs.ui_test_class }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6

@@ -464,7 +464,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         isTerminating = true
         closePanel()
-        hideFloatingPreviewPane()
+        hideFloatingPreviewPane(reason: "termination")
         releasePanelWindows()
         stopSummonShortcut()
         panelContentFitTask?.cancel()
@@ -782,7 +782,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.isPanelKeepOpenActive ?? false
             },
             onDidChangeScreen: { [weak self] in
-                self?.hideFloatingPreviewPane()
+                self?.hideFloatingPreviewPane(reason: "screen-change")
             },
             onFrameChanged: { [weak self] in
                 self?.followMainPanelFrameWithPreview()
@@ -965,6 +965,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleFloatingPreviewTransition(
         _ transition: PreviewPaneState.FloatingPreviewTransition
     ) {
+#if DEBUG
+        let event = switch transition {
+        case .show: "show"
+        case .update: "update"
+        case .hide: "hide"
+        }
+        recordPreviewLifecycle("app-transition-\(event) open=\(previewState.isOpen) confirmation=\(previewState.isFileConfirmationPresented) main_presented=\(panel?.isPresented == true) preview_presented=\(floatingPreviewPanel?.isPresented == true) preview_visible=\(floatingPreviewPanel?.isVisible == true) attached_sheet=\(floatingPreviewPanel?.attachedSheet != nil)")
+#endif
         switch transition {
         case .show(let item), .update(let item):
             guard let panel, panel.isPresented, let composition else {
@@ -983,13 +991,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updatePreviewHeightCeiling()
             floatingPreviewPanel?.present(beside: panel)
         case .hide:
-            hideFloatingPreviewPane()
+            hideFloatingPreviewPane(reason: "state-hide")
         }
     }
 
     /// Orders the floating preview pane out (panel close, screen change, or
     /// the preview's own hide transition). Idempotent.
-    private func hideFloatingPreviewPane() {
+    private func hideFloatingPreviewPane(reason: String) {
+#if DEBUG
+        recordPreviewLifecycle("app-hide-\(reason) open=\(previewState.isOpen) confirmation=\(previewState.isFileConfirmationPresented) main_presented=\(panel?.isPresented == true) preview_presented=\(floatingPreviewPanel?.isPresented == true) preview_visible=\(floatingPreviewPanel?.isVisible == true) attached_sheet=\(floatingPreviewPanel?.attachedSheet != nil)")
+#endif
         prepareFloatingPreview(for: nil)
         floatingPreviewLoader?.clear()
         floatingPreviewLoader = nil
@@ -1024,7 +1035,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 composition.viewState.readingItemID ?? panelSurfaceState?.selection, for: .panel
             )
         }
-        hideFloatingPreviewPane()
+        hideFloatingPreviewPane(reason: "panel-close")
         panelSurfaceState?.endSession()
         composition?.viewState.deactivate()
     }
@@ -1327,7 +1338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func installCompositionForTesting(_ composition: AppComposition) {
         if let installed = self.composition, installed !== composition {
             closePanel()
-            hideFloatingPreviewPane()
+            hideFloatingPreviewPane(reason: "composition-replacement")
             releasePanelWindows()
         }
         installComposition(composition)

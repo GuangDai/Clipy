@@ -41,6 +41,8 @@ xcodebuild -project ClipyApp/ClipyApp.xcodeproj -scheme ClipyApp \
 
 各分片在独立 runner 并行；同一 runner 内 GUI 测试串行，避免共享桌面、系统剪贴板和焦点互相干扰。UI fixture 使用生产 writer 预置存储，释放后启动应用；动作通过稳定可访问性标识和真实控件进行。结果保留 `app.xcresult`、测试 log 和可导出的附件，失败时同样保留。
 
+手动 correctness 可填 `ui_test_class`，只运行指定的 `ClipyUITests` 类，用于快速定位真实应用失败。留空以及 push / PR / reusable 调用继续执行五个完整作业。聚焦调用的成功只证明选中的 GUI 路径，不代表完整 correctness 通过。
+
 宿主测试通过 `ClipyApp` test scheme 显式接收素材目录；CI 脚本把 `CLIPY_FIXTURES_DIR` 传入对应构建设置，scheme 展开为测试进程的环境变量。仅在启动 `xcodebuild` 的 shell 中 export 不能证明宿主进程已收到；应从测试日志确认素材用例实际执行，不能把缺素材的 skip 当作通过。
 
 ## CI 与性能测量

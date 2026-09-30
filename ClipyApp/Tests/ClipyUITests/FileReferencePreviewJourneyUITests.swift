@@ -262,8 +262,20 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.store").path
+        let lifecycle = directory.appendingPathComponent("preview-lifecycle.log")
+        try Data().write(to: lifecycle)
+        app.launchEnvironment["CLIPY_FILE_PREVIEW_LIFECYCLE_PATH"] = lifecycle.path
         app.launch()
-        defer { app.terminate() }
+        defer {
+            app.terminate()
+            if let events = try? String(contentsOf: lifecycle, encoding: .utf8), !events.isEmpty {
+                print("CLIPY_FILE_PREVIEW_LIFECYCLE\n\(events)")
+                let attachment = XCTAttachment(string: events)
+                attachment.name = "preview-lifecycle.log"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+            }
+        }
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
         let rows = panel.descendants(matching: .any).matching(

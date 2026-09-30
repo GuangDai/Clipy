@@ -37,6 +37,15 @@ struct FloatingPreviewResizeHostedTests {
         #expect(arrivals == 1)
         #expect(main.childWindows?.filter { $0 === preview }.count == 1)
 
+        // Native modal ordering can hide a window without changing the
+        // product's intended visibility. Reconcile it without a new arrival.
+        preview.orderOut(nil)
+        #expect(preview.isPresented && !preview.isVisible)
+        preview.present(beside: main)
+        #expect(preview.isPresented && preview.isVisible)
+        #expect(preview.alphaValue == 1)
+        #expect(arrivals == 1)
+
         preview.fitToContent(height: 100)
         #expect(preview.frame.height == 100)
         #expect(arrivals == 1)
@@ -46,6 +55,61 @@ struct FloatingPreviewResizeHostedTests {
         preview.present(beside: main)
         #expect(arrivals == 2)
         #expect(preview.frame.height == 100)
+    }
+
+    @Test
+    func anAttachedSheetRetainsItsOwnerFrameUntilEndAndDismissalEndsTheModal() async throws {
+        let item = try await capturedReference()
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visible = screen.visibleFrame
+        try #require(visible.height >= 500)
+        let owner = AppDelegate()
+        let pointer = NSEvent.mouseLocation
+        let main = NSWindow(
+            contentRect: NSRect(x: visible.minX,
+                                y: pointer.y < visible.midY ? visible.maxY - 100 : visible.minY,
+                                width: 360, height: 100),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        main.isReleasedWhenClosed = false
+        main.orderFrontRegardless()
+        owner.previewState.togglePreview(for: item)
+        let preview = FloatingPreviewPanel(rootView: FloatingPreviewRootView(appDelegate: owner))
+        let alert = NSAlert()
+        alert.messageText = "Hosted preview confirmation"
+        alert.addButton(withTitle: "OK")
+        defer {
+            preview.dismiss()
+            owner.previewState.panelClosed()
+            main.close()
+        }
+        preview.fitToContent(height: 180)
+        preview.present(beside: main)
+        alert.beginSheetModal(for: preview) { _ in }
+        try #require(await ComposedSupport.waitFor { preview.attachedSheet === alert.window })
+        try #require(!preview.frame.contains(NSEvent.mouseLocation))
+        try #require(!main.frame.contains(NSEvent.mouseLocation))
+        #expect(!owner.previewState.isFileConfirmationPresented)
+        #expect(owner.previewState.pointerSurfacesContainingPointer?().contains(.preview) == true)
+        let modalOwnerFrame = preview.frame
+        preview.fitToContent(height: 74)
+        preview.fitToContent(height: 160)
+        #expect(preview.frame == modalOwnerFrame)
+        preview.endSheet(alert.window)
+        try #require(await ComposedSupport.waitFor {
+            preview.attachedSheet == nil && preview.frame.height == 160
+        })
+        #expect(preview.isPresented && preview.isVisible)
+
+        // A purge/close must end an attached modal immediately. Its native
+        // end callback cannot restore a pane whose presentation was retired.
+        alert.beginSheetModal(for: preview) { _ in }
+        try #require(await ComposedSupport.waitFor { preview.attachedSheet === alert.window })
+        preview.dismiss()
+        #expect(!preview.isPresented && !preview.isVisible)
+        try #require(await ComposedSupport.waitFor { preview.attachedSheet == nil })
+        #expect(!preview.isPresented && !preview.isVisible)
+        #expect(main.childWindows?.contains(preview) != true)
     }
 
     @Test(arguments: [false, true])

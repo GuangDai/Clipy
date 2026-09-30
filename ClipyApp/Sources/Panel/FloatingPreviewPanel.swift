@@ -16,11 +16,10 @@
 import AppKit
 import SwiftUI
 
-/// The floating preview window. One instance per app run, created lazily by
-/// the AppDelegate on the first show and reused — dismissing only orders it
-/// out.
+/// The floating preview window. Prepared once the app graph opens and reused;
+/// dismissal ends any owned sheet before ordering the window out.
 @MainActor
-final class FloatingPreviewPanel: NSPanel {
+final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 
     /// Whether the pane is currently on screen.
     private(set) var isPresented = false
@@ -92,10 +91,22 @@ final class FloatingPreviewPanel: NSPanel {
             guard let self, self.isPresented else { return [] }
             let pointer = NSEvent.mouseLocation
             var surfaces: Set<PreviewPaneState.PreviewPointerSurface> = []
-            if self.frame.contains(pointer) { surfaces.insert(.preview) }
-            if let parent = self.parent, parent.isVisible, parent.frame.contains(pointer) {
-                surfaces.insert(.mainPanel)
+            // The SwiftUI alert binding can become false before AppKit has
+            // detached its closing sheet. That native modal family still
+            // owns this preview, even when its buttons lie outside our frame.
+            if self.attachedSheet != nil || self.frame.contains(pointer) {
+                surfaces.insert(.preview)
             }
+            if let parent = self.parent {
+                if parent.attachedSheet != nil || (parent.isVisible && parent.frame.contains(pointer)) {
+                    surfaces.insert(.mainPanel)
+                }
+            }
+#if DEBUG
+            if self.attachedSheet != nil || self.parent?.attachedSheet != nil {
+                self.recordNativeLifecycle("pointer-native-sheet-veto")
+            }
+#endif
             return surfaces
         }
         rootView.appDelegate.previewState.pointerIsBetweenSurfaces = { [weak self] in
@@ -104,6 +115,7 @@ final class FloatingPreviewPanel: NSPanel {
                 NSEvent.mouseLocation, main: parent.frame, preview: self.frame
             )
         }
+        delegate = self
     }
 
     /// Automatic presentation never makes this window key. Clicking the
@@ -126,11 +138,17 @@ final class FloatingPreviewPanel: NSPanel {
 
     override func becomeKey() {
         super.becomeKey()
+#if DEBUG
+        recordNativeLifecycle("became-key")
+#endif
         (parent as? FloatingPanel)?.previewDidBecomeKey()
     }
 
     override func resignKey() {
         super.resignKey()
+#if DEBUG
+        recordNativeLifecycle("resigned-key")
+#endif
         (parent as? FloatingPanel)?.previewDidResignKey()
     }
 
@@ -140,6 +158,15 @@ final class FloatingPreviewPanel: NSPanel {
     /// independently measured content height.
     func present(beside mainPanel: NSWindow) {
         guard widthResize == nil else { return }
+        // Loading confirmed file bytes changes the content height while the
+        // native alert is closing. Preserve the latest demand without moving
+        // its owner until AppKit retires the sheet; didEndSheet applies it.
+        guard attachedSheet == nil else {
+#if DEBUG
+            recordNativeLifecycle("present-deferred-for-sheet")
+#endif
+            return
+        }
         let width = PanelGeometry.persistedFloatingPreviewWidth(from: defaults)
         let gap = PanelGeometry.persistedFloatingPreviewGap(from: defaults)
         if lastParentFrame != mainPanel.frame || resizedAnchor?.width != width || resizedAnchor?.gap != gap {
@@ -157,6 +184,9 @@ final class FloatingPreviewPanel: NSPanel {
         )
         self.placement = placement.placement
         if frame != placement.frame {
+#if DEBUG
+            recordNativeLifecycle("present-frame-change")
+#endif
             setFrame(placement.frame, display: isPresented)
         }
         publishDisplayedGeometry()
@@ -164,6 +194,9 @@ final class FloatingPreviewPanel: NSPanel {
             mainPanel.addChildWindow(self, ordered: .above)
         }
         if !isPresented {
+#if DEBUG
+            recordNativeLifecycle("present-arrival")
+#endif
             let duration = presentationDuration(screen ?? mainPanel.screen)
             setPresentationAlphaImmediately(duration > 0 ? 0.92 : 1)
             orderFrontRegardless()
@@ -175,13 +208,35 @@ final class FloatingPreviewPanel: NSPanel {
                     animator().alphaValue = 1
                 }
             }
+        } else if !isVisible {
+            // Native sheet ordering may hide an intended-visible owner.
+            // Restore ordering without replaying its arrival animation.
+#if DEBUG
+            recordNativeLifecycle("present-invisible-reorder")
+#endif
+            setPresentationAlphaImmediately(1)
+            orderFrontRegardless()
         }
+    }
+
+    func windowWillBeginSheet(_ notification: Notification) {
+#if DEBUG
+        recordNativeLifecycle("sheet-will-begin")
+#endif
+    }
+
+    func windowDidEndSheet(_ notification: Notification) {
+#if DEBUG
+        recordNativeLifecycle("sheet-did-end")
+#endif
+        guard isPresented, previewState.isOpen, let parent, parent.isVisible else { return }
+        present(beside: parent)
     }
 
     /// SwiftUI owns the drag gesture; AppKit supplies screen-space pointer
     /// coordinates so moving a leading edge cannot feed back into translation.
     func resizeWidth(at screenX: CGFloat) {
-        guard isPresented, screenX.isFinite, previewState.isOpen else { return }
+        guard isPresented, attachedSheet == nil, screenX.isFinite, previewState.isOpen else { return }
         if widthResize == nil {
             widthResize = (mouseDownScreenX ?? screenX, frame, placement)
             previewState.beginPreviewResize()
@@ -210,7 +265,7 @@ final class FloatingPreviewPanel: NSPanel {
 
     /// VoiceOver adjustment uses the same bounds and persistence as dragging.
     func adjustWidth(by delta: CGFloat) {
-        guard isPresented, delta.isFinite, previewState.isOpen else { return }
+        guard isPresented, attachedSheet == nil, delta.isFinite, previewState.isOpen else { return }
         let priorWidth = frame.width
         let adjusted = PopupPositionGeometry.resizedFloatingPreviewFrame(
             from: frame, placement: placement,
@@ -255,6 +310,16 @@ final class FloatingPreviewPanel: NSPanel {
     /// Orders the pane out and detaches it from its parent; the instance is
     /// reused on the next `present(beside:)`.
     func dismiss() {
+#if DEBUG
+        recordNativeLifecycle("dismiss")
+#endif
+        // Explicit retirement wins over modal ownership. Mark the intent
+        // closed before ending the sheet so didEndSheet cannot resurrect it.
+        isPresented = false
+        if let sheet = attachedSheet {
+            endSheet(sheet, returnCode: .cancel)
+            sheet.orderOut(nil)
+        }
         // A purge, Details navigation or panel close always wins over a
         // gesture; retiring this session must not save an unfinished drag.
         widthResize = nil
@@ -269,9 +334,14 @@ final class FloatingPreviewPanel: NSPanel {
         parent?.removeChildWindow(self)
         setPresentationAlphaImmediately(1)
         orderOut(nil)
-        isPresented = false
         previewState.endPreviewResize()
     }
+
+#if DEBUG
+    private func recordNativeLifecycle(_ event: String) {
+        recordPreviewLifecycle("native-\(event) presented=\(isPresented) visible=\(isVisible) key=\(isKeyWindow) attached_sheet=\(attachedSheet != nil) parent_sheet=\(parent?.attachedSheet != nil) modal=\(NSApp.modalWindow != nil) open=\(previewState.isOpen) confirmation=\(previewState.isFileConfirmationPresented) frame_height=\(frame.height) latest_height=\(contentHeight ?? -1)")
+    }
+#endif
 }
 
 /// The floating preview's content root. Reads the app delegate's
