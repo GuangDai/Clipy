@@ -237,7 +237,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("explicit file preview.txt")
         let originalAddress = file.absoluteString
         let originalContents = "clipy-file-not-shown-before-confirmation"
@@ -245,7 +245,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         try Data(originalContents.utf8).write(to: file)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        defer { pasteboard.clearContents() }
+        addTeardownBlock { @MainActor () async in pasteboard.clearContents() }
         let item = NSPasteboardItem()
         let fileType = NSPasteboard.PasteboardType("public.file-url")
         XCTAssertTrue(item.setData(Data(originalAddress.utf8), forType: fileType))
@@ -265,17 +265,19 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         let lifecycle = directory.appendingPathComponent("preview-lifecycle.log")
         try Data().write(to: lifecycle)
         app.launchEnvironment["CLIPY_FILE_PREVIEW_LIFECYCLE_PATH"] = lifecycle.path
-        app.launch()
-        defer {
+        // XCTest aborts this method on its first assertion failure; use its
+        // teardown boundary so failures retain the actual modal lifecycle.
+        addTeardownBlock { @MainActor () async in
             app.terminate()
             if let events = try? String(contentsOf: lifecycle, encoding: .utf8), !events.isEmpty {
                 print("CLIPY_FILE_PREVIEW_LIFECYCLE\n\(events)")
                 let attachment = XCTAttachment(string: events)
                 attachment.name = "preview-lifecycle.log"
                 attachment.lifetime = .keepAlways
-                add(attachment)
+                self.add(attachment)
             }
         }
+        app.launch()
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
         let rows = panel.descendants(matching: .any).matching(
