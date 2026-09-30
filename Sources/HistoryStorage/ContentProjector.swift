@@ -62,44 +62,6 @@ internal struct StoredProjectionSize: Equatable, Sendable {
 internal enum ContentProjector {
     // MARK: Stored projection validation (docs/storage.md)
 
-    /// Decodes the bounded literal title bytes without Foundation's encoding
-    /// interpretation. Empty bytes are a valid empty title; a leading U+FEFF
-    /// is content, not a byte-order marker to strip. Reject oversize input
-    /// before decoding, and never repair malformed UTF-8 (§4, §15).
-    internal static func decodeStoredTitle(
-        _ bytes: Data,
-        limits: HistoryLimits
-    ) throws -> String {
-        guard bytes.count <= limits.maximumStoredTitleUTF8Bytes else {
-            throw CodecRejection.storedTitleExceedsBound(
-                found: bytes.count,
-                bound: limits.maximumStoredTitleUTF8Bytes
-            )
-        }
-        guard let title = String(validating: bytes, as: UTF8.self) else {
-            throw CodecRejection.invalidStoredTitleUTF8
-        }
-        return title
-    }
-
-    /// Search bodies share the literal UTF-8 contract of titles, with their
-    /// own bound. A content FEFF is not an encoding marker to remove (§15).
-    internal static func decodeStoredSearchBody(
-        _ bytes: Data,
-        limits: HistoryLimits
-    ) throws -> String {
-        guard bytes.count <= limits.maximumStoredSearchBodyUTF8Bytes else {
-            throw CodecRejection.storedSearchBodyExceedsBound(
-                found: bytes.count,
-                bound: limits.maximumStoredSearchBodyUTF8Bytes
-            )
-        }
-        guard let body = String(validating: bytes, as: UTF8.self) else {
-            throw CodecRejection.invalidStoredSearchBodyUTF8
-        }
-        return body
-    }
-
     /// Re-validates a durable title at its read boundary. The write-side
     /// projector truncates valid values; an over-bound stored value is
     /// corruption, not input to truncate or repair locally.

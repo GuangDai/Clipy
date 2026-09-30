@@ -136,10 +136,11 @@ internal enum PreviewHTMLRenderer {
                 }
             }
             try Task.checkCancellation()
-            return PreviewText(
+            return try PreviewText(
                 text: output,
                 wasTruncated: truncated,
-                configuration: textConfiguration
+                configuration: textConfiguration,
+                checkCancellation: { try Task.checkCancellation() }
             )
         }
 

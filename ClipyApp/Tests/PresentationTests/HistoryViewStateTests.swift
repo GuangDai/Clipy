@@ -640,7 +640,7 @@ struct HistoryViewStateTests {
         state.activate()
         #expect(await pollUntil { await history.observeRequests.count == 1 })
 
-        // Two rapid edits inside one debounce window (250 ms) must fold into
+        // Two rapid edits in the same MainActor turn must fold into
         // a single restart whose query is the FINAL text.
         state.searchText = "cl"
         state.searchText = "clipy"

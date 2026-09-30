@@ -218,6 +218,10 @@ extension SearchWorker {
             var fuzzySelection = FuzzyPageSelection(directive: directive)
             var revisionCounts: [HistoryItemID: Int] = [:]
             var matchingComplete = false
+            // Ordered first pages need only page+lookahead. Tighten later
+            // batches only after every decoded row matched: misses retain the
+            // normal 32-row cadence instead of yielding once per tiny page.
+            var tightensOrderedBatch = !isRankedFuzzy
 #if DEBUG
             var processed = 0
             let trace = SearchDebugTrace(id: UUID(), startedAt: startedAt)
@@ -231,7 +235,10 @@ extension SearchWorker {
             while let reader {
                 try checkSnapshotDeadline(lifetimeDeadline)
                 let fetchStarted = clock.now
-                let batch = try reader.nextBatch(includesRevisionCounts: includesRevisionCounts)
+                let remainingRows = request.limit + 1 + (anchor == nil ? 0 : 1) - ordered.count
+                let maximumRows = tightensOrderedBatch
+                    ? min(Self.maximumBatchRows, max(1, remainingRows)) : Self.maximumBatchRows
+                let batch = try reader.nextBatch(includesRevisionCounts: includesRevisionCounts, maximumRows: maximumRows)
                 // The existing two-second regexp budget measures matching,
                 // not newly introduced SQL batch fetch/yield latency.
                 regexpDeadline = regexpDeadline.advanced(by: fetchStarted.duration(to: clock.now))
@@ -303,6 +310,7 @@ extension SearchWorker {
                             ? HistorySortSQL.precedes(right.corpusRow, left.corpusRow, sortOrder: request.sortOrder)
                             : HistorySortSQL.precedes(left.corpusRow, right.corpusRow, sortOrder: request.sortOrder)
                     } : evaluation.rows
+                    tightensOrderedBatch = !isRankedFuzzy && evaluatedBatch.count == batch.rows.count
                     for evaluated in evaluatedBatch {
                         let compact = EvaluatedRow(
                             corpusRow: evaluated.corpusRow.replacingSearchBody(with: ""),
@@ -380,24 +388,26 @@ extension SearchWorker {
             var rows: [HistoryRow] = []
             rows.reserveCapacity(window.rows.count)
             var returnedCounts: [HistoryItemID: Int] = [:]
+            var excerptBodyLookup: SQLiteStatement?
+            defer { excerptBodyLookup?.finalize() }
             for evaluated in window.rows {
                 try checkSnapshotDeadline(lifetimeDeadline)
                 let row: EvaluatedRow
                 if case .bodyExcerpt? = evaluated.search {
                     // Fetch only this returned body's bytes from the same
                     // read transaction; top-K never retains K full bodies.
-                    let statement = try database.prepare(
-                        "SELECT searchBodyUTF8 FROM history_items WHERE id = ?",
-                        bindings: [.text(evaluated.corpusRow.id.rawValue.uuidString)]
-                    )
-                    defer { statement.finalize() }
-                    guard try statement.step() else {
+                    let bindings = [SQLiteValue.text(evaluated.corpusRow.id.rawValue.uuidString)]
+                    if let excerptBodyLookup {
+                        try excerptBodyLookup.reset(bindings: bindings)
+                    } else {
+                        excerptBodyLookup = try database.prepare(
+                            "SELECT searchBodyUTF8 FROM history_items WHERE id = ?", bindings: bindings
+                        )
+                    }
+                    guard let statement = excerptBodyLookup, try statement.step() else {
                         throw HistoryFailure.persistence(.invariantViolation)
                     }
-                    let bodyBytes = try statement.blob(at: 0)
-                    let body = try mapCodecFailure {
-                        try ContentProjector.decodeStoredSearchBody(bodyBytes, limits: limits)
-                    }
+                    let body = try statement.utf8Blob(at: 0, maximumByteCount: limits.maximumStoredSearchBodyUTF8Bytes)
                     row = EvaluatedRow(
                         corpusRow: evaluated.corpusRow.replacingSearchBody(with: body),
                         search: evaluated.search, anchor: evaluated.anchor
@@ -604,6 +614,8 @@ private final class SQLiteSearchRows {
     let database: SQLiteDatabase
     let limits: HistoryLimits
     var statement: SQLiteStatement?
+    var bodyLookup: SQLiteStatement?
+    var pendingBodyRow = false
     var lane = 0
     let ranges: [(condition: String, bindings: [SQLiteValue], order: String)]
     var pendingRow = false
@@ -637,7 +649,8 @@ private final class SQLiteSearchRows {
                 expression: candidateExpression, in: database
             )
         } else { prefersSparseCandidates = false }
-        defersBody = includesSearchBody && (prefersSparseCandidates || sortOrder != .automatic)
+        defersBody = includesSearchBody && targetedID == nil
+            && (prefersSparseCandidates || sortOrder != .automatic)
         // Each range starts directly at the adjacent anchor in the existing
         // pin/date/UUID indexes. Reverse reads restore display order only
         // after their bounded page and lookbehind have been selected.
@@ -694,13 +707,21 @@ private final class SQLiteSearchRows {
         }
     }
 
-    func finish() { statement?.finalize(); statement = nil }
+    func finish() {
+        statement?.finalize()
+        statement = nil
+        bodyLookup?.finalize()
+        bodyLookup = nil
+        pendingBodyRow = false
+    }
 
-    func nextBatch(includesRevisionCounts: Bool) throws -> (rows: [SearchCorpusRow], revisionCounts: [HistoryItemID: Int], utf8Bytes: Int) {
+    func nextBatch(
+        includesRevisionCounts: Bool, maximumRows: Int = SearchWorker.maximumBatchRows
+    ) throws -> (rows: [SearchCorpusRow], revisionCounts: [HistoryItemID: Int], utf8Bytes: Int) {
         var rows: [SearchCorpusRow] = []
         var counts: [HistoryItemID: Int] = [:]
         var byteCount = 0
-        while rows.count < SearchWorker.maximumBatchRows {
+        while rows.count < maximumRows {
             try Task.checkCancellation()
             if statement == nil {
                 guard lane < ranges.count else { break }
@@ -740,7 +761,8 @@ private final class SQLiteSearchRows {
             guard let statement else { break }
             if !pendingRow {
                 guard try statement.step() else {
-                    finish()
+                    statement.finalize()
+                    self.statement = nil
                     lane += 1
                     // Evaluate the completed tail before deciding whether
                     // any skipped fuzzy prefix needs to be decoded at all.
@@ -751,15 +773,22 @@ private final class SQLiteSearchRows {
             }
             let deferredBody: SQLiteStatement?
             if defersBody {
-                deferredBody = try database.prepare(
-                    "SELECT searchBodyUTF8 FROM history_items WHERE rowid = ?",
-                    bindings: [.integer(try statement.integer(at: 3))]
-                )
+                if !pendingBodyRow {
+                    let bindings = [SQLiteValue.integer(try statement.integer(at: 3))]
+                    if let bodyLookup {
+                        try bodyLookup.reset(bindings: bindings)
+                    } else {
+                        bodyLookup = try database.prepare(
+                            "SELECT searchBodyUTF8 FROM history_items WHERE rowid = ?", bindings: bindings
+                        )
+                    }
+                    guard let bodyLookup, try bodyLookup.step() else {
+                        throw HistoryFailure.persistence(.invariantViolation)
+                    }
+                    pendingBodyRow = true
+                }
+                deferredBody = bodyLookup
             } else { deferredBody = nil }
-            defer { deferredBody?.finalize() }
-            if let deferredBody, try !deferredBody.step() {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
             let bodyStatement = deferredBody ?? statement
             let bodyColumn: Int32 = deferredBody == nil ? 3 : 0
             let titleBytes = try statement.blobByteCount(at: 2)
@@ -785,8 +814,8 @@ private final class SQLiteSearchRows {
                 throw HistoryFailure.persistence(.corruptStoredValue)
             }
             let row = try mapCodecFailure {
-                let title = try ContentProjector.decodeStoredTitle(statement.blob(at: 2), limits: limits)
-                let body = try ContentProjector.decodeStoredSearchBody(bodyStatement.blob(at: bodyColumn), limits: limits)
+                let title = try statement.utf8Blob(at: 2, maximumByteCount: limits.maximumStoredTitleUTF8Bytes)
+                let body = try bodyStatement.utf8Blob(at: bodyColumn, maximumByteCount: limits.maximumStoredSearchBodyUTF8Bytes)
                 let version = try RevisionStateBlobCodec.decodeContentVersion(sqliteUInt64(statement.blob(at: 1)))
                 let types = try EffectiveTypeIdentifiersBlobCodec.decode(statement.blob(at: 4), limits: limits)
                 let copiedAt = Date(timeIntervalSinceReferenceDate: try statement.real(at: 5))
@@ -832,6 +861,7 @@ private final class SQLiteSearchRows {
             rows.append(row)
             byteCount += rowBytes
             pendingRow = false
+            pendingBodyRow = false
         }
         return (rows, counts, byteCount)
     }

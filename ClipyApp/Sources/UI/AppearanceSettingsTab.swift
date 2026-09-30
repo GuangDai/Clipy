@@ -21,6 +21,8 @@ struct AppearanceSettingsTab: View {
     private let popupPosition: Binding<PopupPositionMode>?
     @AppStorage(NativeAppearance.defaultsKey)
     private var nativeAppearance: NativeAppearance = .system
+    @AppStorage(AppMotionSettings.defaultsKey)
+    private var motionSpeed: AppMotionSpeed = .fastest
 
     /// The controls and panel share the same raw preference values, including
     /// user-entered typography. No separate preset index limits custom input.
@@ -67,8 +69,18 @@ struct AppearanceSettingsTab: View {
                     }
                 }
                 .accessibilityIdentifier("clipy.settings.appearance.color-scheme")
+                Picker(NativeAppearanceCopy.text("Animation speed"), selection: $motionSpeed) {
+                    ForEach(AppMotionSpeed.allCases, id: \.self) { speed in
+                        Text(speed.title).tag(speed)
+                    }
+                }
+                .id(interfaceLocale.identifier)
+                .accessibilityIdentifier("clipy.settings.appearance.motion-speed")
             } footer: {
-                Text(NativeAppearanceCopy.text("Uses the macOS accent color and contrast settings."))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(NativeAppearanceCopy.text("Uses the macOS accent color and contrast settings."))
+                    Text(NativeAppearanceCopy.text("Animation changes apply immediately and respect Reduce Motion in macOS."))
+                }
             }
             Section {
                 sampleRow

@@ -420,6 +420,19 @@ internal final class SQLiteStatement {
         }
     }
 
+    /// Reuse a request-owned SELECT after consuming its row. Clear the old
+    /// bindings and row state before rebinding; a failed reset/bind remains
+    /// unusable until the owning request finalizes it.
+    internal func reset(bindings: [SQLiteValue]) throws {
+        let handle = try openHandle()
+        hasRow = false
+        finished = true
+        try database.check(sqlite3_reset(handle))
+        try database.check(sqlite3_clear_bindings(handle))
+        try bind(bindings)
+        finished = false
+    }
+
     internal func isNull(at column: Int32) throws -> Bool {
         try columnType(at: column) == SQLITE_NULL
     }
@@ -457,6 +470,26 @@ internal final class SQLiteStatement {
         if count == 0 { return Data() }
         guard let pointer else { throw database.failure(code: SQLITE_NOMEM) }
         return Data(bytes: pointer, count: count)
+    }
+
+    /// Durable title/body projections are literal UTF-8 BLOBs. Validate the
+    /// storage class and bound before allocation, then copy directly into the
+    /// owning String. The SQLite pointer stays inside this synchronous call;
+    /// no intermediate Data or borrowed value survives step/reset/finalize.
+    internal func utf8Blob(at column: Int32, maximumByteCount: Int) throws -> String {
+        let count = try blobByteCount(at: column)
+        guard count <= maximumByteCount else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
+        if count == 0 { return "" }
+        guard let pointer = sqlite3_column_blob(try openHandle(), column) else {
+            throw database.failure(code: SQLITE_NOMEM)
+        }
+        let bytes = UnsafeBufferPointer(start: pointer.assumingMemoryBound(to: UInt8.self), count: count)
+        guard let value = String(validating: bytes, as: UTF8.self) else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
+        return value
     }
 
     /// Search checks its byte budget before materializing a stored body.

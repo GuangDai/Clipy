@@ -88,6 +88,46 @@ private actor ThumbnailDisplayCancellationProbe {
 @MainActor
 struct ThumbnailStoreTests {
 
+    #if DEBUG
+    @Test func lastAppearanceRetiresOnlyItsFlightAndLateResultCannotReplaceReappearance() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000E1", version: 1)
+        let other = reference("00000000-0000-0000-0000-0000000000E2", version: 1)
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+        store.setDisplayed(item, true)
+        store.setDisplayed(item, true)
+        store.setDisplayed(other, true)
+        store.prefetch(item)
+        store.prefetch(other)
+        try #require(await pollUntil { await history.requestCount == 2 })
+
+        store.setDisplayed(item, false)
+        #expect(store.inFlightCount == 2, "The replacement row still needs the same flight")
+        #expect(await history.cancellationCount == 0)
+        store.setDisplayed(item, false)
+        #expect(store.inFlightCount == 1)
+        try #require(await pollUntil { await history.cancellationCount == 1 })
+        #expect(store.purgeGeneration == 0)
+
+        store.setDisplayed(item, true)
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 3 })
+        #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
+        try #require(await pollUntil { store.debugFetchCompletionCount == 1 })
+        #expect(store.debugDiscardedFetchCompletionCount == 1)
+        #expect(store.imagePixelSize(for: item) == nil)
+        #expect(store.inFlightCount == 2, "The old completion must not consume the new same-key flight")
+
+        #expect(await history.completeRequest(for: other, with: .success(fixturePNGData)))
+        #expect(await history.completeRequest(for: item, occurrence: 1, with: .success(fixturePNGData)))
+        try #require(await pollUntil { store.inFlightCount == 0 })
+        #expect(store.imagePixelSize(for: item) != nil)
+        #expect(store.imagePixelSize(for: other) != nil)
+        #expect(store.cachedEntryCount == 2)
+        #expect(store.debugFetchCompletionCount == 3)
+    }
+    #endif
+
     // MARK: - Fixtures
 
     /// One exact reference with a fixed literal UUID.
@@ -437,6 +477,43 @@ struct ThumbnailStoreTests {
                 purge, item: item, history: history, store: store, probe: probe
             )
         }
+    }
+
+    @Test func lastAppearanceCancelsAnAlreadyStartedDisplayRaster() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000E3", version: 1)
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+        let probe = ThumbnailDisplayCancellationProbe()
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue({
+            await probe.parkFirst()
+        }) {
+            try await exerciseLastAppearanceDisplayCancellation(
+                item: item, history: history, store: store, probe: probe
+            )
+        }
+    }
+
+    // Keep the scenario outside TaskLocal's generic operation closure, as
+    // in exerciseDisplayCancellation's Swift 6.2 codegen workaround.
+    private func exerciseLastAppearanceDisplayCancellation(
+        item: HistoryItemReference, history: PausableThumbnailHistory,
+        store: ThumbnailStore, probe: ThumbnailDisplayCancellationProbe
+    ) async throws {
+        store.setDisplayed(item, true)
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 1 })
+        #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
+        let started = await probe.waitUntilFirstRenderStarts()
+        if !started { await probe.resume() }
+        try #require(started)
+        store.setDisplayed(item, false)
+        #expect(store.inFlightCount == 0)
+        let cancelled = await probe.waitUntilCancellation()
+        await probe.resume()
+        #expect(cancelled)
+        try #require(await pollUntil { store.debugDiscardedFetchCompletionCount == 1 })
+        #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedDecodedBytes == 0)
     }
 
     @Test func nativeSlotTimeoutDoesNotRetainAnUnavailableResult() async throws {
@@ -1027,8 +1104,12 @@ actor PausableThumbnailHistory: ClipboardHistory {
 
     private var requests: [Request] = []
     private var continuations: [Int: CheckedContinuation<ThumbnailPayload?, Error>] = [:]
+    private var cancelledRequests: Set<Int> = []
 
     var requestCount: Int { requests.count }
+    var cancellationCount: Int { cancelledRequests.count }
+
+    private func recordCancellation(_ index: Int) { cancelledRequests.insert(index) }
 
     /// Releases one parked request. `false` makes a missing/already-released
     /// request observable to the test instead of silently hiding a fixture
@@ -1113,8 +1194,14 @@ actor PausableThumbnailHistory: ClipboardHistory {
     ) async throws -> ThumbnailPayload? {
         let index = requests.count
         requests.append(Request(item: item, pixels: pixels))
-        return try await withCheckedThrowingContinuation { continuation in
-            continuations[index] = continuation
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                continuations[index] = continuation
+            }
+        } onCancel: {
+            // Observe cancellation without releasing the non-cooperative
+            // fixture. The test still controls its real terminal response.
+            Task { await self.recordCancellation(index) }
         }
     }
 

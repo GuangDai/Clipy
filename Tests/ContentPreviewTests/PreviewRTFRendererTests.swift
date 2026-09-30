@@ -1,8 +1,28 @@
 import Foundation
+import Darwin
 import Testing
 @testable import ContentPreview
 
 struct PreviewRTFRendererTests {
+    @Test func denseUnicodeAndFormattingControlsRetainTheirCompleteText() throws {
+        let repeats = 20_000
+        let source = Data((#"{\rtf1\uc1 "#
+            + String(repeating: #"\u20320?\b0 x\i0 "#, count: repeats) + "}").utf8)
+        var startCPU = timespec()
+        try #require(clock_gettime(CLOCK_THREAD_CPUTIME_ID, &startCPU) == 0)
+        let start = ContinuousClock.now
+        let outcome = PreviewRTFRenderer.render(source)
+        let elapsed = start.duration(to: .now)
+        var endCPU = timespec()
+        try #require(clock_gettime(CLOCK_THREAD_CPUTIME_ID, &endCPU) == 0)
+        let cpu = Duration.seconds(endCPU.tv_sec - startCPU.tv_sec)
+            + .nanoseconds(endCPU.tv_nsec - startCPU.tv_nsec)
+        let text = try artifact(outcome)
+        #expect(Data(text.text.utf8) == Data(String(repeating: "你x", count: repeats).utf8))
+        #expect(!text.wasTruncated)
+        print("[PERF-preview-rtf] inputBytes=\(source.count) outputUTF16=\(repeats * 2) wall=\(elapsed) threadCPU=\(cpu)")
+    }
+
     @Test(arguments: [
         (#"{\rtf1\ansi Hello {\b bold} and {\i italic}.\par Next\tab cell\line end}"#,
          "Hello bold and italic.\nNext\tcell\nend"),

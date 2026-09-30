@@ -41,7 +41,7 @@
 
 ## 查询、详情与修改
 
-[`HistoryViewState.swift`](../ClipyApp/Sources/UI/HistoryViewState.swift) 持有当前 query、filter、sort、观察任务和三页窗口。输入搜索有 250 ms debounce；显式 Clear / refresh 立即退役旧请求。所有异步读结果在应用前检查 request generation、取消和版本，较晚返回的旧请求不得覆盖新状态。
+[`HistoryViewState.swift`](../ClipyApp/Sources/UI/HistoryViewState.swift) 持有当前 query、filter、sort、观察任务和三页窗口。搜索输入在 20 ms 内合并，输入时立即退役旧行；显式 Clear / refresh 立即重启请求。所有异步读结果在应用前检查 request generation、取消和版本，较晚返回的旧请求不得覆盖新状态。替换查询加载期间保持窗口高度，收到权威结果后在下一轮 MainActor 调整内容高度，不额外等待固定计时器。
 
 详情按需读元数据，表示载荷在用户选择预览、导出或打开时单独读取。复制来源分页独立于主列表。编辑器通过 [`ReviseEditorDraft.swift`](../ClipyApp/Sources/UI/ReviseEditorDraft.swift) 生成完整修订决策，提交带用户编辑基于的 `ContentVersion`。冲突明确反馈，不覆盖并发新内容；无字节变化不创建空修订。详情告诉用户原始内容和旧修订仍然保留，直到保留策略或删除回收。
 
@@ -49,6 +49,8 @@
 
 ## 设置与内存
 
-[`ClipySettingsView.swift`](../ClipyApp/Sources/UI/ClipySettingsView.swift) 包含常规、历史、外观、快捷键、保留、自动化、交互和维护。常规处理启动登录与捕获隐私；外观处理密度、位置、预览与字体；保留读实际持久配置并在可能删除数据前确认；维护显示逻辑用量和估算文件夹占用、备份与存储路径。设置草稿读取有自身 generation，较晚 readback 不能抹掉用户已输入的更改。
+[`ClipySettingsView.swift`](../ClipyApp/Sources/UI/ClipySettingsView.swift) 包含常规、历史、外观、快捷键、保留、自动化、交互和维护。常规处理启动登录与捕获隐私；外观处理密度、位置、预览、字体与十档动画速度；保留读实际持久配置并在可能删除数据前确认；维护显示逻辑用量和估算文件夹占用、备份与存储路径。设置草稿读取有自身 generation，较晚 readback 不能抹掉用户已输入的更改。
+
+动画默认第 10 档最快，第 1 档最慢。面板、预览和 Quick Look 共用出现曲线；最快档省略装饰性缩放和额外反馈动画，系统 Reduce Motion 关闭自定义动画。窗口位置与尺寸立即应用，关闭及失效内容清理不等待动画。时长设计、官方资料和测量范围见 [motion-performance.md](motion-performance.md)。
 
 缩略图和应用图标只缓存可重建结果。 [`ThumbnailStore.swift`](../ClipyApp/Sources/UI/ThumbnailStore.swift) 同时限制条目数和实际像素字节；可见图片持有独立像素 Data，冷数据放入 `NSCache` / `NSPurgeableData`。系统内存压力会取消不必要加载、丢弃冷缓存或停止预取，不把缓存当作权威内容。预览和缩略图细节见 [formats-preview.md](formats-preview.md)。

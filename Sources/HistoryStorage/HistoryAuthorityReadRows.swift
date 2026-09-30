@@ -43,7 +43,6 @@ internal struct ScalarReadRow {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
         id = HistoryItemID(rawValue: uuid)
-        let titleUTF8 = try statement.blob(at: 2)
         let date = try Date(timeIntervalSinceReferenceDate: statement.real(at: 4))
         let count = try sqliteUInt64(statement.blob(at: 5))
         let source = try statement.optionalText(at: 6)
@@ -63,7 +62,7 @@ internal struct ScalarReadRow {
             try RevisionStateBlobCodec.validateFiniteLastCopiedAt(date)
             try RevisionStateBlobCodec.validateCopyCount(count)
             try RevisionStateBlobCodec.validateSourceObservation(source, limits: limits)
-            return try ContentProjector.decodeStoredTitle(titleUTF8, limits: limits)
+            return try statement.utf8Blob(at: 2, maximumByteCount: limits.maximumStoredTitleUTF8Bytes)
         }
         effectiveTypeIdentifiersBlob = try statement.blob(at: 3)
         lastCopiedAt = date

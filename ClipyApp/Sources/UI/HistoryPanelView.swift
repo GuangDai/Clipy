@@ -37,11 +37,11 @@ enum PanelSessionSelection {
         rows.first?.item.id
     }
 
-    static func movedSelection(
+    static func movedSelection<Rows: RandomAccessCollection>(
         _ selection: HistoryItemID?,
-        in rows: [HistoryRow],
+        in rows: Rows,
         direction: PanelSelectionDirection
-    ) -> HistoryItemID? {
+    ) -> HistoryItemID? where Rows.Element == HistoryRow, Rows.Index == Int {
         guard !rows.isEmpty else { return nil }
         guard let selection,
               let currentIndex = rows.firstIndex(where: {
@@ -494,6 +494,9 @@ final class HistoryPanelSurfaceState {
 /// store from it, and only in-package callers inject a store directly.
 struct HistoryPanelView: View {
     @Environment(\.locale) private var locale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(AppMotionSettings.defaultsKey) private var motionLevel = AppMotionSpeed.fastest.rawValue
+    private var motionSpeed: AppMotionSpeed { AppMotionSpeed(rawValue: motionLevel) ?? .fastest }
     @AppStorage(PanelShortcutSettings.defaultsKey) private var shortcutData = Data()
     private var shortcuts: PanelShortcutSettings { PanelShortcutSettings.load(data: shortcutData) }
 
@@ -605,6 +608,10 @@ struct HistoryPanelView: View {
     }
 
     var body: some View {
+        let quickLookItem = surfaceState.resolvedQuickLookReference(
+            in: displayedSelectionRows,
+            hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
+        )
         ZStack {
             mainColumn
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -642,7 +649,8 @@ struct HistoryPanelView: View {
             // The content-fit oracle: any change to the displayed rows,
             // typography, or chrome republishes the analytic height demand;
             // the composition root coalesces and fits the hosting window.
-            .onChange(of: contentFitInput, initial: true) { _, input in
+            .onChange(of: reportedContentFitInput, initial: true) { _, input in
+                guard let input else { return }
                 onContentFitChange?(input)
             }
             .onChange(of: surfaceState.isSessionActive, initial: true) { _, isActive in
@@ -741,21 +749,26 @@ struct HistoryPanelView: View {
             // The quick-look overlay layers above the whole browsing panel;
             // it renders only while the surface
             // state holds a trigger-time exact reference.
-            if let quickLookItem = surfaceState.resolvedQuickLookReference(
-                in: displayedSelectionRows,
-                hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
-            ) {
-                HistoryQuickLookOverlay(
-                    viewState: viewState,
-                    previewState: previewState,
-                    item: quickLookItem,
-                    sourceIcons: sourceIcons,
-                    onDismiss: { surfaceState.quickLookReference = nil }
-                )
-                // Removed/revised content must not remain visible as a
-                // retained fading-out view after its target is invalidated.
-                .transition(.identity)
+            ZStack {
+                if let quickLookItem {
+                    HistoryQuickLookOverlay(
+                        viewState: viewState,
+                        previewState: previewState,
+                        item: quickLookItem,
+                        sourceIcons: sourceIcons,
+                        onDismiss: { surfaceState.quickLookReference = nil }
+                    )
+                    // Removal has no transition; invalidated sensitive
+                    // content leaves immediately, including during insertion.
+                    .transition(AppMotionArrival.transition(speed: motionSpeed, reduceMotion: reduceMotion))
+                }
             }
+            .animation(
+                quickLookItem == nil ? nil : AppMotionSettings.animation(
+                    speed: motionSpeed, reduceMotion: reduceMotion, effect: .presentation
+                ),
+                value: quickLookItem != nil
+            )
         }
     }
 
@@ -825,7 +838,10 @@ struct HistoryPanelView: View {
         // Restrained motion, SwiftUI-local only: the failure banner's
         // appearance animates inside the browsing column.
         .animation(
-            .easeInOut(duration: 0.18),
+            AppMotionSettings.animation(
+                speed: motionSpeed,
+                reduceMotion: reduceMotion
+            ),
             value: isFailureBannerVisible
         )
     }
@@ -895,6 +911,15 @@ struct HistoryPanelView: View {
     /// states report the full-height demand instead of the row-derived one
     /// (the overlay condition is the same resolved reference the ZStack
     /// renders with, keeping demand and rendering in lockstep).
+    private var reportedContentFitInput: PanelContentFit.Input? {
+        let input = contentFitInput
+        // A replacement query clears old rows immediately. Its temporary
+        // empty loading surface keeps the current window height; genuine
+        // empty results and failures still publish their settled demand.
+        guard !viewState.isLoadingFirstPage || input.prefersFullHeight else { return nil }
+        return input
+    }
+
     private var contentFitInput: PanelContentFit.Input {
         let snippetLineLimit = appearance.snippetLineCount.baseLineLimit(
             density: appearance.rowDensity

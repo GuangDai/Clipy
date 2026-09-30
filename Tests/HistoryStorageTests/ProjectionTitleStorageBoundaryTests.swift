@@ -56,22 +56,26 @@ struct ProjectionTitleStorageBoundaryTests {
             Issue.record("Expected the real capture writer to insert a History Item")
             return
         }
-        let (title, body) = try await history.authority.projectionBytesForRoundTripTest(reference.id)
+        let (title, body, decodedTitle, decodedBody) = try await history.authority.projectionBytesForRoundTripTest(reference.id)
         #expect(title == expectedTitle)
         #expect(body == expectedBody)
-        #expect(Data(try ContentProjector.decodeStoredTitle(title, limits: .standard).utf8) == expectedTitle)
-        #expect(Data(try ContentProjector.decodeStoredSearchBody(body, limits: .standard).utf8) == expectedBody)
+        #expect(Data(decodedTitle.utf8) == expectedTitle)
+        #expect(Data(decodedBody.utf8) == expectedBody)
     }
 }
 
 private extension HistoryAuthority {
-    func projectionBytesForRoundTripTest(_ id: HistoryItemID) throws -> (Data, Data) {
+    func projectionBytesForRoundTripTest(_ id: HistoryItemID) throws -> (Data, Data, String, String) {
         let statement = try database.prepare(
             "SELECT titleUTF8, searchBodyUTF8 FROM history_items WHERE id = ?",
             bindings: [.text(id.rawValue.uuidString)]
         )
         defer { statement.finalize() }
         guard try statement.step() else { throw HistoryFailure.notFound(id) }
-        return (try statement.blob(at: 0), try statement.blob(at: 1))
+        return (
+            try statement.blob(at: 0), try statement.blob(at: 1),
+            try statement.utf8Blob(at: 0, maximumByteCount: limits.maximumStoredTitleUTF8Bytes),
+            try statement.utf8Blob(at: 1, maximumByteCount: limits.maximumStoredSearchBodyUTF8Bytes)
+        )
     }
 }

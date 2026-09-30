@@ -468,6 +468,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         stopSummonShortcut()
         panelContentFitTask?.cancel()
         panelContentFitTask = nil
+        pendingPanelContentFitInput = nil
         removeMemoryPressureObservation()
         removeWorkspaceLifecycleObservation()
         if let defaultsObserverToken {
@@ -760,6 +761,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onFrameChanged: { [weak self] in
                     self?.followMainPanelFrameWithPreview()
                 },
+                presentationDuration: { AppMotionSettings.duration(for: $0) },
                 onClosed: { [weak self] in self?.panelDidClose() }
             )
         }
@@ -855,10 +857,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Content-fit coalescing: row/chrome changes arrive in bursts (page
     /// loads, banner transitions), so the latest analytic demand applies
-    /// after a short settle — the same replaceable-task discipline as the
-    /// panel's deferred focus-loss close.
+    /// on the next MainActor turn. A single slot retains only the latest
+    /// demand without restarting a timer for every intermediate update.
     @ObservationIgnored
     private var panelContentFitTask: Task<Void, Never>?
+    @ObservationIgnored
+    private var pendingPanelContentFitInput: PanelContentFit.Input?
 
     @ObservationIgnored
     private var floatingPreviewFitTask: Task<Void, Never>?
@@ -880,15 +884,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// The panel content's analytic height demand (HistoryPanelView's
-    /// `PanelContentFit.Input` reports). Coalesced ~40 ms, then applied to
+    /// `PanelContentFit.Input` reports). Coalesced one MainActor turn, then applied to
     /// the window through FloatingPanel's instant, top-edge-pinned fit;
     /// the persisted height is the ceiling, never a fixed size.
     func panelContentFitDidChange(_ input: PanelContentFit.Input) {
-        panelContentFitTask?.cancel()
+        guard !isTerminating, panel?.isPresented == true else { return }
+        pendingPanelContentFitInput = input
+        guard panelContentFitTask == nil else { return }
         panelContentFitTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(40))
             guard !Task.isCancelled, let self else { return }
             self.panelContentFitTask = nil
+            guard let input = self.pendingPanelContentFitInput else { return }
+            self.pendingPanelContentFitInput = nil
             self.panel?.fitToContent(
                 idealHeight: PanelContentFit.idealHeight(input)
             )
@@ -952,7 +959,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if floatingPreviewPanel == nil {
                 floatingPreviewPanel = FloatingPreviewPanel(
-                    rootView: FloatingPreviewRootView(appDelegate: self)
+                    rootView: FloatingPreviewRootView(appDelegate: self),
+                    presentationDuration: { AppMotionSettings.duration(for: $0) }
                 )
             }
             updatePreviewHeightCeiling()
@@ -980,6 +988,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isPanelKeepOpenActive = false
         panelContentFitTask?.cancel()
         panelContentFitTask = nil
+        pendingPanelContentFitInput = nil
         composition?.cancelPendingPaste()
         if let composition {
             composition.historyBrowsingPreferences.rememberReadingPosition(
@@ -1307,6 +1316,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     var panelForTesting: FloatingPanel? { panel }
+
+    func waitForPanelContentFitForTesting() async {
+        await panelContentFitTask?.value
+    }
 
     /// Hosted Card 15D tests enter through the composition-owned callback
     /// boundary without constructing an AX tree or real assistive client.

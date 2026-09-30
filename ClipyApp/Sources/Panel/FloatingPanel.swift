@@ -62,6 +62,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     private let onPanelClosed: () -> Void
     private let onSubmitSelection: () -> Void
     private let isSelectionSubmissionEnabled: () -> Bool
+    private let presentationDuration: @MainActor (NSScreen?) -> TimeInterval
 
     /// Invoked when the panel changes screens, so the AppDelegate can hide
     /// the floating preview pane rather than leave it on the old display.
@@ -94,6 +95,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// smaller than the new ceiling shrinks the panel).
     private var isLiveResizeActive = false
     private var liveResizeStartingSize: NSSize?
+    private var isSettlingLiveResize = false
 
     /// AppKit can notify the parent that it resigned key before
     /// `beginSheetModal` has made `attachedSheet` observable. Defer the close
@@ -112,6 +114,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         isKeepOpenActive: @escaping () -> Bool = { false },
         onDidChangeScreen: @escaping () -> Void = {},
         onFrameChanged: @escaping () -> Void = {},
+        presentationDuration: @escaping @MainActor (NSScreen?) -> TimeInterval = { _ in 0 },
         onClosed: @escaping () -> Void
     ) {
         self.previewState = previewState
@@ -120,6 +123,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         self.isKeepOpenActive = isKeepOpenActive
         self.onDidChangeScreen = onDidChangeScreen
         self.onFrameChanged = onFrameChanged
+        self.presentationDuration = presentationDuration
         self.onPanelClosed = onClosed
         super.init(
             contentRect: NSRect(
@@ -271,9 +275,20 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             lastPositionAnchor: Self.savedAnchor()
         )
         setFrameProgrammatically(NSRect(origin: origin, size: size), display: false)
+        let duration = isPresented ? 0 : presentationDuration(screen)
+        if !isPresented {
+            setPresentationAlphaImmediately(duration > 0 ? 0.92 : 1)
+        }
         orderFrontRegardless()
         makeKey()
         isPresented = true
+        if duration > 0 {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = duration
+                context.timingFunction = AppMotionTiming.nativeTimingFunction
+                animator().alphaValue = 1
+            }
+        }
         if outsideClickMonitor == nil {
             // A desktop click need not transfer key status from a nonactivating
             // panel. Global mouse observation covers that path without keyboard
@@ -298,6 +313,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         deferredFocusLossCloseTask = nil
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         outsideClickMonitor = nil
+        setPresentationAlphaImmediately(1)
         super.close()
         isPresented = false
         onPanelClosed()
@@ -409,10 +425,11 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// panel frame IS the whole surface — the floating preview lives in its
     /// own child window and never enters this frame.
     func windowDidMove(_ notification: Notification) {
+        guard !isProgrammaticMove else { return }
         persistAnchor()
         // Child windows follow a drag, but their preferred side can become
         // offscreen. Recompute preview placement on the new parent frame.
-        onFrameChanged()
+        notifyFrameChanged()
     }
 
     private func persistAnchor() {
@@ -443,6 +460,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// to its displayed content (Maccy's popup semantics).
     func windowDidEndLiveResize(_ notification: Notification) {
         isLiveResizeActive = false
+        isSettlingLiveResize = true
         let saved = PanelGeometry.persistedSize(from: .standard)
         let widthChanged = liveResizeStartingSize?.width != frame.width
         let heightChanged = liveResizeStartingSize?.height != frame.height
@@ -493,6 +511,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         }
         persistAnchor()
         applyContentFit()
+        isSettlingLiveResize = false
+        // The persisted ceiling changes even when the last drag frame needs
+        // no correction. Publish once, after both persistence and fitting.
         onFrameChanged()
     }
 
@@ -500,7 +521,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// The AppDelegate re-places the visible floating preview pane so it
     /// keeps the main panel's height, side, and top alignment.
     func windowDidResize(_ notification: Notification) {
-        onFrameChanged()
+        guard !isProgrammaticMove else { return }
+        notifyFrameChanged()
     }
 
     // MARK: - Content fit
@@ -601,9 +623,25 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     }
 
     private func setFrameProgrammatically(_ frame: NSRect, display: Bool) {
+        guard self.frame != frame else { return }
         isProgrammaticMove = true
         setFrame(frame, display: display)
         isProgrammaticMove = false
+        notifyFrameChanged()
+    }
+
+    private func notifyFrameChanged() {
+        guard !isSettlingLiveResize else { return }
+        onFrameChanged()
+    }
+
+    private func setPresentationAlphaImmediately(_ value: CGFloat) {
+        // Replace any in-flight alpha transition before a synchronous close
+        // or a new open. No completion callback owns window lifecycle.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            animator().alphaValue = value
+        }
     }
 
 #if DEBUG

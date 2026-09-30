@@ -36,6 +36,97 @@ import Testing
 struct FloatingPanelFrameHostedTests {
 
     @Test
+    func contentFitCoalescesTheLatestDemandAndCloseRetiresAPendingDemand() async throws {
+        let restoreGeometry = isolatePersistedPanelGeometryKeys()
+        defer { restoreGeometry() }
+        let owner = AppDelegate()
+        defer { owner.closePanel() }
+        owner.openPanelForTesting()
+        let panel = try #require(owner.panelForTesting)
+        let initialHeight = panel.frame.height
+        let latest = PanelContentFit.Input(unpinnedRows: [
+            .init(isImageRow: false, snippetLineCount: 0),
+        ])
+        owner.panelContentFitDidChange(.init(prefersFullHeight: true))
+        owner.panelContentFitDidChange(latest)
+        #expect(panel.frame.height == initialHeight)
+        await owner.waitForPanelContentFitForTesting()
+        let fitted = panel.frame.height
+        #expect(fitted == PanelContentFit.clampedHeight(
+            PanelContentFit.idealHeight(latest),
+            ceiling: PanelGeometry.persistedSize(from: .standard).height
+        ))
+
+        owner.panelContentFitDidChange(.init())
+        owner.closePanel()
+        owner.openPanelForTesting()
+        await owner.waitForPanelContentFitForTesting()
+        await Task.yield()
+        #expect(panel.isPresented)
+        #expect(panel.frame.height == fitted)
+    }
+
+    @Test
+    func programmaticFitPublishesOnceAndResizeSettlePublishesTheSavedCeiling() throws {
+        let restoreGeometry = isolatePersistedPanelGeometryKeys()
+        defer { restoreGeometry() }
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        try #require(screen.visibleFrame.height >= 420)
+        let owner = AppDelegate()
+        let changes = PanelFrameChangeProbe()
+        let panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: owner),
+            previewState: owner.previewState,
+            onFrameChanged: {
+                changes.count += 1
+                changes.savedCeiling = PanelGeometry.persistedSize(from: .standard).height
+            },
+            onClosed: {}
+        )
+        defer { panel.close() }
+        panel.open(at: .center, statusItemButtonScreenFrame: nil)
+        changes.count = 0
+        panel.fitToContent(idealHeight: 200)
+        #expect(changes.count == 1)
+        panel.fitToContent(idealHeight: 200)
+        #expect(changes.count == 1)
+
+        panel.windowWillStartLiveResize(Notification(name: NSWindow.willStartLiveResizeNotification, object: panel))
+        panel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.maxY - 300,
+                              width: panel.frame.width, height: 300), display: false)
+        panel.fitToContent(idealHeight: 100)
+        changes.count = 0
+        panel.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification, object: panel))
+        #expect(changes.count == 1)
+        #expect(changes.savedCeiling == 300)
+        #expect(panel.frame.height == 100)
+    }
+
+    @Test
+    func anAnimatedOpenIsImmediatelyVisibleAndCloseNeverWaitsForAnimation() throws {
+        let owner = AppDelegate()
+        var closeCount = 0
+        let panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: owner),
+            previewState: owner.previewState,
+            presentationDuration: { _ in 0.435 },
+            onClosed: { closeCount += 1 }
+        )
+        defer { panel.close() }
+        for _ in 0..<2 {
+            panel.open(at: .center, statusItemButtonScreenFrame: nil)
+            #expect(panel.isPresented)
+            #expect(panel.isVisible)
+            #expect(panel.alphaValue >= 0.9)
+            panel.close()
+            #expect(!panel.isPresented)
+            #expect(!panel.isVisible)
+            #expect(panel.alphaValue == 1)
+        }
+        #expect(closeCount == 2)
+    }
+
+    @Test
     func aReachablePanelFitsChangedDisplayBoundsWithoutSavingTheClippedSize() {
         let saved = PanelGeometry.persistedSize(from: .standard)
         let appDelegate = AppDelegate()
@@ -821,4 +912,10 @@ struct FloatingPanelFrameHostedTests {
 private final class PreviewFollowBox {
     var panel: FloatingPanel?
     var preview: FloatingPreviewPanel?
+}
+
+@MainActor
+private final class PanelFrameChangeProbe {
+    var count = 0
+    var savedCeiling: CGFloat?
 }

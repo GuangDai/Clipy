@@ -14,6 +14,7 @@ internal enum PreviewTextTypography {
             // A short prefix can occupy the first segment by itself, leaving
             // the next segment's combining sequence cold at publication.
             for segment in text.displaySegments.prefix(2) where !segment.isEmpty {
+                guard !Task.isCancelled else { return }
                 let attributed = NSAttributedString(string: String(segment), attributes: [
                     NSAttributedString.Key(rawValue: kCTFontAttributeName as String): font
                 ])

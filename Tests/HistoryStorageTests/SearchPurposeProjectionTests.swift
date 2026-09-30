@@ -20,7 +20,7 @@ struct SearchPurposeProjectionTests {
         let first = await history.measureSearch(.init(kind: kind, limit: 7, sortOrder: sortOrder))
         let firstPage = try first.result.get()
         #expect(firstPage.rows.count == 7)
-        #expect(first.metrics.rowsDecoded == 12)
+        #expect(first.metrics.rowsDecoded == firstPage.rows.count + 1)
         #expect(first.metrics.batchCount == 1)
         #expect(firstPage.rows.allSatisfy { $0.search == nil })
 

@@ -8,7 +8,7 @@
 /// rendered content's height, top edges aligned, trailing
 /// side when the screen's visible frame has room, otherwise leading; clamped into the
 /// visible frame. Placement applies with an instant, non-animated
-/// `setFrame`; the SwiftUI content's own opacity fade is the only motion.
+/// `setFrame`; only a newly shown window has a short alpha transition.
 ///
 /// The pane is a CHILD window of the main panel, so it follows the parent's
 /// ordering and can never outlive it. Showing it preserves the browsing
@@ -27,6 +27,7 @@ final class FloatingPreviewPanel: NSPanel {
     private var contentHeight: CGFloat?
     private let previewState: PreviewPaneState
     private let defaults: UserDefaults
+    private let presentationDuration: @MainActor (NSScreen?) -> TimeInterval
     private var placement: PreviewPlacement = .trailing
     private var lastParentFrame: NSRect?
     private var resizedAnchor: (innerEdge: CGFloat, width: CGFloat, gap: CGFloat, placement: PreviewPlacement)?
@@ -40,9 +41,14 @@ final class FloatingPreviewPanel: NSPanel {
         if let parent, isPresented { present(beside: parent) }
     }
 
-    init(rootView: FloatingPreviewRootView, defaults: UserDefaults = .standard) {
+    init(
+        rootView: FloatingPreviewRootView,
+        defaults: UserDefaults = .standard,
+        presentationDuration: @escaping @MainActor (NSScreen?) -> TimeInterval = { _ in 0 }
+    ) {
         self.previewState = rootView.appDelegate.previewState
         self.defaults = defaults
+        self.presentationDuration = presentationDuration
         super.init(
             contentRect: NSRect(
                 x: 0, y: 0,
@@ -129,7 +135,7 @@ final class FloatingPreviewPanel: NSPanel {
     }
 
     /// Shows the pane beside `mainPanel` (or re-positions an already
-    /// visible pane), without animation. Recomputing the frame on every
+    /// visible pane), without animating geometry. Recomputing the frame on every
     /// call keeps the pane aligned to the main panel while retaining its
     /// independently measured content height.
     func present(beside mainPanel: NSWindow) {
@@ -150,13 +156,26 @@ final class FloatingPreviewPanel: NSPanel {
             preferredInnerEdge: resizedAnchor?.innerEdge
         )
         self.placement = placement.placement
-        setFrame(placement.frame, display: isPresented)
+        if frame != placement.frame {
+            setFrame(placement.frame, display: isPresented)
+        }
         publishDisplayedGeometry()
         if mainPanel.childWindows?.contains(self) != true {
             mainPanel.addChildWindow(self, ordered: .above)
         }
-        orderFrontRegardless()
-        isPresented = true
+        if !isPresented {
+            let duration = presentationDuration(screen ?? mainPanel.screen)
+            setPresentationAlphaImmediately(duration > 0 ? 0.92 : 1)
+            orderFrontRegardless()
+            isPresented = true
+            if duration > 0 {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = duration
+                    context.timingFunction = AppMotionTiming.nativeTimingFunction
+                    animator().alphaValue = 1
+                }
+            }
+        }
     }
 
     /// SwiftUI owns the drag gesture; AppKit supplies screen-space pointer
@@ -168,12 +187,13 @@ final class FloatingPreviewPanel: NSPanel {
             previewState.beginPreviewResize()
         }
         guard let widthResize else { return }
-        setFrame(PopupPositionGeometry.resizedFloatingPreviewFrame(
+        let resized = PopupPositionGeometry.resizedFloatingPreviewFrame(
             from: widthResize.frame,
             placement: widthResize.placement,
             pointerDeltaX: screenX - widthResize.pointerX,
             in: parent?.screen?.visibleFrame
-        ), display: true)
+        )
+        if frame != resized { setFrame(resized, display: true) }
         publishDisplayedGeometry()
     }
 
@@ -204,8 +224,20 @@ final class FloatingPreviewPanel: NSPanel {
     }
 
     private func publishDisplayedGeometry() {
-        previewState.displayedPreviewWidth = frame.width
-        previewState.isPreviewOnLeadingSide = placement == .leading
+        if previewState.displayedPreviewWidth != frame.width {
+            previewState.displayedPreviewWidth = frame.width
+        }
+        let isLeading = placement == .leading
+        if previewState.isPreviewOnLeadingSide != isLeading {
+            previewState.isPreviewOnLeadingSide = isLeading
+        }
+    }
+
+    private func setPresentationAlphaImmediately(_ value: CGFloat) {
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            animator().alphaValue = value
+        }
     }
 
     private func rememberResizeAnchor(_ frame: NSRect, placement: PreviewPlacement) {
@@ -235,6 +267,7 @@ final class FloatingPreviewPanel: NSPanel {
             panel.makeKey()
         }
         parent?.removeChildWindow(self)
+        setPresentationAlphaImmediately(1)
         orderOut(nil)
         isPresented = false
         previewState.endPreviewResize()

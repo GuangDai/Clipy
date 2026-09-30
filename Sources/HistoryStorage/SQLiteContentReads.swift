@@ -95,7 +95,7 @@ internal struct SQLiteContentReads {
                 || statement.textByteCount(at: 7) <= limits.maximumSourceApplicationObservationUTF8Bytes
         else { throw corrupt }
         let currentContentID = try uuid(statement.text(at: 1))
-        let title = try title(statement.blob(at: 2))
+        let title = try statement.utf8Blob(at: 2, maximumByteCount: limits.maximumStoredTitleUTF8Bytes)
         let first = try Date(timeIntervalSinceReferenceDate: statement.real(at: 3))
         let last = try Date(timeIntervalSinceReferenceDate: statement.real(at: 4))
         let count = try sqliteUInt64(statement.blob(at: 5))
@@ -277,7 +277,7 @@ internal struct SQLiteContentReads {
         let id = try uuid(row.text(at: 0))
         let ordinal = try nonnegativeInt(row.integer(at: 1))
         let createdAt = try row.real(at: 2)
-        let title = try title(row.blob(at: 3))
+        let title = try row.utf8Blob(at: 3, maximumByteCount: limits.maximumStoredTitleUTF8Bytes)
         let byteCount = try nonnegativeInt(row.integer(at: 4))
         let count = try nonnegativeInt(row.integer(at: 5))
         guard createdAt.isFinite,
@@ -286,12 +286,6 @@ internal struct SQLiteContentReads {
         else { throw corrupt }
         return SQLiteStoredContent(id: id, ordinal: ordinal, createdAt: Date(timeIntervalSinceReferenceDate: createdAt),
                                    title: title, byteCount: byteCount, representationCount: count)
-    }
-
-    private func title(_ bytes: Data) throws -> String {
-        guard bytes.count <= limits.maximumStoredTitleUTF8Bytes,
-              let value = String(validating: bytes, as: UTF8.self) else { throw corrupt }
-        return value
     }
 
     private func uuid(_ text: String) throws -> UUID {

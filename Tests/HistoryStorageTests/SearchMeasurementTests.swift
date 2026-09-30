@@ -16,9 +16,9 @@ struct SearchMeasurementTests {
             ))
             let page = try measured.result.get()
             #expect(page.rows.count == 7)
-            #expect(measured.metrics.rowsDecoded == 32)
             #expect(measured.metrics.batchCount == 1)
             if mode == .fuzzy {
+                #expect(measured.metrics.rowsDecoded <= SearchWorker.maximumBatchRows)
                 #expect(measured.metrics.rowsEvaluated == 32)
                 #expect(measured.metrics.matchesFound == 32)
                 #expect(measured.metrics.stopReason == .provenBestScore)
@@ -26,6 +26,7 @@ struct SearchMeasurementTests {
                 // The first page evaluates page+lookahead. Continuations
                 // also evaluate their inclusive anchor before dropping it.
                 #expect(measured.metrics.rowsEvaluated == (pageNumber == 0 ? 8 : 9))
+                #expect(measured.metrics.rowsDecoded == measured.metrics.rowsEvaluated)
                 #expect(measured.metrics.matchesFound == measured.metrics.rowsEvaluated)
                 #expect(measured.metrics.stopReason == .pageBudget)
             }

@@ -13,22 +13,32 @@ public struct PreviewText: Equatable, Sendable {
     public let displaySegmentGroups: [Range<Int>]
 
     internal init(text: String, wasTruncated: Bool, configuration: PreviewTextConfiguration = .init()) {
+        self.init(text: text, wasTruncated: wasTruncated, configuration: configuration, checkCancellation: {})
+    }
+
+    internal init(text: String, wasTruncated: Bool, configuration: PreviewTextConfiguration,
+                  checkCancellation: () throws -> Void) rethrows {
+        try checkCancellation()
         let end = configuration.maximumCharacters.flatMap {
             text.index(text.startIndex, offsetBy: $0, limitedBy: text.endIndex)
         } ?? text.endIndex
+        try checkCancellation()
         self.text = String(text[..<end])
         self.wasTruncated = wasTruncated || end != text.endIndex
-        let segments = Self.segment(self.text,
-            budget: configuration.segmentUTF16Budget, lineBreakBudget: configuration.segmentLineBreakBudget)
+        let segments = try Self.segment(self.text,
+            budget: configuration.segmentUTF16Budget, lineBreakBudget: configuration.segmentLineBreakBudget,
+            checkCancellation: checkCancellation)
         self.displaySegments = segments
-        self.displaySegmentGroups = Self.group(segments)
+        self.displaySegmentGroups = try Self.group(segments, checkCancellation: checkCancellation)
+        try checkCancellation()
     }
 
-    private static func group(_ segments: [Substring]) -> [Range<Int>] {
+    private static func group(_ segments: [Substring], checkCancellation: () throws -> Void) rethrows -> [Range<Int>] {
         var groups: [Range<Int>] = []
         var start = 0
         var shortCount = 0
         for index in segments.indices {
+            if index.isMultiple(of: 256) { try checkCancellation() }
             // Ordinary long and multiline segments stay individual lazy
             // rows. Only short single-line values share one native bridge,
             // capped at eight fields and therefore 512 UTF-16 units.
@@ -61,13 +71,17 @@ public struct PreviewText: Equatable, Sendable {
         }
     }
 
-    private static func segment(_ text: String, budget: Int, lineBreakBudget: Int) -> [Substring] {
+    private static func segment(_ text: String, budget: Int, lineBreakBudget: Int,
+                                checkCancellation: () throws -> Void) rethrows -> [Substring] {
         var segments: [Substring] = []
         var start = text.startIndex
         var index = start
         var units = 0
         var lineBreaks = 0
+        var consumed = 0
         while index != text.endIndex {
+            if consumed.isMultiple(of: 1_024) { try checkCancellation() }
+            consumed += 1
             let next = text.index(after: index)
             let count = text[index..<next].utf16.count
             if units > 0, units + min(count, budget) > budget || lineBreaks >= lineBreakBudget {
@@ -90,6 +104,8 @@ public struct PreviewText: Equatable, Sendable {
                 let scalarBudget = min(budget, 64)
                 var scalarIndex = index
                 while scalarIndex != next {
+                    if consumed.isMultiple(of: 1_024) { try checkCancellation() }
+                    consumed += 1
                     let scalar = text.unicodeScalars[scalarIndex]
                     let width = scalar.value > 0xFFFF ? 2 : 1
                     if units + width > scalarBudget {

@@ -4,6 +4,31 @@ import Foundation
 import Testing
 
 struct PreviewTextResourceTests {
+    @Test(arguments: [(false, 4), (true, 4), (false, 12)])
+    func cancellationStopsCharacterScalarAndGroupPreparation(combining: Bool, cancellationCheck: Int) async {
+        let source = combining ? "e" + String(repeating: "\u{301}", count: 8_192)
+            : String(repeating: "x", count: 8_192)
+        let task = Task {
+            var checks = 0
+            do {
+                _ = try PreviewText(text: source, wasTruncated: false,
+                    configuration: .init(maximumCharacters: nil, segmentUTF16Budget: 2),
+                    checkCancellation: {
+                        checks += 1
+                        if checks == cancellationCheck { withUnsafeCurrentTask { $0?.cancel() } }
+                        try Task.checkCancellation()
+                    })
+                return false
+            } catch is CancellationError {
+                return checks == cancellationCheck
+            } catch {
+                Issue.record(error)
+                return false
+            }
+        }
+        #expect(await task.value)
+    }
+
     @Test(arguments: ["\n", "\r", "\r\n", "\u{B}", "\u{C}", "\u{85}", "\u{2028}", "\u{2029}"])
     func shortSegmentsWithAnyUnicodeNewlineHaveTheirOwnNativeBridge(newline: String) {
         let source = "ab" + newline + "cd"

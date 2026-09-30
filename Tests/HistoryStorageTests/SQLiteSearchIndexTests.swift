@@ -26,8 +26,8 @@ struct SQLiteSearchIndexTests {
             var result: [HistoryItemID: String] = [:]
             while try statement.step() {
                 let uuid = try #require(UUID(uuidString: statement.text(at: 0)))
-                result[HistoryItemID(rawValue: uuid)] = try ContentProjector.decodeStoredSearchBody(
-                    statement.blob(at: 1), limits: .standard
+                result[HistoryItemID(rawValue: uuid)] = try statement.utf8Blob(
+                    at: 1, maximumByteCount: HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes
                 )
             }
             return result

@@ -74,6 +74,11 @@ final class AppearanceJourneyUITests: XCTestCase {
                            "Changing appearance must preserve row layout.")
         }
         chooseOption("Follow macOS", in: appearance, app: app, context: "restore system appearance")
+        let motion = app.popUpButtons["clipy.settings.appearance.motion-speed"]
+        assertExists(motion, timeout: 5, in: app, context: "ten-level animation speed")
+        chooseOption("1 — Slowest", in: motion, app: app, context: "slower motion")
+        XCTAssertTrue(waitUntil(timeout: 5) { motion.value as? String == "1 — Slowest" },
+                      diagnostic(app, context: "motion choice applies immediately"))
         chooseOption("Comfortable", in: density, app: app, context: "row density")
         XCTAssertTrue(waitUntil(timeout: 5) { sample.frame.height > compactHeight },
                       diagnostic(app, context: "density changes the visible sample spacing"))
@@ -108,6 +113,10 @@ final class AppearanceJourneyUITests: XCTestCase {
         assertExists(lines, timeout: 5, in: app, context: "persisted line count")
         XCTAssertEqual(font.value as? String, "17.5")
         XCTAssertEqual(lines.value as? String, "5")
+        XCTAssertEqual(motion.value as? String, "1 — Slowest")
+        chooseOption("10 — Fastest", in: motion, app: app, context: "restore fastest motion")
+        XCTAssertTrue(waitUntil(timeout: 5) { motion.value as? String == "10 — Fastest" },
+                      diagnostic(app, context: "motion returns to fastest"))
         setAutomaticLines(true, control: automaticLines, app: app)
         enterNumber("13", in: font, app: app)
 

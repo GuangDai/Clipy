@@ -284,9 +284,13 @@ public actor ContentPreview {
             guard let decoded = codec.decode(representation.bytes), !decoded.isEmpty else {
                 return .failed(.malformedRepresentation)
             }
-            return .content(.text(PreviewText(
-                text: decoded, wasTruncated: false, configuration: textConfiguration
-            )))
+            do {
+                return .content(.text(try PreviewText(
+                    text: decoded, wasTruncated: false, configuration: textConfiguration,
+                    checkCancellation: { try Task.checkCancellation() }
+                )))
+            } catch is CancellationError { return .failed(.cancelled) }
+            catch { return .failed(.malformedRepresentation) }
         case .rtf:
             return PreviewRTFRenderer.render(representation.bytes, textConfiguration: textConfiguration)
         case .rtfd:

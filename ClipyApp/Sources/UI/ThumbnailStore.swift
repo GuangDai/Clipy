@@ -100,7 +100,8 @@ final class ThumbnailStore {
     private(set) var isPrefetchSuspended = false
 
     func setDisplayed(_ item: HistoryItemReference, _ displayed: Bool) {
-        let count = (displayedItemCounts[item] ?? 0) + (displayed ? 1 : -1)
+        let previousCount = displayedItemCounts[item] ?? 0
+        let count = previousCount + (displayed ? 1 : -1)
         displayedItemCounts[item] = count > 0 ? count : nil
         if displayed {
             if isSurfaceActive, entries[item]?.width != nil, activeRasters[item] == nil {
@@ -113,6 +114,14 @@ final class ThumbnailStore {
                 }
             }
         } else if count <= 0 {
+            if previousCount > 0 {
+                // The row's .task only starts this independently owned work.
+                // Its last appearance must also retire it, so offscreen reads
+                // do not stay ahead of visible demand in the decode queue.
+                // Completion still records its actual terminal outcome; the
+                // removed token prevents it from filling a reappeared row.
+                inFlight.removeValue(forKey: item)?.task.cancel()
+            }
             if let raster = activeRasters.removeValue(forKey: item) {
                 retainColdPixels(raster.pixels, for: item)
             }

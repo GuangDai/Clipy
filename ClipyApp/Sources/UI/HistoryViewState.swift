@@ -117,9 +117,10 @@ final class HistoryViewState {
         }
     }
 
-    /// The raw search-field draft. Edits restart observation after a 250 ms
-    /// debounce; only the empty string means `.recent`. Exact and regexp
-    /// whitespace is syntax and is never rewritten by presentation state.
+    /// The raw search-field draft. Edits coalesce within a 20 ms window
+    /// before observation restarts; only the empty string means `.recent`.
+    /// Exact and regexp whitespace is syntax and is never rewritten by
+    /// presentation state.
     var searchText: String = "" {
         didSet {
             // Swift String equality merges canonically equivalent spellings,
@@ -227,7 +228,7 @@ final class HistoryViewState {
     private var observationTask: Task<Void, Never>?
     private var activationHasRequestedRestore = false
 
-    /// The pending 250 ms search-debounce task.
+    /// The pending frame-sized search-coalescing task.
     private var debounceTask: Task<Void, Never>?
 
     /// The one-shot page request owned by the current browsing lifecycle.
@@ -274,6 +275,18 @@ final class HistoryViewState {
     /// floating panel's viewport-driven prefetch policy.
     func recordReadingPosition(visibleRowIDs ids: [HistoryItemID]) {
         visibleRowIDs = Set(ids)
+    }
+
+    /// Workspace row geometry changes one membership in O(1). These IDs
+    /// have no visual consumer, so scrolling need not invalidate the workspace
+    /// or rebuild its page slice. The closed/loading lifecycle owns an empty set.
+    func recordReadingPosition(for itemID: HistoryItemID, isVisible: Bool) {
+        guard hasAuthoritativeFirstPage, !isLoadingFirstPage else { return }
+        if isVisible {
+            visibleRowIDs.insert(itemID)
+        } else {
+            visibleRowIDs.remove(itemID)
+        }
     }
 
     var hasPreviousPage: Bool { loadedPages.first?.previous != nil }
@@ -342,8 +355,10 @@ final class HistoryViewState {
     private var failNextEditorDetailsReadForTesting = false
 #endif
 
-    /// Search-edit debounce (V2-07 §4 feel: no per-keystroke re-observe).
-    private static let searchDebounceInterval: Duration = .milliseconds(250)
+    /// Merge same-turn edits without retaining a quarter-second idle delay.
+    /// Cancellation and authoritative publication still
+    /// belong to the existing query generation, not to this duration.
+    private static let searchDebounceInterval: Duration = .milliseconds(20)
 
     // MARK: - Init
 
@@ -1199,6 +1214,9 @@ final class HistoryViewState {
                 // Cancelled: a newer edit owns the restart.
                 return
             }
+            // Sleep may have completed before its MainActor continuation
+            // resumes. A newer input can still cancel it in that interval.
+            guard !Task.isCancelled else { return }
             self?.debounceTask = nil
             self?.startObservation()
         }

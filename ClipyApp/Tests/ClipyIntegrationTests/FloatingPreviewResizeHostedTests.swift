@@ -10,6 +10,44 @@ import Testing
 @Suite("Hosted floating-preview width", .serialized)
 @MainActor
 struct FloatingPreviewResizeHostedTests {
+    @Test
+    func repeatedPresentationKeepsTheFrameAndDoesNotRestartTheArrivalAnimation() throws {
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visible = screen.visibleFrame
+        let owner = AppDelegate()
+        let main = NSWindow(
+            contentRect: NSRect(x: visible.minX, y: visible.maxY - 420, width: 360, height: 420),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        main.isReleasedWhenClosed = false
+        main.orderFrontRegardless()
+        defer { main.close() }
+        var arrivals = 0
+        let preview = FloatingPreviewPanel(
+            rootView: FloatingPreviewRootView(appDelegate: owner),
+            presentationDuration: { _ in arrivals += 1; return 0.435 }
+        )
+        defer { preview.dismiss() }
+        preview.present(beside: main)
+        let firstFrame = preview.frame
+        #expect(preview.isVisible)
+        #expect(preview.alphaValue >= 0.9)
+        preview.present(beside: main)
+        #expect(preview.frame == firstFrame)
+        #expect(arrivals == 1)
+        #expect(main.childWindows?.filter { $0 === preview }.count == 1)
+
+        preview.fitToContent(height: 100)
+        #expect(preview.frame.height == 100)
+        #expect(arrivals == 1)
+        preview.dismiss()
+        #expect(!preview.isVisible)
+        #expect(preview.alphaValue == 1)
+        preview.present(beside: main)
+        #expect(arrivals == 2)
+        #expect(preview.frame.height == 100)
+    }
+
     @Test(arguments: [false, true])
     func resizingKeepsItsSideAndSavesOnlyAtMouseUp(leading: Bool) async throws {
         let item = try await capturedReference()

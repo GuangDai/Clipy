@@ -30,7 +30,6 @@ struct HistoryWorkspaceView: View {
     @State private var mutationStatus: SettingStatus?
     @State private var compactRows = false
     @State private var listWidth = 350.0
-    @State private var visibleIDs: Set<HistoryItemID> = []
     @State private var listViewportHeight: CGFloat = 0
     @State private var isActive = false
 
@@ -50,10 +49,10 @@ struct HistoryWorkspaceView: View {
 
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
     private func text(_ key: String) -> String { HistoryWorkspaceCopy.text(key, bundle: copyBundle) }
-    private var pageRows: [HistoryRow] {
+    private var pageRows: ArraySlice<HistoryRow> {
         let offsets = paging.rowOffsets(in: viewState.loadedRowRange)
         guard offsets.upperBound <= viewState.rows.count else { return [] }
-        return Array(viewState.rows[offsets])
+        return viewState.rows[offsets]
     }
     private var selectedRow: HistoryRow? {
         guard selectedIDs.count == 1, let id = selectedIDs.first else { return nil }
@@ -286,12 +285,13 @@ struct HistoryWorkspaceView: View {
 
     private var historyColumn: some View {
         let viewportHeight = listViewportHeight
+        let rows = pageRows
         return VStack(spacing: 0) {
             selectionToolbar.padding(10)
             Divider()
             if viewState.isLoadingFirstPage {
                 ProgressView(text("Loading history…")).frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if pageRows.isEmpty {
+            } else if rows.isEmpty {
                 ContentUnavailableView {
                     Label(text(viewState.isSearchActive || viewState.hasActiveFilters ? "No matching items" : "History is empty"),
                           systemImage: "clipboard")
@@ -300,7 +300,7 @@ struct HistoryWorkspaceView: View {
                 }
             } else {
                 List(selection: $selectedIDs) {
-                    ForEach(pageRows, id: \.item.id) { row in
+                    ForEach(rows, id: \.item.id) { row in
                         HistoryWorkspaceRow(row: row, thumbnails: thumbnails, sourceIcons: sourceIcons,
                                             compact: compactRows)
                             .tag(row.item.id)
@@ -312,11 +312,14 @@ struct HistoryWorkspaceView: View {
                                 let frame = proxy.frame(in: .named("history-workspace-list"))
                                 return frame.height > 0 && frame.maxY > 0 && frame.minY < viewportHeight
                             } action: { visible in
-                                if visible { visibleIDs.insert(row.item.id) }
-                                else { visibleIDs.remove(row.item.id) }
-                                recordReadingPosition()
+                                guard isActive else { return }
+                                viewState.recordReadingPosition(for: row.item.id, isVisible: visible)
                             }
-                            .onDisappear { visibleIDs.remove(row.item.id) }
+                            .onDisappear {
+                                if isActive {
+                                    viewState.recordReadingPosition(for: row.item.id, isVisible: false)
+                                }
+                            }
                             .accessibilityIdentifier("clipy.history.workspace.row." + row.item.id.description)
                     }
                 }
@@ -388,30 +391,33 @@ struct HistoryWorkspaceView: View {
     }
 
     private var previewColumn: some View {
-        VStack(spacing: 0) {
+        // Reuse one selected-row projection for this render. Action closures
+        // still resolve selectedRow when invoked, after any query invalidation.
+        let row = selectedRow
+        return VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Text(text("Preview")).font(.headline)
                 Spacer()
                 Button(action: copySelection) { Image(systemName: "doc.on.doc") }
-                    .disabled(selectedRow == nil || copyState.isCopying || isMutating)
+                    .disabled(row == nil || copyState.isCopying || isMutating)
                     .help(text("Copy to Clipboard"))
                     .accessibilityLabel(text("Copy to Clipboard"))
                     .accessibilityIdentifier("clipy.history.workspace.copy")
                 Button {
                     guard let row = selectedRow else { return }
                     submit(row.pinnedPosition == nil ? .pin(row.item.id) : .unpin(row.item.id))
-                } label: { Image(systemName: selectedRow?.pinnedPosition == nil ? "pin" : "pin.fill") }
-                .disabled(selectedRow == nil || isMutating)
-                .help(text(selectedRow?.pinnedPosition == nil ? "Pin" : "Unpin"))
-                .accessibilityLabel(text(selectedRow?.pinnedPosition == nil ? "Pin" : "Unpin"))
+                } label: { Image(systemName: row?.pinnedPosition == nil ? "pin" : "pin.fill") }
+                .disabled(row == nil || isMutating)
+                .help(text(row?.pinnedPosition == nil ? "Pin" : "Unpin"))
+                .accessibilityLabel(text(row?.pinnedPosition == nil ? "Pin" : "Unpin"))
                 .accessibilityIdentifier("clipy.history.workspace.pin")
                 Button { detailsItem = selectedRow?.item } label: { Image(systemName: "info.circle") }
-                    .disabled(selectedRow == nil || isMutating)
+                    .disabled(row == nil || isMutating)
                     .help(text("Details and editing…"))
                     .accessibilityLabel(text("Details and editing…"))
                     .accessibilityIdentifier("clipy.history.workspace.details")
                 Button { removalItem = selectedRow?.item } label: { Image(systemName: "trash") }
-                    .disabled(selectedRow == nil || isMutating)
+                    .disabled(row == nil || isMutating)
                     .help(text("Remove…"))
                     .accessibilityLabel(text("Remove…"))
                     .accessibilityIdentifier("clipy.history.workspace.remove")
@@ -419,7 +425,7 @@ struct HistoryWorkspaceView: View {
             .buttonStyle(.borderless)
             .padding(12)
             Divider()
-            if let row = selectedRow {
+            if let row {
                 HistoryPreviewView(viewState: viewState, previewState: previewState, item: row.item,
                                    sourceIcons: sourceIcons)
                     .id(row.item.id)
@@ -598,7 +604,6 @@ struct HistoryWorkspaceView: View {
     private func changePage(_ direction: HistoryWorkspacePaging.Direction) {
         guard !isLoading, !isMutating, canMove(direction) else { return }
         selectedIDs = []
-        visibleIDs = []
         if let request = paging.move(direction, loadedRange: viewState.loadedRowRange,
                                       hasPreviousPage: viewState.hasPreviousPage, hasNextPage: viewState.hasNextPage,
                                       hasKnownRowOffset: viewState.hasKnownRowOffset) {
@@ -701,8 +706,10 @@ struct HistoryWorkspaceView: View {
 
     private func recordReadingPosition() {
         guard isActive else { return }
-        let visible = pageRows.filter { visibleIDs.contains($0.item.id) }.map(\.item.id)
-        viewState.recordReadingPosition(visibleRowIDs: visible.isEmpty ? Array(pageRows.prefix(1).map(\.item.id)) : visible)
+        // Explicit page navigation mounts its list at the top. Subsequent
+        // row geometry supplies exact visible membership without rescanning
+        // or copying every row whenever one edge crosses the viewport.
+        viewState.recordReadingPosition(visibleRowIDs: pageRows.first.map { [$0.item.id] } ?? [])
     }
 }
 
