@@ -148,7 +148,7 @@ final class LanguageSelectionJourneyUITests: XCTestCase {
         let name = app.textFields["clipy.workflow.name"]
         XCTAssertTrue(name.waitForExistence(timeout: 10), app.debugDescription)
         assertLabel("clipy.workflow.title", equals: language.text("Workflows", "工作流"), within: app, in: app)
-        assertLabel("clipy.workflow.name", equals: language.text("Workflow name", "工作流名称"), within: app, in: app)
+        XCTAssertEqual(name.placeholderValue, language.text("Workflow name", "工作流名称"), app.debugDescription)
         let configuration = app.descendants(matching: .any)["clipy.workflow.configuration"]
         XCTAssertTrue(configuration.waitForExistence(timeout: 5), app.debugDescription)
         for (english, chinese) in [("Steps", "步骤"), ("Trigger and scope", "触发方式与范围")] {

@@ -336,6 +336,53 @@ struct HistoryBackupTests {
         #expect(try await history.details(for: item.id).item == item)
     }
 
+    @Test(arguments: ["abcdefab-cdef-abcd-efab-cdefabcdefab", "not-a-uuid"])
+    func invalidStoredBlobIdentityRemovesPartialBackupAndPreservesSource(rawID: String) async throws {
+        let history = try await WSSupport.makeHistory()
+        let root = WSSupport.tempStoreURL("backup-invalid-blob-id")
+        defer { WSSupport.removeStore(root) }
+        let parent = root.deletingLastPathComponent()
+        let destination = parent.appendingPathComponent("export")
+        let item = try inserted(try await history.perform(.capture(capture(byte: 46))))
+        await history.authority.waitForBlobCleanup()
+        let id = try #require(UUID(uuidString: "ABCDEFAB-CDEF-ABCD-EFAB-CDEFABCDEFAB"))
+        let bytes = Data(repeating: 46, count: 128 * 1_024)
+        let sourceFile = try await history.authority.withTestDatabase { authority in
+            // Keep a real immutable file at the canonical path. A parser
+            // silently normalizing the lower-case reference would copy it
+            // and publish metadata that normal content readers reject.
+            _ = try authority.blobStore.write(bytes, id: id)
+            try authority.database.execute("""
+                UPDATE representations SET blobID=?
+                WHERE contentID=(SELECT currentContentID FROM history_items WHERE id=?)
+                  AND exactType='com.example.large'
+                """, bindings: [.text(rawID), .text(item.id.rawValue.uuidString)])
+            return authority.storeLocation.rootURL.appendingPathComponent(
+                "blobs/\(id.uuidString.prefix(2))/\(id.uuidString).blob"
+            )
+        }
+        let before = try await history.usage()
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await history.backup(to: destination)
+        }
+        #expect(!FileManager.default.fileExists(atPath: destination.path))
+        #expect(try FileManager.default.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            .allSatisfy { $0.pathExtension != "incomplete" })
+        #expect(try await history.usage() == before)
+        #expect(try Data(contentsOf: sourceFile) == bytes)
+        let unchangedID = try await history.authority.withTestDatabase { authority in
+            let row = try authority.database.prepare("""
+                SELECT blobID FROM representations
+                WHERE contentID=(SELECT currentContentID FROM history_items WHERE id=?)
+                  AND exactType='com.example.large'
+                """, bindings: [.text(item.id.rawValue.uuidString)])
+            defer { row.finalize() }
+            guard try row.step() else { throw HistoryFailure.persistence(.invariantViolation) }
+            return try row.text(at: 0)
+        }
+        #expect(unchangedID == rawID)
+    }
+
     @Test func cancelledBackupCreatesNoOutputAndLeavesHistoryUsable() async throws {
         let history = try await WSSupport.makeHistory()
         let root = WSSupport.tempStoreURL("backup-cancel")

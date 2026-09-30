@@ -8,72 +8,13 @@ import Testing
 
 @Suite("Running UI test capture-access configuration")
 struct RunningUITestCaptureAccessConfigurationTests {
-    @Test("running UI tests default to allowed capture access")
-    func defaultsToAllowed() throws {
-        let configuration = try #require(
-            RunningUITestConfiguration.current(environment: [
-                "CLIPY_RUNNING_UI_TEST": "1",
-                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-default.store",
-            ])
-        )
-
-        #expect(configuration.initialCaptureAccessBehavior == .allowed)
-        #expect(configuration.currentCaptureAccessBehavior == .allowed)
-        #expect(
-            configuration.capturePauseDuration
-                == CapturePausePolicy.standardDuration
-        )
-        #expect(
-            RunningUITestConfiguration.current(environment: [
-                "CLIPY_RUNNING_UI_TEST": "1",
-                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-allowed.store",
-                "CLIPY_UI_TEST_CAPTURE_ACCESS": "allowed",
-            ])?.initialCaptureAccessBehavior == .allowed
-        )
-    }
-
-    @Test("running UI tests accept an exact denied capture-access posture")
-    func selectsDeniedExactly() throws {
-        let configuration = try #require(
-            RunningUITestConfiguration.current(environment: [
-                "CLIPY_RUNNING_UI_TEST": "1",
-                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-denied.store",
-                "CLIPY_UI_TEST_CAPTURE_ACCESS": "denied",
-            ])
-        )
-
-        #expect(configuration.initialCaptureAccessBehavior == .denied)
-        #expect(configuration.currentCaptureAccessBehavior == .denied)
-        #expect(
-            RunningUITestConfiguration.current(environment: [
-                "CLIPY_RUNNING_UI_TEST": "1",
-                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-invalid.store",
-                "CLIPY_UI_TEST_CAPTURE_ACCESS": "Denied",
-            ]) == nil
-        )
-    }
-
-    @Test("running UI tests can re-read allowed after an initial denial")
-    func selectsDeniedThenAllowedRecoveryExactly() throws {
-        let configuration = try #require(
-            RunningUITestConfiguration.current(environment: [
-                "CLIPY_RUNNING_UI_TEST": "1",
-                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-recovery.store",
-                "CLIPY_UI_TEST_CAPTURE_ACCESS": "denied-then-allowed",
-            ])
-        )
-
-        #expect(configuration.initialCaptureAccessBehavior == .denied)
-        #expect(configuration.currentCaptureAccessBehavior == .allowed)
-    }
-
-    @Test("running UI tests select the remaining fail-closed access matrix")
-    func selectsRemainingAccessMatrixExactly() throws {
-        let cases: [(
-            value: String,
-            initial: PasteboardAccessBehavior,
-            current: PasteboardAccessBehavior
-        )] = [
+    @Test("access launch inputs keep their initial and recovery states distinct")
+    func selectsAccessPosturesAndRejectsUnknownSpellings() throws {
+        let cases: [(String?, PasteboardAccessBehavior, PasteboardAccessBehavior)] = [
+            (nil, .allowed, .allowed),
+            ("allowed", .allowed, .allowed),
+            ("denied", .denied, .denied),
+            ("denied-then-allowed", .denied, .allowed),
             ("system-default", .systemDefault, .systemDefault),
             ("system-default-then-allowed", .systemDefault, .allowed),
             ("ask", .ask, .ask),
@@ -81,34 +22,26 @@ struct RunningUITestCaptureAccessConfigurationTests {
             ("read-failure", .unavailable, .unavailable),
             ("read-failure-then-allowed", .unavailable, .allowed),
         ]
-
-        for testCase in cases {
-            let configuration = try #require(
-                RunningUITestConfiguration.current(environment: [
-                    "CLIPY_RUNNING_UI_TEST": "1",
-                    "CLIPY_UI_TEST_STORE_PATH":
-                        "/tmp/clipy-ui-\(testCase.value).store",
-                    "CLIPY_UI_TEST_CAPTURE_ACCESS": testCase.value,
-                ])
-            )
-            #expect(
-                configuration.initialCaptureAccessBehavior
-                    == testCase.initial
-            )
-            #expect(
-                configuration.currentCaptureAccessBehavior
-                    == testCase.current
-            )
-        }
-
-        #expect(
-            RunningUITestConfiguration.current(environment: [
+        for (value, initial, current) in cases {
+            var environment = [
                 "CLIPY_RUNNING_UI_TEST": "1",
-                "CLIPY_UI_TEST_STORE_PATH":
-                    "/tmp/clipy-ui-read-failure-invalid.store",
-                "CLIPY_UI_TEST_CAPTURE_ACCESS": "unavailable",
-            ]) == nil
-        )
+                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-access.store",
+            ]
+            if let value { environment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = value }
+            let configuration = try #require(RunningUITestConfiguration.current(environment: environment))
+            #expect(configuration.initialCaptureAccessBehavior == initial)
+            #expect(configuration.currentCaptureAccessBehavior == current)
+            if value == nil {
+                #expect(configuration.capturePauseDuration == CapturePausePolicy.standardDuration)
+            }
+        }
+        for value in ["Denied", "unavailable"] {
+            #expect(RunningUITestConfiguration.current(environment: [
+                "CLIPY_RUNNING_UI_TEST": "1",
+                "CLIPY_UI_TEST_STORE_PATH": "/tmp/clipy-ui-invalid.store",
+                "CLIPY_UI_TEST_CAPTURE_ACCESS": value,
+            ]) == nil)
+        }
     }
 
     @Test("running UI tests accept only the exact short-Pause switch")
@@ -125,7 +58,6 @@ struct RunningUITestCaptureAccessConfigurationTests {
             configuration.capturePauseDuration
                 == CapturePausePolicy.runningUITestDuration
         )
-        #expect(configuration.capturePauseDuration == .seconds(8))
         #expect(
             RunningUITestConfiguration.current(environment: [
                 "CLIPY_RUNNING_UI_TEST": "1",

@@ -37,7 +37,7 @@ final class AppearanceJourneyUITests: XCTestCase {
     /// row. The Settings sample also grows with density, line count and
     /// font size; screenshots retain the actual appearance for review.
     @MainActor
-    func testRowDensitySwitchPersistsAcrossSummons() throws {
+    func testRowDensityPersistsAcrossSummonsAndFiltersRestoreTheCapturedRow() throws {
         let captured = "clipy-density-row-check"
         let app = try launchApp(capturing: captured)
         defer { app.terminate() }
@@ -133,7 +133,8 @@ final class AppearanceJourneyUITests: XCTestCase {
         let generalTab = app.buttons["clipy.settings.category.general"]
         assertExists(generalTab, timeout: 5, in: app, context: "General tab")
         generalTab.click()
-        app.typeKey("w", modifierFlags: .command)
+        closeSettingsAndSummonPanel(control: generalTab, panel: panel, app: app)
+        assertFilterRestoresCapturedRow(captured, in: app)
     }
 
     /// With the auto-open preference off, selecting a row and outwaiting the
@@ -243,11 +244,7 @@ final class AppearanceJourneyUITests: XCTestCase {
     /// Links narrows to zero rows and the search empty state, then All
     /// restores the captured row without dismissing the floating panel.
     @MainActor
-    func testFilterMenuNarrowsRows() throws {
-        let captured = "alpha-filter-check"
-        let app = try launchApp(capturing: captured)
-        defer { app.terminate() }
-
+    private func assertFilterRestoresCapturedRow(_ captured: String, in app: XCUIApplication) {
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         let rows = historyRows(in: app)
         assertRowCount(1, in: rows, app: app, context: "filter initial capture")

@@ -366,16 +366,17 @@ extension SearchWorker {
     /// rejected conservatively: whitespace and `#` line comments would make
     /// a second structural grammar necessary to prove the same safety
     /// properties. These guards intentionally reject some valid but risky
-    /// patterns (03b §8); anything the scanner misreads structurally is
-    /// still caught by the compilation check that follows.
+    /// patterns (03b §8); malformed syntax is rejected by compilation.
     internal static func containsRejectedPatternShape(_ pattern: String) -> Bool {
         // ICU interprets syntax as Unicode scalars, not grapheme clusters.
         // A combining mark after `(`, `+`, `|`, or `}` must not hide that
         // token from the existing 03b §8 nested-quantifier/alternation check.
         // The separate query-size limits still count Characters.
-        let characters = Array(pattern.unicodeScalars)
+        let characters = removingEmptyQuotedLiterals(Array(pattern.unicodeScalars))
         var index = 0
-        var characterClassDepth = 0
+        // ICU permits a literal ']' immediately after '[' or '[^'. Keep
+        // that prefix separately so a class's literal '+' remains inert.
+        var characterClassPrefixes: [CharacterClassPrefix] = []
         var inQuotedLiteral = false
         var openGroupBodyContainsQuantifier: [Bool] = []
         var openGroupBodyContainsAlternation: [Bool] = []
@@ -403,11 +404,14 @@ extension SearchWorker {
                     inQuotedLiteral = false
                     index += 2
                 } else {
+                    if !characterClassPrefixes.isEmpty {
+                        characterClassPrefixes[characterClassPrefixes.count - 1] = .body
+                    }
                     index += 1
                 }
                 continue
             }
-            if characterClassDepth > 0 {
+            if !characterClassPrefixes.isEmpty {
                 if character == "\\" {
                     if index + 1 < characters.count,
                        characters[index + 1] == "Q" {
@@ -416,8 +420,11 @@ extension SearchWorker {
                         // brackets pass through as literals; otherwise a
                         // quoted `[` can hide a real `(class+)+` shape.
                         inQuotedLiteral = true
+                        index += 2
+                    } else {
+                        characterClassPrefixes[characterClassPrefixes.count - 1] = .body
+                        index = escapedTokenEnd(at: index, in: characters)
                     }
-                    index += 2
                     continue
                 }
                 // ICU UnicodeSet syntax admits nested sets and POSIX classes
@@ -426,9 +433,15 @@ extension SearchWorker {
                 // as a group quantifier (V1-Verified/03c). A literal bracket
                 // in a UnicodeSet is escaped, handled by the branch above.
                 if character == "[" {
-                    characterClassDepth += 1
+                    characterClassPrefixes[characterClassPrefixes.count - 1] = .body
+                    characterClassPrefixes.append(.first)
                 } else if character == "]" {
-                    characterClassDepth -= 1
+                    if characterClassPrefixes.last == .body { characterClassPrefixes.removeLast() }
+                    else { characterClassPrefixes[characterClassPrefixes.count - 1] = .body }
+                } else if character == "^", characterClassPrefixes.last == .first {
+                    characterClassPrefixes[characterClassPrefixes.count - 1] = .negatedFirst
+                } else {
+                    characterClassPrefixes[characterClassPrefixes.count - 1] = .body
                 }
                 index += 1
                 continue
@@ -443,13 +456,17 @@ extension SearchWorker {
                         // skipping it prevents both false positives and a
                         // quoted `[` from desynchronizing class depth.
                         inQuotedLiteral = true
+                        index += 2
                     } else if ("1"..."9").contains(escaped) || escaped == "k" {
                         return true
+                    } else {
+                        index = escapedTokenEnd(at: index, in: characters)
                     }
+                } else {
+                    index += 1
                 }
-                index += 2
             case "[":
-                characterClassDepth = 1
+                characterClassPrefixes.append(.first)
                 index += 1
             case "(":
                 if inlineFlagClauseEnablesComments(
@@ -460,11 +477,7 @@ extension SearchWorker {
                 } else if index + 2 < characters.count,
                    characters[index + 1] == "?",
                    characters[index + 2] == "#" {
-                    var cursor = index + 3
-                    while cursor < characters.count, characters[cursor] != ")" {
-                        cursor += 1
-                    }
-                    index = cursor + 1
+                    index = parenthesizedCommentEnd(at: index, in: characters) ?? characters.count
                 } else {
                     openGroupBodyContainsQuantifier.append(false)
                     openGroupBodyContainsAlternation.append(false)
@@ -543,7 +556,9 @@ extension SearchWorker {
                 cursor += 1
                 continue
             }
-            guard "ismwx".unicodeScalars.contains(flag) else { return false }
+            // ICU also accepts Unix-lines d and the compatibility no-op u.
+            // Stopping before either flag would miss a subsequent enabled x.
+            guard "idmsuwx".unicodeScalars.contains(flag) else { return false }
             if flag == "x", enabling {
                 return true
             }
@@ -559,15 +574,114 @@ extension SearchWorker {
         at index: Int,
         in characters: [Unicode.Scalar]
     ) -> Bool {
-        guard index < characters.count else { return false }
-        switch characters[index] {
+        var cursor = index
+        // ICU's expr-quant state resumes after a (?#...) comment: the
+        // comment does not introduce a term between the group and quantifier.
+        while let end = parenthesizedCommentEnd(at: cursor, in: characters) { cursor = end }
+        guard cursor < characters.count else { return false }
+        switch characters[cursor] {
         case "*", "+", "?":
             return true
         case "{":
-            return intervalQuantifierEnd(at: index, in: characters) != nil
+            return intervalQuantifierEnd(at: cursor, in: characters) != nil
         default:
             return false
         }
+    }
+
+    private enum CharacterClassPrefix: Equatable { case first, negatedFirst, body }
+
+    /// ICU nextChar consumes a complete escaped token before exposing syntax:
+    /// apple-oss-distributions/ICU icu4c/source/i18n/regexcmp.cpp, nextChar.
+    /// In particular \cX owns X even when X is ')'/'[', and \x{61}'s braces
+    /// belong to one literal, never an interval quantifier.
+    private static func escapedTokenEnd(at start: Int, in characters: [Unicode.Scalar]) -> Int {
+        guard start + 1 < characters.count else { return characters.count }
+        let escaped = characters[start + 1]
+        if escaped == "c" { return min(start + 3, characters.count) }
+        if escaped == "u" { return min(start + 6, characters.count) }
+        if escaped == "U" { return min(start + 10, characters.count) }
+        if "xNpP".unicodeScalars.contains(escaped), start + 2 < characters.count,
+           characters[start + 2] == "{" {
+            var cursor = start + 3
+            while cursor < characters.count, characters[cursor] != "}" { cursor += 1 }
+            return min(cursor + 1, characters.count)
+        }
+        if escaped == "x" { return min(start + 4, characters.count) }
+        return start + 2
+    }
+
+    /// Empty \Q\E emits no ICU token, including inside inline flag clauses.
+    /// Remove only those regions; nonempty quoted content and escape-owned
+    /// operands remain unchanged. The array is bounded by regexp admission.
+    private static func removingEmptyQuotedLiterals(_ characters: [Unicode.Scalar]) -> [Unicode.Scalar] {
+        var result: [Unicode.Scalar] = []
+        result.reserveCapacity(characters.count)
+        var cursor = 0
+        var quoted = false
+        while cursor < characters.count {
+            if quoted {
+                if characters[cursor] == "\\", cursor + 1 < characters.count,
+                   characters[cursor + 1] == "E" {
+                    result.append(contentsOf: characters[cursor..<(cursor + 2)])
+                    quoted = false
+                    cursor += 2
+                } else {
+                    result.append(characters[cursor])
+                    cursor += 1
+                }
+            } else if characters[cursor] == "\\", cursor + 1 < characters.count {
+                if characters[cursor + 1] == "Q" {
+                    if cursor + 3 < characters.count, characters[cursor + 2] == "\\",
+                       characters[cursor + 3] == "E" {
+                        cursor += 4
+                    } else {
+                        result.append(contentsOf: characters[cursor..<(cursor + 2)])
+                        quoted = true
+                        cursor += 2
+                    }
+                } else {
+                    let end = escapedTokenEnd(at: cursor, in: characters)
+                    result.append(contentsOf: characters[cursor..<end])
+                    cursor = end
+                }
+            } else {
+                result.append(characters[cursor])
+                cursor += 1
+            }
+        }
+        return result
+    }
+
+    /// Native inline comments share nextChar's \Q quoting and \cX escape
+    /// handling. An ordinary \) still ends the comment in ICU; a quoted or
+    /// control-escape-owned ')' does not.
+    private static func parenthesizedCommentEnd(at start: Int, in characters: [Unicode.Scalar]) -> Int? {
+        guard start + 2 < characters.count, characters[start] == "(",
+              characters[start + 1] == "?", characters[start + 2] == "#" else { return nil }
+        var cursor = start + 3
+        var quoted = false
+        while cursor < characters.count {
+            if quoted {
+                if characters[cursor] == "\\", cursor + 1 < characters.count,
+                   characters[cursor + 1] == "E" {
+                    quoted = false
+                    cursor += 2
+                } else { cursor += 1 }
+            } else if characters[cursor] == ")" {
+                return cursor + 1
+            } else if characters[cursor] == "\\", cursor + 1 < characters.count {
+                if characters[cursor + 1] == "Q" {
+                    quoted = true
+                    cursor += 2
+                } else if characters[cursor + 1] == ")" {
+                    return cursor + 2
+                } else {
+                    cursor = escapedTokenEnd(at: cursor, in: characters)
+                }
+            } else { cursor += 1 }
+        }
+        return nil
     }
 
     /// Parses a `{n}` / `{n,}` / `{n,m}` interval quantifier starting at

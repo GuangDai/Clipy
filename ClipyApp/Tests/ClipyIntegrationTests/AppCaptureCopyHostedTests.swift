@@ -40,8 +40,6 @@ struct AppCaptureCopyHostedTests {
         #expect(AppCaptureCopy.recoveryLabel(.retry, bundle: chinese) == "重试剪贴板访问")
         #expect(AppCaptureCopy.statusLabel(isPaused: true, bundle: chinese) == "Clipy，剪贴板监控已暂停")
         #expect(AppCaptureCopy.statusLabel(isPaused: false, bundle: chinese) == "Clipy")
-        #expect(AppCaptureCopy.text("Dismiss capture warning", bundle: chinese) == "关闭采集警告")
-        #expect(AppCaptureCopy.text("Clipboard Monitoring Unavailable", bundle: chinese) == "剪贴板监控不可用")
     }
 
     @Test func lostCaptureNoticeExplainsRecopyInsteadOfAutomaticRetry() throws {

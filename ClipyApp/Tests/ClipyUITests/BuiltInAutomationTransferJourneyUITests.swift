@@ -24,7 +24,7 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
         let clipboard = "clipboard unchanged by workflow transfer \(suffix)"
         let app = launch(directory: directory, clipboard: clipboard)
         defer { app.terminate(); NSPasteboard.general.clearContents() }
-        let manage = openWorkflows(in: app)
+        let manage = try openWorkflows(in: app)
         let name = app.textFields["clipy.workflow.name"]
         let source = app.textViews["clipy.workflow.source"]
         var createdIdentifiers: [String] = []
@@ -43,8 +43,8 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
         app.descendants(matching: .any)["clipy.workflow.load"].click()
         app.menuItems["New workflow"].click()
         XCTAssertTrue(name.waitForExistence(timeout: 5), app.debugDescription)
-        replaceText(of: name, with: originalName)
-        replaceText(of: source, with: originalInput)
+        try replaceText(of: name, with: originalName)
+        try replaceText(of: source, with: originalInput)
         let save = app.buttons["clipy.workflow.save"]
         save.click()
         XCTAssertTrue(waitUntil { !save.isEnabled }, app.debugDescription)
@@ -59,7 +59,7 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
 
         // Cancelling the review does not admit a draft, save a definition,
         // switch selection or discard the selected workflow's test input.
-        importFile(inputFile, in: app)
+        try importFile(inputFile, in: app)
         let review = app.descendants(matching: .any)["clipy.workflow.import.review"]
         XCTAssertTrue(review.waitForExistence(timeout: 10), app.debugDescription)
         XCTAssertTrue(app.staticTexts[importedName].exists, app.debugDescription)
@@ -73,7 +73,7 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
         XCTAssertFalse(workflowRow(named: importedName, in: app).exists)
         XCTAssertFalse(save.isEnabled)
 
-        importFile(inputFile, in: app)
+        try importFile(inputFile, in: app)
         XCTAssertTrue(review.waitForExistence(timeout: 10), app.debugDescription)
         app.buttons["clipy.workflow.import.confirm"].click()
         XCTAssertTrue(waitUntil {
@@ -98,7 +98,7 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
         let trigger = app.popUpButtons["clipy.workflow.trigger"]
         XCTAssertTrue(trigger.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertEqual(trigger.value as? String, "Manual only", app.debugDescription)
-        replaceText(of: source, with: importedInput)
+        try replaceText(of: source, with: importedInput)
         save.click()
         XCTAssertTrue(waitUntil { !save.isEnabled }, app.debugDescription)
 
@@ -108,7 +108,7 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
         let result = app.textViews["clipy.workflow.result"]
         XCTAssertTrue(waitUntil { result.value as? String == importedInput.uppercased() }, app.debugDescription)
         let outputFile = directory.appendingPathComponent("exported-definition.json")
-        exportFile(outputFile, workflowName: importedName, in: app)
+        try exportFile(outputFile, workflowName: importedName, in: app)
         XCTAssertTrue(waitUntil { FileManager.default.fileExists(atPath: outputFile.path) }, app.debugDescription)
         let exported = try Data(contentsOf: outputFile)
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: exported) as? [String: Any])
@@ -174,43 +174,50 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    private func importFile(_ url: URL, in app: XCUIApplication) {
+    private func importFile(_ url: URL, in app: XCUIApplication) throws {
         app.descendants(matching: .any)["clipy.workflow.load"].click()
         let action = app.menuItems["Import workflow…"]
-        XCTAssertTrue(action.waitForExistence(timeout: 5), app.debugDescription)
+        try require(action.waitForExistence(timeout: 5), app.debugDescription)
         action.click()
-        let open = app.buttons.matching(NSPredicate(format: "label IN %@", ["Open", "Import"])).firstMatch
-        XCTAssertTrue(waitUntil { open.exists && open.isHittable }, app.debugDescription)
-        goToPath(url.path, in: app)
-        XCTAssertTrue(waitUntil { open.exists && open.isHittable && open.isEnabled }, app.debugDescription)
+        // Native AppKit panel buttons expose their text through title;
+        // SwiftUI's confirmation buttons may expose it through label.
+        let open = app.buttons.matching(NSPredicate(
+            format: "title IN %@ OR label IN %@", ["Open", "Import"], ["Open", "Import"]
+        )).firstMatch
+        try require(waitUntil { open.exists && open.isHittable }, app.debugDescription)
+        try goToPath(url.path, panelAction: open, in: app)
+        try require(waitUntil { open.exists && open.isHittable && open.isEnabled }, app.debugDescription)
         open.click()
     }
 
     @MainActor
-    private func exportFile(_ url: URL, workflowName: String, in app: XCUIApplication) {
+    private func exportFile(_ url: URL, workflowName: String, in app: XCUIApplication) throws {
         app.descendants(matching: .any)["clipy.workflow.actions"].click()
         let action = app.menuItems["Export workflow…"]
-        XCTAssertTrue(action.waitForExistence(timeout: 5), app.debugDescription)
+        try require(action.waitForExistence(timeout: 5), app.debugDescription)
         action.click()
-        let save = app.buttons.matching(NSPredicate(format: "label IN %@", ["Save", "Export"])).firstMatch
-        XCTAssertTrue(waitUntil { save.exists && save.isHittable }, app.debugDescription)
+        let save = app.buttons.matching(NSPredicate(
+            format: "title IN %@ OR label IN %@", ["Save", "Export"], ["Save", "Export"]
+        )).firstMatch
+        try require(waitUntil { save.exists && save.isHittable }, app.debugDescription)
         // Find the native filename field by its proposed filename instead of
         // depending on an undocumented AppKit accessibility identifier.
         let filename = app.textFields.matching(NSPredicate(
             format: "value BEGINSWITH %@ AND identifier != %@", workflowName, "clipy.workflow.name"
         )).firstMatch
-        XCTAssertTrue(filename.waitForExistence(timeout: 5), app.debugDescription)
-        replaceText(of: filename, with: url.lastPathComponent)
-        goToPath(url.deletingLastPathComponent().path, in: app)
-        XCTAssertTrue(waitUntil { save.exists && save.isHittable && save.isEnabled }, app.debugDescription)
+        try require(filename.waitForExistence(timeout: 5), app.debugDescription)
+        try replaceText(of: filename, with: url.lastPathComponent)
+        try goToPath(url.deletingLastPathComponent().path, panelAction: save, in: app)
+        try require(waitUntil { save.exists && save.isHittable && save.isEnabled }, app.debugDescription)
         save.click()
     }
 
     @MainActor
-    private func goToPath(_ path: String, in app: XCUIApplication) {
+    private func goToPath(_ path: String, panelAction: XCUIElement, in app: XCUIApplication) throws {
         // This is the native Open/Save panel's Go to Folder keyboard path.
         // The caller checks the native action becomes available again before
         // submitting the chosen file or destination.
+        try require(panelAction.exists && panelAction.isHittable, app.debugDescription)
         app.typeKey("g", modifierFlags: [.command, .shift])
         app.typeKey("a", modifierFlags: .command)
         app.typeText(path)
@@ -218,23 +225,23 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    private func openWorkflows(in app: XCUIApplication) -> XCUIElement {
-        XCTAssertTrue(app.descendants(matching: .any)["clipy.panel.root"].waitForExistence(timeout: 20), app.debugDescription)
+    private func openWorkflows(in app: XCUIApplication) throws -> XCUIElement {
+        try require(app.descendants(matching: .any)["clipy.panel.root"].waitForExistence(timeout: 20), app.debugDescription)
         app.typeKey(",", modifierFlags: .command)
         let automation = app.buttons["clipy.settings.category.automation"]
-        XCTAssertTrue(automation.waitForExistence(timeout: 10), app.debugDescription)
+        try require(automation.waitForExistence(timeout: 10), app.debugDescription)
         automation.click()
         let manage = app.buttons["clipy.settings.workflows.manage"]
-        XCTAssertTrue(manage.waitForExistence(timeout: 5), app.debugDescription)
+        try require(manage.waitForExistence(timeout: 5), app.debugDescription)
         SettingsJourneyControls.scroll(manage, into: app.scrollViews.containing(.any, identifier: manage.identifier).firstMatch, app: app)
         manage.click()
-        XCTAssertTrue(app.textFields["clipy.workflow.name"].waitForExistence(timeout: 5), app.debugDescription)
+        try require(app.textFields["clipy.workflow.name"].waitForExistence(timeout: 5), app.debugDescription)
         return manage
     }
 
     @MainActor
-    private func replaceText(of field: XCUIElement, with value: String) {
-        XCTAssertTrue(field.isHittable)
+    private func replaceText(of field: XCUIElement, with value: String) throws {
+        try require(field.exists && field.isHittable)
         field.click()
         field.typeKey("a", modifierFlags: .command)
         field.typeText(value)
@@ -275,5 +282,15 @@ final class BuiltInAutomationTransferJourneyUITests: XCTestCase {
     private func waitUntil(_ condition: @escaping () -> Bool) -> Bool {
         let expectation = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in condition() }, object: nil)
         return XCTWaiter.wait(for: [expectation], timeout: 10) == .completed
+    }
+
+    @MainActor
+    private func require(
+        _ condition: @autoclosure () -> Bool,
+        _ message: @autoclosure () -> String = "",
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        _ = try XCTUnwrap(condition() ? true : nil, message(), file: file, line: line)
     }
 }

@@ -79,7 +79,7 @@ extension HistoryAuthority {
                 while try batch.step() {
                     try Task.checkCancellation()
                     let name = try batch.text(at: 0)
-                    guard let id = UUID(uuidString: name),
+                    guard let id = UUID(uuidString: name), id.uuidString == name,
                           let byteCount = Int(exactly: try batch.integer(at: 1)),
                           byteCount > 0, try batch.integer(at: 2) == Int64(byteCount) else {
                         throw HistoryFailure.persistence(.corruptStoredValue)

@@ -182,6 +182,8 @@ struct HistoryListScrollAnchorHostedTests {
             let host = NSHostingView(rootView: HostedPanel(
                 state: state, surface: surface, preview: preview, observation: observation
             ))
+            // Match FloatingPanel's externally controlled viewport size.
+            host.sizingOptions = []
             host.frame = NSRect(x: 0, y: 0, width: 420, height: 320)
             let window = NSWindow(contentRect: host.frame, styleMask: [.borderless],
                                   backing: .buffered, defer: false)
@@ -203,15 +205,17 @@ struct HistoryListScrollAnchorHostedTests {
         func scroll(to fraction: Double, expectedFirstVisibleIndex: Range<Int>) async throws {
             let ready = await ComposedSupport.waitFor {
                 self.host.layoutSubtreeIfNeeded()
-                return self.scrollElement()?.accessibilityVerticalScrollBar() != nil
+                return self.scrollElement().flatMap { self.verticalScroller(of: $0) } != nil
             }
-            try #require(ready, "The mounted production list exposes its vertical scrollbar")
-            let scroller = try #require(
-                scrollElement()?.accessibilityVerticalScrollBar() as? any NSAccessibilityProtocol
-            )
-            let minimum = try #require(scroller.accessibilityMinValue() as? NSNumber).doubleValue
-            let maximum = try #require(scroller.accessibilityMaxValue() as? NSNumber).doubleValue
-            scroller.setAccessibilityValue(NSNumber(value: minimum + (maximum - minimum) * fraction))
+            try #require(ready, "The mounted production list exposes its vertical scrollbar. \(accessibilityDiagnostics())")
+            let scroll = try #require(scrollElement())
+            let scroller = try #require(verticalScroller(of: scroll))
+            try #require(scroller.responds(to: #selector(NSAccessibilityProtocol.accessibilityMinValue)))
+            try #require(scroller.responds(to: #selector(NSAccessibilityProtocol.accessibilityMaxValue)))
+            let minimum = try #require(scroller.value(forKey: "accessibilityMinValue") as? NSNumber).doubleValue
+            let maximum = try #require(scroller.value(forKey: "accessibilityMaxValue") as? NSNumber).doubleValue
+            try #require(scroller.responds(to: #selector(NSAccessibilityProtocol.setAccessibilityValue(_:))))
+            scroller.setValue(NSNumber(value: minimum + (maximum - minimum) * fraction), forKey: "accessibilityValue")
             let positioned = await ComposedSupport.waitFor {
                 self.host.layoutSubtreeIfNeeded()
                 guard let first = self.visibleRows().first else { return false }
@@ -244,15 +248,15 @@ struct HistoryListScrollAnchorHostedTests {
 
         func visibleRows() -> [VisibleRow] {
             guard let scroll = scrollElement() else { return [] }
-            let viewport = scroll.accessibilityFrame()
+            let viewport = frame(of: scroll)
             guard !viewport.isEmpty else { return [] }
             let indices = Dictionary(uniqueKeysWithValues: orderedIDs.enumerated().map {
                 ("clipy.history.row.\($0.element.description)", $0.offset)
             })
             return accessibilityElements(beneath: scroll).compactMap { element -> VisibleRow? in
-                guard let identifier = element.accessibilityIdentifier(),
+                guard let identifier = self.identifier(of: element),
                       let index = indices[identifier] else { return nil }
-                let frame = element.accessibilityFrame()
+                let frame = self.frame(of: element)
                 // Use a fully visible row, excluding clipped edge text and
                 // offscreen lazy rows retained in the accessibility tree.
                 guard !frame.isEmpty, viewport.contains(frame) else { return nil }
@@ -261,27 +265,58 @@ struct HistoryListScrollAnchorHostedTests {
             }.sorted { $0.offset < $1.offset }
         }
 
-        private func scrollElement() -> (any NSAccessibilityProtocol)? {
-            accessibilityElements(beneath: host).first {
-                $0.accessibilityIdentifier() == "clipy.history.scroll"
+        private func scrollElement() -> NSObject? {
+            accessibilityElements(beneath: window).first {
+                identifier(of: $0) == "clipy.history.scroll"
             }
         }
 
         /// Only the documented NSAccessibility hierarchy is inspected. The
         /// test never assumes any private NSHostingView descendant class.
         private func accessibilityElements(
-            beneath root: any NSAccessibilityProtocol
-        ) -> [any NSAccessibilityProtocol] {
-            var pending: [any NSAccessibilityProtocol] = [root]
+            beneath root: NSObject
+        ) -> [NSObject] {
+            var pending: [NSObject] = [root]
+            var visited: Set<ObjectIdentifier> = [ObjectIdentifier(root)]
             var index = 0
             while index < pending.count && index < 4_096 {
                 let element = pending[index]
                 index += 1
-                pending.append(contentsOf: (element.accessibilityChildren() ?? []).compactMap {
-                    $0 as? any NSAccessibilityProtocol
-                })
+                guard element.responds(to: #selector(NSAccessibilityProtocol.accessibilityChildren)) else { continue }
+                let children = element.value(forKey: "accessibilityChildren") as? [Any] ?? []
+                for case let child as NSObject in children where visited.insert(ObjectIdentifier(child)).inserted {
+                    pending.append(child)
+                }
             }
             return pending
+        }
+
+        private func identifier(of element: NSObject) -> String? {
+            guard element.responds(to: #selector(NSAccessibilityProtocol.accessibilityIdentifier)) else { return nil }
+            return element.value(forKey: "accessibilityIdentifier") as? String
+        }
+
+        private func frame(of element: NSObject) -> NSRect {
+            guard element.responds(to: #selector(NSAccessibilityProtocol.accessibilityFrame)) else { return .zero }
+            return (element.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue ?? .zero
+        }
+
+        private func verticalScroller(of element: NSObject) -> NSObject? {
+            guard element.responds(to: #selector(NSAccessibilityProtocol.accessibilityVerticalScrollBar)) else { return nil }
+            return element.value(forKey: "accessibilityVerticalScrollBar") as? NSObject
+        }
+
+        private func accessibilityDiagnostics() -> String {
+            let hierarchy = accessibilityElements(beneath: window).prefix(48).map { element in
+                let role: String?
+                if element.responds(to: #selector(NSAccessibilityProtocol.accessibilityRole)) {
+                    role = element.value(forKey: "accessibilityRole") as? String
+                } else {
+                    role = nil
+                }
+                return "\(role ?? "nil"): \(identifier(of: element) ?? "nil"), \(frame(of: element))"
+            }.joined(separator: "\n")
+            return "Window visible: \(window.isVisible); host attached: \(host.window === window); frame: \(host.frame); rendered rows: \(observation.rowIDs.count); model rows: \(state.rows.count). AX hierarchy:\n\(hierarchy)"
         }
     }
 }

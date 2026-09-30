@@ -26,7 +26,7 @@ app:"TextEdit" date:2026-09-01..2026-09-30
 source-id:com.apple.TextEdit NOT draft
 ```
 
-支持 `app:` / `source:` 应用名称、精确 `source-id:`、`date:` 单日或范围、`before:`、`after:`、`type:text|images|links|all` 及 `is:pinned`。日期按 UTC 日解释，与机器时区无关。应用名称由应用层读取安装应用元数据并替换成来源 ID，同一次解析中相同名称只匹配一次，解析器本身不查询系统。保存的相对日期搜索定义仍在使用时解析为当时日期，不能永久冻结为首次保存的日期。
+支持 `app:` / `source:` 应用名称、精确 `source-id:`、`date:` 单日或范围、`before:`、`after:`、`type:text|images|links|all` 及 `is:pinned`。日期按 UTC 日解释，与机器时区无关。应用名称由应用层读取安装应用元数据并替换成来源 ID，同一次解析中相同名称只匹配一次，解析器本身不查询系统。替换在构造扩张节点前检查 4,096 字节、128 tokens 和 16 层嵌套上限；超出时明确失败，不截断匹配的应用。保存的相对日期搜索定义仍在使用时解析为当时日期，不能永久冻结为首次保存的日期。
 
 ## 存储搜索路径
 
@@ -48,7 +48,7 @@ fuzzy 的 Fuse 固定参数是 threshold 0.7、location 0、distance 100、忽�
 
 ## 分页与观察
 
-页面 limit 为 1 至 500。按排序 anchor 继续翻页，不把全部结果读入内存再截取。游标封装快照位置、请求身份、方向和排序 anchor；提交后旧位置或改变 query / filter / sort 的游标明确失效。`startAround` 在新的权威快照中定位指定项目；项目不存在或不符合当前查询时失败。
+页面 limit 为 1 至 500。按排序 anchor 继续翻页，不把全部结果读入内存再截取。游标封装快照位置、请求身份、方向和排序 anchor；提交后旧位置或改变 query / filter / sort 的游标明确失效。`startAround` 在新的权威快照中定位指定项目；项目不存在或不符合当前查询时失败。fuzzy 目标达到已证明的全局最低分时，前页探测直接使用时间 / ID 反向索引范围；分数较差的目标仍检查其他候选，避免漏掉复制时间更早、分数更好的前项。
 
 `observe` 先注册失效通知再读取，避免提交落在订阅与首读之间；每次输出完整替换第一页。界面收到新快照会重置旧分页窗口，禁止混合不同 `ChangePosition` 的页。界面的默认页长 50，最多留三页；相邻页由一次 `browse` 请求获取。详细实现入口见 [`HistoryViewState.swift`](../ClipyApp/Sources/UI/HistoryViewState.swift) 和 [`HistoryWorkspacePaging.swift`](../ClipyApp/Sources/UI/HistoryWorkspacePaging.swift)。
 

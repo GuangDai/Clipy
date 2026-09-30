@@ -46,7 +46,12 @@ struct AppearanceSettingsTab: View {
     private var previewWidth = Double(PanelGeometry.floatingPreviewWidth)
     @AppStorage(PanelGeometry.usesCustomFloatingPreviewWidthDefaultsKey)
     private var usesCustomPreviewWidth = false
+    // The field owns its edit, including a parsed value below the usable
+    // minimum. Returning the old preference after rejecting an edit makes
+    // TextField reformat it and submit that old value, clearing the error.
+    @State private var previewWidthDraft = Double(PanelGeometry.floatingPreviewWidth)
     @State private var isPreviewWidthInvalid = false
+    @FocusState private var isPreviewWidthFocused: Bool
 
     init(popupPosition: Binding<PopupPositionMode>?) {
         self.popupPosition = popupPosition
@@ -144,14 +149,18 @@ struct AppearanceSettingsTab: View {
                 .accessibilityIdentifier("clipy.settings.appearance.preview-auto-open")
                 Toggle(SettingsCopy.text("Customize preview width"), isOn: $usesCustomPreviewWidth)
                     .accessibilityIdentifier("clipy.settings.preview.custom-width")
-                    .onChange(of: usesCustomPreviewWidth) { _, _ in isPreviewWidthInvalid = false }
+                    .onChange(of: usesCustomPreviewWidth) { _, _ in
+                        previewWidthDraft = Double(effectivePreviewWidth)
+                        isPreviewWidthInvalid = false
+                    }
                 if usesCustomPreviewWidth {
                     SettingsFieldLayout {
                         Label(SettingsCopy.text("Preview width"), systemImage: "arrow.left.and.right")
                         HStack(spacing: 8) {
                             TextField("", value: Binding(
-                                get: { Double(effectivePreviewWidth) },
+                                get: { previewWidthDraft },
                                 set: {
+                                    previewWidthDraft = $0
                                     guard $0.isFinite,
                                           $0 >= Double(PanelGeometry.minimumPersistedFloatingPreviewWidth)
                                     else {
@@ -167,6 +176,20 @@ struct AppearanceSettingsTab: View {
                                 .frame(width: 88)
                                 .accessibilityLabel(SettingsCopy.text("Preview width"))
                                 .accessibilityIdentifier("clipy.settings.preview.panel-width")
+                                .focused($isPreviewWidthFocused)
+                                .onAppear {
+                                    previewWidthDraft = Double(effectivePreviewWidth)
+                                    isPreviewWidthInvalid = false
+                                }
+                                .onChange(of: previewWidth) { _, _ in
+                                    guard !isPreviewWidthFocused else { return }
+                                    previewWidthDraft = Double(effectivePreviewWidth)
+                                    isPreviewWidthInvalid = false
+                                }
+                                .onChange(of: isPreviewWidthFocused) { _, isFocused in
+                                    guard !isFocused, !isPreviewWidthInvalid else { return }
+                                    previewWidthDraft = Double(effectivePreviewWidth)
+                                }
                             Text("pt").foregroundStyle(.secondary)
                         }
                         .frame(width: 120, alignment: .trailing)
@@ -228,6 +251,7 @@ struct AppearanceSettingsTab: View {
                     isPreviewTextLengthLimited = true
                     previewGap = Double(PanelGeometry.floatingPreviewGap)
                     previewWidth = Double(PanelGeometry.floatingPreviewWidth)
+                    previewWidthDraft = Double(PanelGeometry.floatingPreviewWidth)
                     usesCustomPreviewWidth = false
                     isPreviewWidthInvalid = false
                 }

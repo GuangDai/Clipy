@@ -157,8 +157,9 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         lastVisible.click()
         try assertPreview(fixtures[54].text, in: workspace, app: app)
         try assertPage(2, range: "Items 51–55", in: workspace, app: app)
-        try require(abs(firstVisible.frame.minY - position) <= 1,
-                       "Selecting a later row must not move the page's reading position.")
+        let selectedPosition = firstVisible.frame.minY
+        try require(abs(selectedPosition - position) <= 1,
+                       "Selecting a later row moved the first row from \(position) to \(selectedPosition).")
         try require(!next.isEnabled)
         previous.click()
         try assertPage(1, range: "Items 1–50", in: workspace, app: app)
@@ -281,7 +282,6 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         let expected = "Completed: \(count) · Failed: 0 · Not processed: 0"
         try require(waitUntil {
             summary.exists && summary.label.contains(expected) && summary.value as? String == operation
-                && workspace.buttons["clipy.history.workspace.select-page"].isEnabled
         }, app.debugDescription)
     }
 

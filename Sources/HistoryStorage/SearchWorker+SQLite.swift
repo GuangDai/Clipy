@@ -139,8 +139,10 @@ extension SearchWorker {
             await suspensionHandler?(.evaluationEntry)
             try checkSnapshotDeadline(lifetimeDeadline)
             let hasExplicitOrder = request.sortOrder != .automatic
+            let isRankedFuzzy = admitted.mode == .fuzzy && !admitted.term.isEmpty && !hasExplicitOrder
             var regexpDeadline = clock.now.advanced(by: regexpEngineDeadline)
             let seekHasPrevious: Bool
+            let lowestPossibleFuzzyScore: Double
             if let target = request.startAround {
                 let seek = try await resolveSearchStart(
                     target, request: request, admitted: admitted, database: database, position: position,
@@ -150,15 +152,17 @@ extension SearchWorker {
                 )
                 anchor = seek.anchor
                 seekHasPrevious = seek.hasPrevious
-            } else { seekHasPrevious = false }
+                lowestPossibleFuzzyScore = seek.lowestPossibleFuzzyScore
+            } else {
+                seekHasPrevious = false
+                lowestPossibleFuzzyScore = isRankedFuzzy
+                    ? try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: admitted.term, in: database) : 0
+            }
             if let anchor, hasExplicitOrder {
                 guard case .metadata = anchor else { throw HistoryFailure.snapshotExpired(current: position) }
             } else if case .metadata? = anchor {
                 throw HistoryFailure.snapshotExpired(current: position)
             }
-            let isRankedFuzzy = admitted.mode == .fuzzy && !admitted.term.isEmpty && !hasExplicitOrder
-            let lowestPossibleFuzzyScore = isRankedFuzzy
-                ? try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: admitted.term, in: database) : 0
             let fuzzyOrderedAnchor: StoredOrderingAnchor?
             let completesFuzzyPrefix: Bool
             let reversesFuzzyPredecessors: Bool
@@ -437,7 +441,12 @@ extension SearchWorker {
                 page: HistoryPage(position: position, rows: rows, previous: previous, next: next),
                 revisionCounts: returnedCounts
             )
-        } catch let failure as SQLiteFailure {
+        } catch {
+            // Native lock waits and connection-open I/O do not invoke the
+            // progress callback. Recheck after cleanup so a cancelled read
+            // cannot surface BUSY/openStore/factProof as its final result.
+            try Task.checkCancellation()
+            guard let failure = error as? SQLiteFailure else { throw error }
             switch failure.primaryCode {
             case SQLITE_CORRUPT, SQLITE_NOTADB, SQLITE_FULL: throw failure.historyFailure
             case SQLITE_INTERRUPT:
@@ -468,7 +477,7 @@ extension SearchWorker {
         expression: PreparedSearchExpression?, expressionPredicate: (sql: String, bindings: [SQLiteValue])?,
         lifetimeDeadline: ContinuousClock.Instant, regexpDeadline: inout ContinuousClock.Instant,
         work: SearchWorkCounter
-    ) async throws -> (anchor: StoredOrderingAnchor, hasPrevious: Bool) {
+    ) async throws -> (anchor: StoredOrderingAnchor, hasPrevious: Bool, lowestPossibleFuzzyScore: Double) {
         let targetReader = try SQLiteSearchRows(
             database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
             includesSearchBody: admitted.requiresSearchBody,
@@ -488,14 +497,29 @@ extension SearchWorker {
         targetReader.finish()
 
         let rankedFuzzy = admitted.mode == .fuzzy && !admitted.term.isEmpty && request.sortOrder == .automatic
-        let scoresPredecessors = rankedFuzzy && target.corpusRow.pinOrdinal == nil
+        let lowestPossibleFuzzyScore = rankedFuzzy
+            ? try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: admitted.term, in: database) : 0
+        let predecessorAnchor: StoredOrderingAnchor?
+        if rankedFuzzy, target.corpusRow.pinOrdinal == nil {
+            if case .fuzzyUnpinned(let score, let date, let id) = anchor, score == lowestPossibleFuzzyScore {
+                // No later unpinned row can precede a floor-score target:
+                // equal scores use the same date/ID order, and larger scores
+                // follow it. Reuse the reverse cursor's bounded keyset; pins
+                // still participate regardless of their match score.
+                predecessorAnchor = .defaultOrder(pinnedOrdinal: nil, lastCopiedAt: date, id: id)
+            } else {
+                // A worse-scored target can have better predecessors anywhere
+                // in the retained history, including at older copy dates.
+                predecessorAnchor = nil
+            }
+        } else { predecessorAnchor = anchor }
         let predecessors = try SQLiteSearchRows(
             database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
             includesSearchBody: admitted.requiresSearchBody,
             expressionPredicate: expressionPredicate,
             candidateExpression: admitted.expression.map { PreparedSearchExpression.candidateExpression($0.root) }
                 ?? SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
-            orderedAnchor: scoresPredecessors ? nil : anchor, reversesOrder: !scoresPredecessors,
+            orderedAnchor: predecessorAnchor, reversesOrder: predecessorAnchor != nil,
             completesFuzzyPrefix: false, work: work
         )
         defer { predecessors.finish() }
@@ -504,16 +528,18 @@ extension SearchWorker {
             let fetchedAt = ContinuousClock.now
             let batch = try predecessors.nextBatch(includesRevisionCounts: false)
             regexpDeadline = regexpDeadline.advanced(by: fetchedAt.duration(to: ContinuousClock.now))
-            guard !batch.rows.isEmpty else { return (anchor, false) }
+            guard !batch.rows.isEmpty else { return (anchor, false, lowestPossibleFuzzyScore) }
             let matches = try await evaluateSeekBatch(
                 batch.rows, admitted: admitted, position: position, exact: exact, fuzzy: fuzzy,
                 regexp: regexp, expression: expression, deadline: min(regexpDeadline, lifetimeDeadline), work: work
             )
             for match in matches.rows {
                 if rankedFuzzy {
-                    if FuzzyPageSelection.precedes(match.anchor, anchor) { return (anchor, true) }
+                    if FuzzyPageSelection.precedes(match.anchor, anchor) {
+                        return (anchor, true, lowestPossibleFuzzyScore)
+                    }
                 } else if match.corpusRow.id != id {
-                    return (anchor, true)
+                    return (anchor, true, lowestPossibleFuzzyScore)
                 }
             }
             let yieldedAt = ContinuousClock.now

@@ -369,19 +369,21 @@ struct HistoryWorkspaceView: View {
                     .accessibilityIdentifier("clipy.history.workspace.selection-count")
             }
             .controlSize(.small)
-            if !selectedIDs.isEmpty {
-                HStack {
-                    Button(text("Pin")) { executeBatch(.pin, references: selectedReferences) }
-                        .accessibilityIdentifier("clipy.history.workspace.batch.pin")
-                    Button(text("Unpin")) { executeBatch(.unpin, references: selectedReferences) }
-                        .accessibilityIdentifier("clipy.history.workspace.batch.unpin")
-                    Spacer(minLength: 0)
-                    Button(text("Remove…"), role: .destructive) { batchRemoval = selectedReferences }
-                        .accessibilityIdentifier("clipy.history.workspace.batch.remove")
-                }
-                .controlSize(.small)
-                .disabled(isMutating || selectedReferences.isEmpty)
+            // Selection must not move the list's reading position. Keep the
+            // batch row's space when empty, with no active or accessible controls.
+            HStack {
+                Button(text("Pin")) { executeBatch(.pin, references: selectedReferences) }
+                    .accessibilityIdentifier("clipy.history.workspace.batch.pin")
+                Button(text("Unpin")) { executeBatch(.unpin, references: selectedReferences) }
+                    .accessibilityIdentifier("clipy.history.workspace.batch.unpin")
+                Spacer(minLength: 0)
+                Button(text("Remove…"), role: .destructive) { batchRemoval = selectedReferences }
+                    .accessibilityIdentifier("clipy.history.workspace.batch.remove")
             }
+            .controlSize(.small)
+            .opacity(selectedIDs.isEmpty ? 0 : 1)
+            .disabled(selectedIDs.isEmpty || isMutating || selectedReferences.isEmpty)
+            .accessibilityHidden(selectedIDs.isEmpty)
         }
     }
 

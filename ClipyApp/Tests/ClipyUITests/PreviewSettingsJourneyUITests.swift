@@ -106,7 +106,8 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         let width = app.textFields["clipy.settings.preview.panel-width"]
         set("100", in: width, app: app)
         let widthError = app.descendants(matching: .any)["clipy.settings.preview.width-error"]
-        XCTAssertTrue(widthError.waitForExistence(timeout: 5))
+        XCTAssertTrue(widthError.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(value(width), "100", "The rejected width remains editable instead of silently reverting.")
         set("420", in: width, app: app)
         XCTAssertTrue(waitUntil { !widthError.exists })
         settings.buttons["_XCUI:CloseWindow"].click()
