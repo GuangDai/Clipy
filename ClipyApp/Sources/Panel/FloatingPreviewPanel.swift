@@ -139,7 +139,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
                 .command, .control, .option, .shift,
             ]).isEmpty
 #if DEBUG
-            let responderClass = responder.map { NSStringFromClass(type(of: $0)) } ?? "nil"
+            let responderClass = responder.map { String(reflecting: type(of: $0)) } ?? "nil"
             recordPreviewLifecycle("native-preview-escape-entry responder_class=\(responderClass) responder_is_window=\(responder === self) responder_is_host=\(responder === contentView) unmodified=\(unmodified) marked_text=\(hasMarkedText) information=\(previewState.isInformationPresented) confirmation=\(previewState.isFileConfirmationPresented) attached_sheet=\(attachedSheet != nil) parent_sheet=\(parent?.attachedSheet != nil)")
 #endif
             if unmodified, !hasMarkedText, !previewState.isFileConfirmationPresented,
