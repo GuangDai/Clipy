@@ -95,21 +95,21 @@ struct FloatingPanelMarkedTextEventTests {
     func markedKeysAreDeliveredDirectlyToTheTextResponder() throws {
         let appDelegate = AppDelegate()
         var submissionCount = 0
-        var completionActive = true
+        let responder = RecordingMarkedTextView(
+            frame: NSRect(x: 0, y: 0, width: 100, height: 30)
+        )
+        responder.isCompletionActive = true
         let panel = FloatingPanel(
             rootView: PanelRootView(appDelegate: appDelegate),
             previewState: appDelegate.previewState,
             isSelectionSubmissionEnabled: { true },
-            isSearchCompletionActive: { completionActive },
+            isSearchCompletionActive: { responder.isCompletionActive },
             onSubmitSelection: { submissionCount += 1 },
             onClosed: {}
         )
         defer { panel.close() }
         panel.open(at: .center, statusItemButtonScreenFrame: nil)
 
-        let responder = RecordingMarkedTextView(
-            frame: NSRect(x: 0, y: 0, width: 100, height: 30)
-        )
         panel.contentView?.addSubview(responder)
         try #require(panel.makeFirstResponder(responder))
         responder.setMarkedText(
@@ -150,7 +150,7 @@ struct FloatingPanelMarkedTextEventTests {
         #expect(appDelegate.previewState.isInformationPresented)
         #expect(panel.isPresented)
 
-        completionActive = false
+        responder.isCompletionActive = false
         NSApp.sendEvent(returnKey)
         #expect(submissionCount == 1)
         NSApp.sendEvent(escape)
@@ -180,6 +180,7 @@ struct FloatingPanelMarkedTextEventTests {
 
 @MainActor
 private final class RecordingMarkedTextView: NSTextView {
+    var isCompletionActive = false
     private(set) var receivedKeyCodes: [UInt16] = []
 
     override func keyDown(with event: NSEvent) {

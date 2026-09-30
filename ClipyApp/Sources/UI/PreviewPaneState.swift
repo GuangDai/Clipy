@@ -89,8 +89,8 @@ final class PreviewPaneState {
     /// panel surface (04 §9 fence convention).
     private(set) var previewedItem: HistoryItemReference?
 
-    /// The screen/user size ceiling for a content-fitted preview; never a
-    /// minimum and independent of the number of rows in the browsing list.
+    /// The preview's actual viewport height, following the main panel's
+    /// displayed frame. Content never reduces the floating pane's height.
     var availablePreviewHeight: CGFloat = PanelGeometry.height
 
     /// Actual fitted window dimensions drive the SwiftUI resize affordance;
