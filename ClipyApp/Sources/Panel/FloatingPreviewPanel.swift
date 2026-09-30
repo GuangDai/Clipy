@@ -27,6 +27,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     private let previewState: PreviewPaneState
     private let defaults: UserDefaults
     private let presentationDuration: @MainActor (NSScreen?) -> TimeInterval
+    private let motionPresentation = AppMotionPresentation()
     private var placement: PreviewPlacement = .trailing
     private var lastParentFrame: NSRect?
     private var resizedAnchor: (innerEdge: CGFloat, width: CGFloat, gap: CGFloat, placement: PreviewPlacement)?
@@ -77,12 +78,12 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         // `clipy.preview.root` in the accessibility tree (CI preview journeys).
         setAccessibilityIdentifier("clipy.panel.floatingPreview")
 
-        let hostingView = NSHostingView(rootView: rootView.appLanguage())
+        let hostingView = NSHostingView(rootView: AppMotionSurface(
+            presentation: motionPresentation, content: rootView.appLanguage()
+        ))
         hostingView.sizingOptions = []
         hostingView.wantsLayer = true
-        hostingView.layer?.cornerRadius = 12
-        hostingView.layer?.masksToBounds = true
-        contentView = AppMotionSettings.surface(containing: hostingView)
+        contentView = hostingView
 
         // Retry's pointer can already be over this non-key window while
         // SwiftUI still reports only the main window's exit. Check actual
@@ -200,26 +201,16 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 #if DEBUG
             recordNativeLifecycle("present-arrival")
 #endif
-            let duration = presentationDuration(screen ?? mainPanel.screen)
-            setPresentationAlphaImmediately(duration > 0 ? 0.92 : 1)
-            AppMotionSettings.animateArrival(in: contentView, duration: duration)
+            motionPresentation.play(duration: presentationDuration(screen ?? mainPanel.screen))
             orderFrontRegardless()
             isPresented = true
-            if duration > 0 {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = duration
-                    context.timingFunction = AppMotionTiming.nativeTimingFunction
-                    animator().alphaValue = 1
-                }
-            }
         } else if shouldRestoreOrdering {
             // Native sheet ordering may hide an intended-visible owner.
             // Restore ordering without replaying its arrival animation.
 #if DEBUG
             recordNativeLifecycle("present-invisible-reorder")
 #endif
-            AppMotionSettings.cancelArrival(in: contentView)
-            setPresentationAlphaImmediately(1)
+            motionPresentation.cancel()
             orderFrontRegardless()
         }
     }
@@ -293,13 +284,6 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         }
     }
 
-    private func setPresentationAlphaImmediately(_ value: CGFloat) {
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            animator().alphaValue = value
-        }
-    }
-
     private func rememberResizeAnchor(_ frame: NSRect, placement: PreviewPlacement) {
         // Recomputing a large preferred gap after mouse-up would shift the
         // handle away from the pointer. Preserve its actual inner edge until
@@ -318,7 +302,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 #if DEBUG
         recordNativeLifecycle("dismiss")
 #endif
-        AppMotionSettings.cancelArrival(in: contentView)
+        motionPresentation.cancel()
         // Explicit retirement wins over modal ownership. Mark the intent
         // closed before ending the sheet so didEndSheet cannot resurrect it.
         isPresented = false
@@ -338,7 +322,6 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
             panel.makeKey()
         }
         parent?.removeChildWindow(self)
-        setPresentationAlphaImmediately(1)
         orderOut(nil)
         previewState.endPreviewResize()
     }

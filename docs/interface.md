@@ -53,6 +53,6 @@
 
 [`ClipySettingsView.swift`](../ClipyApp/Sources/UI/ClipySettingsView.swift) 包含常规、历史、外观、快捷键、保留、自动化、交互和维护。常规处理启动登录与捕获隐私；外观处理密度、位置、预览、字体与十档动画速度；保留读实际持久配置并在可能删除数据前确认；维护显示逻辑用量和估算文件夹占用、备份与存储路径。设置草稿读取有自身 generation，较晚 readback 不能抹掉用户已输入的更改。
 
-动画默认第 10 档最快，第 1 档最慢。面板、预览和 Quick Look 共用出现曲线与小幅缩放，十档保持相同动作，搜索及过滤按钮采用更短的按压反馈；系统 Reduce Motion 关闭自定义动画。窗口位置与尺寸立即应用，关闭及失效内容清理不等待动画。时长设计、官方资料和测量范围见 [motion-performance.md](motion-performance.md)。
+动画默认第 10 档最快，第 1 档最慢。面板、预览和 Quick Look 使用 SwiftUI 过渡，共用出现曲线与小幅缩放，十档保持相同动作，搜索及过滤按钮采用更短的按压反馈；系统 Reduce Motion 关闭自定义动画。原生窗口外壳负责现有定位、跟随、焦点与系统事件，窗口位置与尺寸立即应用，关闭及失效内容清理不等待动画。时长设计、官方资料和测量范围见 [motion-performance.md](motion-performance.md)。
 
 缩略图和应用图标只缓存可重建结果。 [`ThumbnailStore.swift`](../ClipyApp/Sources/UI/ThumbnailStore.swift) 同时限制条目数和实际像素字节；可见图片持有独立像素 Data，冷数据放入 `NSCache` / `NSPurgeableData`。系统内存压力会取消不必要加载、丢弃冷缓存或停止预取，不把缓存当作权威内容。预览和缩略图细节见 [formats-preview.md](formats-preview.md)。

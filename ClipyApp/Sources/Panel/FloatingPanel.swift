@@ -63,6 +63,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     private let onSubmitSelection: () -> Void
     private let isSelectionSubmissionEnabled: () -> Bool
     private let presentationDuration: @MainActor (NSScreen?) -> TimeInterval
+    private let motionPresentation = AppMotionPresentation()
 
     /// Invoked when the panel changes screens, so the AppDelegate can hide
     /// the floating preview pane rather than leave it on the old display.
@@ -161,12 +162,12 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         // applied at open. The bounds only constrain interactive resizes.
         applyResizeLimits()
 
-        let hostingView = NSHostingView(rootView: rootView.appLanguage())
+        let hostingView = NSHostingView(rootView: AppMotionSurface(
+            presentation: motionPresentation, content: rootView.appLanguage()
+        ))
         hostingView.sizingOptions = []
         hostingView.wantsLayer = true
-        hostingView.layer?.cornerRadius = 12
-        hostingView.layer?.masksToBounds = true
-        contentView = AppMotionSettings.surface(containing: hostingView)
+        contentView = hostingView
 
         delegate = self
     }
@@ -275,21 +276,12 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             lastPositionAnchor: Self.savedAnchor()
         )
         setFrameProgrammatically(NSRect(origin: origin, size: size), display: false)
-        let duration = isPresented ? 0 : presentationDuration(screen)
         if !isPresented {
-            setPresentationAlphaImmediately(duration > 0 ? 0.92 : 1)
-            AppMotionSettings.animateArrival(in: contentView, duration: duration)
+            motionPresentation.play(duration: presentationDuration(screen))
         }
         orderFrontRegardless()
         makeKey()
         isPresented = true
-        if duration > 0 {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = duration
-                context.timingFunction = AppMotionTiming.nativeTimingFunction
-                animator().alphaValue = 1
-            }
-        }
         if outsideClickMonitor == nil {
             // A desktop click need not transfer key status from a nonactivating
             // panel. Global mouse observation covers that path without keyboard
@@ -310,12 +302,11 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// (the floating preview pane) order out with it.
     override func close() {
         guard isPresented else { return }
-        AppMotionSettings.cancelArrival(in: contentView)
+        motionPresentation.cancel()
         deferredFocusLossCloseTask?.cancel()
         deferredFocusLossCloseTask = nil
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         outsideClickMonitor = nil
-        setPresentationAlphaImmediately(1)
         super.close()
         isPresented = false
         onPanelClosed()
@@ -635,15 +626,6 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     private func notifyFrameChanged() {
         guard !isSettlingLiveResize else { return }
         onFrameChanged()
-    }
-
-    private func setPresentationAlphaImmediately(_ value: CGFloat) {
-        // Replace any in-flight alpha transition before a synchronous close
-        // or a new open. No completion callback owns window lifecycle.
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0
-            animator().alphaValue = value
-        }
     }
 
 #if DEBUG

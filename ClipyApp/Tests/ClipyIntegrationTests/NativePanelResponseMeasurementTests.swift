@@ -234,15 +234,10 @@ private final class NativePanelDisplayTickProbe: NSObject {
         callbackTicks += 1
         let milliseconds = Self.milliseconds(startedAt.duration(to: now))
         if firstCallbackMilliseconds == nil { firstCallbackMilliseconds = milliseconds }
-        // The arrival surface is a transparent parent. Its settled layout
-        // alone does not establish that the actual hosting child is ready.
-        guard let window, let surface = window.contentView,
-              surface.subviews.count == 1, let content = surface.subviews.first,
+        guard let window, let content = window.contentView,
               window.isVisible, window.alphaValue > 0,
-              surface.window === window, !surface.needsLayout,
               content.window === window, !content.needsLayout,
-              surface.bounds.size == window.contentRect(forFrameRect: window.frame).size,
-              content.frame == surface.bounds, content.bounds.size == surface.bounds.size,
+              content.bounds.size == window.contentRect(forFrameRect: window.frame).size,
               isReady?() == true
         else { return }
         let interval = link.targetTimestamp - link.timestamp

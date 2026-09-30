@@ -1,5 +1,5 @@
 import AppKit
-import QuartzCore
+import Observation
 import SwiftUI
 
 enum AppMotionSpeed: Int, CaseIterable, Sendable {
@@ -46,19 +46,17 @@ struct AppMotionTiming: Sendable {
     }
 
     var animation: Animation? {
-        duration > 0 ? .timingCurve(Self.curve.0, Self.curve.1, Self.curve.2, Self.curve.3,
-                                  duration: duration) : nil
+        duration > 0 ? .timingCurve(Self.unitCurve, duration: duration) : nil
     }
 
-    static var nativeTimingFunction: CAMediaTimingFunction {
-        CAMediaTimingFunction(controlPoints: Float(curve.0), Float(curve.1),
-                              Float(curve.2), Float(curve.3))
+    static var unitCurve: UnitCurve {
+        .bezier(startControlPoint: UnitPoint(x: curve.0, y: curve.1),
+                endControlPoint: UnitPoint(x: curve.2, y: curve.3))
     }
 }
 
 enum AppMotionSettings {
     static let defaultsKey = "clipy.appearance.motionSpeed"
-    static let arrivalAnimationKey = "clipy.presentation.arrival"
 
     static func load(from defaults: UserDefaults) -> AppMotionSpeed {
         AppMotionSpeed(rawValue: defaults.integer(forKey: defaultsKey)) ?? .fastest
@@ -84,46 +82,74 @@ enum AppMotionSettings {
         ).animation
     }
 
-    /// Keep AppKit's hosting-view geometry untouched. The transparent parent
-    /// carries the arrival effect on its sublayers; normal view autoresizing
-    /// still owns the child's size, with no per-frame layout work.
-    @MainActor
-    static func surface(containing view: NSView) -> NSView {
-        let surface = NSView(frame: view.frame)
-        surface.wantsLayer = true
-        view.autoresizingMask = [.width, .height]
-        surface.addSubview(view)
-        return surface
+}
+
+/// Presentation values only. Window/session/content lifetime stays with the
+/// existing native owners; SwiftUI replaces the keyframes for each request.
+@MainActor
+@Observable
+final class AppMotionPresentation {
+    private(set) var requestGeneration: UInt = 0
+    private(set) var isActive = false
+    private(set) var duration: TimeInterval = 0
+
+    func play(duration: TimeInterval) {
+        self.duration = duration
+        isActive = duration > 0
+        requestGeneration &+= 1
     }
 
-    /// Animate the prepared child surface without changing the backing layer's
-    /// AppKit-owned transform or anchorPoint (Core Animation Guide, OS X rules).
-    @MainActor
-    static func animateArrival(in view: NSView?, duration: TimeInterval) {
-        cancelArrival(in: view)
-        guard duration > 0, let view, let layer = view.layer else { return }
-        let scale = CGFloat(AppMotionTiming.arrivalScale)
-        var start = CATransform3DMakeScale(scale, scale, 1)
-        // AppKit chooses its backing-layer anchor. Read it rather than changing
-        // it, and compensate so the visible content scales around its center.
-        start.m41 = (1 - scale) * view.bounds.width * (0.5 - layer.anchorPoint.x)
-        start.m42 = (1 - scale) * view.bounds.height * (0.5 - layer.anchorPoint.y)
-        let animation = CABasicAnimation(keyPath: "sublayerTransform")
-        animation.fromValue = NSValue(caTransform3D: start)
-        animation.toValue = NSValue(caTransform3D: CATransform3DIdentity)
-        animation.duration = duration
-        animation.timingFunction = AppMotionTiming.nativeTimingFunction
-        layer.add(animation, forKey: arrivalAnimationKey)
+    func cancel() {
+        guard isActive else { return }
+        isActive = false
+        requestGeneration &+= 1
+    }
+}
+
+struct AppMotionSurface<Content: View>: View {
+    let presentation: AppMotionPresentation
+    let content: Content
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var playbackTrigger: UInt = 0
+
+    private struct Values: Sendable {
+        var scale = 1.0
+        var opacity = 1.0
     }
 
-    @MainActor
-    static func cancelArrival(in view: NSView?) {
-        view?.layer?.removeAnimation(forKey: arrivalAnimationKey)
+    var body: some View {
+        // The @Sendable frame closure captures immutable values, never the
+        // MainActor state or History. Only these two visual modifiers update.
+        let request = presentation.requestGeneration
+        let isActive = presentation.isActive && !reduceMotion
+        let duration = isActive ? presentation.duration : 0
+        let awaitingStart = request != playbackTrigger
+        content
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .keyframeAnimator(initialValue: Values(), trigger: playbackTrigger) { content, values in
+                content
+                    .scaleEffect(CGFloat(isActive ? (awaitingStart ? AppMotionTiming.arrivalScale : values.scale) : 1))
+                    .opacity(isActive ? (awaitingStart ? 0.92 : values.opacity) : 1)
+            } keyframes: { _ in
+                KeyframeTrack(\.scale) {
+                    MoveKeyframe(isActive ? AppMotionTiming.arrivalScale : 1)
+                    LinearKeyframe(1, duration: duration, timingCurve: AppMotionTiming.unitCurve)
+                }
+                KeyframeTrack(\.opacity) {
+                    MoveKeyframe(isActive ? 0.92 : 1)
+                    LinearKeyframe(1, duration: duration, timingCurve: AppMotionTiming.unitCurve)
+                }
+            }
+            .onChange(of: request, initial: true) { _, request in
+                // The native owner can request before the hosting view first
+                // mounts. Forward after mounting so the trigger truly changes.
+                playbackTrigger = request
+            }
     }
 }
 
 /// Insertion only: disappearing or invalid content leaves immediately. The
-/// small scale settles on the same curve as native window alpha, while the
+/// small scale settles on the same curve as the window content, while the
 /// ten levels retain the same movement, including the short fastest level.
 struct AppMotionArrival: ViewModifier {
     let opacity: Double

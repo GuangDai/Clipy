@@ -13,6 +13,7 @@ Clipy 采用十档速度，1 最慢、10 最快；只有最快档以不超过五
 | [Apple Animation.speed](https://developer.apple.com/documentation/swiftui/animation/speed(_:)) | SwiftUI 的 speed 是播放倍数，2 倍将一秒动画缩短为半秒。它与 Hyprland 同名参数方向不同，接口上应先算统一秒数，再交给框架。 |
 | [Apple：统一应用动画](https://developer.apple.com/documentation/swiftui/unifying-your-app-s-animations) | SwiftUI、UIKit、AppKit 有不同动画实现；Apple 提供跨框架使用 SwiftUI Animation 的入口，支持对运行中的动画重新设目标，并延续既有速度。使用相同数值曲线能统一外观，但不足以证明不同实现的中断行为完全相同。 |
 | [Apple WWDC23：Explore SwiftUI animation](https://developer.apple.com/videos/play/wwdc2023/10156/) | 内置 `scaleEffect` 等 animatable 属性可高效插值；自定义 `Animatable` 的 `body` 会按帧执行，并可能重新布局。应优先使用已有显示属性，避免为了小幅缩放自建逐帧布局。 |
+| [SwiftUI keyframeAnimator](https://developer.apple.com/documentation/swiftui/view/keyframeanimator(initialvalue:trigger:content:keyframes:))、[LinearKeyframe](https://developer.apple.com/documentation/swiftui/linearkeyframe/init(_:duration:timingcurve:)) | 新 trigger 用新序列替换进行中的动画，结束值保持为下一次的起点；LinearKeyframe 支持统一 UnitCurve。content 回调每帧执行，因此只组合现有显示属性，不读取历史、解码或布局。 |
 | [Apple：界面响应](https://developer.apple.com/documentation/xcode/understanding-user-interface-responsiveness) | 动画时长、首次反馈延迟和掉帧是不同问题。主线程阻塞可能同时导致响应停顿与掉帧，一个刷新间隔的延迟就可能让动画卡顿；只缩短曲线时间不能修复内容读取、布局或提交阻塞。 |
 | [NSScreen.maximumFramesPerSecond](https://developer.apple.com/documentation/appkit/nsscreen/maximumframespersecond) | 返回屏幕支持的最大刷新率，不能把它当作当前正在显示的帧率或整个事件处理链的耗时。 |
 
@@ -39,20 +40,22 @@ Clipy 采用十档速度，1 最慢、10 最快；只有最快档以不超过五
 
 SwiftUI 与 AppKit 统一使用三次 Bezier 控制点 `(0.2, 0.8, 0.2, 1)`。由控制点计算，曲线起点斜率为 4、终点斜率为 0，意图是尽早靠近目标、平稳收尾；“更利落”的感受是设计推断，仍需实际交互判断。统一只需共用这个有限值定义，不需要继承注册表或另一层动画调度系统。
 
-面板、浮动预览和 Quick Look 初次出现统一使用 0.92 至 1 的透明度及 0.975 至 1 的小幅缩放，十档只改变时长，不改变动作幅度。原生面板在透明父视图的 `sublayerTransform` 上执行缩放，仅读取锚点并补偿中心，不修改 AppKit 管理的 hosting layer 几何属性；窗口位置和内容适配尺寸立即应用，不逐帧重排窗口。[Apple Core Animation Guide](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/CoreAnimation_guide/CreatingBasicAnimations/CreatingBasicAnimations.html) 明确要求不要修改 layer-backed 视图的 `transform` 和 `anchorPoint`；[Sublayers Content](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/CoreAnimation_guide/LayerStyleProperties/LayerStyleProperties.html) 说明父图层的 `sublayerTransform` 相对其锚点应用。关闭会立即移除本次 layer 动画，消失、删除、修订失效及隐藏立即生效，不能等待装饰动画才清理敏感内容。
+面板、浮动预览和 Quick Look 初次出现统一使用 0.92 至 1 的透明度及 0.975 至 1 的小幅缩放，十档只改变时长，不改变动作幅度。过渡使用 SwiftUI 的 `scaleEffect`、`opacity` 与统一曲线；窗口位置和内容适配尺寸立即应用，不逐帧重排窗口。关闭、失效清理及隐藏立即生效，不能等待装饰动画才清理敏感内容。
 
 SwiftUI 中的缩放和透明度使用普通 `ViewModifier` 包装框架已有属性，不实现自己的逐帧 `Animatable.body`。这不证明 SwiftUI、AppKit 和 WindowServer 没有其他逐帧计算，只减少应用主动添加的插值工作。具体接线见 [`HistoryPanelView.swift`](../ClipyApp/Sources/UI/HistoryPanelView.swift)、[`FloatingPanel.swift`](../ClipyApp/Sources/Panel/FloatingPanel.swift) 与 [`FloatingPreviewPanel.swift`](../ClipyApp/Sources/Panel/FloatingPreviewPanel.swift)。
 
 ## 可以采用与不能照搬的部分
 
-可以采用统一曲线、明确用途和少量子用途时长；让新交互立即替换旧意图，已有窗口不因再次召唤重播出现动画，隐藏立即替换当前 alpha 动画。当前 native 窗口实现取消同属性旧过渡再设置状态，不把 completion callback 当窗口生命周期所有者。SwiftUI 交给框架重新设目标；如未来需要位置变化的连续速度，应核对框架对应 API，而不是自己排队或计时等待。这是依据上面来源形成的 Clipy 设计判断。
+可以采用统一曲线、明确用途和少量子用途时长；让新交互立即替换旧意图，已有窗口不因再次召唤重播出现动画。SwiftUI 执行显示效果，原有窗口生命周期只发出出现或取消意图，不把 animation completion 当窗口生命周期所有者。如未来需要位置变化的连续速度，应核对框架对应 API，而不是自己排队或计时等待。这是依据上面来源形成的 Clipy 设计判断。
 
 不能直接照搬 compositor 的大幅 `popin`、整屏 workspace 滑动、装饰旋转或永久循环：Clipy 的目标是短暂浏览与快速复制，额外几何变化会改变内容位置，并增加每次高频操作的视觉等待。Hyprland 本身也指出循环效果会持续按刷新率渲染、增加 CPU / GPU 和电池负担。[Hyprland Animations](https://wiki.hypr.land/Configuring/Advanced-and-Cool/Animations/)
 
 只调整显示属性，不把搜索、读取、解码、列表分页或实际 mutation 延迟到动画结束。继续使用有界页面、后台内容准备和目标 / 版本发布检查；统一动态效果不成为业务状态转换的第二套机制。
 
+视图和动画优先使用 SwiftUI。窗口外壳仍处理每次召唤定位、独立预览跟随、焦点、Space 和系统事件；这些既有职责没有为了过渡动画再增加 AppKit 视图层。SwiftUI 的 [`defaultWindowPlacement`](https://developer.apple.com/documentation/swiftui/scene/defaultwindowplacement(_:)) 定义首次创建窗口的默认放置，不是持续追踪另一窗口的接口；[`UtilityWindow`](https://developer.apple.com/documentation/swiftui/utilitywindow) 自带自动隐藏与 Esc 关闭规则，不能直接视为当前两窗会话的等价替换。这说明本次保留现有外壳的取舍，不意味着 SwiftUI 无法创建浮动窗口。
+
 ## 当前验证边界
 
-代码中的十档时长、Reduce Motion 与关闭时取消 layer 动画是可检查的确定行为；曲线体验、快速反复开关是否平顺，以及输入至稳定画面的五帧上限仍需要真实 macOS 运行证据。按用户要求只使用 CI，不执行本地 Swift 构建 / 测试。普通 CI 编译和功能测试通过也不能自动证明物理显示链的帧数。
+代码中的十档时长、Reduce Motion、即时关闭与重复打开不重播是可检查的确定行为；曲线体验、快速反复开关是否平顺，以及输入至稳定画面的五帧上限仍需要真实 macOS 运行证据。按用户要求只使用 CI，不执行本地 Swift 构建 / 测试。普通 CI 编译和功能测试通过也不能自动证明物理显示链的帧数。
 
 后续判断时分清四段：输入到第一处可见反馈、请求的曲线时长、框架 / 渲染掉帧、内容何时可交互。最慢档允许长于五帧但立即可操作，最快档缩短动态效果，不省略正确的内容与权限检查。没有这些证据时不宣称“端到端五帧已验证”或“主线程无开销”。
