@@ -2,6 +2,9 @@
 /// Parsing is pure and bounded; it never reads application or History state.
 import Foundation
 
+private let expressionTokenLimit = 128
+private let expressionNestingLimit = 16
+
 public struct HistorySearchExpressionError: Error, Sendable, Equatable {
     public enum Reason: String, Sendable {
         case queryTooLong, tooManyTerms, tooDeep, expectedTerm, unexpectedToken
@@ -86,22 +89,81 @@ public struct HistorySearchExpression: Sendable, Hashable {
     /// App composition resolves display names using installed application
     /// metadata. This pure transformation substitutes exact source IDs; nil
     /// leaves a term unresolved, while an empty list matches no History row.
+    /// Each occurrence invokes `transform` once, in query order. The resolved
+    /// serialization must fit the same byte/token/nesting limits as parsing;
+    /// an excessive expansion throws before building its unbounded OR tree.
     public func replacingApplicationTerms(
         _ transform: (String) -> [String]?
-    ) -> Self {
-        func replace(_ node: Node) -> Node {
-            switch node {
-            case .application(let name):
-                guard let identifiers = transform(name) else { return node }
-                guard let first = identifiers.first else { return .noMatch }
-                return identifiers.dropFirst().reduce(.sourceID(first)) { .or($0, .sourceID($1)) }
-            case .and(let lhs, let rhs): return .and(replace(lhs), replace(rhs))
-            case .or(let lhs, let rhs): return .or(replace(lhs), replace(rhs))
-            case .not(let child): return .not(replace(child))
-            default: return node
+    ) throws(HistorySearchExpressionError) -> Self {
+        typealias Shape = (node: Node, bytes: Int, tokens: Int, precedence: Int, depth: Int)
+        func check(bytes: Int, tokens: Int, depth: Int) throws(HistorySearchExpressionError) {
+            guard bytes <= HistoryLimits.standard.maximumSearchTermUTF8Bytes else {
+                throw HistorySearchExpressionError(reason: .queryTooLong, offset: 0)
+            }
+            guard tokens <= expressionTokenLimit else {
+                throw HistorySearchExpressionError(reason: .tooManyTerms, offset: 0)
+            }
+            guard depth <= expressionNestingLimit else {
+                throw HistorySearchExpressionError(reason: .tooDeep, offset: 0)
             }
         }
-        return Self(root: replace(root))
+        func leaf(_ node: Node) throws(HistorySearchExpressionError) -> Shape {
+            // A transform may return a very long identifier. Reject its raw
+            // bytes before quoting could allocate another large String.
+            if case .sourceID(let identifier) = node,
+               identifier.utf8.count > HistoryLimits.standard.maximumSearchTermUTF8Bytes {
+                throw HistorySearchExpressionError(reason: .queryTooLong, offset: 0)
+            }
+            let bytes = Self(root: node).serialized.utf8.count
+            let noMatch: Bool
+            if case .noMatch = node { noMatch = true } else { noMatch = false }
+            let shape: Shape = (node, bytes, noMatch ? 2 : 1, noMatch ? 3 : 4, noMatch ? 1 : 0)
+            try check(bytes: shape.bytes, tokens: shape.tokens, depth: shape.depth)
+            return shape
+        }
+        func combine(_ lhs: Shape, _ rhs: Shape, and: Bool) throws(HistorySearchExpressionError) -> Shape {
+            let precedence = and ? 2 : 1
+            let leftWrap = lhs.precedence < precedence ? 1 : 0
+            let rightWrap = rhs.precedence < precedence ? 1 : 0
+            let parentheses = 2 * (leftWrap + rightWrap)
+            let bytes = lhs.bytes + rhs.bytes + (and ? 1 : 4) + parentheses
+            let tokens = lhs.tokens + rhs.tokens + (and ? 0 : 1) + parentheses
+            let depth = max(lhs.depth + leftWrap, rhs.depth + rightWrap)
+            try check(bytes: bytes, tokens: tokens, depth: depth)
+            return (and ? .and(lhs.node, rhs.node) : .or(lhs.node, rhs.node), bytes, tokens, precedence, depth)
+        }
+        func replace(_ node: Node) throws(HistorySearchExpressionError) -> Shape {
+            switch node {
+            case .application(let name):
+                guard let identifiers = transform(name) else { return try leaf(node) }
+                // An OR of N IDs alone needs 2N-1 tokens. Count-check before
+                // constructing even its first node, without inspecting or
+                // copying a thousands-entry metadata result.
+                guard identifiers.count <= (expressionTokenLimit + 1) / 2 else {
+                    throw HistorySearchExpressionError(reason: .tooManyTerms, offset: 0)
+                }
+                guard let first = identifiers.first else { return try leaf(.noMatch) }
+                var shape = try leaf(.sourceID(first))
+                for identifier in identifiers.dropFirst() {
+                    shape = try combine(shape, leaf(.sourceID(identifier)), and: false)
+                }
+                return shape
+            case .and(let lhs, let rhs):
+                return try combine(replace(lhs), replace(rhs), and: true)
+            case .or(let lhs, let rhs):
+                return try combine(replace(lhs), replace(rhs), and: false)
+            case .not(let child):
+                let replacedChild = try replace(child)
+                let wrap = replacedChild.precedence < 3 ? 1 : 0
+                let bytes = 4 + replacedChild.bytes + 2 * wrap
+                let tokens = 1 + replacedChild.tokens + 2 * wrap
+                let depth = 1 + replacedChild.depth + wrap
+                try check(bytes: bytes, tokens: tokens, depth: depth)
+                return (.not(replacedChild.node), bytes, tokens, 3, depth)
+            default: return try leaf(node)
+            }
+        }
+        return Self(root: try replace(root).node)
     }
 
     /// Canonical source text for forwarding a resolved query through the
@@ -259,7 +321,7 @@ private struct ExpressionParser {
                     kind = .atom(value, field: field)
                 }
             }
-            guard scanned.count < 128 else {
+            guard scanned.count < expressionTokenLimit else {
                 throw Failure(reason: .tooManyTerms, offset: start)
             }
             scanned.append(ExpressionToken(kind: kind, offset: start))
@@ -297,7 +359,7 @@ private struct ExpressionParser {
     }
 
     private mutating func parseUnary(depth: Int) throws(HistorySearchExpressionError) -> Node {
-        guard depth <= 16 else { throw failure(.tooDeep) }
+        guard depth <= expressionNestingLimit else { throw failure(.tooDeep) }
         guard index < tokens.count else { throw failure(.expectedTerm) }
         if consume(.not) { return .not(try parseUnary(depth: depth + 1)) }
         if consume(.open) {

@@ -374,9 +374,9 @@ struct AppCaptureAccessTests {
             deadlineSleep.startedCount == 1
         })
         let deadline = try #require(composition?.capturePauseTaskForTesting)
-        weak var releasedComposition = composition
+        let wasReleased = { [weak composition] in composition == nil }
         composition = nil
-        #expect(releasedComposition == nil)
+        #expect(wasReleased())
         #expect(deadline.isCancelled)
         deadlineSleep.expire(0)
         await deadline.value

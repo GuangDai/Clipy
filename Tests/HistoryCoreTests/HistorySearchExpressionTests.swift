@@ -92,12 +92,12 @@ func expressionSearchQuotedLiteralRoundTripsWithoutInterpretingSyntax(literal: S
     )
 
     #expect(expression.applicationTerms == ["Telegram", "Brave", "Safari Technology Preview"])
-    #expect(expression.replacingApplicationTerms { _ in nil } == expression)
+    #expect(try expression.replacingApplicationTerms { _ in nil } == expression)
 }
 
 @Test func expressionSearchReplacesNamesWithExactAlternativesInsideNegatedGroups() throws {
     let expression = try HistorySearchExpression.parse("source:Telegram NOT source:Brave")
-    let resolved = expression.replacingApplicationTerms { name in
+    let resolved = try expression.replacingApplicationTerms { name in
         switch name {
         case "Telegram": ["org.telegram.desktop", "ru.keepcoder.Telegram"]
         case "Brave": ["com.brave.Browser", "com.brave.Browser.beta"]
@@ -115,7 +115,7 @@ func expressionSearchQuotedLiteralRoundTripsWithoutInterpretingSyntax(literal: S
 
 @Test func expressionSearchEmptyResolutionStaysFalseWhenSerializedAndRespectsNot() throws {
     let expression = try HistorySearchExpression.parse("source:Missing NOT app:Other")
-    let resolved = expression.replacingApplicationTerms { _ in [] }
+    let resolved = try expression.replacingApplicationTerms { _ in [] }
     let reparsed = try HistorySearchExpression.parse(resolved.serialized)
 
     #expect(resolved.root == .and(.noMatch, .not(.noMatch)))
@@ -129,7 +129,7 @@ func expressionSearchQuotedLiteralRoundTripsWithoutInterpretingSyntax(literal: S
         "source-id:" + HistorySearchExpression.quoted(identifier)
     )
     var lookupCount = 0
-    let resolved = expression.replacingApplicationTerms { _ in
+    let resolved = try expression.replacingApplicationTerms { _ in
         lookupCount += 1
         return []
     }
@@ -172,6 +172,72 @@ func expressionSearchSerializationEscapesOnlyTextThatWouldBecomeSyntax(literal: 
     let expression = try HistorySearchExpression.parse(HistorySearchExpression.quoted(literal))
 
     #expect(try HistorySearchExpression.parse(expression.serialized) == expression)
+}
+
+@Test func expressionResolutionRejectsThousandsOfIDsBeforeResolvingLaterOccurrences() throws {
+    let expression = try HistorySearchExpression.parse(Array(repeating: "app:a", count: 128).joined(separator: " "))
+    let identifiers = (0..<5_000).map { "org.example.application-\($0)" }
+    var calls = 0
+
+    #expect(throws: HistorySearchExpressionError(reason: .tooManyTerms, offset: 0)) {
+        try expression.replacingApplicationTerms { _ in
+            calls += 1
+            return identifiers
+        }
+    }
+    #expect(calls == 1)
+}
+
+@Test func expressionResolutionKeepsOccurrenceOrderAndIndependentTransformResults() throws {
+    let expression = try HistorySearchExpression.parse("app:A (app:B app:A)")
+    var calls: [String] = []
+    let resolved = try expression.replacingApplicationTerms { name in
+        calls.append(name)
+        switch calls.count {
+        case 1: return nil
+        case 2: return ["id-B"]
+        default: return []
+        }
+    }
+
+    #expect(calls == ["A", "B", "A"])
+    #expect(resolved.root == .and(.application("A"), .and(.sourceID("id-B"), .noMatch)))
+}
+
+@Test func expressionResolutionAdmitsExactSerializationBoundaries() throws {
+    let apps = try HistorySearchExpression.parse(Array(repeating: "app:a", count: 128).joined(separator: " "))
+    let adjacent = try apps.replacingApplicationTerms { _ in ["a"] }
+    #expect(try HistorySearchExpression.parse(adjacent.serialized) == adjacent)
+    let maximumBytes = HistoryLimits.standard.maximumSearchTermUTF8Bytes
+    let literal = try HistorySearchExpression.parse(String(repeating: "a", count: maximumBytes))
+    #expect(try literal.replacingApplicationTerms { _ in nil } == literal)
+
+    let app = try HistorySearchExpression.parse("app:a")
+    for identifier in [String(repeating: "a", count: maximumBytes - 10), String(repeating: "\"", count: (maximumBytes - 12) / 2)] {
+        let resolved = try app.replacingApplicationTerms { _ in [identifier] }
+        #expect(resolved.serialized.utf8.count == maximumBytes)
+        #expect(try HistorySearchExpression.parse(resolved.serialized) == resolved)
+        #expect(throws: HistorySearchExpressionError(reason: .queryTooLong, offset: 0)) {
+            try app.replacingApplicationTerms { _ in [identifier + "a"] }
+        }
+    }
+}
+
+@Test func expressionResolutionCountsOROperatorsParenthesesAndNotDepth() throws {
+    let identifiers = (0..<64).map { "id-\($0)" }
+    let app = try HistorySearchExpression.parse("app:a")
+    let resolved = try app.replacingApplicationTerms { _ in identifiers }
+    #expect(try HistorySearchExpression.parse(resolved.serialized) == resolved)
+    let negated = try HistorySearchExpression.parse("NOT app:a")
+    let negatedBoundary = try negated.replacingApplicationTerms { _ in Array(identifiers.prefix(63)) }
+    #expect(try HistorySearchExpression.parse(negatedBoundary.serialized) == negatedBoundary)
+    #expect(throws: HistorySearchExpressionError(reason: .tooManyTerms, offset: 0)) {
+        try negated.replacingApplicationTerms { _ in identifiers }
+    }
+    let deepest = try HistorySearchExpression.parse(String(repeating: "NOT ", count: 16) + "app:a")
+    #expect(throws: HistorySearchExpressionError(reason: .tooDeep, offset: 0)) {
+        try deepest.replacingApplicationTerms { _ in ["first", "second"] }
+    }
 }
 
 @Test(arguments: ["https://example.com/notes", "project:clipy", "12:30"])

@@ -12,7 +12,7 @@ struct SourceApplicationSearchResolverTests {
             .init(bundleID: "com.apple.Notes", displayName: "Notes")
         ])
         let expression = try HistorySearchExpression.parse("source:Telegram or (source:Brave AND NOT source:Notes)")
-        let result = resolver.resolve(expression)
+        let result = try resolver.resolve(expression)
 
         #expect(result.unresolvedNames.isEmpty)
         #expect(result.expression == (try HistorySearchExpression.parse(
@@ -26,13 +26,25 @@ struct SourceApplicationSearchResolverTests {
             .init(bundleID: "org.example.notes-one", displayName: "Notes"),
             .init(bundleID: "org.example.notes-two", displayName: "Notes")
         ])
-        let result = resolver.resolve(try HistorySearchExpression.parse("NOT source:notes"))
+        let result = try resolver.resolve(try HistorySearchExpression.parse("NOT source:notes"))
 
         #expect(resolver.applications.count == 2)
         #expect(result.unresolvedNames.isEmpty)
         #expect(result.expression == (try HistorySearchExpression.parse(
             "NOT (source-id:org.example.notes-one OR source-id:org.example.notes-two)"
         )))
+    }
+
+    @Test func thousandsOfMatchingApplicationsReportAnExplicitResolutionLimit() throws {
+        let resolver = SourceApplicationSearchResolver(applications: (0..<5_000).map {
+            .init(bundleID: "org.example.app-\($0)", displayName: "Application a")
+        })
+        let expression = try HistorySearchExpression.parse(Array(repeating: "app:a", count: 128).joined(separator: " "))
+
+        #expect(throws: HistorySearchExpressionError.self) {
+            try resolver.resolve(expression)
+        }
+        #expect(resolver.applications.count == 5_000)
     }
 
     @Test func namesAreRealMetadataAndNotGuessedFromBundleIdentifiers() {
@@ -51,14 +63,14 @@ struct SourceApplicationSearchResolverTests {
 
     @Test func unavailableNamesAreReportedAndExplicitIDsNeedNoInstalledApplication() throws {
         let resolver = SourceApplicationSearchResolver(applications: [])
-        let unresolved = resolver.resolve(try HistorySearchExpression.parse(
+        let unresolved = try resolver.resolve(try HistorySearchExpression.parse(
             "source:Missing OR NOT source:Missing"
         ))
         let explicit = try HistorySearchExpression.parse("source-id:org.example.removed-app")
 
         #expect(unresolved.unresolvedNames == ["Missing"])
-        #expect(resolver.resolve(explicit).unresolvedNames.isEmpty)
-        #expect(resolver.resolve(explicit).expression == explicit)
+        #expect(try resolver.resolve(explicit).unresolvedNames.isEmpty)
+        #expect(try resolver.resolve(explicit).expression == explicit)
     }
 
     @Test func duplicateInstallationsMergeTheirRealNamesWithoutDuplicateChoices() async {

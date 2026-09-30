@@ -1106,15 +1106,15 @@ final class HistoryViewState {
             }
         }
         if let expression, !expression.applicationTerms.isEmpty {
-            let resolution = searchSourceResolver.resolve(expression)
-            resolvedExpressionText = resolution.expression.serialized
-            unresolved.append(contentsOf: resolution.unresolvedNames)
-            if let resolvedExpressionText {
-                do {
+            do {
+                let resolution = try searchSourceResolver.resolve(expression)
+                resolvedExpressionText = resolution.expression.serialized
+                unresolved.append(contentsOf: resolution.unresolvedNames)
+                if let resolvedExpressionText {
                     _ = try HistorySearchExpression.parse(resolvedExpressionText)
-                } catch {
-                    sourceResolutionError = error
                 }
+            } catch {
+                sourceResolutionError = error
             }
         }
         if let ids = resolvedSourceApplicationIDs,

@@ -90,11 +90,11 @@ final class SourceApplicationSearchResolver {
         }.map(\.bundleID)
     }
 
-    func resolve(_ expression: HistorySearchExpression) -> Resolution {
+    func resolve(_ expression: HistorySearchExpression) throws(HistorySearchExpressionError) -> Resolution {
         var unresolved: [String] = []
         var unresolvedNames = Set<String>()
         var matches: [String: [String]] = [:]
-        let resolved = expression.replacingApplicationTerms { name in
+        let resolved = try expression.replacingApplicationTerms { name in
             if let identifiers = matches[name] { return identifiers }
             let identifiers = self.identifiers(matching: name)
             matches[name] = identifiers
