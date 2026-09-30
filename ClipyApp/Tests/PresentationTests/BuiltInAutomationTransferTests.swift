@@ -67,14 +67,26 @@ struct BuiltInAutomationTransferTests {
         }
     }
 
-    @Test func fileReadEnforcesLimitAndReturnsAllBytesIncludingExactLimit() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("WorkflowTransfer-\(UUID()).json")
-        defer { try? FileManager.default.removeItem(at: url) }
+    @Test func fileReadPreservesExactBytesAndBoundsAndRejectsNonregularSources() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WorkflowTransfer-\(UUID())", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("workflow.json")
+        let link = directory.appendingPathComponent("linked-workflow.json")
         let data = Data(repeating: 65, count: 131_072)
         try data.write(to: url)
-        #expect(try BuiltInAutomationTransfer.read(url, maximumBytes: data.count) == data)
-        #expect(throws: BuiltInAutomationTransfer.Failure.tooLarge) {
-            try BuiltInAutomationTransfer.read(url, maximumBytes: data.count - 1)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: url)
+        for source in [url, link] {
+            #expect(try BuiltInAutomationTransfer.read(source, maximumBytes: data.count) == data)
+            #expect(throws: BuiltInAutomationTransfer.Failure.tooLarge) {
+                try BuiltInAutomationTransfer.read(source, maximumBytes: data.count - 1)
+            }
+        }
+        // /dev/null returns EOF immediately, so an old reader fails this
+        // assertion without blocking the CI runner on an unwritten FIFO.
+        #expect(throws: BuiltInAutomationTransfer.Failure.unreadable) {
+            try BuiltInAutomationTransfer.read(URL(fileURLWithPath: "/dev/null"), maximumBytes: 1_024)
         }
     }
 }

@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import CoreTransferable
 import SwiftUI
@@ -68,8 +69,18 @@ enum BuiltInAutomationTransfer {
     /// Bound the file read itself, including files whose reported size changes.
     static func read(_ url: URL, maximumBytes: Int) throws -> Data {
         try Task.checkCancellation()
-        let handle = try FileHandle(forReadingFrom: url)
+        let path = url.path(percentEncoded: false)
+        guard url.isFileURL, !path.utf8.contains(0) else { throw Failure.unreadable }
+        // Opening a FIFO must not wait for a writer before cancellation can
+        // run. Inspect the descriptor used for reading; ordinary symlinks to
+        // regular documents remain supported.
+        let descriptor = Darwin.open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+        guard descriptor >= 0 else { throw Failure.unreadable }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         defer { try? handle.close() }
+        var metadata = stat()
+        guard Darwin.fstat(descriptor, &metadata) == 0,
+              metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else { throw Failure.unreadable }
         var data = Data()
         while data.count <= maximumBytes {
             try Task.checkCancellation()
