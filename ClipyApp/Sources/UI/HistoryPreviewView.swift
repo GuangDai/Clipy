@@ -658,7 +658,8 @@ struct HistoryPreviewView: View {
                                 }
                                 .buttonStyle(AppMotionPressStyle())
                                 .keyboardShortcut(.cancelAction)
-                                .accessibilityLabel(PanelActionsCopy.text("Close"))
+                                .accessibilityLabel(PreviewCopy.text("Close"))
+                                .help(PreviewCopy.text("Close"))
                                 .accessibilityIdentifier("clipy.preview.information.close")
                             }
                         }
