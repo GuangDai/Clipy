@@ -101,9 +101,8 @@ final class PreviewPaneState {
     var onPreparationTargetChanged: ((HistoryItemReference?) -> Void)?
 
     /// The dwell delay before a selection change auto-opens the preview
-    /// (Maccy's `previewDelay` default: 200 ms). The property is
-    /// package (GOV-3): only this module schedules the dwell; the public
-    /// `init(autoOpenDelay:)` parameter remains the seam.
+    /// (Maccy's `previewDelay` default: 200 ms). Only this module schedules
+    /// the dwell; `init(autoOpenDelay:)` supplies its timing.
     private(set) var autoOpenDelay: Duration
 
     /// The grace between the pointer leaving BOTH surfaces and the
@@ -114,7 +113,7 @@ final class PreviewPaneState {
 
     /// Whether dwell auto-open is armed. The panel's key status drives this
     /// (`panelBecameKey`/`panelResignedKey`) so a background panel never
-    /// opens a preview. Package (GOV-3): arming is driven only by the
+    /// opens a preview. Arming is driven only by the
     /// in-module panel lifecycle methods.
     private(set) var isAutoOpenEnabled = true
 
@@ -141,7 +140,7 @@ final class PreviewPaneState {
     /// flight never fires; manual dismissal and its suppression are
     /// unaffected. Re-enabling restores auto-open on the NEXT selection
     /// change (it never opens the pane by itself).
-    /// Package (GOV-3): `HistoryPanelView` pushes the preference from the
+    /// `HistoryPanelView` pushes the preference from the
     /// injected appearance snapshot inside this module.
     var isAutoOpenPreferenceEnabled = true {
         didSet {
@@ -376,7 +375,7 @@ final class PreviewPaneState {
     /// The panel closed: hide the pane and keep automatic opening disarmed
     /// until AppKit reports that the panel became key again. Selection
     /// changes published while the panel is hidden therefore cannot leak
-    /// into the next visible session (review Card 9E). Package (GOV-3): the
+    /// into the next visible session (review Card 9E). The
     /// panel-close path that resets this state is this module's
     /// `HistoryPanelView`; `panelBecameKey`/`panelResignedKey` above remain
     /// the ClipyApp panel seam.

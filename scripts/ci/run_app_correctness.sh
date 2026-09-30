@@ -21,12 +21,15 @@ shard="${6:-all}"
 # Leave room in shard 4 for both hosted bundles, not only its GUI journeys.
 gui_group_1=(
   AppearanceJourneyUITests
+  AdvancedInteractionJourneyUITests
   ClipboardJourneyUITests
+  KeyboardShortcutsJourneyUITests
   RetentionCountJourneyUITests
   RetentionPolicyJourneyUITests
   TextPreviewTruncationJourneyUITests
 )
 gui_group_2=(
+  BuiltInAutomationJourneyUITests
   ThumbnailScrollMeasurementJourneyUITests
   CaptureAccessJourneyUITests
   ContentFirstRowJourneyUITests
@@ -34,14 +37,17 @@ gui_group_2=(
   StoreOpenRecoveryJourneyUITests
 )
 gui_group_3=(
+  BuiltInAutomationTransferJourneyUITests
   RTLPreviewGeometryJourneyUITests
   EditorRuntimeJourneyUITests
   FileReferencePreviewJourneyUITests
   HistoryBackupJourneyUITests
+  LanguageSelectionJourneyUITests
   MultiItemDragJourneyUITests
   NarrowSearchHeaderJourneyUITests
   PreviewRecoveryJourneyUITests
   DetailsUnavailableImageJourneyUITests
+  WorkflowSyntaxJourneyUITests
 )
 test_arguments=(-parallel-testing-enabled NO)
 case "$shard" in

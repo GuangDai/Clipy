@@ -99,7 +99,13 @@ public actor LocalAutomationClient {
             case let .failure(value): requestID = value.requestID
             }
         }
-        return LocalAutomationOutput(ClipyCLIContract.render(
+        return failure(code, requestID: requestID)
+    }
+
+    private static func failure(
+        _ code: LocalAutomationClientFailure, requestID: ClipyCLIRequestID?
+    ) -> LocalAutomationOutput {
+        LocalAutomationOutput(ClipyCLIContract.render(
             .failure(requestID: requestID, code: code.code)
         ))
     }
@@ -114,16 +120,21 @@ public actor LocalAutomationClient {
             close()
             return LocalAutomationOutput(ClipyCLIContract.render(value))
         }
+        // The correlation ID is already validated. Error paths must not parse
+        // and allocate the complete request (including revision bytes) again.
+        func failure(_ code: LocalAutomationClientFailure) -> LocalAutomationOutput {
+            Self.failure(code, requestID: request.requestID)
+        }
         guard credential.count == LocalAutomationFrames.credentialByteCount else {
             close()
-            return Self.failure(.authenticationFailed, request: json)
+            return failure(.authenticationFailed)
         }
-        guard let connection = descriptor else { return Self.failure(.notReady, request: json) }
+        guard let connection = descriptor else { return failure(.notReady) }
         // Transfer ownership to this one operation before the first await;
         // actor reentry cannot send another request or close/reuse this FD.
         descriptor = nil
         defer { _ = Darwin.close(connection) }
-        guard timeout.isFinite, timeout > 0 else { return Self.failure(.timeout, request: json) }
+        guard timeout.isFinite, timeout > 0 else { return failure(.timeout) }
         let deadline = ContinuousClock.now.advanced(by: .seconds(timeout))
         var bytesSent = 0
         do {
@@ -145,13 +156,13 @@ public actor LocalAutomationClient {
             // Once any request bytes leave, preserve uncertainty even on cancel;
             // changing the catch order alone could falsely promise no commit (07 §8.3).
             if request.isMutation, bytesSent > 0 {
-                return Self.failure(.outcomeUnknown, request: json)
+                return failure(.outcomeUnknown)
             }
-            if error is CancellationError { return Self.failure(.cancelled, request: json) }
+            if error is CancellationError { return failure(.cancelled) }
             if case LocalAutomationSocket.Failure.timeout = error {
-                return Self.failure(.timeout, request: json)
+                return failure(.timeout)
             }
-            return Self.failure(.notReady, request: json)
+            return failure(.notReady)
         }
     }
 

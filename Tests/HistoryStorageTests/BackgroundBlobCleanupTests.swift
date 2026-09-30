@@ -61,7 +61,7 @@ struct BackgroundBlobCleanupTests {
         let root = await history.authority.withTestDatabase { $0.storeLocation.rootURL }
         let gate = SuspensionGate()
         await Self.parkCleanup(history, at: gate)
-        await history.authority.requestBlobCleanup()
+        await history.authority.requestBlobCleanup(scanningOrphans: true)
         await gate.waitForPark(Self.park)
         // Finish the bounded ownership-metadata phase and run its first
         // file batch, then park before the next file batch. Merely resuming

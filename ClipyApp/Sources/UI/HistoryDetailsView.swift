@@ -102,7 +102,7 @@ struct HistoryDetailsLoadFence {
     }
 
     func owns(_ token: Int) -> Bool {
-        token == generation
+        isActive && !isPurged && token == generation
     }
 
     func accepts(
@@ -122,7 +122,7 @@ struct HistoryDetailsLoadFence {
         from current: HistoryItemReference,
         to latest: HistoryItemReference
     ) -> Bool {
-        guard !isPurged,
+        guard isActive, !isPurged,
               latest.id == current.id,
               latest.contentVersion >= current.contentVersion
         else { return false }
@@ -329,6 +329,7 @@ struct HistoryDetailsView: View {
     /// saved revision still joins the same explicit authoritative reload.
     @MainActor
     private func closeEditor() {
+        guard loadFence.isActive, !loadFence.isPurged else { return }
         showsEditor = false
         // Save/Reload Latest may have advanced currentItem while this phase
         // still contains the opening metadata. Do not expose its old Edit or
@@ -358,7 +359,7 @@ struct HistoryDetailsView: View {
     @MainActor
     private func advanceDetailsReference(_ latest: HistoryItemReference) {
         let previous = currentItem
-        guard !loadFence.isPurged,
+        guard loadFence.isActive, !loadFence.isPurged,
               latest.id == previous.id,
               latest.contentVersion >= previous.contentVersion
         else { return }
@@ -610,7 +611,7 @@ struct HistoryDetailsView: View {
               case .loaded(let details, _) = phase else { return }
         let representations = request.basis == .canonical ? details.canonical : details.effective
         guard let metadata = representations.first(where: {
-            $0.typeIdentifier == request.typeIdentifier && $0.pasteboardItemIndex == request.pasteboardItemIndex
+            $0.typeIdentifier.utf8.elementsEqual(request.typeIdentifier.utf8) && $0.pasteboardItemIndex == request.pasteboardItemIndex
         }) else { return }
         previewRequest = request
         let generation = loadFence.generation
@@ -752,19 +753,26 @@ struct HistoryDetailsView: View {
     /// existing inline failure presentation.
     @MainActor
     private func togglePin(isPinned: Bool) async {
-        guard !isTogglingPin else { return }
+        guard loadFence.isActive, !loadFence.isPurged, !Task.isCancelled, !isTogglingPin else { return }
+        let reference = currentItem
+        let generation = loadFence.generation
         isTogglingPin = true
         defer { isTogglingPin = false }
         do {
             if isPinned {
-                _ = try await viewState.unpinAwaitingReceipt(currentItem.id)
+                _ = try await viewState.unpinAwaitingReceipt(reference.id)
             } else {
-                _ = try await viewState.pinAwaitingReceipt(currentItem.id)
+                _ = try await viewState.pinAwaitingReceipt(reference.id)
             }
+            guard !Task.isCancelled, loadFence.owns(generation) else { return }
             await load(presentingTransition: false)
         } catch let failure as HistoryFailure {
+            guard loadFence.owns(generation),
+                  currentItem == reference, !Task.isCancelled else { return }
             failureNotice = FailurePresentation.message(for: failure, bundle: copyBundle)
         } catch {
+            guard loadFence.owns(generation),
+                  currentItem == reference, !Task.isCancelled else { return }
             guard error is CancellationError else {
                 failureNotice = PanelActionsCopy.text("Clipy couldn't update this item.", bundle: copyBundle)
                 return
@@ -777,20 +785,30 @@ struct HistoryDetailsView: View {
     /// other typed failures surface their message inline.
     @MainActor
     private func revise(intent: RevisionIntent, expected: ContentVersion) async {
-        guard !isRevising else { return }
+        guard loadFence.isActive, !loadFence.isPurged, !Task.isCancelled, !isRevising else { return }
+        let reference = currentItem
+        var generation = loadFence.generation
         isRevising = true
         defer { isRevising = false }
         do {
             _ = try await viewState.reviseKeepingDetails(
                 RevisionRequest(
-                    itemID: currentItem.id,
+                    itemID: reference.id,
                     expected: expected,
                     intent: intent
                 ),
-                onCommittedReference: advanceDetailsReference
+                onCommittedReference: { latest in
+                    guard !Task.isCancelled, loadFence.owns(generation),
+                          currentItem == reference else { return }
+                    advanceDetailsReference(latest)
+                    generation = loadFence.generation
+                }
             )
+            guard !Task.isCancelled, loadFence.owns(generation) else { return }
             await load(presentingTransition: false)
         } catch let failure as HistoryFailure {
+            guard loadFence.owns(generation),
+                  currentItem == reference, !Task.isCancelled else { return }
             if case .staleContent = failure {
                 showsStaleNotice = true
                 needsRevisionConflictReload = true
@@ -799,6 +817,8 @@ struct HistoryDetailsView: View {
                 failureNotice = FailurePresentation.message(for: failure, bundle: copyBundle)
             }
         } catch {
+            guard loadFence.owns(generation),
+                  currentItem == reference, !Task.isCancelled else { return }
             guard error is CancellationError else {
                 failureNotice = PanelActionsCopy.text("Clipy couldn't update this item.", bundle: copyBundle)
                 return
@@ -812,16 +832,22 @@ struct HistoryDetailsView: View {
     /// and removes this navigation path for a committed Remove.
     @MainActor
     private func remove() async {
-        guard !isRemoving else { return }
+        guard loadFence.isActive, !loadFence.isPurged, !Task.isCancelled, !isRemoving else { return }
+        let reference = currentItem
+        let generation = loadFence.generation
         isRemoving = true
         defer { isRemoving = false }
         do {
-            _ = try await viewState.removeAwaitingReceipt(currentItem.id)
+            _ = try await viewState.removeAwaitingReceipt(reference.id)
             // The receipt-confirmed surface purge owns dismissal. Do not
             // issue a guaranteed-notFound read after a successful Remove.
         } catch let failure as HistoryFailure {
+            guard loadFence.owns(generation),
+                  currentItem == reference, !Task.isCancelled else { return }
             failureNotice = FailurePresentation.message(for: failure, bundle: copyBundle)
         } catch {
+            guard loadFence.owns(generation),
+                  currentItem == reference, !Task.isCancelled else { return }
             guard error is CancellationError else {
                 failureNotice = PanelActionsCopy.text("Clipy couldn't remove this item.", bundle: copyBundle)
                 return
@@ -1337,7 +1363,7 @@ internal enum ContentBasis: String, Hashable {
         typeIdentifier: String, in details: HistoryDetails, pasteboardItemIndex: Int = 0
     ) -> HistoryRepresentationRequest? {
         let values = self == .effective ? details.effective : details.canonical
-        guard values.contains(where: { $0.typeIdentifier == typeIdentifier && $0.pasteboardItemIndex == pasteboardItemIndex }) else { return nil }
+        guard values.contains(where: { $0.typeIdentifier.utf8.elementsEqual(typeIdentifier.utf8) && $0.pasteboardItemIndex == pasteboardItemIndex }) else { return nil }
         return HistoryRepresentationRequest(item: details.item,
             basis: self == .effective ? .effective : .canonical, typeIdentifier: typeIdentifier,
             pasteboardItemIndex: pasteboardItemIndex)

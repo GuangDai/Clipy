@@ -54,15 +54,19 @@ public struct HistorySearchExpression: Sendable, Hashable {
     /// Unresolved source/app values; exact `source-id:` terms need no app
     /// metadata lookup. The order follows their first appearance in the query.
     public var applicationTerms: [String] {
-        func terms(_ node: Node) -> [String] {
+        var result: [String] = []
+        func collect(_ node: Node) {
             switch node {
-            case .application(let value): return [value]
-            case .and(let lhs, let rhs), .or(let lhs, let rhs): return terms(lhs) + terms(rhs)
-            case .not(let child): return terms(child)
-            default: return []
+            case .application(let value): result.append(value)
+            case .and(let lhs, let rhs), .or(let lhs, let rhs):
+                collect(lhs)
+                collect(rhs)
+            case .not(let child): collect(child)
+            default: break
             }
         }
-        return terms(root)
+        collect(root)
+        return result
     }
 
     public static func parse(_ text: String) throws(HistorySearchExpressionError) -> Self {
@@ -109,37 +113,63 @@ public struct HistorySearchExpression: Sendable, Hashable {
             let parts = calendar.dateComponents([.year, .month, .day], from: value)
             return String(format: "%04d-%02d-%02d", parts.year ?? 1, parts.month ?? 1, parts.day ?? 1)
         }
-        func render(_ node: Node, inside parentPrecedence: Int = 0) -> String {
-            let text: String
-            let precedence: Int
-            switch node {
-            case .all: text = "type:all"; precedence = 4
-            case .noMatch: text = "NOT type:all"; precedence = 3
-            case .text(let value): text = Self.quoted(value); precedence = 4
-            case .application(let name): text = "source:" + Self.quoted(name); precedence = 4
-            case .sourceID(let id): text = "source-id:" + Self.quoted(id); precedence = 4
-            case .type(let type): text = "type:" + type.rawValue; precedence = 4
-            case .pinned: text = "is:pinned"; precedence = 4
-            case .copiedDate(let from, let until):
-                precedence = 4
-                if let from, let until {
-                    text = "date:" + day(from) + ".." + day(until.addingTimeInterval(-86_400))
-                } else if let from { text = "after:" + day(from) }
-                else if let until { text = "before:" + day(until) }
-                else { text = "type:all" }
-            case .and(let lhs, let rhs):
-                precedence = 2
-                text = render(lhs, inside: 2) + " AND " + render(rhs, inside: 2)
-            case .or(let lhs, let rhs):
-                precedence = 1
-                text = render(lhs, inside: 1) + " OR " + render(rhs, inside: 1)
-            case .not(let child):
-                precedence = 3
-                text = "NOT " + render(child, inside: 3)
+        // Append once into the final buffer: left-associated queries must not
+        // copy every earlier term again at each Boolean node. Bare values
+        // avoid growing an admitted 4,096-byte literal solely by quoting it.
+        var result = ""
+        func appendValue(_ value: String, field: String? = nil) {
+            if let field { result += field + ":" }
+            let hasSyntax = value.isEmpty || value.contains {
+                $0.isWhitespace || $0 == "(" || $0 == ")" || $0 == "\""
             }
-            return precedence < parentPrecedence ? "(" + text + ")" : text
+            let looksLikeCondition = field == nil && value.split(separator: ":", maxSplits: 1).first.map {
+                ["app", "source", "source-id", "date", "before", "after", "type", "is"].contains($0.lowercased())
+            } == true && value.contains(":")
+            let looksLikeOperator = field == nil && ["AND", "OR", "NOT"].contains(value.uppercased())
+            result += hasSyntax || looksLikeCondition || looksLikeOperator ? Self.quoted(value) : value
         }
-        return render(root)
+        func render(_ node: Node, inside parentPrecedence: Int = 0) {
+            let precedence = switch node {
+            case .or: 1
+            case .and: 2
+            case .not, .noMatch: 3
+            default: 4
+            }
+            if precedence < parentPrecedence { result += "(" }
+            switch node {
+            case .all: result += "type:all"
+            case .noMatch: result += "NOT type:all"
+            case .text(let value): appendValue(value)
+            case .application(let name): appendValue(name, field: "app")
+            case .sourceID(let id): appendValue(id, field: "source-id")
+            case .type(let type): result += "type:" + type.rawValue
+            case .pinned: result += "is:pinned"
+            case .copiedDate(let from, let until):
+                if let from, let until {
+                    let finalDay = until.addingTimeInterval(-86_400)
+                    result += "date:" + day(from)
+                    if finalDay != from { result += ".." + day(finalDay) }
+                } else if let from { result += "after:" + day(from) }
+                else if let until { result += "before:" + day(until) }
+                else { result += "type:all" }
+            case .and(let lhs, let rhs):
+                render(lhs, inside: 2)
+                // Adjacency has exactly AND's precedence, while avoiding a
+                // redundant operator token for each admitted adjacent term.
+                result += " "
+                render(rhs, inside: 2)
+            case .or(let lhs, let rhs):
+                render(lhs, inside: 1)
+                result += " OR "
+                render(rhs, inside: 1)
+            case .not(let child):
+                result += "NOT "
+                render(child, inside: 3)
+            }
+            if precedence < parentPrecedence { result += ")" }
+        }
+        render(root)
+        return result
     }
 }
 
@@ -178,6 +208,7 @@ private struct ExpressionParser {
                 var value = ""
                 var field: String?
                 var wasQuoted = false
+                var sawColon = false
                 while cursor < characters.count,
                       !characters[cursor].isWhitespace,
                       characters[cursor] != "(", characters[cursor] != ")" {
@@ -197,10 +228,18 @@ private struct ExpressionParser {
                             throw Failure(reason: .unclosedQuote, offset: quoteStart)
                         }
                         cursor += 1
-                    } else if characters[cursor] == ":", !wasQuoted, field == nil,
-                              ["app", "source", "source-id", "date", "before", "after", "type", "is"].contains(value.lowercased()) {
-                        field = value.lowercased()
-                        value = ""
+                    } else if characters[cursor] == ":", !wasQuoted, !sawColon {
+                        // An unrecognized first prefix remains literal. No
+                        // later colon can turn that same value into a field;
+                        // lowercasing its growing prefix again is quadratic.
+                        sawColon = true
+                        let prefix = value.lowercased()
+                        if ["app", "source", "source-id", "date", "before", "after", "type", "is"].contains(prefix) {
+                            field = prefix
+                            value = ""
+                        } else {
+                            value.append(":")
+                        }
                         cursor += 1
                     } else {
                         value.append(characters[cursor])

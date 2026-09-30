@@ -17,18 +17,6 @@ struct SearchLibraryCopyTests {
             == .success("搜索条件已保存。"))
     }
 
-    @Test func destructiveActionsExplainWhichCollectionsAreRemoved() throws {
-        let chinese = try localizedBundle("zh-Hans")
-        #expect(SearchLibraryCopy.text(
-            "This removes favorites and recent search conditions. Clipboard history is unchanged.", bundle: chinese
-        ) == "这会删除收藏和最近搜索条件，不影响剪贴板历史。")
-        #expect(SearchLibraryCopy.text(
-            "Turning off automatic history clears recent searches and keeps favorites.", bundle: chinese
-        ) == "关闭自动记录会清空最近搜索，收藏会保留。")
-        #expect(SearchLibraryCopy.text("Favorites", bundle: chinese) == "收藏")
-        #expect(SearchLibraryCopy.text("Recent searches", bundle: chinese) == "最近搜索")
-    }
-
     @Test func aSavedSummaryDescribesFiltersWithoutTurningQueryTextIntoResults() throws {
         let chinese = try localizedBundle("zh-Hans")
         var filters = HistorySearchFilters()

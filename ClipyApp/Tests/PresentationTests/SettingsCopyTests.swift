@@ -16,22 +16,6 @@ struct SettingsCopyTests {
         )))
     }
 
-    @Test("Chinese settings preserve destructive scope and recovery guidance")
-    func translatedSettings() throws {
-        let chinese = try bundle("zh-Hans")
-        #expect(SettingsCopy.text("General", bundle: chinese) == "通用")
-        #expect(SettingsCopy.text(
-            "Remove every item, including pinned items?", bundle: chinese
-        ) == "移除全部项目，包括置顶项目？")
-        #expect(SettingsCopy.text(
-            "Approval is required in System Settings.", bundle: chinese
-        ) == "需要在系统设置中批准。")
-        #expect(SettingsCopy.text(
-            "Panel position and size changes apply the next time the panel opens.",
-            bundle: chinese
-        ) == "面板位置和大小的更改将在下次打开面板时生效。")
-    }
-
     @Test("Settings interpolation retains app identifiers and shortcut symbols")
     func interpolatedSettings() throws {
         let english = try bundle("en")

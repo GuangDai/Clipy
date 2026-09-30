@@ -55,6 +55,16 @@ extension BuiltInAutomation {
         recognizeText: @Sendable (Data) async throws -> String = BuiltInAutomation.recognizeText
     ) async throws -> BuiltInAutomationOutput {
         try validateStepTree(steps)
+        return try await runValidated(input, steps: steps, recognizeText: recognizeText)
+    }
+
+    /// Batch execution admits the fixed step tree once. Each item's resource
+    /// limits and selected branches are still checked against its own value.
+    static func runValidated(
+        _ input: BuiltInAutomationInput, steps: [BuiltInAutomationStep],
+        recognizeText: @Sendable (Data) async throws -> String = BuiltInAutomation.recognizeText
+    ) async throws -> BuiltInAutomationOutput {
+        try Task.checkCancellation()
         switch input {
         case let .text(text): try checkSize(text)
         case let .image(data): try validateImage(data)

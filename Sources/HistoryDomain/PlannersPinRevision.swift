@@ -278,21 +278,12 @@ private func isNormalizedRevisionContent(
     canonical: CanonicalContent
 ) -> Bool {
     let representations = proposed.representations
-    guard !representations.isEmpty else { return false }
-    guard Set(representations.map(\.pasteboardItemIndex)) == Set(canonical.representations.map { $0.content.pasteboardItemIndex }) else { return false }
-    let canonicalTypes = Set(canonical.representations.map { $0.content.key })
-    var seenTypes = Set<ContentRepresentationKey>()
-    seenTypes.reserveCapacity(representations.count)
-    for (index, representation) in representations.enumerated() {
-        guard !representation.bytes.isEmpty,
-              canonicalTypes.contains(representation.key),
-              seenTypes.insert(representation.key).inserted
-        else {
-            return false
-        }
-        if index > 0 {
-            guard representations[index - 1].key.precedes(representation.key) else { return false }
-        }
-    }
-    return true
+    guard let proposedKeys = try? normalizedRepresentationKeys(representations),
+          representations.last?.pasteboardItemIndex
+            == canonical.representations.last?.content.pasteboardItemIndex else { return false }
+    // Both normalized lists cover contiguous 0-based items. Equal final
+    // indices therefore prove every original pasteboard item still exists;
+    // membership separately forbids adding a type within any item (02 §2.1).
+    let canonicalKeys = Set(canonical.representations.lazy.map { $0.content.key })
+    return proposedKeys.isSubset(of: canonicalKeys)
 }

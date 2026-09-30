@@ -131,6 +131,11 @@ struct BuiltInAutomationWorkflow: Identifiable, Codable, Equatable, Sendable {
         scope = try values.decodeIfPresent(BuiltInAutomationScope.self, forKey: .scope) ?? .init()
     }
 
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.id == rhs.id && lhs.name.utf8.elementsEqual(rhs.name.utf8)
+            && lhs.steps == rhs.steps && lhs.trigger == rhs.trigger && lhs.scope == rhs.scope
+    }
+
     static var presets: [Self] {
         [
             Self(name: "Clean up text", steps: [.init(operation: .trimLines), .init(operation: .removeEmptyLines)]),

@@ -102,6 +102,8 @@ package enum LocalAutomationSocket {
         deadline: ContinuousClock.Instant
     ) async throws -> Data {
         guard count >= 0 else { throw Failure.invalidFrame }
+        try Task.checkCancellation()
+        guard ContinuousClock.now < deadline else { throw Failure.timeout }
         var bytes = Data(count: count)
         var offset = 0
         while offset < count {
@@ -154,6 +156,6 @@ package enum LocalAutomationSocket {
 
     package static func pause(until deadline: ContinuousClock.Instant) async throws {
         guard ContinuousClock.now < deadline else { throw Failure.timeout }
-            try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(5))), clock: .continuous)
+        try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(5))), clock: .continuous)
     }
 }

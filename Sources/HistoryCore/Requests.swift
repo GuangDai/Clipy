@@ -21,6 +21,37 @@ public enum SearchMode: Sendable, Hashable {
 public enum HistoryBrowseKind: Sendable, Hashable {
     case recent
     case search(text: String, mode: SearchMode)
+
+    /// Search consumes the original scalar sequence, including literal
+    /// exact/regexp terms. Canonically equivalent spellings may match
+    /// different rows and therefore cannot share a query/cursor identity.
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.recent, .recent): true
+        case (.search(let left, let leftMode), .search(let right, let rightMode)):
+            leftMode == rightMode && left.utf8.elementsEqual(right.utf8)
+        default: false
+        }
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        switch self {
+        case .recent:
+            hasher.combine(0)
+        case .search(let text, let mode):
+            hasher.combine(1)
+            hasher.combine(mode)
+            hashLiteralString(text, into: &hasher)
+        }
+    }
+}
+
+private func hashLiteralString(_ value: String, into hasher: inout Hasher) {
+    var value = value
+    value.withUTF8 {
+        hasher.combine($0.count)
+        hasher.combine(bytes: UnsafeRawBufferPointer($0))
+    }
 }
 
 /// Ordering applied after filtering and before pagination. Automatic preserves
@@ -105,14 +136,12 @@ public struct HistoryFilter: Sendable, Hashable {
         if let sourceApplicationIDs {
             hasher.combine(sourceApplicationIDs.count)
             for identifier in sourceApplicationIDs {
-                hasher.combine(identifier.utf8.count)
-                for byte in identifier.utf8 { hasher.combine(byte) }
+                hashLiteralString(identifier, into: &hasher)
             }
         }
         hasher.combine(sourceApplication != nil)
         if let sourceApplication {
-            hasher.combine(sourceApplication.utf8.count)
-            for byte in sourceApplication.utf8 { hasher.combine(byte) }
+            hashLiteralString(sourceApplication, into: &hasher)
         }
     }
 

@@ -28,6 +28,13 @@ extension HistoryAuthority {
     internal func publishHistoryContent(
         for plan: StampedCommitPlan, didPublish: () -> Void = {}
     ) throws -> [Int: PublishedHistoryContent] {
+        guard plan.mutations.contains(where: { mutation in
+            switch mutation {
+            case .create, .appendRevision: return true
+            case .updateOccurrence, .relocatePin, .delete, .setRetentionPolicy,
+                    .pruneRevisions, .setRetentionPolicies, .bulkClear, .retirePrefix: return false
+            }
+        }) else { return [:] }
         var published: [Int: PublishedHistoryContent] = [:]
         var newPayloadBytes: Int64 = 0
         let available = volumeAvailableCapacityOverride ?? volumeAvailableCapacityReader()
@@ -71,7 +78,11 @@ extension HistoryAuthority {
                 inline = reused.inline
                 blobID = reused.blobID
             } else {
-                newPayloadBytes += Int64(representation.bytes.count)
+                let (nextPayloadBytes, overflow) = newPayloadBytes.addingReportingOverflow(
+                    Int64(representation.bytes.count)
+                )
+                guard !overflow else { throw HistoryFailure.persistence(.invariantViolation) }
+                newPayloadBytes = nextPayloadBytes
                 if let failure = CaptureCapacityAdmission.failure(
                     demandBytes: newPayloadBytes, availableCapacity: available
                 ) { throw failure }

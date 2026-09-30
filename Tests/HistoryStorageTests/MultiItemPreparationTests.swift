@@ -32,8 +32,12 @@ struct MultiItemPreparationTests {
 
         let decoded = try CanonicalBlobCodec.decode(CanonicalBlobCodec.encode(canonical))
         #expect(decoded == canonical)
-        let entries = try SignatureBlobCodec.decode(SignatureBlobCodec.encode(prepared.signatureEntries))
-        #expect(entries == prepared.signatureEntries)
+        let signatures = canonical.representations.map {
+            ContentSignatureEntry(typeIdentifier: $0.content.typeIdentifier, fingerprint: $0.fingerprint,
+                                  byteCount: $0.content.bytes.count, pasteboardItemIndex: $0.content.pasteboardItemIndex)
+        }
+        let entries = try SignatureBlobCodec.decode(SignatureBlobCodec.encode(signatures))
+        #expect(entries == signatures)
         try SignatureBlobCodec.validateCoverage(canonical: decoded, entries: entries)
 
         let revisionID = RevisionID(rawValue: UUID())

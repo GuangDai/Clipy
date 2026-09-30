@@ -163,18 +163,27 @@ internal final class SQLiteDatabase {
     /// connection or shares mutable state with a cancellation task.
     /// Remove it before ROLLBACK so an expired read cannot interrupt cleanup.
     internal func setReadInterruptionDeadline(_ deadline: ContinuousClock.Instant?) throws {
-        let handle = try openHandle()
-        if let deadline {
-            let state = SQLiteReadDeadline(deadline: deadline)
+        _ = try openHandle()
+        readDeadline = deadline.map { SQLiteReadDeadline(deadline: $0) }
+        restoreReadInterruptionHandler()
+    }
+
+    /// SQLite has one progress-handler slot. Scoped cancellation temporarily
+    /// borrows it; restore the caller's read deadline after COMMIT/ROLLBACK,
+    /// never while transaction cleanup still needs an uninterrupted handle.
+    private func restoreReadInterruptionHandler() {
+        guard let handle else {
+            readDeadline = nil
+            return
+        }
+        if let state = readDeadline {
             sqlite3_progress_handler(handle, 1_000, { context in
                 guard let context else { return 0 }
                 let state = Unmanaged<SQLiteReadDeadline>.fromOpaque(context).takeUnretainedValue()
                 return Task.isCancelled || ContinuousClock().now >= state.deadline ? 1 : 0
             }, Unmanaged.passUnretained(state).toOpaque())
-            readDeadline = state
         } else {
             sqlite3_progress_handler(handle, 0, nil, nil)
-            readDeadline = nil
         }
     }
 
@@ -192,6 +201,23 @@ internal final class SQLiteDatabase {
         let statement = try prepare(sql, bindings: bindings)
         defer { statement.finalize() }
         while try statement.step() {}
+    }
+
+    /// VACUUM cannot run inside a transaction. The private backup still
+    /// needs native cancellation while reclaiming a large export's free
+    /// pages, rather than waiting until SQLite has copied the entire file.
+    internal func executeCancellable(_ sql: String) throws {
+        try Task.checkCancellation()
+        let handle = try openHandle()
+        sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
+        defer { restoreReadInterruptionHandler() }
+        do {
+            try execute(sql)
+            try Task.checkCancellation()
+        } catch let failure as SQLiteFailure {
+            try Task.checkCancellation()
+            throw failure
+        }
     }
 
     internal func prepare(
@@ -226,12 +252,17 @@ internal final class SQLiteDatabase {
         guard checkingCancellation else { return try transaction(begin: "BEGIN DEFERRED", body) }
         try Task.checkCancellation()
         let handle = try openHandle()
+        defer { restoreReadInterruptionHandler() }
         do {
             return try transaction(begin: "BEGIN DEFERRED") {
                 // Explicit metadata sorts may scan an older store without the
                 // optional ordering index. Cancellation must interrupt native
                 // SQL work before it has produced its first bounded row.
-                sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
+                if readDeadline != nil {
+                    restoreReadInterruptionHandler()
+                } else {
+                    sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
+                }
                 defer { sqlite3_progress_handler(handle, 0, nil, nil) }
                 let value = try body()
                 try Task.checkCancellation()
@@ -257,9 +288,7 @@ internal final class SQLiteDatabase {
         // one sqlite3_step. Check the owning task from SQLite itself, with
         // no cross-thread connection access or second cancellation writer.
         sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
-        defer {
-            if let handle = self.handle { sqlite3_progress_handler(handle, 0, nil, nil) }
-        }
+        defer { restoreReadInterruptionHandler() }
         do {
             return try transaction(begin: "BEGIN IMMEDIATE") {
                 do {

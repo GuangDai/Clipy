@@ -320,6 +320,33 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         screenVisibleFrames.contains { $0.intersects(frame) }
     }
 
+    /// A Dock or display-size change can leave a reachable window partly
+    /// outside the safe area. Fit the existing session to the display holding
+    /// its largest visible part, without replacing saved user dimensions.
+    func fitToVisibleFrames(_ screenVisibleFrames: [NSRect]) {
+        let fittingFrame = screenVisibleFrames.max { first, second in
+            let firstIntersection = first.intersection(frame)
+            let secondIntersection = second.intersection(frame)
+            let firstArea = firstIntersection.isNull ? 0 : firstIntersection.width * firstIntersection.height
+            let secondArea = secondIntersection.isNull ? 0 : secondIntersection.width * secondIntersection.height
+            return firstArea < secondArea
+        }
+        guard let fittingFrame, fittingFrame.intersects(frame) else { return }
+        applyResizeLimits(in: fittingFrame)
+        let size = NSSize(
+            width: min(frame.width, fittingFrame.width),
+            height: min(frame.height, fittingFrame.height)
+        )
+        let fitted = NSRect(
+            x: min(max(frame.minX, fittingFrame.minX), fittingFrame.maxX - size.width),
+            y: min(max(frame.maxY - size.height, fittingFrame.minY), fittingFrame.maxY - size.height),
+            width: size.width,
+            height: size.height
+        )
+        guard fitted != frame else { return }
+        setFrameProgrammatically(fitted, display: isPresented)
+    }
+
     /// Closes the panel when it loses key status — an outside click
     /// dismisses (Maccy's `resignKey`); a modal alert on top keeps it open
     /// (`NSApplication.isModalAlertPresented` below — public modal/sheet
@@ -383,6 +410,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// own child window and never enters this frame.
     func windowDidMove(_ notification: Notification) {
         persistAnchor()
+        // Child windows follow a drag, but their preferred side can become
+        // offscreen. Recompute preview placement on the new parent frame.
+        onFrameChanged()
     }
 
     private func persistAnchor() {

@@ -22,11 +22,18 @@ extension BuiltInAutomation {
     static func evaluate(
         _ inputs: [BuiltInAutomationInput], workflow: BuiltInAutomationWorkflow
     ) async throws -> BuiltInAutomationOutput {
+        try validateStepTree(workflow.steps)
+        return try await evaluateValidated(inputs, workflow: workflow)
+    }
+
+    private static func evaluateValidated(
+        _ inputs: [BuiltInAutomationInput], workflow: BuiltInAutomationWorkflow
+    ) async throws -> BuiltInAutomationOutput {
         var first: BuiltInAutomationOutput?
         var count = 0
         var requestsNotification = false
         for input in inputs {
-            let result = try await run(input, steps: workflow.steps)
+            let result = try await runValidated(input, steps: workflow.steps)
             if result.matchedConditions {
                 count += 1
                 requestsNotification = requestsNotification || result.requestsNotification
@@ -64,6 +71,8 @@ extension BuiltInAutomation {
             guard (1...1000).contains(remaining), workflow.scope.validTimeRange else {
                 throw BuiltInAutomationFailure.invalidScope
             }
+            try validateStepTree(workflow.steps)
+            let allowedApplicationIDs = Set(workflow.scope.applicationIDs)
             // History cursors bind the original request limit. Keep it
             // constant, then truncate the last page to the user's range.
             let pageSize = min(remaining, 50)
@@ -77,10 +86,11 @@ extension BuiltInAutomation {
                 let page = try await history.browse(.init(kind: .recent, limit: pageSize, cursor: cursor))
                 for row in page.rows.prefix(remaining) {
                     remaining -= 1
-                    guard workflow.scope.includes(application: row.lastSource, copiedAt: row.lastCopiedAt, now: now) else { continue }
+                    guard workflow.scope.includes(application: row.lastSource, copiedAt: row.lastCopiedAt, now: now,
+                                                  allowedApplicationIDs: allowedApplicationIDs) else { continue }
                     let payload = try await history.pastePayload(for: row.item.id)
                     guard payload.item == row.item else { throw BuiltInAutomationFailure.historyUnavailable }
-                    let result = try await evaluate(inputs(from: payload.representations, workflow: workflow), workflow: workflow)
+                    let result = try await evaluateValidated(inputs(from: payload.representations, workflow: workflow), workflow: workflow)
                     if firstInput == nil { firstInput = result.originalInput }
                     if result.matchedConditions {
                         count += 1

@@ -1,8 +1,70 @@
 @testable import ContentPreview
+import Dispatch
 import Foundation
 import Testing
 
 struct PreviewTextResourceTests {
+    @Test(arguments: ["\n", "\r", "\r\n", "\u{B}", "\u{C}", "\u{85}", "\u{2028}", "\u{2029}"])
+    func shortSegmentsWithAnyUnicodeNewlineHaveTheirOwnNativeBridge(newline: String) {
+        let source = "ab" + newline + "cd"
+        let text = PreviewText(text: source, wasTruncated: false,
+                              configuration: .init(segmentUTF16Budget: 2))
+        #expect(Data(text.displaySegments.joined().utf8) == Data(source.utf8))
+        #expect(text.displaySegmentGroups.allSatisfy { $0.count == 1 })
+    }
+
+    #if DEBUG
+    @Test(.serialized, arguments: [false, true])
+    @MainActor
+    func synchronousTextWorkDoesNotBlockANewerPreview(cancelOlderRender: Bool) async {
+        let renderer = ContentPreview()
+        let started = DispatchSemaphore(value: 0)
+        let resume = DispatchSemaphore(value: 0)
+        let older = ContentPreviewDebugInstrumentation.$textRenderDidStart.withValue({
+            started.signal()
+            // A synchronous parser/native-font call cannot suspend to make
+            // its actor available. Keep this worker synchronously occupied.
+            _ = resume.wait(timeout: .now() + 5)
+        }) {
+            Task {
+                await renderer.renderHistoryPane([
+                    PreviewRepresentation(typeIdentifier: "public.html", bytes: Data("<p>older</p>".utf8))
+                ])
+            }
+        }
+        let startDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+        var didStart = false
+        while !didStart, ContinuousClock.now < startDeadline {
+            didStart = started.wait(timeout: .now()) == .success
+            if !didStart { try? await Task.sleep(for: .milliseconds(10)) }
+        }
+        if cancelOlderRender { older.cancel() }
+        var newerOutcome: PreviewOutcome?
+        let newer = Task {
+            newerOutcome = await renderer.renderHistoryPane([
+                PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("newer".utf8))
+            ])
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while newerOutcome == nil, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let completedWhileOlderWorkerWasOccupied = newerOutcome
+        // Join both jobs even on failure so an actor-blocking regression
+        // reports its result instead of hanging the test process.
+        resume.signal()
+        let olderOutcome = await older.value
+        await newer.value
+        #expect(didStart)
+        #expect(completedWhileOlderWorkerWasOccupied == .content(.text(PreviewText(text: "newer", wasTruncated: false))))
+        #expect(olderOutcome == (cancelOlderRender
+            ? .failed(.cancelled) : .content(.text(PreviewText(text: "older", wasTruncated: false)))))
+        let settled = await renderer.debugSnapshot()
+        #expect(settled.activeJobs == 0)
+        #expect(settled.retainedSourceBytes == 0)
+    }
+    #endif
+
     @Test func shortSegmentGroupsBoundBridgesWithoutRejoiningAnOversizedGrapheme() async throws {
         let source = "Prefix\ne" + String(repeating: "\u{301}", count: 20_000)
         let outcome = await ContentPreview().renderHistoryPane([

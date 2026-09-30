@@ -169,15 +169,15 @@ final class BuiltInAutomationLibrary {
     }
 
     private static func validateSteps(_ steps: [BuiltInAutomationStep], insideCondition: Bool) throws {
-        typealias ValidationFrame = (remaining: ArraySlice<BuiltInAutomationStep>, notificationAllowed: Bool)
-        func frame(_ children: [BuiltInAutomationStep], insideCondition: Bool) -> ValidationFrame {
+        typealias ValidationFrame = (remaining: ArraySlice<BuiltInAutomationStep>, notificationAllowed: Bool, isEnabled: Bool)
+        func frame(_ children: [BuiltInAutomationStep], insideCondition: Bool, isEnabled: Bool) -> ValidationFrame {
             // Flat notifications may precede their sibling guard, but cannot
             // borrow permission from an unrelated conditional branch.
             (children[...], insideCondition || children.contains {
                 $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation)
-            })
+            }, isEnabled)
         }
-        var pending = [frame(steps, insideCondition: insideCondition)]
+        var pending = [frame(steps, insideCondition: insideCondition, isEnabled: true)]
         while var current = pending.popLast() {
             try Task.checkCancellation()
             guard let step = current.remaining.popFirst() else { continue }
@@ -185,20 +185,28 @@ final class BuiltInAutomationLibrary {
             guard step.find.utf8.count <= 16_384, step.replacement.utf8.count <= 16_384 else {
                 throw BuiltInAutomationFailure.definitionTooLarge
             }
-            guard step.enabled else { continue }
+            let enabled = current.isEnabled && step.enabled
+            let executesBranches = enabled && step.operation == .conditional
+            // Disabled and unused branches still enter the saved file. Check
+            // their field budgets without requiring unfinished edits to run.
+            if let predicate = step.predicate { try predicate.validate(isEnabled: executesBranches) }
+            pending.append(frame(step.otherwiseSteps, insideCondition: true, isEnabled: executesBranches))
+            pending.append(frame(step.thenSteps, insideCondition: true, isEnabled: executesBranches))
+            guard enabled else { continue }
             if step.operation == .replace && step.find.isEmpty { throw BuiltInAutomationFailure.emptyFind }
             if [.regexReplace, .regexExtract, .matchesRegex].contains(step.operation) {
-                guard !step.find.isEmpty, (try? NSRegularExpression(pattern: step.find)) != nil else {
+                guard !step.find.isEmpty, let regex = try? NSRegularExpression(pattern: step.find) else {
                     throw BuiltInAutomationFailure.invalidRegex
+                }
+                if step.operation == .regexReplace {
+                    try BuiltInAutomation.validateReplacementTemplate(step.replacement, captureGroupCount: regex.numberOfCaptureGroups)
                 }
             }
             if step.operation == .notify && !current.notificationAllowed {
                 throw BuiltInAutomationFailure.notificationNeedsCondition
             }
-            if step.operation == .conditional {
+            if step.operation == .conditional && step.predicate == nil {
                 try step.effectivePredicate.validate()
-                pending.append(frame(step.otherwiseSteps, insideCondition: true))
-                pending.append(frame(step.thenSteps, insideCondition: true))
             }
         }
     }

@@ -83,28 +83,25 @@ internal enum HCRBootstrap {
         limits: JournalLimits,
         compactionInjection: (() throws -> Void)?
     ) throws {
-        let validated = try validate(
+        let validatedRows = try validate(
             config: config,
             position: position,
             in: database,
             limits: limits
         )
         let deleteCount = try prefixDeleteCount(
-            rows: validated.rows,
+            rows: validatedRows,
             now: now,
             limits: limits
         )
         guard deleteCount > 0 else { return }
 
-        let deletedRows = validated.rows.prefix(deleteCount)
+        let deletedRows = validatedRows.prefix(deleteCount)
         let newFloor = deletedRows[deletedRows.index(before: deletedRows.endIndex)]
             .sequence
         var deletedBytes: UInt64 = 0
         for row in deletedRows {
-            guard let bytes = UInt64(exactly: row.affectedItemsBlob.count) else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            let (sum, overflow) = deletedBytes.addingReportingOverflow(bytes)
+            let (sum, overflow) = deletedBytes.addingReportingOverflow(row.affectedItemsByteCount)
             guard !overflow else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
@@ -121,6 +118,9 @@ internal enum HCRBootstrap {
                 "DELETE FROM history_change_records WHERE sequence <= ?",
                 bindings: [.blob(sqliteUInt64(newFloor))]
             )
+            guard try database.changedRowCount == Int64(deleteCount) else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
             try compactionInjection?()
             try database.execute("""
                 UPDATE journal_config SET compactionFloorRaw = ?, journalBytes = ?
@@ -129,26 +129,21 @@ internal enum HCRBootstrap {
                     .blob(sqliteUInt64(newFloor)), .blob(sqliteUInt64(remainingBytes)),
                     .text(config.key)
                 ])
+            guard try database.changedRowCount == 1 else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
         } catch {
             throw HistoryFailure.persistence(.transaction)
         }
-
-        _ = try validate(
-            config: JournalConfigRow(
-                key: config.key,
-                compactionFloorRaw: newFloor,
-                journalBytes: remainingBytes,
-                configSchemaVersion: config.configSchemaVersion
-            ),
-            position: position,
-            in: database,
-            limits: limits
-        )
+        // Every surviving row and byte total was validated before mutation.
+        // Exact DELETE/UPDATE counts establish the new suffix without decoding
+        // that same payload collection a second time inside this transaction.
     }
 
-    private struct ValidatedSuffix {
-        let rows: [HistoryChangeRecordRow]
-        let logicalBytes: UInt64
+    private struct ValidatedRow {
+        let sequence: UInt64
+        let affectedItemsByteCount: UInt64
+        let createdAt: Date
     }
 
     private static func validate(
@@ -156,7 +151,7 @@ internal enum HCRBootstrap {
         position: UInt64,
         in database: SQLiteDatabase,
         limits: JournalLimits
-    ) throws -> ValidatedSuffix {
+    ) throws -> [ValidatedRow] {
         guard config.key == configKey else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
@@ -175,68 +170,81 @@ internal enum HCRBootstrap {
         guard !fetchLimitOverflow else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        let rows: [HistoryChangeRecordRow]
+        let expectedCount = position - config.compactionFloorRaw
+        guard expectedCount <= UInt64(limits.maxJournalRecordCount) else {
+            throw HistoryFailure.persistence(.invariantViolation)
+        }
+        var rows: [ValidatedRow] = []
+        var expectedSequence = config.compactionFloorRaw
+        var logicalBytes: UInt64 = 0
         do {
-            rows = try loadRecords(in: database, limit: fetchLimit)
+            let statement = try database.prepare("""
+                SELECT sequence, changePositionRaw, changeKindRaw, affectedItemsBlob, createdAt
+                FROM history_change_records ORDER BY sequence LIMIT ?
+                """, bindings: [.integer(Int64(fetchLimit))])
+            defer { statement.finalize() }
+            while try statement.step() {
+                guard rows.count < limits.maxJournalRecordCount else {
+                    throw HistoryFailure.persistence(.invariantViolation)
+                }
+                guard try statement.blobByteCount(at: 0) == 8,
+                      try statement.blobByteCount(at: 1) == 8 else {
+                    throw HistoryFailure.persistence(.corruptStoredValue)
+                }
+                let sequence = try sqliteUInt64(statement.blob(at: 0))
+                let position = try sqliteUInt64(statement.blob(at: 1))
+                let (successor, overflow) = expectedSequence.addingReportingOverflow(1)
+                guard !overflow, sequence == successor, position == sequence else {
+                    throw HistoryFailure.persistence(.invariantViolation)
+                }
+                expectedSequence = successor
+                guard let rawKind = Int16(exactly: try statement.integer(at: 2)),
+                      let changeKind = HistoryChangeKindRawV1(rawValue: rawKind),
+                      try statement.blobByteCount(at: 3)
+                        <= AffectedItemsBlobCodec.maximumBlobBytes(limits: limits) else {
+                    throw HistoryFailure.persistence(.corruptStoredValue)
+                }
+                // Keep only sequence/date/length across rows. Startup must
+                // validate each payload, but never retain the complete 80 MiB
+                // journal in Swift just to select an age-retention prefix.
+                let blob = try statement.blob(at: 3)
+                do {
+                    _ = try AffectedItemsBlobCodec.decode(blob, for: changeKind, limits: limits)
+                } catch let rejection as AffectedItemsBlobRejection {
+                    throw rejection.historyFailure
+                }
+                let createdAt = Date(timeIntervalSinceReferenceDate: try statement.real(at: 4))
+                guard createdAt.timeIntervalSinceReferenceDate.isFinite else {
+                    throw HistoryFailure.persistence(.corruptStoredValue)
+                }
+                let bytes = UInt64(blob.count)
+                let (sum, byteOverflow) = logicalBytes.addingReportingOverflow(bytes)
+                guard !byteOverflow else {
+                    throw HistoryFailure.persistence(.invariantViolation)
+                }
+                logicalBytes = sum
+                rows.append(ValidatedRow(
+                    sequence: sequence, affectedItemsByteCount: bytes, createdAt: createdAt
+                ))
+            }
         } catch let failure as HistoryFailure {
             throw failure
         } catch {
             throw HistoryFailure.persistence(.openStore)
         }
-        guard rows.count <= limits.maxJournalRecordCount else {
-            throw HistoryFailure.persistence(.invariantViolation)
-        }
-
-        let expectedCount = position - config.compactionFloorRaw
         guard UInt64(rows.count) == expectedCount else {
             throw HistoryFailure.persistence(.invariantViolation)
-        }
-        var expectedSequence = config.compactionFloorRaw
-        var logicalBytes: UInt64 = 0
-        for row in rows {
-            let (successor, overflow) = expectedSequence.addingReportingOverflow(1)
-            guard !overflow,
-                  row.sequence == successor,
-                  row.changePositionRaw == row.sequence else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            expectedSequence = successor
-            guard let changeKind = HistoryChangeKindRawV1(
-                rawValue: row.changeKindRaw
-            ) else {
-                throw HistoryFailure.persistence(.corruptStoredValue)
-            }
-            do {
-                _ = try AffectedItemsBlobCodec.decode(
-                    row.affectedItemsBlob,
-                    for: changeKind,
-                    limits: limits
-                )
-            } catch let rejection as AffectedItemsBlobRejection {
-                throw rejection.historyFailure
-            }
-            guard row.createdAt.timeIntervalSinceReferenceDate.isFinite else {
-                throw HistoryFailure.persistence(.corruptStoredValue)
-            }
-            guard let bytes = UInt64(exactly: row.affectedItemsBlob.count) else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            let (sum, byteOverflow) = logicalBytes.addingReportingOverflow(bytes)
-            guard !byteOverflow else {
-                throw HistoryFailure.persistence(.invariantViolation)
-            }
-            logicalBytes = sum
         }
         guard expectedSequence == position,
               logicalBytes == config.journalBytes,
               logicalBytes <= limits.maxJournalBytes else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
-        return ValidatedSuffix(rows: rows, logicalBytes: logicalBytes)
+        return rows
     }
 
     private static func prefixDeleteCount(
-        rows: [HistoryChangeRecordRow],
+        rows: [ValidatedRow],
         now: Date,
         limits: JournalLimits
     ) throws -> Int {

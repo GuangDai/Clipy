@@ -244,6 +244,14 @@ internal actor RevisionPreparationActor {
             guard actionsByType.count == source.canonical.representations.count else {
                 throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
             }
+            // Both snapshot contents were normalized and validated by the
+            // Authority (02 §2.1). Resolve current inheritance once by key;
+            // repeated linear searches otherwise make a keep-current draft
+            // quadratic in its representations. The at-most-32 values share
+            // their immutable Data storage; this is not a retained store index.
+            let currentByKey = Dictionary(uniqueKeysWithValues: source.current.representations.map {
+                ($0.key, $0)
+            })
             // Current inheritance preserves that stored identifier spelling.
             // Equivalent spellings can sort differently, so normalize the
             // resolved result after all decisions (docs/02-domain.md §2.1).
@@ -260,9 +268,7 @@ internal actor RevisionPreparationActor {
                 case .inheritCanonical:
                     representations.append(canonicalRepresentation.content)
                 case .inheritCurrent:
-                    guard let current = source.current.representations.first(where: {
-                        $0.key == canonicalRepresentation.content.key
-                    }) else {
+                    guard let current = currentByKey[canonicalRepresentation.content.key] else {
                         throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
                     }
                     representations.append(current)

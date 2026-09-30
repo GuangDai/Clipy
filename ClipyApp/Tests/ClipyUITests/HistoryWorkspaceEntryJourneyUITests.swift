@@ -20,7 +20,7 @@ final class HistoryWorkspaceEntryJourneyUITests: XCTestCase {
         let source = "History workspace keeps this preview available."
         XCTAssertTrue(pasteboard.setString(source, forType: .string))
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.sqlite").path
@@ -36,8 +36,8 @@ final class HistoryWorkspaceEntryJourneyUITests: XCTestCase {
         let workspace = settings.descendants(matching: .any)["clipy.history.workspace"]
         XCTAssertTrue(workspace.waitForExistence(timeout: 10), app.debugDescription)
         let row = workspace.descendants(matching: .any).matching(NSPredicate(
-            format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
-            "clipy.history.workspace.row.", "History workspace"
+            format: "identifier BEGINSWITH %@ AND (label CONTAINS %@ OR value CONTAINS %@)",
+            "clipy.history.workspace.row.", "History workspace", "History workspace"
         )).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
         row.click()

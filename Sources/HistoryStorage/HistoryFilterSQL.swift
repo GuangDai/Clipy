@@ -100,8 +100,9 @@ internal enum HistoryFilterSQL {
             bindings.append(.real(before.timeIntervalSinceReferenceDate))
         }
         func contains(_ identifiers: [ClipboardFormatIdentifier], negated: Bool = false) {
-            // The (contentID, typeKey) uniqueness index bounds each lookup to
-            // one current content value; only exact identifiers classify it.
+            // The (contentID, pasteboardItemIndex, typeKey) index restricts
+            // this scan to one current content's at-most-32 descriptors;
+            // only exact identifiers classify it, across all its items.
             let placeholders = Array(repeating: "?", count: identifiers.count).joined(separator: ",")
             clauses.append("""
                 \(negated ? "NOT " : "")EXISTS (

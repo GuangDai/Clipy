@@ -129,7 +129,7 @@ struct HCRBootstrapTests {
         #expect(try await Self.snapshot(in: authority) == before)
     }
 
-    @Test("startup compacts only the fixed oldest prefix and revalidates")
+    @Test("startup compacts only the fixed oldest prefix and preserves the validated suffix")
     func startupPrefixCompaction() async throws {
         let authority = try await Self.ageFixture()
         try await Self.bootstrap(authority, limits: Self.ageLimits())
@@ -201,6 +201,12 @@ struct HCRBootstrapTests {
         try await Self.expectDamage(expected: .persistence(.corruptStoredValue),
             sql: "UPDATE history_change_records SET affectedItemsBlob = ? WHERE sequence = ?",
             bindings: [.blob(Data([0, 2, 0, 0])), .blob(sqliteUInt64(2))])
+        try await Self.expectDamage(expected: .persistence(.corruptStoredValue),
+            sql: "UPDATE history_change_records SET affectedItemsBlob = zeroblob(?) WHERE sequence = ?",
+            bindings: [
+                .integer(Int64(AffectedItemsBlobCodec.maximumBlobBytes() + 1)),
+                .blob(sqliteUInt64(2))
+            ])
         try await Self.expectDamage(expected: .persistence(.corruptStoredValue),
             sql: "UPDATE history_change_records SET createdAt = ? WHERE sequence = ?",
             bindings: [.real(.infinity), .blob(sqliteUInt64(2))])

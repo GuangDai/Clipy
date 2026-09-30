@@ -116,7 +116,6 @@ struct ClipySettingsView: View {
             detail
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
                 .navigationTitle(category.title)
-                .accessibilityIdentifier("clipy.settings.detail")
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: category == .history ? 820 : 560, minHeight: 420)

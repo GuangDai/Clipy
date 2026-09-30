@@ -53,7 +53,7 @@ extension HistoryAuthority {
         for itemID: HistoryItemID, expectedCopyCount: UInt64, offset: Int
     ) throws -> HistoryCopySourcePage {
         guard offset >= 0 else { throw HistoryFailure.invalidInput(.invalidPageLimit) }
-        return try database.readTransaction {
+        return try database.readTransaction(checkingCancellation: true) {
             guard let item = try HistoryItemRowHydration.metadata(itemID: itemID, in: database, limits: limits)
             else { throw HistoryFailure.notFound(itemID) }
             guard item.occurrence.count == expectedCopyCount else {
@@ -66,7 +66,9 @@ extension HistoryAuthority {
             defer { query.finalize() }
             var sources: [CopySourceSummary] = []
             var hasMore = false
-            while try query.step() {
+            while true {
+                try Task.checkCancellation()
+                guard try query.step() else { break }
                 if sources.count == 32 { hasMore = true; break }
                 guard try query.isNull(at: 0)
                     || query.textByteCount(at: 0) <= limits.maximumSourceApplicationObservationUTF8Bytes else {

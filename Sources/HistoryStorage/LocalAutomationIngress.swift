@@ -79,8 +79,10 @@ public actor LocalAutomationIngress {
     private var locators: [String: LocatorTarget] = [:]
     private var locatorByTarget: [LocatorTarget: String] = [:]
     private var locatorOrder: [String] = []
+    private var nextLocatorEvictionIndex = 0
     private var cursors: [String: CursorTarget] = [:]
     private var cursorOrder: [String] = []
+    private var nextCursorEvictionIndex = 0
 
     internal init(
         authority: HistoryAuthority,
@@ -220,12 +222,15 @@ public actor LocalAutomationIngress {
         if let next = page.next {
             let token = "c1_" + UUID().uuidString.lowercased()
             if cursorOrder.count == 64 {
-                cursors.removeValue(forKey: cursorOrder.removeFirst())
+                cursors.removeValue(forKey: cursorOrder[nextCursorEvictionIndex])
+                cursorOrder[nextCursorEvictionIndex] = token
+                nextCursorEvictionIndex = (nextCursorEvictionIndex + 1) % 64
+            } else {
+                cursorOrder.append(token)
             }
             cursors[token] = CursorTarget(
                 connection: connection, kind: kind, limit: limit, cursor: next
             )
-            cursorOrder.append(token)
             nextCursor = token
         } else {
             nextCursor = nil
@@ -243,16 +248,19 @@ public actor LocalAutomationIngress {
     private func locator(for itemID: HistoryItemID, connection: ExternalConnectionID) -> String {
         let target = LocatorTarget(connection: connection, itemID: itemID)
         if let existing = locatorByTarget[target] { return existing }
+        let token = "i1_" + UUID().uuidString.lowercased()
         if locatorOrder.count == Self.maximumLocatorCount {
-            let expired = locatorOrder.removeFirst()
+            let expired = locatorOrder[nextLocatorEvictionIndex]
             if let oldTarget = locators.removeValue(forKey: expired) {
                 locatorByTarget.removeValue(forKey: oldTarget)
             }
+            locatorOrder[nextLocatorEvictionIndex] = token
+            nextLocatorEvictionIndex = (nextLocatorEvictionIndex + 1) % Self.maximumLocatorCount
+        } else {
+            locatorOrder.append(token)
         }
-        let token = "i1_" + UUID().uuidString.lowercased()
         locators[token] = target
         locatorByTarget[target] = token
-        locatorOrder.append(token)
         return token
     }
 }

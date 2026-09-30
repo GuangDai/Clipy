@@ -98,6 +98,7 @@ struct SearchLibraryView: View {
         } message: {
             Text(text("Favorites and clipboard history will remain unchanged."))
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.search.library")
     }
 

@@ -44,6 +44,7 @@ internal struct SQLiteContentReads {
     let limits: HistoryLimits
 
     func reference(for id: HistoryItemID) throws -> HistoryItemReference {
+        try Task.checkCancellation()
         let statement = try database.prepare(
             "SELECT contentVersion FROM history_items WHERE id = ?", bindings: [.text(id.rawValue.uuidString)]
         )
@@ -64,6 +65,7 @@ internal struct SQLiteContentReads {
     }
 
     func item(for id: HistoryItemID, expectedVersion: ContentVersion? = nil) throws -> SQLiteContentItem {
+        try Task.checkCancellation()
         let statement = try database.prepare("""
             SELECT contentVersion, currentContentID, titleUTF8, firstCopiedAt, lastCopiedAt,
                    copyCount, firstSource, lastSource, pinOrdinal, canonicalBytes, revisionCount, revisionBytes,
@@ -136,6 +138,7 @@ internal struct SQLiteContentReads {
     }
 
     func canonicalContent(for item: SQLiteContentItem) throws -> SQLiteStoredContent {
+        try Task.checkCancellation()
         let statement = try database.prepare("""
             SELECT id, revisionOrdinal, createdAt, titleUTF8, contentByteCount, representationCount
             FROM contents WHERE itemID = ? AND revisionOrdinal = 0
@@ -148,6 +151,7 @@ internal struct SQLiteContentReads {
     }
 
     func contents(for item: SQLiteContentItem) throws -> [SQLiteStoredContent] {
+        try Task.checkCancellation()
         let statement = try database.prepare("""
             SELECT id, revisionOrdinal, createdAt, titleUTF8, contentByteCount, representationCount
             FROM contents WHERE itemID = ? ORDER BY revisionOrdinal LIMIT ?
@@ -155,7 +159,9 @@ internal struct SQLiteContentReads {
         defer { statement.finalize() }
         var contents: [SQLiteStoredContent] = []
         var revisionBytes = 0
-        while try statement.step() {
+        while true {
+            try Task.checkCancellation()
+            guard try statement.step() else { break }
             guard contents.count <= limits.maximumRevisionsPerItem else { throw corrupt }
             let content = try decodeContent(statement)
             // Revision ordinals retain creation order through pruning. Gaps
@@ -177,10 +183,12 @@ internal struct SQLiteContentReads {
               revisionBytes == item.revisionBytes,
               contents.contains(where: { $0.id == item.currentContentID
                   && (item.revisionCount == 0 ? $0.ordinal == 0 : $0.ordinal > 0) }) else { throw corrupt }
+        try Task.checkCancellation()
         return contents
     }
 
     func representations(in content: SQLiteStoredContent) throws -> [SQLiteRepresentationSource] {
+        try Task.checkCancellation()
         // Deliberately omit inlineBytes: even an inline sibling is not a
         // requested thumbnail payload. Only read(_:) materializes bytes.
         let statement = try database.prepare("""
@@ -190,7 +198,9 @@ internal struct SQLiteContentReads {
         defer { statement.finalize() }
         var values: [SQLiteRepresentationSource] = []
         var byteCount = 0
-        while try statement.step() {
+        while true {
+            try Task.checkCancellation()
+            guard try statement.step() else { break }
             guard values.count < limits.maximumRepresentationsPerCaptureOrRevision else { throw corrupt }
             guard try statement.textByteCount(at: 1) <= limits.maximumTypeIdentifierUTF8Bytes else { throw corrupt }
             let ordinal = try nonnegativeInt(statement.integer(at: 0))
@@ -209,6 +219,7 @@ internal struct SQLiteContentReads {
         }
         guard values.count == content.representationCount, byteCount == content.byteCount else { throw corrupt }
         try mapCodecFailure { try CodecValidation.requireNormalizedRepresentationOrder(values.map(\.key)) }
+        try Task.checkCancellation()
         return values
     }
 
@@ -250,6 +261,7 @@ internal struct SQLiteContentReads {
     }
 
     private func content(id: UUID, itemID: HistoryItemID) throws -> SQLiteStoredContent {
+        try Task.checkCancellation()
         let statement = try database.prepare("""
             SELECT id, revisionOrdinal, createdAt, titleUTF8, contentByteCount, representationCount
             FROM contents WHERE id = ? AND itemID = ?

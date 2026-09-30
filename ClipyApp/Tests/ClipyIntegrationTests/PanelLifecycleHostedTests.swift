@@ -21,6 +21,27 @@ import Testing
 @MainActor
 struct PanelLifecycleHostedTests {
 
+    @Test("termination retires the panel session and rejects later summon")
+    func terminationCannotReopenSensitivePanelState() throws {
+        let installed = installedOwner()
+        let owner = installed.appDelegate
+        defer { owner.closePanel(); installed.composition.stop() }
+        owner.openPanelForTesting()
+        let panel = try #require(owner.panelForTesting)
+        let surface = try #require(owner.panelSurfaceState)
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        owner.applicationWillTerminate(Notification(
+            name: NSApplication.willTerminateNotification, object: NSApp
+        ))
+        #expect(!panel.isPresented)
+        #expect(!surface.isSessionActive)
+        #expect(!installed.composition.isCaptureObservationActiveForTesting)
+        owner.openPanelForTesting()
+        #expect(!panel.isPresented)
+        #expect(surface.sessionGeneration == 1)
+    }
+
     @Test("Details retires a key floating preview and restores main-panel focus")
     func detailsPushRetiresKeyPreviewWithoutEndingSession() async throws {
         let source = try await ComposedSupport.openMemoryHistory()

@@ -7,6 +7,33 @@ import XCTest
 /// actor readiness, or the parallel Swift Testing fixture workload.
 @MainActor
 final class LocalAutomationDeadlineTests: XCTestCase {
+    func testEmptyReadStillHonorsCancellationAndDeadline() async throws {
+        try await withSocketPair { _, receiver in
+            do {
+                _ = try await LocalAutomationSocket.receive(
+                    0, from: receiver, deadline: .now.advanced(by: .seconds(-1))
+                )
+                XCTFail("an empty read must still honor its deadline")
+            } catch let failure as LocalAutomationSocket.Failure {
+                XCTAssertEqual(failure, .timeout)
+            }
+            let reading = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                do {
+                    _ = try await LocalAutomationSocket.receive(
+                        0, from: receiver, deadline: .now.advanced(by: .seconds(2))
+                    )
+                    XCTFail("an empty read must still honor cancellation")
+                } catch is CancellationError {
+                    // Preflight happens before constructing the response buffer.
+                } catch {
+                    XCTFail("expected cancellation, got \(error)")
+                }
+            }
+            await reading.value
+        }
+    }
+
     func testExpiredReadDoesNotConsumeAlreadyBufferedBytes() async throws {
         try await withSocketPair { sender, receiver in
             let bytes = Data([0x41])

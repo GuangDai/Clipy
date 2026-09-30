@@ -66,19 +66,26 @@ enum BuiltInAutomationSyntax {
     /// Formatting is canonical; comments and UUIDs are not executable rules.
     static func render(_ steps: [BuiltInAutomationStep]) throws -> String {
         enum Work {
-            case block([Step], Int)
+            case block(ArraySlice<Step>, Int)
             case step(Step, Int, Bool)
             case line(String, Int)
         }
-        var work: [Work] = [.block(steps, 0)]
+        var work: [Work] = [.block(steps[...], 0)]
         var output = ""
         var line = 1
         while let next = work.popLast() {
             try Task.checkCancellation()
             switch next {
-            case .block(let children, let depth):
-                if children.isEmpty { work.append(.line("pass", depth)) }
-                else { for child in children.reversed() { work.append(.step(child, depth, false)) } }
+            case .block(var children, let depth):
+                guard let child = children.popFirst() else {
+                    work.append(.line("pass", depth))
+                    continue
+                }
+                // V2-13: advance through siblings rather than copying an
+                // entire block into the work stack before its byte limit can
+                // be checked. Traversal storage depends on depth, not width.
+                if !children.isEmpty { work.append(.block(children, depth)) }
+                work.append(.step(child, depth, false))
             case .line(let text, let depth):
                 guard depth <= maximumSourceBytes / 4,
                       output.utf8.count + depth * 4 + text.utf8.count + 1 <= maximumSourceBytes else {
@@ -94,10 +101,10 @@ enum BuiltInAutomationSyntax {
                 }
                 if step.operation == .conditional {
                     if !step.otherwiseSteps.isEmpty {
-                        work.append(.block(step.otherwiseSteps, depth + 1))
+                        work.append(.block(step.otherwiseSteps[...], depth + 1))
                         work.append(.line("else:", depth))
                     }
-                    work.append(.block(step.thenSteps, depth + 1))
+                    work.append(.block(step.thenSteps[...], depth + 1))
                     work.append(.line("if " + (try renderPredicate(step.effectivePredicate)) + ":", depth))
                 } else {
                     guard step.thenSteps.isEmpty, step.otherwiseSteps.isEmpty else {
@@ -161,18 +168,33 @@ enum BuiltInAutomationSyntax {
     }
 
     private static func renderPredicate(_ predicate: Predicate) throws -> String {
-        enum Work { case value(Predicate), text(String) }
+        enum Work {
+            case value(Predicate), text(String)
+            case group(ArraySlice<Predicate>, String)
+        }
         var pending: [Work] = [.value(predicate)]
         var result = ""
         while let next = pending.popLast() {
             try Task.checkCancellation()
             switch next {
             case .text(let text): result += text
+            case .group(var children, let separator):
+                guard let child = children.popFirst() else { continue }
+                if !children.isEmpty {
+                    pending.append(.group(children, separator))
+                    pending.append(.text(separator))
+                }
+                pending.append(.value(child))
             case .value(let value):
                 switch value {
                 case .match(let condition, let argument):
-                    guard argument.utf8.count <= maximumArgumentBytes else {
-                        throw Failure(reason: .parameterTooLarge, line: 1, column: 1)
+                    // Kind tests have no executable argument. Old visual
+                    // fields are deliberately omitted by V2-13, including
+                    // their spelling and size.
+                    if condition == .containsText || condition == .matchesRegex {
+                        guard argument.utf8.count <= maximumArgumentBytes else {
+                            throw Failure(reason: .parameterTooLarge, line: 1, column: 1)
+                        }
                     }
                     switch condition {
                     case .isText: result += "is_text()"
@@ -192,10 +214,7 @@ enum BuiltInAutomationSyntax {
                     if case .all = value { separator = " and " } else { separator = " or " }
                     result += "("
                     pending.append(.text(")"))
-                    for index in children.indices.reversed() {
-                        pending.append(.value(children[index]))
-                        if index > 0 { pending.append(.text(separator)) }
-                    }
+                    pending.append(.group(children[...], separator))
                 }
             }
             guard result.utf8.count <= maximumSourceBytes else {
@@ -361,13 +380,13 @@ enum BuiltInAutomationSyntax {
         mutating func accept(_ source: String, number: Int) throws {
             let significant = source.drop(while: { $0 == " " || $0 == "\t" })
             if significant.isEmpty || significant.first == "#" { return }
-            let characters = Array(source)
+            var content = source[...]
             var indentation = 0
-            while indentation < characters.count, characters[indentation] == " " { indentation += 1 }
-            if indentation < characters.count, characters[indentation] == "\t" {
+            while content.first == " " { content.removeFirst(); indentation += 1 }
+            if content.first == "\t" {
                 throw Failure(reason: .tabsInIndentation, line: number, column: indentation + 1)
             }
-            var lexer = try Lexer(source: String(characters.dropFirst(indentation)), line: number,
+            var lexer = try Lexer(source: String(content), line: number,
                               baseColumn: indentation + 1)
             let tokens = try lexer.tokens()
             guard !tokens.isEmpty else { return }
@@ -389,32 +408,32 @@ enum BuiltInAutomationSyntax {
             let frameIndex = frames.count - 1
             switch name {
             case "if":
-                try requireColon(tokens, line: number, endColumn: tokens.last?.endColumn ?? characters.count + 1)
+                try requireColon(tokens, line: number, endColumn: tokens.last?.endColumn ?? lexer.endColumn)
                 let predicate = try parsePredicate(Array(tokens.dropFirst().dropLast()), line: number,
-                                                   endColumn: tokens.last?.column ?? characters.count + 1)
+                                                   endColumn: tokens.last?.column ?? lexer.endColumn)
                 let step = Step(operation: .conditional, enabled: frames[frameIndex].enabled, predicate: predicate)
                 let id = append(step, to: frames[frameIndex].destination)
                 frames[frameIndex].availableElse = id
                 pending = Pending(destination: .then(id), enabled: true, line: number)
             case "else":
-                try requireColon(tokens, line: number, endColumn: tokens.last?.endColumn ?? characters.count + 1)
+                try requireColon(tokens, line: number, endColumn: tokens.last?.endColumn ?? lexer.endColumn)
                 guard tokens.count == 2, let id = frames[frameIndex].availableElse else {
                     throw Failure(reason: .unexpectedElse, line: number, column: tokens[0].column)
                 }
                 frames[frameIndex].availableElse = nil
                 pending = Pending(destination: .otherwise(id), enabled: true, line: number)
             case "elif":
-                try requireColon(tokens, line: number, endColumn: tokens.last?.endColumn ?? characters.count + 1)
+                try requireColon(tokens, line: number, endColumn: tokens.last?.endColumn ?? lexer.endColumn)
                 guard let previous = frames[frameIndex].availableElse else {
                     throw Failure(reason: .unexpectedElse, line: number, column: tokens[0].column)
                 }
                 let predicate = try parsePredicate(Array(tokens.dropFirst().dropLast()), line: number,
-                                                   endColumn: tokens.last?.column ?? characters.count + 1)
+                                                   endColumn: tokens.last?.column ?? lexer.endColumn)
                 let id = append(Step(operation: .conditional, predicate: predicate), to: .otherwise(previous))
                 frames[frameIndex].availableElse = id
                 pending = Pending(destination: .then(id), enabled: true, line: number)
             case "disabled":
-                try requireColon(tokens, line: number, endColumn: tokens.last?.endColumn ?? characters.count + 1)
+                try requireColon(tokens, line: number, endColumn: tokens.last?.endColumn ?? lexer.endColumn)
                 guard tokens.count == 2 else {
                     throw Failure(reason: .unexpectedToken, line: number, column: tokens[1].column)
                 }

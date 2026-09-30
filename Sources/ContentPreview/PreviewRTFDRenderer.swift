@@ -8,7 +8,7 @@ import Foundation
 internal enum PreviewRTFDRenderer {
     internal static func render(_ bytes: Data, textConfiguration: PreviewTextConfiguration = .init()) -> PreviewOutcome {
         guard !Task.isCancelled else { return .failed(.cancelled) }
-        guard bytes.count <= 1_048_576 else { return .failed(.resourceLimit) }
+        guard bytes.count <= PreviewResourceLimits.richTextInputBytes else { return .failed(.resourceLimit) }
         guard let wrapper = FileWrapper(serializedRepresentation: bytes),
               wrapper.isDirectory, let children = wrapper.fileWrappers else {
             return .failed(.malformedRepresentation)

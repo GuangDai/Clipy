@@ -22,7 +22,7 @@ final class CompactPreviewJourneyUITests: XCTestCase {
 
         let app = XCUIApplication()
         app.launchArguments += [
-            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES",
             // Keep the long fixture intact when measuring content fitting.
             "-clipy.preview.isTextLengthLimited", "YES",

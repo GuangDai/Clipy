@@ -119,6 +119,62 @@ struct ThumbnailSourceQueueTests {
         case noImage, sourceFailure, cancelled, malformedImage
     }
 
+    @Test func cancellingEveryQueuedConsumerSkipsItsSourceRead() async throws {
+        let service = ThumbnailService()
+        let sourceGate = SuspensionGate()
+        let joinGate = SuspensionGate()
+        let probe = ThumbnailQueueProbe()
+        let first = Task {
+            try await service.thumbnail(
+                for: Self.first, pixels: Self.pixels,
+                loadSource: {
+                    await probe.loadedSource()
+                    await sourceGate.park(at: "active.source")
+                    return Self.png
+                }, validateJoin: {}
+            )
+        }
+        await sourceGate.waitForPark("active.source")
+        let queuedRequest: @Sendable () async throws -> ThumbnailPayload? = {
+            try await service.thumbnail(
+                for: Self.second, pixels: Self.pixels,
+                loadSource: { await probe.loadedSource(); return Self.png },
+                validateJoin: { await joinGate.park(at: "queued.join") }
+            )
+        }
+        let queuedCreator = Task { try await queuedRequest() }
+        let queuedJoiner = Task { try await queuedRequest() }
+        await joinGate.waitForPark("queued.join")
+        queuedCreator.cancel()
+        queuedJoiner.cancel()
+        await joinGate.resume("queued.join")
+        // Let the creator's cancellation handler reach the service while
+        // the predecessor is still parked. This establishes retirement
+        // before releasing the queue, rather than depending on task order.
+        var retired = false
+        for _ in 0..<2_000 {
+            if await service.inFlightCount == 1 { retired = true; break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(retired)
+        await sourceGate.resume("active.source")
+        #expect(try await first.value?.item == Self.first)
+        await #expect(throws: CancellationError.self) { try await queuedJoiner.value }
+        await #expect(throws: CancellationError.self) { try await queuedCreator.value }
+        #expect(await probe.sourceLoads == 1)
+        #expect(await service.inFlightCount == 0)
+
+        // Retirement does not negative-cache the exact key. New demand
+        // starts one fresh source read after the cancelled queue drains.
+        let restarted = try await service.thumbnail(
+            for: Self.second, pixels: Self.pixels,
+            loadSource: { await probe.loadedSource(); return Self.png },
+            validateJoin: {}
+        )
+        #expect(restarted?.item == Self.second)
+        #expect(await probe.sourceLoads == 2)
+    }
+
     @Test(arguments: [FirstOutcome.noImage, .sourceFailure, .cancelled, .malformedImage])
     func everyTerminalOutcomeLetsTheFollowingSourceRun(_ outcome: FirstOutcome) async throws {
         let service = ThumbnailService()

@@ -52,7 +52,7 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         temporaryDirectory = directory
 
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
                                 "-clipy.appearance.previewAutoOpen", "YES"]
         defer { app.terminate() }
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"

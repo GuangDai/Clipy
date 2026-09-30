@@ -196,6 +196,7 @@ extension SearchWorker {
             } else {
                 reader = try SQLiteSearchRows(
                     database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
+                    includesSearchBody: admitted.requiresSearchBody,
                     expressionPredicate: expressionPredicate,
                     candidateExpression: admitted.expression.map { PreparedSearchExpression.candidateExpression($0.root) }
                         ?? SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
@@ -470,6 +471,7 @@ extension SearchWorker {
     ) async throws -> (anchor: StoredOrderingAnchor, hasPrevious: Bool) {
         let targetReader = try SQLiteSearchRows(
             database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
+            includesSearchBody: admitted.requiresSearchBody,
             expressionPredicate: expressionPredicate, candidateExpression: nil,
             orderedAnchor: nil, reversesOrder: false, completesFuzzyPrefix: false,
             work: work, targetedID: id
@@ -489,6 +491,7 @@ extension SearchWorker {
         let scoresPredecessors = rankedFuzzy && target.corpusRow.pinOrdinal == nil
         let predecessors = try SQLiteSearchRows(
             database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
+            includesSearchBody: admitted.requiresSearchBody,
             expressionPredicate: expressionPredicate,
             candidateExpression: admitted.expression.map { PreparedSearchExpression.candidateExpression($0.root) }
                 ?? SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
@@ -583,11 +586,13 @@ private final class SQLiteSearchRows {
     let candidateExpression: String?
     let prefersSparseCandidates: Bool
     let defersBody: Bool
+    let includesSearchBody: Bool
     let work: SearchWorkCounter
     let fuzzyPrefixLane: Int?
 
     init(
         database: SQLiteDatabase, limits: HistoryLimits, filter: HistoryFilter, sortOrder: HistorySortOrder,
+        includesSearchBody: Bool,
         expressionPredicate: (sql: String, bindings: [SQLiteValue])?,
         candidateExpression: String?, orderedAnchor: StoredOrderingAnchor?, reversesOrder: Bool,
         completesFuzzyPrefix: Bool,
@@ -599,13 +604,14 @@ private final class SQLiteSearchRows {
         self.expressionPredicate = expressionPredicate
         self.candidateExpression = candidateExpression
         self.work = work
+        self.includesSearchBody = includesSearchBody
         self.fuzzyPrefixLane = completesFuzzyPrefix ? 2 : nil
         if let candidateExpression {
             prefersSparseCandidates = try SQLiteSearchIndex.prefersSparseCandidates(
                 expression: candidateExpression, in: database
             )
         } else { prefersSparseCandidates = false }
-        defersBody = prefersSparseCandidates || sortOrder != .automatic
+        defersBody = includesSearchBody && (prefersSparseCandidates || sortOrder != .automatic)
         // Each range starts directly at the adjacent anchor in the existing
         // pin/date/UUID indexes. Reverse reads restore display order only
         // after their bounded page and lookbehind have been selected.
@@ -694,7 +700,8 @@ private final class SQLiteSearchRows {
                 // can be admitted. Resolve each yielded rowid below, inside
                 // this same read transaction. Dense indexed walks keep their
                 // single projection because they do not sort the candidates.
-                let bodyProjection = defersBody ? "rowid" : "searchBodyUTF8"
+                let bodyProjection = includesSearchBody
+                    ? (defersBody ? "rowid" : "searchBodyUTF8") : "X''"
                 statement = try database.prepare("""
                     SELECT id,contentVersion,titleUTF8,\(bodyProjection),effectiveTypeIdentifiersBlob,
                            lastCopiedAt,copyCount,lastSource,pinOrdinal,revisionCount,

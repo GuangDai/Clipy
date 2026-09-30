@@ -16,10 +16,9 @@
 /// docs/00-overview.md §5 the required outcome (MainActor-isolated firing)
 /// is enforced, not assumed.
 ///
-/// Registration is process-lifetime (Maccy's `Popup.swift` design note:
-/// repeatedly enabling/disabling a Carbon hotkey leaks handler slots), and
-/// every press toggles the panel — the open/close decision lives with the
-/// caller's action.
+/// Registration is owned by the shortcut controller. Rebinding or recording
+/// removes both Carbon references; destroying a registration does the same.
+/// Every press toggles the panel through the caller's action.
 import Carbon.HIToolbox
 import Foundation
 
@@ -54,6 +53,12 @@ final class GlobalHotKey {
         self.modifiers = modifiers
         self.hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
         self.action = action
+    }
+
+    /// Carbon retains only an unowned user-data pointer. Remove its handler
+    /// on the same actor before the referenced Swift object is destroyed.
+    isolated deinit {
+        unregister()
     }
 
     /// The 'CLPY' four-char signature namespacing Clipy's hotkey IDs.

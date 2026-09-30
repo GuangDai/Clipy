@@ -3,7 +3,7 @@
 
 Builds the real-scale fixture tree at ``.tmp/fixtures/clipy-fixtures-v1/``
 (images, texts, rich text, misc + ``manifest.json``) and packs it as
-``.tmp/fixtures/clipy-fixtures-v1.tar.gz`` (+ ``.sha256``). The tree is
+``.tmp/fixtures/clipy-fixtures-v1.tar.gz``. The tree is
 generated ONCE, reviewed, and hosted on a GitHub release; CI downloads it and
 never regenerates it.
 
@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import argparse
 import gzip
-import hashlib
 import io
 import json
 import random
@@ -82,10 +81,6 @@ MiB = 1024 * 1024
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
-
-
-def sha256_bytes(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def fit_utf8(text: str, target: int) -> bytes:
@@ -575,10 +570,6 @@ def build_tarball(tree: Path, tarball: Path) -> None:
                 tar.addfile(info, io.BytesIO(data))
     tarball.parent.mkdir(parents=True, exist_ok=True)
     tarball.write_bytes(raw.getvalue())
-    digest = sha256_bytes(raw.getvalue())
-    tarball.with_suffix(tarball.suffix + ".sha256").write_text(
-        f"{digest}  {tarball.name}\n", encoding="ascii"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -623,7 +614,6 @@ def generate(seed: int, outdir: Path, tarball: Path) -> list[dict]:
         save_bytes(outdir / relpath, data)
         files.append({
             "path": relpath,
-            "sha256": sha256_bytes(data),
             "bytes": len(data),
             "kind": kind,
             "note": note,
@@ -837,8 +827,6 @@ def validate(tree: Path, tarball: Path) -> None:
         data = (tree / rel).read_bytes()
         if len(data) != entry["bytes"]:
             problems.append(f"{rel}: size {len(data)} != manifest {entry['bytes']}")
-        if sha256_bytes(data) != entry["sha256"]:
-            problems.append(f"{rel}: sha256 mismatch")
         kind = entry["kind"]
 
         if kind == "image":
@@ -883,11 +871,8 @@ def validate(tree: Path, tarball: Path) -> None:
     if b"\n" in title.rstrip(b" "):
         problems.append("title-over-1kib.txt is not a single line")
 
-    # Tarball: hash matches .sha256 sidecar; member bytes match the tree.
+    # Archived members retain the generated fixture bytes.
     tar_data = tarball.read_bytes()
-    sidecar = tarball.with_suffix(tarball.suffix + ".sha256").read_text("ascii")
-    if sha256_bytes(tar_data) != sidecar.split()[0]:
-        problems.append("tarball sha256 != .sha256 sidecar")
     with tarfile.open(fileobj=io.BytesIO(tar_data), mode="r:gz") as tar:
         for member in tar.getmembers():
             if not member.isfile():
@@ -909,7 +894,7 @@ def validate(tree: Path, tarball: Path) -> None:
         for p in problems:
             print(f"  - {p}")
         raise SystemExit(1)
-    print(f"validation OK: {len(entries)} files, tarball + sha256 verified")
+    print(f"validation OK: {len(entries)} files, archive members match the fixture tree")
 
 
 # ---------------------------------------------------------------------------

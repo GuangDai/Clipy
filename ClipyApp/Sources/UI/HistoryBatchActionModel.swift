@@ -25,7 +25,9 @@ final class HistoryBatchActionModel {
     private(set) var requested: [HistoryItemReference] = []
     private(set) var succeeded: [HistoryItemReference] = []
     private(set) var failures: [Failure] = []
-    private(set) var remaining: [HistoryItemReference] = []
+    // A slice advances its start index in O(1). Array.removeFirst would copy
+    // every outstanding reference after each action, making a batch O(n²).
+    private(set) var remaining: ArraySlice<HistoryItemReference> = []
 
     init(viewState: HistoryViewState) { self.viewState = viewState }
 
@@ -36,8 +38,11 @@ final class HistoryBatchActionModel {
     /// Failure and interruption keep their original selection order even if
     /// observation has moved these items outside the current page window.
     var retryReferences: [HistoryItemReference] {
-        let unfinished = Set(failedReferences.map(\.id) + remaining.map(\.id))
-        return requested.filter { unfinished.contains($0.id) }
+        // Failed items were visited in request order; remaining is its
+        // unvisited suffix. Their concatenation already preserves that order.
+        var retry = failedReferences
+        retry.append(contentsOf: remaining)
+        return retry
     }
 
     func stop() {
@@ -53,7 +58,7 @@ final class HistoryBatchActionModel {
 
         self.operation = operation
         requested = items
-        remaining = items
+        remaining = items[...]
         succeeded = []
         failures = []
         isStopping = false

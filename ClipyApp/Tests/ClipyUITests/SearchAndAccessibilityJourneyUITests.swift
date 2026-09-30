@@ -244,7 +244,8 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
 
         let app = XCUIApplication()
         app.launchArguments += [
-            "-AppleLanguages", "(\(language))", "-AppleLocale", locale
+            "-AppleLanguages", "(\(language))", "-AppleLocale", locale,
+            "-clipy.language", "system"
         ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory

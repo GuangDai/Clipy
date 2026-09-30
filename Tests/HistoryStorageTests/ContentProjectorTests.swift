@@ -51,7 +51,7 @@ private func effectiveTextContent(
     #expect(projection.searchBody.utf8.count == bound)
 }
 
-@Test func titleOnlyProjectionMatchesNewlineAndWhitespaceSemantics() {
+@Test func titleProjectionMatchesNewlineAndWhitespaceSemantics() {
     let fixtures: [(String, String)] = [
         (" \r\n\t\r\n First title \rignored", "First title"),
         ("\r\n\r\n\n\r First title \nignored", "First title"),
@@ -63,14 +63,13 @@ private func effectiveTextContent(
         let content = effectiveTextContent([
             ("public.utf8-plain-text", text),
         ])
-        let title = ContentProjector.projectTitle(content)
+        let title = ContentProjector.project(content).title
         // String equality alone would hide a change to Unicode normalization.
         #expect(Data(title.utf8) == Data(expected.utf8))
-        #expect(Data(title.utf8) == Data(ContentProjector.project(content).title.utf8))
     }
 }
 
-@Test func titleOnlyProjectionKeepsGraphemesAtTheByteLimitBeforeALargeBody() {
+@Test func titleProjectionKeepsGraphemesAtTheByteLimitBeforeALargeBody() {
     let prefix = String(
         repeating: "a",
         count: HistoryLimits.standard.maximumStoredTitleUTF8Bytes - 1
@@ -79,20 +78,21 @@ private func effectiveTextContent(
         + String(repeating: "large body\r\n", count: 50_000)
     for identifier in ["public.utf8-plain-text", "public.utf16-external-plain-text"] {
         let content = effectiveTextContent([(identifier, text)])
-        let title = ContentProjector.projectTitle(content)
+        let title = ContentProjector.project(content).title
         // The decomposed grapheme needs three bytes and cannot fit in the
         // final one-byte slot. Neither its base nor its accent may be split.
         #expect(Data(title.utf8) == Data(prefix.utf8))
-        #expect(Data(title.utf8) == Data(ContentProjector.project(content).title.utf8))
     }
 }
 
-@Test func titleOnlyProjectionStillRejectsMalformedBytesAfterAValidFirstLine() {
+@Test func titleProjectionRejectsMalformedBytesAfterAValidFirstLine() {
     let content = EffectiveContent(representations: [ContentRepresentation(
         typeIdentifier: "public.utf8-plain-text",
         bytes: Data("Valid first line\r\n".utf8) + Data([0xC3, 0x28])
     )])
-    #expect(ContentProjector.projectTitle(content) == "public.utf8-plain-text")
+    let projection = ContentProjector.project(content)
+    #expect(projection.title == "public.utf8-plain-text")
+    #expect(projection.searchBody.isEmpty)
 }
 
 @Test func completedTitleAndBodyBudgetsExcludeLaterText() {
@@ -198,7 +198,6 @@ func nativeUTF16ProjectionHonorsByteOrder(bytes: Data) {
 
     #expect(projection.title == "A中🦊")
     #expect(projection.searchBody == "A中🦊")
-    #expect(ContentProjector.projectTitle(content) == "A中🦊")
 }
 
 @Test(arguments: [
@@ -214,7 +213,6 @@ func externalUTF16ProjectionHonorsByteOrder(bytes: Data) {
     let projection = ContentProjector.project(content)
     #expect(projection.title == "A中")
     #expect(projection.searchBody == "A中")
-    #expect(ContentProjector.projectTitle(content) == "A中")
 }
 
 @Test func misspelledExternalUTF8IdentifierRemainsOpaque() {

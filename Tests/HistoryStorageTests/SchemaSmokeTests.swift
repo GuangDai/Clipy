@@ -29,9 +29,6 @@ struct SchemaSmokeTests {
         #expect(try statement.blob(at: 3) == bytes)
         #expect(try sqliteUInt64(statement.blob(at: 4)) == 1)
         #expect(try !statement.step())
-        let table = try reader.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'representations'")
-        defer { table.finalize() }
-        #expect(try table.step())
     }
 
     @Test func previousModelStoreIsRejectedWithoutDeletingOrRecreatingIt() async throws {

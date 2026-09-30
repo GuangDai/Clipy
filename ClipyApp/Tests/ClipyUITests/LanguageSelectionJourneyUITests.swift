@@ -215,7 +215,12 @@ final class LanguageSelectionJourneyUITests: XCTestCase {
         _ identifier: String, equals expected: String, within container: XCUIElement, in app: XCUIApplication
     ) {
         let element = container.descendants(matching: .any)[identifier]
-        XCTAssertTrue(waitUntil { element.exists && element.label == expected }, app.debugDescription)
+        XCTAssertTrue(waitUntil {
+            guard element.exists else { return false }
+            let text = element.elementType == .staticText
+                ? ((element.value as? String) ?? element.label) : element.label
+            return text == expected
+        }, app.debugDescription)
     }
 
     @MainActor

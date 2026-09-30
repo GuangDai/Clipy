@@ -154,6 +154,25 @@ func expressionSearchSerializationPreservesGroupingWithoutAddingExcessiveNesting
     #expect(reparsed == expression)
 }
 
+@Test(arguments: [
+    Array(repeating: "app:Editor", count: 128).joined(separator: " "),
+    String(repeating: "a", count: HistoryLimits.standard.maximumSearchTermUTF8Bytes),
+    "app:" + String(repeating: "a", count: HistoryLimits.standard.maximumSearchTermUTF8Bytes - 4),
+    String(repeating: "url:", count: HistoryLimits.standard.maximumSearchTermUTF8Bytes / 4)
+])
+func expressionSearchSerializationKeepsAdmittedTokenAndByteBoundaries(text: String) throws {
+    let expression = try HistorySearchExpression.parse(text)
+
+    #expect(try HistorySearchExpression.parse(expression.serialized) == expression)
+}
+
+@Test(arguments: ["AND", "OR", "NOT", "app:literal", "source-id:literal", "x:y:z", #"a\b"#])
+func expressionSearchSerializationEscapesOnlyTextThatWouldBecomeSyntax(literal: String) throws {
+    let expression = try HistorySearchExpression.parse(HistorySearchExpression.quoted(literal))
+
+    #expect(try HistorySearchExpression.parse(expression.serialized) == expression)
+}
+
 @Test(arguments: ["https://example.com/notes", "project:clipy", "12:30"])
 func expressionSearchPreservesUnrecognizedColonTermsAsText(literal: String) throws {
     let expression = try HistorySearchExpression.parse(literal)

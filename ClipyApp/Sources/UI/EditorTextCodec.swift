@@ -68,13 +68,15 @@ struct EditorTextCodec: Sendable, Equatable {
             // A formerly BOM-less codec may add a marker to disambiguate
             // newly authored text. Consume that marker exactly once too.
             let body = bytes.dropFirst(hasBOM ? 2 : 0)
-            var units: [UInt16] = []
-            units.reserveCapacity(body.count / 2)
-            var iterator = body.makeIterator()
-            while let first = iterator.next(), let second = iterator.next() {
-                units.append(littleEndian
+            // Validate directly from the existing bytes. An intermediate
+            // UInt16 array would duplicate the entire editor source before
+            // String allocates its decoded text.
+            let units = stride(from: body.startIndex, to: body.endIndex, by: 2).lazy.map { offset in
+                let first = body[offset]
+                let second = body[offset + 1]
+                return littleEndian
                     ? UInt16(first) | (UInt16(second) << 8)
-                    : (UInt16(first) << 8) | UInt16(second))
+                    : (UInt16(first) << 8) | UInt16(second)
             }
             // After consuming the encoding marker, any further U+FEFF is
             // content. Validate code units without another BOM interpretation.

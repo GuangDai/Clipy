@@ -229,5 +229,13 @@ private static func replaceTextRequest(
     // The durable singleton matches the revert receipt's position.
     let revertPosition = try WSSupport.fetchPosition(revertContainer)
     #expect(revertPosition.rawValue == 3)
+
+    let details = try await history.details(for: itemID)
+    #expect(details.item == reverted)
+    #expect(details.revisions.map(\.id) == [preservedRevision.id, appendedRevision.id])
+    #expect(details.revisions.map(\.isActive) == [false, true])
+    let payload = try await history.pastePayload(for: itemID)
+    #expect(payload.item == reverted)
+    #expect(payload.representations.map(\.bytes) == [Data(canonicalText.utf8)])
 }
 }

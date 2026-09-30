@@ -7,7 +7,7 @@ import Foundation
 
 internal enum PreviewRTFRenderer {
     internal static func render(_ bytes: Data, textConfiguration: PreviewTextConfiguration = .init()) -> PreviewOutcome {
-        guard bytes.count <= 1_048_576 else { return .failed(.resourceLimit) }
+        guard bytes.count <= PreviewResourceLimits.richTextInputBytes else { return .failed(.resourceLimit) }
         do {
             var parser = Parser(bytes: Array(bytes))
             let decoded = try parser.parse()
@@ -159,7 +159,7 @@ private struct Parser {
         var number = 0
         while offset < bytes.count, (48...57).contains(bytes[offset]) {
             number = number * 10 + Int(bytes[offset] - 48)
-            guard number <= 2_147_483_648 else { throw ParseFailure.malformed }
+            guard number <= Int(Int32.max) + 1 else { throw ParseFailure.malformed }
             offset += 1
         }
         guard !negative || offset != numberStart else { throw ParseFailure.malformed }

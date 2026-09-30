@@ -165,7 +165,7 @@ struct UISmokeJourneyTests {
             let appended = await ComposedSupport.waitFor(timeout: 10) {
                 viewState.rows.count > displayed || !viewState.hasNextPage
             }
-            #expect(
+            try #require(
                 appended,
                 "browse smoke: continuation page \(iterations + 1) landed"
             )

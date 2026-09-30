@@ -300,6 +300,54 @@ final class LocalAutomationSocketTests: XCTestCase {
         }
     }
 
+    func testCancelledStartDoesNotRecreateAStoppedEndpoint() async throws {
+        try await withFixture { fixture in
+            await fixture.service.stop()
+            let starting = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                do {
+                    try await fixture.service.start()
+                    XCTFail("a cancelled start must not create a listener")
+                } catch is CancellationError {
+                    // The caller cancelled before any socket was bound.
+                } catch {
+                    XCTFail("expected cancellation, got \(error)")
+                }
+            }
+            await starting.value
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.endpoint.path))
+        }
+    }
+
+    func testCancelledStopJoinsConnectionsAndAllowsACompleteRestart() async throws {
+        try await withFixture { fixture in
+            var clients: [LocalAutomationClient] = []
+            for _ in 0..<4 {
+                clients.append(try await LocalAutomationClient.connect(endpointURL: fixture.endpoint))
+            }
+            // Leave each request stream incomplete. Cleanup must close both
+            // accepted requests and any sockets still queued at the listener.
+            let stopping = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                await fixture.service.stop()
+            }
+            await stopping.value
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.endpoint.path))
+            for client in clients {
+                let output = await client.request(
+                    try Self.json(arguments: ["limit": 1]), credential: fixture.credential,
+                    timeout: 2
+                )
+                XCTAssertEqual(output.exitCode, 5)
+                XCTAssertEqual(output.stderr, Data("clipyctl: not_ready\n".utf8))
+            }
+            try await fixture.service.start()
+            let output = try await fixture.send(Self.json(arguments: ["limit": 1]))
+            XCTAssertEqual(output.exitCode, 3)
+            XCTAssertEqual(output.stderr, Data("clipyctl: not_granted\n".utf8))
+        }
+    }
+
     private struct Fixture: Sendable {
         let history: SQLiteHistory
         let connection: ExternalConnectionID

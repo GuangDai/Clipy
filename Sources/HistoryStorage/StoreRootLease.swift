@@ -12,7 +12,7 @@
 ///
 /// Chosen semantics, fixed by the review row:
 ///
-/// - acquired nonblocking BEFORE any `ModelContainer` exists, held for the
+/// - acquired nonblocking before the store's SQLite connection opens, held for the
 ///   owning facade's lifetime (process lifetime in the app);
 /// - a second OWNER PROCESS is refused with the typed sibling failure
 ///   `HistoryFailure.persistence(.storeAlreadyOpen)`;
@@ -31,6 +31,7 @@
 ///   live same-process owners would weaken the exclusion until the survivor
 ///   exits; the composition root's never-released reservation makes that
 ///   shape unreachable in the product.
+import Darwin
 import Foundation
 import HistoryCore
 
@@ -61,6 +62,9 @@ internal final class StoreRootLease: Sendable {
     /// location and stays the flattened `.persistence(.openStore)` (DATA-14)
     /// — fail-closed, with no stale-state inspection.
     internal static func acquire(storeURL: URL) throws -> StoreRootLease {
+        guard storeURL.isFileURL, !storeURL.path(percentEncoded: false).utf8.contains(0) else {
+            throw HistoryFailure.persistence(.openStore)
+        }
         let leaseURL = storeURL.deletingLastPathComponent()
             .appendingPathComponent(storeURL.lastPathComponent + ".lease")
         let descriptor = Darwin.open(
@@ -69,6 +73,12 @@ internal final class StoreRootLease: Sendable {
             mode_t(0o600)
         )
         guard descriptor >= 0 else {
+            throw HistoryFailure.persistence(.openStore)
+        }
+        var status = stat()
+        guard Darwin.fstat(descriptor, &status) == 0,
+              status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
+            _ = Darwin.close(descriptor)
             throw HistoryFailure.persistence(.openStore)
         }
         var request = flock()

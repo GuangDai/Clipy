@@ -68,22 +68,23 @@ indirect enum BuiltInAutomationPredicate: Codable, Equatable, Sendable {
         return result
     }
 
-    /// Saving checks every condition, even one skipped by short-circuiting.
-    /// Empty groups are incomplete edits, never an implicit unconditional match.
-    func validate() throws {
+    /// Active conditions are checked even when short-circuiting skips them.
+    /// Inactive edits keep their field budgets without becoming executable;
+    /// an enabled empty group never becomes an unconditional match (V2-13).
+    func validate(isEnabled: Bool = true) throws {
         var pending = [self]
         while let predicate = pending.popLast() {
             try Task.checkCancellation()
             switch predicate {
             case .match(let condition, let find):
                 guard find.utf8.count <= 16_384 else { throw BuiltInAutomationFailure.definitionTooLarge }
-                if condition == .matchesRegex {
+                if isEnabled && condition == .matchesRegex {
                     guard !find.isEmpty, (try? NSRegularExpression(pattern: find)) != nil else {
                         throw BuiltInAutomationFailure.invalidRegex
                     }
                 }
             case .all(let children), .any(let children):
-                guard !children.isEmpty else { throw BuiltInAutomationFailure.emptyConditionGroup }
+                if isEnabled && children.isEmpty { throw BuiltInAutomationFailure.emptyConditionGroup }
                 pending.append(contentsOf: children)
             case .not(let child): pending.append(child)
             }

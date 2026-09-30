@@ -416,7 +416,7 @@ package enum PreviewAccessProbe {
 }
 
 /// Opt-in JSONL persistence for probe records — the `ThumbnailMeasurement`
-/// posture (Sources/PresentationUI/ThumbnailStore.swift) minus the
+/// posture (ClipyApp/Sources/UI/ThumbnailStore.swift) minus the
 /// running-app envelope: this probe is driven by the test lane, not the
 /// app, so activation is a single absolute-path environment key
 /// (`CLIPY_PREVIEW_ACCESS_MEASUREMENT_PATH`); nothing in a product launch

@@ -35,6 +35,31 @@ import Testing
 @MainActor
 struct FloatingPanelFrameHostedTests {
 
+    @Test
+    func aReachablePanelFitsChangedDisplayBoundsWithoutSavingTheClippedSize() {
+        let saved = PanelGeometry.persistedSize(from: .standard)
+        let appDelegate = AppDelegate()
+        let panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: appDelegate),
+            previewState: appDelegate.previewState,
+            onClosed: {}
+        )
+        panel.setFrameForScreenChangeTesting(NSRect(x: 100, y: 100, width: 400, height: 300))
+        let safeFrame = NSRect(x: 0, y: 0, width: 350, height: 280)
+        #expect(panel.isReachable(in: [safeFrame]))
+        panel.fitToVisibleFrames([safeFrame])
+        #expect(panel.frame == safeFrame)
+        #expect(PanelGeometry.persistedSize(from: .standard) == saved)
+
+        // A position-only change also keeps all controls within the new
+        // drawing area, rather than preserving a partly offscreen toolbar.
+        panel.setFrameForScreenChangeTesting(NSRect(x: 250, y: 200, width: 300, height: 200))
+        let largerSafeFrame = NSRect(x: 0, y: 0, width: 500, height: 400)
+        panel.fitToVisibleFrames([largerSafeFrame])
+        #expect(panel.frame == NSRect(x: 200, y: 200, width: 300, height: 200))
+        #expect(PanelGeometry.persistedSize(from: .standard) == saved)
+    }
+
     /// The floating preview pane presents beside the panel on the trailing
     /// side at the pure geometry's frame, and the main panel's frame never
     /// changes for preview (the redesign moved preview out of the window).

@@ -15,6 +15,7 @@ public actor LocalAutomationService {
     private var suspendedSource: (any DispatchSourceRead)?
     private var sourceTermination: AsyncStream<Void>?
     private var connections: [UUID: Task<Void, Never>] = [:]
+    private var shutdown: Task<Void, Never>?
 
     public init(ingress: LocalAutomationIngress, endpointURL: URL) {
         self.ingress = ingress
@@ -22,6 +23,10 @@ public actor LocalAutomationService {
     }
 
     public func start() async throws {
+        // stop() releases actor isolation while joining the source and its
+        // requests. Do not bind a replacement while the old socket is live.
+        while let shutdown { await shutdown.value }
+        try Task.checkCancellation()
         guard listener == nil else { return }
         try LocalAutomationSocket.withAddress(endpointURL) { _, _ in () }
         try prepareDirectory()
@@ -80,6 +85,10 @@ public actor LocalAutomationService {
     }
 
     public func stop() async {
+        if let shutdown {
+            await shutdown.value
+            return
+        }
         // Cancellation wakes every bounded read/write wait. Each connection
         // task is its descriptor's sole closer; stop joins them before return.
         let source = readSource
@@ -96,11 +105,19 @@ public actor LocalAutomationService {
             self.suspendedSource = nil
         }
         for task in pending { task.cancel() }
-        if let termination {
-            for await _ in termination {}
+        // A cancelled caller would immediately leave an AsyncStream loop.
+        // Keep resource cleanup in its own task so every stop caller joins
+        // actual descriptor closure and the same bounded request cleanup.
+        let cleanup = Task {
+            if let termination {
+                for await _ in termination {}
+            }
+            self.removeEndpoint(matching: identity)
+            for task in pending { await task.value }
+            self.shutdown = nil
         }
-        removeEndpoint(matching: identity)
-        for task in pending { await task.value }
+        shutdown = cleanup
+        await cleanup.value
     }
 
     private func acceptConnections(_ source: any DispatchSourceRead) {

@@ -84,9 +84,13 @@ package actor ThumbnailService {
     /// One source-to-decode task per exact key. Source hydration lives inside
     /// the shared task, so concurrent callers retain one bounded source value
     /// rather than one value per caller.
-    private var flights: [
-        ThumbnailFlightKey: Task<ThumbnailPayload?, Error>
-    ] = [:]
+    private struct Flight: Sendable {
+        let token: Int
+        let task: Task<ThumbnailPayload?, Error>
+        var callers: Set<Int>
+    }
+    private var flights: [ThumbnailFlightKey: Flight] = [:]
+    private var nextToken = 0
 
     /// The owned off-Authority decode worker (§9 step 6; §14.5).
     private let worker = ThumbnailWorker()
@@ -145,15 +149,17 @@ package actor ThumbnailService {
         try Task.checkCancellation()
         let key = ThumbnailFlightKey(item: item, pixels: pixels)
 
+        nextToken += 1
+        let caller = nextToken
+
         // Existing-key callers cross their own scalar version fence before
         // sharing the creator's source/decode result. A failed join never
         // cancels or removes the creator-owned flight.
-        if let existing = flights[key] {
-            try await validateJoin()
-            try Task.checkCancellation()
-            let payload = try await existing.value
-            try Task.checkCancellation()
-            return payload
+        if let task = flights[key]?.task, let token = flights[key]?.token {
+            flights[key]?.callers.insert(caller)
+            return try await awaitFlight(task, token: token, key: key, caller: caller) {
+                try await validateJoin()
+            }
         }
 
         // Snapshot actor-owned immutable dependencies, then install the task
@@ -163,16 +169,22 @@ package actor ThumbnailService {
         let worker = worker
         let handler = suspensionHandler
         let predecessor = completionTail
+        let token = caller
         let task = Task<ThumbnailPayload?, Error> {
+            defer { finishFlight(key, token: token) }
             await predecessor?.value
-            guard let sourceBytes = try await loadSource() else {
-                return nil
-            }
+            // Queueing must not turn retired display demand into another
+            // full source read. Last-caller cancellation cancels this shared
+            // task; an exact-key survivor keeps it alive instead.
+            try Task.checkCancellation()
+            guard let sourceBytes = try await loadSource() else { return nil }
+            try Task.checkCancellation()
 
             // WS15 parks after the source/version fence and before ImageIO.
             // The flight is already visible, so a concurrent stale caller
             // takes the validated join path instead of creating another load.
             await handler?(.decodeEntry)
+            try Task.checkCancellation()
 
             return try await worker.decodeThumbnail(
                 sourceBytes: sourceBytes,
@@ -180,26 +192,46 @@ package actor ThumbnailService {
                 pixels: pixels
             )
         }
-        flights[key] = task
+        flights[key] = Flight(token: token, task: task, callers: [caller])
         completionTail = Task {
             // Every terminal outcome advances the queue. The source task
             // still carries its original result/error to its exact-key callers.
             _ = try? await task.value
         }
 
-        // §9 step 7: remove the flight entry on success, failure, OR
-        // cancellation — completed bytes are NOT retained. The deferred
-        // removal runs unconditionally before the value/error propagates.
-        defer {
-            flights.removeValue(forKey: key)
-            if flights.isEmpty { completionTail = nil }
+        return try await awaitFlight(task, token: token, key: key, caller: caller) {}
+    }
+
+    private func awaitFlight(
+        _ task: Task<ThumbnailPayload?, Error>, token: Int,
+        key: ThumbnailFlightKey, caller: Int,
+        validate: @Sendable () async throws -> Void
+    ) async throws -> ThumbnailPayload? {
+        defer { releaseCaller(key, token: token, caller: caller) }
+        return try await withTaskCancellationHandler {
+            try await validate()
+            try Task.checkCancellation()
+            let payload = try await task.value
+            try Task.checkCancellation()
+            return payload
+        } onCancel: {
+            Task { await self.releaseCaller(key, token: token, caller: caller) }
         }
-        let payload = try await task.value
-        // Native work is shared and may outlive an individual caller. Its
-        // successful result belongs only to callers that still want it;
-        // cancelling this caller never cancels another consumer's decode.
-        try Task.checkCancellation()
-        return payload
+    }
+
+    private func releaseCaller(_ key: ThumbnailFlightKey, token: Int, caller: Int) {
+        guard flights[key]?.token == token,
+              flights[key]?.callers.remove(caller) != nil else { return }
+        if flights[key]?.callers.isEmpty == true {
+            flights.removeValue(forKey: key)?.task.cancel()
+            // Keep completionTail until the cancelled task has drained.
+            // Dropping it here could hydrate a new source during old decode.
+        }
+    }
+
+    private func finishFlight(_ key: ThumbnailFlightKey, token: Int) {
+        if flights[key]?.token == token { flights.removeValue(forKey: key) }
+        if flights.isEmpty { completionTail = nil }
     }
 
     /// Package-only direct-source convenience used by the Part VI §9 runner
@@ -279,6 +311,7 @@ internal actor ThumbnailWorker {
         item: HistoryItemReference,
         pixels: PixelSize
     ) throws -> ThumbnailPayload {
+        try Task.checkCancellation()
         let limits = HistoryLimits.standard
 
         // Phase 1 — decode/downsample (§9 step 6; §14.5).
@@ -340,6 +373,7 @@ internal actor ThumbnailWorker {
             // representation reads and paste remain independent (05 §16).
             throw HistoryFailure.thumbnailUnavailable
         }
+        try Task.checkCancellation()
 
         // Phase 2 — re-encode as PNG and enforce the output bound (06 §2).
         //
@@ -367,6 +401,7 @@ internal actor ThumbnailWorker {
             // image is an encode-side invariant, not stored-value corruption.
             throw Self.encodingFailure
         }
+        try Task.checkCancellation()
 
         let encodedBytes = mutableData as Data
 

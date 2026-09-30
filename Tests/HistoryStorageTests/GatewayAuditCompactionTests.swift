@@ -182,6 +182,34 @@ struct GatewayAuditCompactionTests {
         }
     }
 
+    @Test("rebase can discard an oversized corrupt prefix while retaining a valid suffix")
+    func oversizedCorruptPrefixCanBeQuarantined() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            try database.writeTransaction {
+                try GatewayAuditTestSupport.appendRecent(count: 3, context: database)
+                try database.execute(
+                    "UPDATE operation_records SET payloadBlob = zeroblob(?) WHERE auditSequence = ?",
+                    bindings: [
+                        .integer(Int64(ExternalLimits.standard.maximumAuditPayloadBlobBytes + 1)),
+                        .blob(sqliteUInt64(1))
+                    ]
+                )
+                try GatewayAuditTestSupport.setCounters(nextAuditSequence: 4, auditBytes: .max, in: database)
+            }
+            _ = try authority.rebaseGatewayAudit(
+                reason: .corruptionDetected, newFloor: 2,
+                requestedAt: GatewayAuditTestSupport.requestedAt,
+                committedAt: GatewayAuditTestSupport.requestedAt
+            )
+            let config = try HistoryAuthority.loadGatewayConfig(in: database)
+            try GatewayAuditStore.validateRetainedState(config: config, in: database)
+            #expect(config.compactionFloor == 2)
+            #expect(try GatewayAuditTestSupport.rows(in: database).map(\.auditSequence) == [2, 3, 4])
+        }
+    }
+
     @Test("invalid rebase floor and byte underflow do not partially mutate")
     func invalidRebaseHasNoPartialMutation() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))

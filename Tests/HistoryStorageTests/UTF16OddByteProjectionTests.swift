@@ -32,6 +32,5 @@ struct UTF16OddByteProjectionTests {
         let projection = ContentProjector.project(malformed)
         #expect(projection.title == fixture.type)
         #expect(projection.searchBody.isEmpty)
-        #expect(ContentProjector.projectTitle(malformed) == fixture.type)
     }
 }

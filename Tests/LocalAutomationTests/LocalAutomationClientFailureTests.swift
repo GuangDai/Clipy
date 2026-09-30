@@ -86,6 +86,8 @@ final class LocalAutomationClientFailureTests: XCTestCase {
     private static func expect(_ output: LocalAutomationOutput, code: String) {
         XCTAssertEqual(output.exitCode, 5)
         XCTAssertEqual(String(decoding: output.stderr, as: UTF8.self), "clipyctl: \(code)\n")
+        let expected = "{\"error\":{\"code\":\"\(code)\"},\"ok\":false,\"protocolVersion\":1,\"requestID\":\"9bd92054-bd3f-4d20-8f8a-5d77aa63b726\"}\n"
+        XCTAssertEqual(output.stdout, Data(expected.utf8))
     }
 
     private func withConnection(

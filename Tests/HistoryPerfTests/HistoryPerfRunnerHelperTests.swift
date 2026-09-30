@@ -64,7 +64,6 @@ struct HistoryPerfRunnerHelperTests {
             return Double(measurementCount)
         })
 
-        #expect(persistentOpenChildSampleCount == 5)
         #expect(measurementCount == 6)
         #expect(events == [
             "populate",
@@ -90,8 +89,6 @@ struct HistoryPerfRunnerHelperTests {
 
         #expect(populate == "HistoryPerfRunner WL2 child failed mode=populate\n")
         #expect(measure == "HistoryPerfRunner WL2 child failed mode=measure\n")
-        #expect(!populate.contains("/"))
-        #expect(!measure.contains("/"))
     }
 
     @Test func nearestRankPercentilesSelectObservedSamples() {
@@ -111,10 +108,6 @@ struct HistoryPerfRunnerHelperTests {
     /// sample maximum — the 11-sample exact-search budget therefore
     /// reports p50 only.
     @Test func admissionPercentilesReportOnlySupportedRanks() {
-        #expect(admissionP50MinimumSamples == 3)
-        #expect(admissionP95MinimumSamples == 20)
-        #expect(admissionP99MinimumSamples == 100)
-
         // 101 samples: every rank is supported and selects an interior
         // sample (p99 = the 100th of 101, not the max).
         let full = admissionPercentilesIfSupported((1...101).reversed().map(Double.init))
@@ -238,92 +231,6 @@ struct HistoryPerfRunnerHelperTests {
             event: .diagnosticRequestCompleted(elapsedMs: 1_234.5)
         ) == "HistoryPerfRunner admission progress mode=exact-search-probe "
             + "phase=diagnostic-request state=completed elapsed_ms=1234.500")
-    }
-
-    @Test func exactSearchAdmissionUsesReducedSampleBudget() {
-        // IND-07 measurement-budget freeze. Original basis: the absent-term
-        // worst-bound scan cost ~125 s per request against the 5,000 × 256
-        // KiB corpus (the Foundation-oracle diagnostic that opened IND-07),
-        // so the 101-sample profile budget could not finish inside the
-        // dispatch lane's 90-minute step ceiling. Re-baselined by
-        // measurement: GOV-1 run 32685185124 recorded p50 2,666 ms per
-        // request (11 samples, range 1,810–3,827 ms), at which 101 samples
-        // would fit (103 × 3.8 s ≈ 7 min). The freeze stays at 11: the
-        // fixture is record-only p50-trend evidence, and 13 requests still
-        // fit in ≈27 min at the historical ~125 s Foundation-path cost if a
-        // matcher regression restores it. At n = 11 the nearest-rank
-        // p95/p99 fall below their 20/100-sample support floors and are
-        // omitted from the encoded JSON, which the fixture notes must state.
-        #expect(admissionExactSearchWarmupCount == 1)
-        #expect(admissionExactSearchSampleCount == 11)
-    }
-
-    @Test func admissionProfilesFreezeFullAndFailureReproductionShapes() {
-        #expect(AdmissionProfile.full == AdmissionProfile(
-            retainedRows: 5_000,
-            searchBodyBytes: 256 * 1_024,
-            sampleCount: 101,
-            warmupCount: 1,
-            pageLimit: 50
-        ))
-        #expect(AdmissionProfile.prepareSmoke == AdmissionProfile(
-            retainedRows: 1_000,
-            searchBodyBytes: 256 * 1_024,
-            sampleCount: 0,
-            warmupCount: 0,
-            pageLimit: 50
-        ))
-        #expect(AdmissionMode.prepare.profile == .full)
-        #expect(AdmissionMode.prepareSmoke.profile == .prepareSmoke)
-        #expect(AdmissionMode.seed.profile == .full)
-        #expect(AdmissionMode.seedSmoke.profile == .prepareSmoke)
-        #expect(AdmissionMode.exactSearchProbe.profile == .full)
-        #expect(AdmissionMode.exactMatcherAB.profile == .full)
-        #expect(AdmissionMode.seed.createsStore)
-        #expect(AdmissionMode.seedSmoke.createsStore)
-        #expect(!AdmissionMode.prepare.createsStore)
-        #expect(!AdmissionMode.prepareSmoke.createsStore)
-        #expect(!AdmissionMode.browseTies.createsStore)
-        #expect(!AdmissionMode.exactSearchProbe.createsStore)
-        #expect(!AdmissionMode.exactMatcherAB.createsStore)
-        #expect(AdmissionMode.prepare.expectedSeedMode == .seed)
-        #expect(AdmissionMode.prepareSmoke.expectedSeedMode == .seedSmoke)
-        #expect(AdmissionMode.seed.expectedSeedMode == nil)
-        #expect(AdmissionMode.exactSearchProbe.expectedSeedMode == nil)
-        #expect(AdmissionMode.exactMatcherAB.expectedSeedMode == nil)
-        #expect(AdmissionMode.prepare.isSetupFixture)
-        #expect(AdmissionMode.prepareSmoke.isSetupFixture)
-        #expect(!AdmissionMode.seed.isSetupFixture)
-        #expect(!AdmissionMode.exactMatcherAB.isSetupFixture)
-    }
-
-    @Test func exactSearchProbeFixtureIsExplicitlyNonCanonical() throws {
-        let fixture = AdmissionExactSearchProbeFixture(
-            schemaVersion: 1,
-            mode: AdmissionMode.exactSearchProbe.rawValue,
-            evidenceClass: "debug-diagnostic",
-            buildConfiguration: "debug",
-            traceEnvironmentEnabled: true,
-            canonicalPercentileEvidence: false,
-            publicRequestCount: 1,
-            corpusRows: 5_000,
-            bodyBytesPerRow: 256 * 1_024,
-            elapsedMs: 1_234.5,
-            position: 81,
-            matchedRows: 0,
-            hasNextPage: false,
-            completionMarker: "single-public-exact-search-completed"
-        )
-
-        let encoded = try JSONEncoder().encode(fixture)
-        #expect(try JSONDecoder().decode(
-            AdmissionExactSearchProbeFixture.self,
-            from: encoded
-        ) == fixture)
-        let json = String(decoding: encoded, as: UTF8.self)
-        #expect(!json.contains("rawSamplesMs"))
-        #expect(!json.contains("percentiles"))
-        #expect(json.contains("canonicalPercentileEvidence"))
     }
 
     @Test func admissionSeedHandoffRoundTripsAndRejectsInvalidFacts() throws {

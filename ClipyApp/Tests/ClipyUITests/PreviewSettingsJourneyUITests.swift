@@ -19,7 +19,7 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         let source = "Prefix with a complete tail"
         XCTAssertTrue(pasteboard.setString(source, forType: .string))
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
@@ -88,7 +88,7 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         defer { pasteboard.clearContents() }
         XCTAssertTrue(pasteboard.setString("Preview width remains adjustable.", forType: .string))
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"

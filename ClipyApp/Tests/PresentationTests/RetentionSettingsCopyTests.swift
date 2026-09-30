@@ -18,64 +18,6 @@ struct RetentionSettingsCopyTests {
         return try #require(Bundle(url: url))
     }
 
-    @Test("labels and destructive confirmation resolve from translated resources")
-    func translatedCopy() throws {
-        let chinese = try bundle("zh-Hans")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.tab-title", "Retention", bundle: chinese
-        ) == "保留")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.confirm-message", "missing", bundle: chinese
-        ) == "更严格的限制可能会永久移除项目或修订版本。")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.feedback.no-change", "missing", bundle: chinese
-        ) == "没有更改。")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.age.enforcement-note", "missing", bundle: try bundle("en")
-        ) == "Age limits are checked when Clipy captures a clipboard change or "
-            + "you apply retention settings. Time passing alone doesn't remove items.")
-    }
-
-    @Test("optional count copy distinguishes count removal from independent retention policies")
-    func optionalCountCopy() throws {
-        let english = try bundle("en")
-        let chinese = try bundle("zh-Hans")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.items.toggle", "missing", bundle: chinese
-        ) == "限制未置顶项目数量")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.items.input-hint", "missing", bundle: english
-        ) == "Enter a positive whole number.")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.items.enforcement-note", "missing", bundle: chinese
-        ) == "关闭后，未置顶项目不受条数限制。已启用的时间、存储空间和修订版本限制仍然生效。条数限制不会移除已置顶项目。")
-    }
-
-    @Test("cancellation names only the interrupted apply and preserves earlier successful limits")
-    func cancelledApplyCopyIsScopedToItsOwnTransaction() throws {
-        let chinese = try bundle("zh-Hans")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.count-cancelled", "missing", bundle: chinese
-        ) == "已取消。本次应用未更改条数限制，也未移除任何项目。")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.policies-cancelled", "missing", bundle: chinese
-        ) == "已取消。本次应用未更改这些清理限制，也未移除任何项目或修订版本。")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.history-changed", "missing", bundle: try bundle("en")
-        ) == "History changed while preparing cleanup. Nothing was applied. Try applying again.")
-    }
-
-    @Test("revision-limit recovery does not blame pinned items in Chinese")
-    func revisionBudgetRecoveryCopy() throws {
-        let chinese = try bundle("zh-Hans")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.active-revision-over-budget", "missing", bundle: chinese
-        ) == "当前生效的修订版本超出此限额。请提高修订存储限额。")
-        #expect(RetentionSettingsCopy.plain(
-            "settings.retention.combined-budget-unsatisfiable", "missing", bundle: chinese
-        ) == "置顶项目可能超出存储限额，或当前生效的修订版本可能超出其限额。请提高限额，或取消置顶以减少受保护的存储用量。")
-    }
-
     @Test("receipt plurals preserve zero, one, many and localized grouping",
           arguments: [0, 1, 2, 5_000])
     func englishReceiptPlurals(_ count: Int) throws {

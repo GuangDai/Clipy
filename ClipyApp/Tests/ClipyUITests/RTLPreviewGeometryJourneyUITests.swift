@@ -28,7 +28,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         // Apple's documented Mac RTL test arguments work without adding an
         // Arabic localization or a product-only layout-direction switch.
         app.launchArguments += [
-            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-NSForceRightToLeftWritingDirection", "YES", "-AppleTextDirection", "YES",
             "-panelPosition", "cursor",
             "-clipy.appearance.previewAutoOpen", "YES",

@@ -230,7 +230,10 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
                 cursor: current
             ))
             for row in page.rows {
-                #expect(seen.insert(row.item.id).inserted)
+                try #require(seen.insert(row.item.id).inserted)
+            }
+            if page.next != nil {
+                try #require(!page.rows.isEmpty, "A continuation must make progress")
             }
             cursor = page.next
             pages += 1

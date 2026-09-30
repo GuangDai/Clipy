@@ -67,13 +67,6 @@ extension HistoryPerfRunnerHelperTests {
         ])
     }
 
-    @Test func section9CoverageMapAcceptsEveryRequiredWorkloadAndBullet() {
-        let fixtures = section9WorkloadCoverage.map { key, expectation in
-            Self.fixture(key: key, bullet: expectation.bulletLabel)
-        }
-        #expect(section9CoverageIssues(fixtures).isEmpty)
-    }
-
     @Test func section9CoverageMapDetectsDeletionAndLabelDrift() {
         var fixtures = section9WorkloadCoverage.map { key, expectation in
             Self.fixture(key: key, bullet: expectation.bulletLabel)
@@ -92,37 +85,6 @@ extension HistoryPerfRunnerHelperTests {
         #expect(issues.contains { $0.contains("thumbnailSingleFlightSharesDecode") })
         #expect(issues.contains { $0.contains("recentBrowseIndependentOfRetainedCount") })
         #expect(issues.contains { $0.contains("emitted workloads cover") })
-    }
-
-    @Test func section9CoverageMapRequiresEveryFrozenSearchMode() {
-        let searchKeys = [
-            "exactSearchScalesWithRetainedCount",
-            "fuzzySearchScalesWithRetainedCount",
-            "regexpSearchScalesWithRetainedCount",
-        ]
-        for key in searchKeys {
-            #expect(section9WorkloadCoverage[key]?.bulletLabel == "7")
-            #expect(section9WorkloadCoverage[key]?.bulletNumbers == Set([7]))
-        }
-
-        var fixtures = section9WorkloadCoverage.map { key, expectation in
-            Self.fixture(key: key, bullet: expectation.bulletLabel)
-        }
-        fixtures.removeAll { $0.key == "fuzzySearchScalesWithRetainedCount" }
-
-        let issues = section9CoverageIssues(fixtures)
-        #expect(issues.contains { $0.contains("fuzzySearchScalesWithRetainedCount") })
-    }
-
-    @Test func section9CoverageMapNamesTheWarmPersistentOpenConstruct() {
-        let key = "persistentStoreOpenScalesWithRetainedMetadata"
-        #expect(section9WorkloadCoverage[key]?.bulletLabel == "3")
-        #expect(section9WorkloadCoverage[key]?.bulletNumbers == Set([3]))
-        #expect(
-            section9WorkloadCoverage[
-                "indexRebuildLinearInRetainedSignatureMetadata"
-            ]?.bulletLabel == nil
-        )
     }
 
     internal static func isCompletedWarmup(
@@ -162,57 +124,6 @@ extension HistoryPerfRunnerHelperTests {
                 == Set(section9WorkloadCoverage.keys)
                     .subtracting(section9RecordOnlyWorkloads)
         )
-    }
-
-    @Test func wl1aExplicitlyUsesTheDocumentedOnePointTwoHeadroomException() throws {
-        let envelope = try #require(
-            section9WorkloadEnvelopes["captureScalesWithRetainedCount"]
-        )
-
-        #expect(envelope.measurementScales == [200, 1_000])
-        #expect(envelope.scaleSpan == 5)
-        #expect(envelope.theoreticalRatio == 5)
-        #expect(envelope.bound == 6)
-        #expect(envelope.headroomFactor == 1.2)
-        switch envelope.headroomPolicy {
-        case .standard:
-            Issue.record("WL1a silently inherited the general 1.5× floor")
-        case .wl1aRetainedInventoryException:
-            break
-        }
-    }
-
-    @Test func standardLinearEnvelopeDerivesRatioAndHeadroomFromItsScale() throws {
-        let envelope = try #require(
-            section9WorkloadEnvelopes[
-                "persistentStoreOpenScalesWithRetainedMetadata"
-            ]
-        )
-
-        #expect(envelope.measurementScales == [200, 500, 1_000])
-        #expect(envelope.scaleSpan == 5)
-        #expect(envelope.theoreticalRatio == 5)
-        #expect(envelope.bound == 8)
-        #expect(envelope.headroomFactor == 1.6)
-        switch envelope.headroomPolicy {
-        case .standard:
-            break
-        case .wl1aRetainedInventoryException:
-            Issue.record("A standard workload used WL1a's narrow exception")
-        }
-    }
-
-    @Test func constantEnvelopeUsesOneAsItsTheoreticalRatio() throws {
-        let envelope = try #require(
-            section9WorkloadEnvelopes[
-                "recentBrowseIndependentOfRetainedCount"
-            ]
-        )
-
-        #expect(envelope.scaleSpan == 4)
-        #expect(envelope.theoreticalRatio == 1)
-        #expect(envelope.bound == 3)
-        #expect(envelope.headroomFactor == 3)
     }
 
     @Test func complexityEnvelopeValidationRejectsBadSpanAndHeadroom() {

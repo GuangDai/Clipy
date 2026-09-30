@@ -129,9 +129,8 @@ enum PopupPositionGeometry {
             && point.y <= max(main.maxY, preview.maxY)
     }
 
-    /// Computes the panel's top-left screen-space origin (AppKit window
-    /// origins are bottom-left of the window; every mode below returns the
-    /// BOTTOM-left origin ready for `setFrameOrigin`).
+    /// Computes the panel's bottom-left screen-space origin, ready for
+    /// AppKit's `setFrameOrigin`.
     ///
     /// - Parameters:
     ///   - mode: the placement mode (status-item clicks pass `.statusItem`

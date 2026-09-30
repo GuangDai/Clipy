@@ -19,8 +19,6 @@ public struct PreviewReference: Equatable, Sendable {
     /// A filename/host is presentation only; address and filePath stay exact.
     public let displayName: String
 
-    private static let maximumSourceBytes = 16 * 1_024
-
     private init(kind: Kind, address: String, filePath: String?, displayName: String) {
         self.kind = kind
         self.address = address
@@ -44,7 +42,7 @@ public struct PreviewReference: Equatable, Sendable {
             return nil
         }
 
-        guard representation.bytes.count <= maximumSourceBytes else {
+        guard representation.bytes.count <= PreviewResourceLimits.referenceInputBytes else {
             return .failed(.resourceLimit)
         }
         // Foundation's encoding-based initializer strips a UTF-8 BOM. Keep

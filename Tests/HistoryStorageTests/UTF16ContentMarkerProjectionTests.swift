@@ -19,6 +19,5 @@ struct UTF16ContentMarkerProjectionTests {
         let expected = Data([0xEF, 0xBB, 0xBF, 0x42, 0xF0, 0x9F, 0xA6, 0x8A])
         #expect(Data(projection.title.utf8) == expected)
         #expect(Data(projection.searchBody.utf8) == expected)
-        #expect(Data(ContentProjector.projectTitle(content).utf8) == expected)
     }
 }

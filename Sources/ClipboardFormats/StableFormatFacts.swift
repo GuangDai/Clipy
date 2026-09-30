@@ -14,6 +14,19 @@ public struct ClipboardFormatIdentifier: Hashable, Sendable {
         self.rawValue = rawValue
     }
 
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.rawValue.utf8.elementsEqual(rhs.rawValue.utf8)
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        // String's canonical-equivalence hashing would merge differently
+        // spelled open-world identifiers. Hash exactly the bytes we compare.
+        var spelling = rawValue
+        spelling.withUTF8 { bytes in
+            hasher.combine(bytes: UnsafeRawBufferPointer(bytes))
+        }
+    }
+
     /// The string codec declared by this exact identifier, when Clipy has an
     /// explicit byte-order contract. This is a wire fact, not permission to
     /// project, preview, present, or edit the representation.

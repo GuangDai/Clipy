@@ -353,6 +353,35 @@ struct AppCaptureAccessTests {
         #expect(accessReads.withLock { $0 } == readsAfterStop)
     }
 
+    @Test("releasing the composition cancels a non-cooperative Pause deadline")
+    @MainActor
+    func releasedCompositionCancelsItsDeadline() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let deadlineSleep = ControlledPauseDeadlineSleep()
+        let pasteboard = ComposedSupport.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        var composition: AppComposition? = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            initialCaptureAccessBehavior: .allowed,
+            captureAccessBehaviorProvider: { .allowed },
+            capturePauseSleep: { duration in
+                try await deadlineSleep.sleep(for: duration)
+            }
+        )
+        composition?.pauseCapture()
+        try #require(await ComposedSupport.waitFor {
+            deadlineSleep.startedCount == 1
+        })
+        let deadline = try #require(composition?.capturePauseTaskForTesting)
+        weak var releasedComposition = composition
+        composition = nil
+        #expect(releasedComposition == nil)
+        #expect(deadline.isCancelled)
+        deadlineSleep.expire(0)
+        await deadline.value
+    }
+
     @Test("manual Resume cancels the outstanding Pause deadline")
     @MainActor
     func manualResumeCancelsTimedResume() async throws {

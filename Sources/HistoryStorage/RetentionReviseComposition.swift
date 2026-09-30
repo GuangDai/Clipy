@@ -63,13 +63,16 @@ extension HistoryAuthority {
         if !pruneSet.isEmpty {
             mutations.append(.pruneRevisions(itemID: revisedItemID, removedRevisionIDs: pruneSet))
         }
+        // SQLite promotes overflowing integer addition to REAL. Validate the
+        // aggregate even with R2 disabled, before accounting can persist a
+        // value outside the exact integer representation (V2-09 §9).
+        let currentTotal = try RetentionConfigLoading.totalRetainedBytes(in: database)
+        let withoutOldRevisions = try RetentionConfigLoading.checkedSubtract(currentTotal, oldRevisionBytes)
+        let projectedTotal = try RetentionConfigLoading.checkedAdd(withoutOldRevisions, projectedRevisionBytes)
         if let storagePolicy = policies?.storage {
             // Only the revised item's revision bytes change before R2. The
             // durable aggregate accounts for every other retained item; SQL
             // streams oldest unpinned victims, retaining only selected IDs.
-            let currentTotal = try RetentionConfigLoading.totalRetainedBytes(in: database)
-            let withoutOldRevisions = try RetentionConfigLoading.checkedSubtract(currentTotal, oldRevisionBytes)
-            let projectedTotal = try RetentionConfigLoading.checkedAdd(withoutOldRevisions, projectedRevisionBytes)
             let prefix = try RetentionConfigLoading.retirementPrefix(
                 in: database,
                 policies: HistoryRetentionPolicies(age: nil, storage: storagePolicy, revisions: nil),

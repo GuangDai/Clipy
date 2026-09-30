@@ -1,6 +1,6 @@
 /// F1 client credential-file custody proofs (`V2-05` §0.3): owner-only
 /// directory/file modes, no-follow and regular-file admission, exact 48-byte
-/// readback, atomic temp-then-rename replacement, crash-orphan reclaim, and
+/// readback, atomic temp-then-rename replacement, concurrent-writer preservation, and
 /// the inherited-stdin supply grammar. Everything runs against real per-test
 /// temp directories on the runner filesystem; no Keychain, Authority,
 /// transport, or CLI process is involved, and no claim beyond the file
@@ -282,8 +282,38 @@ struct LocalAutomationClientCredentialCustodyTests {
         #expect(try Data(contentsOf: planted) == Self.rotatedBytes)
     }
 
-    @Test("crash-orphan temporaries are reclaimed on load and install; everything else is untouched")
-    func crashOrphanReclaim() throws {
+    @Test("concurrent replacements leave one complete credential even when readback loses the race")
+    func concurrentReplacementsPreserveThePublishedCredential() async throws {
+        let fixture = try Self.makeFixture()
+        defer { Self.removeFixture(fixture) }
+        let custody = fixture.custody
+        try custody.installCredential(Self.credentialBytes)
+        for _ in 0..<20 {
+            let first = Task.detached { try Self.installAllowingConcurrentReplacement(Self.credentialBytes, in: custody) }
+            let second = Task.detached { try Self.installAllowingConcurrentReplacement(Self.rotatedBytes, in: custody) }
+            _ = try await first.value
+            _ = try await second.value
+            let installed = try custody.loadCredential()
+            #expect(installed == Self.credentialBytes || installed == Self.rotatedBytes)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: fixture.directory.path)
+            == [LocalAutomationClientCredentialCustody.credentialFileName])
+    }
+
+    private static func installAllowingConcurrentReplacement(
+        _ bytes: Data,
+        in custody: LocalAutomationClientCredentialCustody
+    ) throws -> Bool {
+        do {
+            try custody.installCredential(bytes)
+            return true
+        } catch LocalAutomationClientCredentialCustodyFailure.readbackMismatch {
+            return false
+        }
+    }
+
+    @Test("reads and installs preserve another writer's temporary files")
+    func readsAndInstallsPreserveOtherWriterTemporaries() throws {
         let fixture = try Self.makeFixture()
         defer { Self.removeFixture(fixture) }
 
@@ -299,7 +329,7 @@ struct LocalAutomationClientCredentialCustodyTests {
                 to: fixture.directory.appendingPathComponent(name)
             )
         }
-        let orphanNames = [
+        let temporaryNames = [
             LocalAutomationClientCredentialCustody.temporaryFileName(
                 forToken: UUID(uuidString: "00000000-0000-0000-0000-0000000000A1")!
             ),
@@ -307,12 +337,12 @@ struct LocalAutomationClientCredentialCustodyTests {
                 forToken: UUID(uuidString: "00000000-0000-0000-0000-0000000000A2")!
             ),
         ]
-        // An interrupted write leaves a partial temp sibling behind.
+        // Another installer may hold either a partial or complete temp sibling.
         try Data(repeating: 0xEE, count: 10).write(
-            to: fixture.directory.appendingPathComponent(orphanNames[0])
+            to: fixture.directory.appendingPathComponent(temporaryNames[0])
         )
         try Self.rotatedBytes.write(
-            to: fixture.directory.appendingPathComponent(orphanNames[1])
+            to: fixture.directory.appendingPathComponent(temporaryNames[1])
         )
 
         #expect(try fixture.custody.loadCredential() == Self.credentialBytes)
@@ -320,42 +350,27 @@ struct LocalAutomationClientCredentialCustodyTests {
             atPath: fixture.directory.path
         ))
         #expect(names == Set(
-            [LocalAutomationClientCredentialCustody.credentialFileName] + decoyNames
+            [LocalAutomationClientCredentialCustody.credentialFileName] + decoyNames + temporaryNames
         ))
 
-        // The install path reclaims a fresh orphan the same way.
-        try Data(repeating: 0xEE, count: 3).write(
-            to: fixture.directory.appendingPathComponent(orphanNames[0])
-        )
+        // A concurrent install must also leave the other writer's temp alone.
         try fixture.custody.installCredential(Self.rotatedBytes)
         #expect(try fixture.custody.loadCredential() == Self.rotatedBytes)
         names = Set(try FileManager.default.contentsOfDirectory(
             atPath: fixture.directory.path
         ))
         #expect(names == Set(
-            [LocalAutomationClientCredentialCustody.credentialFileName] + decoyNames
+            [LocalAutomationClientCredentialCustody.credentialFileName] + decoyNames + temporaryNames
         ))
+        #expect(try Data(contentsOf: fixture.directory.appendingPathComponent(temporaryNames[0]))
+            == Data(repeating: 0xEE, count: 10))
+        #expect(try Data(contentsOf: fixture.directory.appendingPathComponent(temporaryNames[1]))
+            == Self.rotatedBytes)
         for name in decoyNames {
             #expect(try Data(
                 contentsOf: fixture.directory.appendingPathComponent(name)
             ) == decoyBytes)
         }
-    }
-
-    @Test("the temporary-name predicate matches only this component's own orphans")
-    func orphanNamePredicateIsExact() {
-        let own = LocalAutomationClientCredentialCustody.temporaryFileName(
-            forToken: UUID(uuidString: "00000000-0000-0000-0000-0000000000A3")!
-        )
-        let isOrphan = LocalAutomationClientCredentialCustody
-            .isOrphanedTemporaryFileName
-        #expect(isOrphan(own))
-        #expect(!isOrphan(LocalAutomationClientCredentialCustody.credentialFileName))
-        #expect(!isOrphan("notes.txt"))
-        #expect(!isOrphan(
-            ".\(LocalAutomationClientCredentialCustody.credentialFileName).tmp"
-        ))
-        #expect(!isOrphan("\(own).bak"))
     }
 
     @Test("the supply grammar accepts exactly 48 bytes")
@@ -406,6 +421,20 @@ struct LocalAutomationClientCredentialCustodyTests {
                 from: shortHandle
             )
         }
+    }
+
+    @Test("oversized inherited input is rejected after at most 49 bytes")
+    func inheritedDescriptorRejectsOversizedInputWithoutDrainingIt() throws {
+        let fixture = try Self.makeFixture()
+        defer { Self.removeFixture(fixture) }
+        let oversized = fixture.root.appendingPathComponent("oversized")
+        try Data(repeating: 0x11, count: 1_048_576).write(to: oversized)
+        let handle = try FileHandle(forReadingFrom: oversized)
+        defer { try? handle.close() }
+        #expect(throws: LocalAutomationClientCredentialCustodyFailure.malformedCredential) {
+            _ = try LocalAutomationClientCredentialCustody.readSuppliedCredential(from: handle)
+        }
+        #expect(try handle.offset() == 49)
     }
 
     @Test("revocation-side removal is best-effort, idempotent, and never throws")

@@ -47,6 +47,12 @@ public final class PasteboardObserver {
         self.accessBehaviorProvider = { adapter.captureAccessBehavior }
     }
 
+    isolated deinit {
+        // The run loop retains its timer, whose callback retains us weakly.
+        // Dropping the observer must also remove that now-useless poll source.
+        timer?.invalidate()
+    }
+
 #if DEBUG
     /// DEBUG-only AppKit-boundary substitution. Hosted app tests need to prove
     /// a live allow→deny transition without mutating the user's General

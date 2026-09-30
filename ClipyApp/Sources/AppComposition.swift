@@ -400,6 +400,10 @@ final class AppComposition {
         self.capturePauseDuration = capturePauseDuration
     }
 
+    isolated deinit {
+        stop()
+    }
+
     /// Opens the persistent store (creating the store's parent directory
     /// first), wires capture observation and the paste hand-off, and
     /// rejects a second open over a URL this process already opened.

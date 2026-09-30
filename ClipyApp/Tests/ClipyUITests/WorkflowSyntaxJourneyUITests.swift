@@ -55,7 +55,9 @@ final class WorkflowSyntaxJourneyUITests: XCTestCase {
         reveal(applyRule, in: app)
         applyRule.click()
         let error = app.descendants(matching: .any)["clipy.workflow.syntax.error"]
-        XCTAssertTrue(waitUntil { error.exists && error.label.contains("Line 2") }, app.debugDescription)
+        XCTAssertTrue(waitUntil {
+            error.exists && ((error.value as? String) ?? error.label).contains("Line 2")
+        }, app.debugDescription)
         XCTAssertEqual(editor.value as? String, invalid)
         let goToError = app.buttons["clipy.workflow.syntax.go-to-error"]
         reveal(goToError, in: app)

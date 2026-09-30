@@ -660,17 +660,32 @@ final class ThumbnailStore {
     /// visible-row flights: those rows have already issued their `.task`
     /// request and would otherwise remain permanent fallbacks.
     private func evictColdEntriesIfNeeded() {
-        while entries.count > maximumEntries || retainedDecodedBytes > maximumDecodedBytes {
-            let cold = entries.filter { displayedItemCounts[$0.key] == nil }
-            let candidates = cold.isEmpty ? entries : cold
-            guard let coldest = candidates.min(by: { $0.value.recency < $1.value.recency }) else {
-                return
-            }
-            entries.removeValue(forKey: coldest.key)
-            activeRasters.removeValue(forKey: coldest.key)
-            coldPixels.removeObject(forKey: cacheKey(coldest.key))
-            retainedDecodedBytes -= coldest.value.decodedBytes
+        guard isOverCapacity,
+              let coldest = entries.min(by: evictionPrecedes) else { return }
+        removeEntry(coldest.key)
+        guard isOverCapacity else { return }
+        // Ordinary admission evicts one entry with one O(N) scan. A large
+        // raster may need many removals; order the remaining scalar entries
+        // once instead of rescanning and allocating a filtered dictionary
+        // for every victim (O(N²) in the worst case).
+        for candidate in entries.sorted(by: evictionPrecedes) {
+            guard isOverCapacity else { break }
+            removeEntry(candidate.key)
         }
+    }
+
+    private var isOverCapacity: Bool {
+        entries.count > maximumEntries || retainedDecodedBytes > maximumDecodedBytes
+    }
+
+    private func evictionPrecedes(
+        _ lhs: Dictionary<HistoryItemReference, Entry>.Element,
+        _ rhs: Dictionary<HistoryItemReference, Entry>.Element
+    ) -> Bool {
+        let leftDisplayed = displayedItemCounts[lhs.key] != nil
+        let rightDisplayed = displayedItemCounts[rhs.key] != nil
+        if leftDisplayed != rightDisplayed { return !leftDisplayed }
+        return lhs.value.recency < rhs.value.recency
     }
 
     /// Finishes a thrown/cancelled request without negative-retaining it.

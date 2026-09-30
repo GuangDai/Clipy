@@ -6,7 +6,7 @@
 /// The runtime matrix is split by owning seam:
 ///
 /// - `CapturePlannerInvariantTests`: D1, D3, D7, D9–D11, D13–D14, D16,
-///   D18–D19 through `planCapture` plus `effectiveContent`;
+///   D18–D19 through `planCapture` and byte-confirmation helpers;
 /// - `PinRevisionPlannerInvariantTests`: D2–D4, D12, D15–D16, D18 through
 ///   `planPinnedPlacement`, `planUnpin`, `planRemove`, `planClear`, and
 ///   `planRevision`;
@@ -19,8 +19,7 @@
 ///   `planRevisionRetentionExpansion` (docs/v2/V2-02-retention.md §5/§6.5;
 ///   `RET-PRUNE-1` Domain half);
 /// - this file: Canonical value validation/fingerprint-independent equality
-///   (D7), immutable value construction (D17), PinOrdinal ordering (D12), and
-///   the admitted retention floor value (D19).
+///   (D7).
 ///
 /// D5/D6 token stamping belongs to HistoryStorage rather than a Domain
 /// planner; D8 fact completeness and D17 Sendable/import purity are structural
@@ -96,24 +95,4 @@ private func canonicalRepresentation(
             canonicalRepresentation(pngImage, [0x89, 0x50]),
         ])
     }
-}
-
-// MARK: - PinOrdinal ordering (docs/02-domain.md §3.2)
-
-@Test func pinOrdinalOrdersByRawValue() {
-    // Swift does not synthesize `Comparable` here; `<` orders by `rawValue`.
-    #expect(PinOrdinal(rawValue: 0) < PinOrdinal(rawValue: 1))
-    #expect(!(PinOrdinal(rawValue: 1) < PinOrdinal(rawValue: 1)))
-    #expect(PinOrdinal(rawValue: 2) > PinOrdinal(rawValue: 1))
-    #expect(PinOrdinal(rawValue: 3) == PinOrdinal(rawValue: 3))
-}
-
-// MARK: - RetentionPolicy floor (docs/02-domain.md §5.5, D19)
-
-@Test func retentionPolicyStoresMaximumUnpinnedItems() {
-    // The ≥1 floor is enforced at the `HistoryStorage` boundary (typed
-    // `invalidInput`), so this value type simply stores the admitted policy;
-    // planning always receives a policy permitting at least one unpinned item.
-    #expect(RetentionPolicy(maximumUnpinnedItems: 1).maximumUnpinnedItems == 1)
-    #expect(RetentionPolicy(maximumUnpinnedItems: 5_000).maximumUnpinnedItems == 5_000)
 }

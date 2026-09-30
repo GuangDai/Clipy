@@ -26,7 +26,7 @@ final class PreviewTextSelectionJourneyUITests: XCTestCase {
         XCTAssertTrue(pasteboard.setString(source, forType: .string))
         let app = XCUIApplication()
         app.launchArguments += [
-            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES",
             "-clipy.preview.isTextLengthLimited", "YES",
             "-clipy.preview.maximumTextCharacters", "50000",

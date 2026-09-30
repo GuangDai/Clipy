@@ -71,6 +71,21 @@ struct WS7SameContentRevisionTests {
         return
     }
 
+    let explicitBytes = try await history.perform(.revise(RevisionRequest(
+        itemID: reference.id,
+        expected: reference.contentVersion,
+        intent: .replace(RevisionDraft(decisions: [
+            RevisionDecision(
+                typeIdentifier: "public.utf8-plain-text",
+                action: .replace(bytes: Data(text.utf8))
+            ),
+        ]))
+    )))
+    guard case .unchanged = explicitBytes else {
+        Issue.record("Byte-identical replacement appended a revision")
+        return
+    }
+
     // Storage side, through the INDEPENDENT container: still exactly one row.
     let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
@@ -92,6 +107,10 @@ struct WS7SameContentRevisionTests {
     // durable singleton still holds the capture commit's position.
     let position = try WSSupport.fetchPosition(container)
     #expect(position.rawValue == 1)
+
+    let details = try await history.details(for: reference.id)
+    #expect(details.item == reference)
+    #expect(details.revisions.isEmpty)
 }
 
 /// WS7 scenario B (docs/06-cross-cutting.md §8): a `.revert(to: .canonical)`

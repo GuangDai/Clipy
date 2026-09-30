@@ -243,6 +243,59 @@ internal enum HistoryItemRowHydration {
 }
 
 internal enum IngestFactLoader {
+    /// A format shared by many items must not force every repeat copy to
+    /// probe the full posting list when another format is selective. Sample
+    /// at most 33 covering-index entries per format, then use the smallest
+    /// posting list as the anchor. The full signature intersection and byte
+    /// confirmation below are unchanged (V2-09 §4; 02 §9).
+    private static func captureCandidates(
+        for incoming: CanonicalContent, in database: SQLiteDatabase
+    ) throws -> SQLiteStatement {
+        let representations = incoming.representations
+        var anchor = 0
+        if representations.count > 1 {
+            var smallestCount: Int64 = 33
+            for (index, representation) in representations.enumerated() {
+                try Task.checkCancellation()
+                let probe = try database.prepare("""
+                    SELECT count(*) FROM (
+                        SELECT 1 FROM representations
+                        WHERE pasteboardItemIndex=? AND typeKey=? AND byteCount=? AND fingerprint=?
+                        LIMIT ?
+                    )
+                    """, bindings: candidateBindings(representation) + [.integer(smallestCount)])
+                defer { probe.finalize() }
+                guard try probe.step() else { throw HistoryFailure.persistence(.invariantViolation) }
+                let count = try probe.integer(at: 0)
+                if count < smallestCount {
+                    smallestCount = count
+                    anchor = index
+                }
+                // At most one candidate is already a bounded lookup. A zero
+                // posting list establishes an empty intersection immediately.
+                if smallestCount <= 1 { break }
+            }
+        }
+        var sql = """
+            SELECT c.itemID FROM representations r JOIN contents c ON c.id=r.contentID
+            JOIN history_items h ON h.id=c.itemID
+            WHERE c.revisionOrdinal=0 AND r.pasteboardItemIndex=? AND r.typeKey=? AND r.byteCount=? AND r.fingerprint=?
+            """
+        var bindings = candidateBindings(representations[anchor])
+        for (index, representation) in representations.enumerated() where index != anchor {
+            sql += " AND EXISTS(SELECT 1 FROM representations s WHERE s.contentID=c.id AND s.pasteboardItemIndex=? AND s.typeKey=? AND s.byteCount=? AND s.fingerprint=?)"
+            bindings += candidateBindings(representation)
+        }
+        return try database.prepare(sql, bindings: bindings)
+    }
+
+    private static func candidateBindings(_ representation: CanonicalRepresentation) -> [SQLiteValue] {
+        [.integer(Int64(representation.content.pasteboardItemIndex)),
+         .text(representation.content.typeIdentifier.precomposedStringWithCanonicalMapping),
+         .integer(Int64(representation.content.bytes.count)),
+         .blob(sqliteUInt64(representation.fingerprint.rawValue))]
+    }
+
     internal static func loadFacts(in database: SQLiteDatabase, blobStore: ImmutableBlobStore,
                                    prepared: PreparedCapture, retention: RetentionPolicy,
                                    limits: HistoryLimits = .standard) throws -> IngestFacts {
@@ -254,21 +307,7 @@ internal enum IngestFactLoader {
                 database: database, blobStore: blobStore, limits: limits)
         }
         if match == nil {
-            var sql = """
-                SELECT c.itemID FROM representations r JOIN contents c ON c.id=r.contentID
-                JOIN history_items h ON h.id=c.itemID
-                WHERE c.revisionOrdinal=0 AND r.pasteboardItemIndex=? AND r.typeKey=? AND r.byteCount=? AND r.fingerprint=?
-                """
-            var bindings: [SQLiteValue] = []
-            for (index, representation) in prepared.canonical.representations.enumerated() {
-                if index > 0 {
-                    sql += " AND EXISTS(SELECT 1 FROM representations s WHERE s.contentID=c.id AND s.pasteboardItemIndex=? AND s.typeKey=? AND s.byteCount=? AND s.fingerprint=?)"
-                }
-                bindings += [.integer(Int64(representation.content.pasteboardItemIndex)),
-                             .text(representation.content.typeIdentifier.precomposedStringWithCanonicalMapping),
-                             .integer(Int64(representation.content.bytes.count)), .blob(sqliteUInt64(representation.fingerprint.rawValue))]
-            }
-            let candidates = try database.prepare(sql, bindings: bindings)
+            let candidates = try captureCandidates(for: prepared.canonical, in: database)
             defer { candidates.finalize() }
             var winner: CanonicalCaptureMatch?
             while try candidates.step() {

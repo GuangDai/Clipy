@@ -107,6 +107,13 @@ struct WS19OutOfOrderCaptureTests {
     // The durable singleton matches the receipt's position.
     let position = try WSSupport.fetchPosition(container)
     #expect(position.rawValue == 2)
+
+    let details = try await history.details(for: reference.id)
+    #expect(details.occurrence.count == 2)
+    #expect(details.occurrence.firstCopiedAt == laterObservedAt)
+    #expect(details.occurrence.lastCopiedAt == laterObservedAt)
+    #expect(details.occurrence.firstSource == source)
+    #expect(details.occurrence.lastSource == source)
 }
 
 /// WS19 companion (docs/02-domain.md §3.1): an out-of-order capture carrying

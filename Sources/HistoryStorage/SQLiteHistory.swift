@@ -229,7 +229,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         }
 
         // No facade escapes until the History and Gateway state is ready.
-        let revisionPreparation = RevisionPreparationActor()
+        let revisionPreparation = RevisionPreparationActor(limits: limits)
         let externalGateway = ExternalGateway(
             authority: authority,
             appIntentsConnectionID: appIntentsConnectionID,
@@ -240,6 +240,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         let history = SQLiteHistory(
             authority: authority,
             ingestPreparation: IngestPreparationActor(
+                limits: limits,
                 makeCandidateID: makeCandidateID
             ),
             revisionPreparation: revisionPreparation,
@@ -252,7 +253,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         )
         // Construction is complete before maintenance is scheduled. This
         // actor call only queues work; startup never walks blob directories.
-        await authority.requestBlobCleanup()
+        await authority.requestBlobCleanup(scanningOrphans: true)
         return history
     }
 

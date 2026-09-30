@@ -33,7 +33,7 @@ public struct PreviewText: Equatable, Sendable {
             // rows. Only short single-line values share one native bridge,
             // capped at eight fields and therefore 512 UTF-16 units.
             let isShort = segments[index].utf16.count <= 64
-                && !segments[index].contains(where: \.isNewline)
+                && !segments[index].unicodeScalars.contains(where: isNewline)
             if isShort {
                 if shortCount == 8 {
                     groups.append(start..<index)
@@ -49,6 +49,16 @@ public struct PreviewText: Equatable, Sendable {
         }
         if shortCount > 0 { groups.append(start..<segments.endIndex) }
         return groups
+    }
+
+    private static func isNewline(_ scalar: Unicode.Scalar) -> Bool {
+        // Character iteration on a scalar-bounded slice inside one enormous
+        // combining cluster rescans the remaining cluster for every slice.
+        // Newline scalars have no need for grapheme-boundary discovery.
+        switch scalar.value {
+        case 0x0A...0x0D, 0x85, 0x2028, 0x2029: true
+        default: false
+        }
     }
 
     private static func segment(_ text: String, budget: Int, lineBreakBudget: Int) -> [Substring] {

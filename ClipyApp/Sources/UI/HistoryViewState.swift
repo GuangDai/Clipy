@@ -722,6 +722,12 @@ final class HistoryViewState {
         guard rows.contains(where: { $0.item == reference && isDisplayed($0) }) else { return nil }
         let payload = try await history.pastePayload(for: reference.id)
         try Task.checkCancellation()
+        // The ID read can return a revision committed after mouse-down. A
+        // closed, filtered or revised row no longer owns this pending drag;
+        // only a successfully returned payload may outlive its source row.
+        guard payload.item == reference,
+              rows.contains(where: { $0.item == reference && isDisplayed($0) })
+        else { return nil }
         return payload
     }
 

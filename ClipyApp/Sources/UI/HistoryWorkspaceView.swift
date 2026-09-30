@@ -84,6 +84,7 @@ struct HistoryWorkspaceView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.history.workspace")
     }
 
@@ -431,6 +432,7 @@ struct HistoryWorkspaceView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.history.workspace.preview")
     }
 
@@ -501,6 +503,7 @@ struct HistoryWorkspaceView: View {
                 }
             }
             .padding(.horizontal, 16).padding(.vertical, 8)
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("clipy.history.workspace.status")
         }
     }
@@ -562,6 +565,7 @@ struct HistoryWorkspaceView: View {
             }
             .font(.caption)
         }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.history.workspace.batch.result")
     }
 
@@ -639,10 +643,13 @@ struct HistoryWorkspaceView: View {
 
     private func executeBatch(_ operation: HistoryBatchActionModel.Operation, references: [HistoryItemReference]) {
         guard !isMutating, !references.isEmpty else { return }
-        batchTitles = Dictionary(uniqueKeysWithValues: references.map { reference in
-            (reference.id, pageRows.first(where: { $0.item.id == reference.id })?.title
-                ?? batchTitles[reference.id] ?? text("History item"))
-        })
+        let visibleTitles = Dictionary(pageRows.map { ($0.item.id, $0.title) },
+                                       uniquingKeysWith: { first, _ in first })
+        let previousTitles = batchTitles
+        batchTitles = Dictionary(references.map { reference in
+            (reference.id, visibleTitles[reference.id]
+                ?? previousTitles[reference.id] ?? text("History item"))
+        }, uniquingKeysWith: { first, _ in first })
         mutationStatus = nil
         showsBatchResult = true
         batchTask = Task {

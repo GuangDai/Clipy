@@ -315,6 +315,29 @@ struct PopupPositionGeometryTests {
 
 struct GlobalHotKeyTests {
 
+    @Test @MainActor
+    func droppingARegisteredHotKeyReleasesItsCarbonChord() {
+        var hotKey: GlobalHotKey? = GlobalHotKey(
+            keyCode: UInt32(kVK_F17),
+            modifiers: UInt32(controlKey | optionKey | cmdKey),
+            id: 101,
+            action: {}
+        )
+        #expect(hotKey?.register() == true)
+        let replacement = GlobalHotKey(
+            keyCode: UInt32(kVK_F17),
+            modifiers: UInt32(controlKey | optionKey | cmdKey),
+            id: 102,
+            action: {}
+        )
+        defer { replacement.unregister() }
+        #expect(!replacement.register(), "a live owner reserves this exact chord")
+        weak var releasedHotKey = hotKey
+        hotKey = nil
+        #expect(releasedHotKey == nil)
+        #expect(replacement.register(), "the destroyed owner leaves neither a hotkey nor a handler")
+    }
+
     /// Carbon registration works on the headless runner (no accessibility
     /// grant needed — that is why the Carbon API was chosen), re-registration
     /// is an idempotent no-op, and `fire()` runs the action (the tail of the

@@ -175,31 +175,40 @@ package struct CanonicalContent: Sendable, Hashable {
     ///
     /// - Throws: `CanonicalContentRejection` when any requirement fails.
     package init(representations: [CanonicalRepresentation]) throws {
-        guard !representations.isEmpty else {
-            throw CanonicalContentRejection.emptyRepresentations
-        }
-        var seen = Set<ContentRepresentationKey>()
-        seen.reserveCapacity(representations.count)
-        for representation in representations {
-            let typeIdentifier = representation.content.typeIdentifier
-            guard seen.insert(representation.content.key).inserted else {
-                throw CanonicalContentRejection.duplicateTypeIdentifier(typeIdentifier)
-            }
-            guard !representation.content.bytes.isEmpty else {
-                throw CanonicalContentRejection.emptyBytes(typeIdentifier: typeIdentifier)
-            }
-        }
-        guard representations.first?.content.pasteboardItemIndex == 0 else {
-            throw CanonicalContentRejection.nonNormalizedOrder
-        }
-        for (previous, next) in zip(representations, representations.dropFirst()) {
-            guard previous.content.key.precedes(next.content.key),
-                  next.content.pasteboardItemIndex - previous.content.pasteboardItemIndex <= 1 else {
-                throw CanonicalContentRejection.nonNormalizedOrder
-            }
-        }
+        _ = try normalizedRepresentationKeys(representations.lazy.map(\.content))
         self.representations = representations
     }
+}
+
+/// Canonical ingest and proposed revisions share the same normalized shape
+/// (02 §2.1/§11). Return the already-checked keys for revision membership
+/// validation; lazy Canonical projections never copy clipboard payloads.
+func normalizedRepresentationKeys(
+    _ representations: some Collection<ContentRepresentation>
+) throws -> Set<ContentRepresentationKey> {
+    guard !representations.isEmpty else {
+        throw CanonicalContentRejection.emptyRepresentations
+    }
+    var seen = Set<ContentRepresentationKey>()
+    seen.reserveCapacity(representations.count)
+    for representation in representations {
+        guard seen.insert(representation.key).inserted else {
+            throw CanonicalContentRejection.duplicateTypeIdentifier(representation.typeIdentifier)
+        }
+        guard !representation.bytes.isEmpty else {
+            throw CanonicalContentRejection.emptyBytes(typeIdentifier: representation.typeIdentifier)
+        }
+    }
+    guard representations.first?.pasteboardItemIndex == 0 else {
+        throw CanonicalContentRejection.nonNormalizedOrder
+    }
+    for (previous, next) in zip(representations, representations.dropFirst()) {
+        guard previous.key.precedes(next.key),
+              next.pasteboardItemIndex - previous.pasteboardItemIndex <= 1 else {
+            throw CanonicalContentRejection.nonNormalizedOrder
+        }
+    }
+    return seen
 }
 
 // MARK: - Effective Content (docs/02-domain.md §2.4)
@@ -209,7 +218,8 @@ package struct CanonicalContent: Sendable, Hashable {
 /// docs/02-domain.md §2.4
 ///
 /// Distinct from Canonical Content even when their bytes currently match.
-/// Every consumer derives it from `effectiveContent(of:)` (§2.6).
+/// Storage resolves the active lineage before constructing operation facts
+/// (§2.6; V2-09 §5), without hydrating older revision payloads.
 package struct EffectiveContent: Sendable, Hashable {
     package let representations: [ContentRepresentation]
 
@@ -255,46 +265,4 @@ package struct ContentRevision: Sendable, Hashable {
         self.createdAt = createdAt
         self.content = content
     }
-}
-
-// MARK: - Effective Content derivation (docs/02-domain.md §2.6)
-
-/// Derives the single Effective Content state of one fully hydrated item.
-/// docs/02-domain.md §2.6
-///
-/// With no active revision, strips fingerprints from the Canonical
-/// representations and returns the normalized result. With an active
-/// revision, finds it in `item.revisions` and returns its complete content
-/// snapshot. Title, search body, paste bytes, edit draft, and thumbnail
-/// input all derive from this one result; revision never changes the
-/// Canonical signature used by general deduplication.
-///
-/// - Throws: `DomainRejection.corruptLineage` for corrupt persisted lineage
-///   (§6, §11 step 3, D3): a non-nil `activeRevisionID` naming no stored
-///   revision, a duplicated active revision, or a non-empty revision list
-///   with a nil active ID. Corrupt state is never an implicit fallback to
-///   Canonical Content.
-package func effectiveContent(of item: HistoryItemState) throws -> EffectiveContent {
-    guard let activeRevisionID = item.activeRevisionID else {
-        // D3: a nil active ID is valid only when the revision list is empty.
-        guard item.revisions.isEmpty else {
-            throw DomainRejection.corruptLineage
-        }
-        return EffectiveContent(
-            representations: item.canonical.representations.map(\.content)
-        )
-    }
-    var activeRevision: ContentRevision?
-    for revision in item.revisions where revision.id == activeRevisionID {
-        guard activeRevision == nil else {
-            // The active ID names more than one stored revision.
-            throw DomainRejection.corruptLineage
-        }
-        activeRevision = revision
-    }
-    guard let activeRevision else {
-        // The active ID names no stored revision.
-        throw DomainRejection.corruptLineage
-    }
-    return activeRevision.content
 }

@@ -77,8 +77,6 @@ struct ContentProjectorStreamingEquivalenceTests {
             #expect(actual.effectiveTypeIdentifiers == sources.map(\.representation.typeIdentifier))
             #expect(Data(actual.title.utf8) == Data(expected.title.utf8))
             #expect(Data(actual.searchBody.utf8) == Data(expected.body.utf8))
-            #expect(Data(ContentProjector.projectTitle(content, limits: limits).utf8)
-                == Data(expected.title.utf8))
         }
     }
 

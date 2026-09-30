@@ -21,6 +21,7 @@ internal final class ImmutableBlobStore {
     private let synchronize: (Int32, Bool) throws -> Void
     private let files = FileManager()
     private var cleanupEnumerator: FileManager.DirectoryEnumerator?
+    private var cleanupEnumerationFailure: (any Error)?
     private var cleaningStaging = false
 
     internal init(
@@ -97,7 +98,9 @@ internal final class ImmutableBlobStore {
         guard expectedByteCount >= 0 else { throw corruptValue }
         do {
             let url = blobURL(id)
-            guard try url.resourceValues(forKeys: [.fileSizeKey]).fileSize == expectedByteCount else {
+            let properties = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
+            guard properties.isRegularFile == true, properties.isSymbolicLink == false,
+                  properties.fileSize == expectedByteCount else {
                 throw corruptValue
             }
             let bytes = try Data(contentsOf: url, options: .mappedIfSafe)
@@ -121,9 +124,22 @@ internal final class ImmutableBlobStore {
         guard expectedByteCount >= 0, range.lowerBound >= 0,
               range.upperBound <= expectedByteCount else { throw corruptValue }
         do {
-            let handle = try FileHandle(forReadingFrom: blobURL(id))
+            // A corrupt file entry may be a symlink, directory or FIFO. Open
+            // without following links or waiting for a FIFO writer, then
+            // validate the same descriptor used by every bounded chunk.
+            let descriptor = Darwin.open(blobURL(id).path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            guard descriptor >= 0 else {
+                if errno == ELOOP { throw corruptValue }
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
             defer { try? handle.close() }
-            guard try handle.seekToEnd() == UInt64(expectedByteCount) else { throw corruptValue }
+            var status = stat()
+            guard Darwin.fstat(descriptor, &status) == 0 else {
+                throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            }
+            guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+                  status.st_size == Int64(expectedByteCount) else { throw corruptValue }
             try handle.seek(toOffset: UInt64(range.lowerBound))
             var bytes = Data()
             bytes.reserveCapacity(range.count)
@@ -166,12 +182,24 @@ internal final class ImmutableBlobStore {
         for _ in 0..<limit {
             if cleanupEnumerator == nil {
                 let directory = root.appendingPathComponent(cleaningStaging ? "staging" : "blobs")
-                guard let enumerator = files.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey]) else {
+                cleanupEnumerationFailure = nil
+                guard let enumerator = files.enumerator(
+                    at: directory, includingPropertiesForKeys: [.isRegularFileKey],
+                    errorHandler: { [weak self] _, error in
+                        self?.cleanupEnumerationFailure = error
+                        return false
+                    }
+                ) else {
                     throw HistoryFailure.persistence(.transaction)
                 }
                 cleanupEnumerator = enumerator
             }
-            guard let url = cleanupEnumerator?.nextObject() as? URL else {
+            let next = cleanupEnumerator?.nextObject()
+            if let error = cleanupEnumerationFailure {
+                cancelCleanupPass()
+                throw PersistenceErrorClassification.transactionFailure(for: error)
+            }
+            guard let url = next as? URL else {
                 cleanupEnumerator = nil
                 if cleaningStaging {
                     cleaningStaging = false
@@ -204,6 +232,7 @@ internal final class ImmutableBlobStore {
     /// past entries whose database references may since have been removed.
     internal func cancelCleanupPass() {
         cleanupEnumerator = nil
+        cleanupEnumerationFailure = nil
         cleaningStaging = false
     }
 

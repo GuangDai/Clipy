@@ -40,7 +40,24 @@ internal enum MutationFactLoaders {
                                        bindings: [.text(itemID.rawValue.uuidString)])
         defer { row.finalize() }
         let item = try row.step() ? HistoryItemRowHydration.retainedSummary(row) : nil
-        let count = try PinnedOrderSQL.validatedCount(in: database, limits: limits)
+        let count: Int
+        if item?.pinOrdinal != nil {
+            // Only a pinned target can relocate this lane. Its complete
+            // density proof remains mandatory before any shift (D12).
+            count = try PinnedOrderSQL.validatedCount(in: database, limits: limits)
+        } else {
+            // Removing an unpinned item cannot change any pin ordinal.
+            // Avoid two O(P) lane scans for this point mutation (V2-09 §4).
+            let state = try database.prepare("""
+                SELECT retainedItemCount,pinnedItemCount
+                FROM history_state WHERE key='retained-history'
+                """)
+            defer { state.finalize() }
+            guard try state.step() else { throw corrupt }
+            let retained = try HistoryItemRowHydration.integer(state, 0)
+            count = try HistoryItemRowHydration.integer(state, 1)
+            guard retained >= 0, count >= 0, count <= retained else { throw corrupt }
+        }
         return RemoveFacts(item: item, pinnedCount: count)
     }
 
@@ -73,8 +90,9 @@ internal enum MutationFactLoaders {
             let bytes = try HistoryItemRowHydration.integer(rows, 2)
             guard ordinal > previousOrdinal, bytes > 0, bytes <= limits.maximumProposedRevisionBytes,
                   result.count < limits.maximumRevisionsPerItem else { throw corrupt }
-            totalBytes += bytes
-            guard totalBytes <= limits.maximumTotalRevisionBytesPerItem else { throw corrupt }
+            let (nextTotal, overflow) = totalBytes.addingReportingOverflow(bytes)
+            guard !overflow, nextTotal <= limits.maximumTotalRevisionBytesPerItem else { throw corrupt }
+            totalBytes = nextTotal
             result.append(RevisionRetentionSummary(id: RevisionID(rawValue: try HistoryItemRowHydration.uuid(rows.text(at: 0))), byteCount: bytes))
             previousOrdinal = ordinal
         }

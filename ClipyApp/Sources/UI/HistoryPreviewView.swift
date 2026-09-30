@@ -41,6 +41,7 @@ struct HistoryPreviewView: View {
     @State private var textNoticeHeight: CGFloat = 0
     @State private var loader: PreviewContentLoader
     @State private var retryGeneration = 0
+    @State private var retryItem: HistoryItemReference?
     @State private var fileConfirmationPresented = false
     @State private var pinRequest: PinRequest?
     @State private var pinFailure: (item: HistoryItemReference, message: String)?
@@ -242,7 +243,7 @@ struct HistoryPreviewView: View {
             await loader.loadForDisplay(item: item,
                 textConfiguration: PreviewTextSettings.configuration(
                     maximumCharacters: maximumTextCharacters, isLengthLimited: isTextLengthLimited),
-                isRetry: retryGeneration > 0)
+                isRetry: item != nil && retryItem == item)
         }
         .task(id: pinRequest) {
             guard let request = pinRequest, !Task.isCancelled else { return }
@@ -254,6 +255,7 @@ struct HistoryPreviewView: View {
                 self.informationItem = nil
             }
             fileConfirmationPresented = false
+            retryItem = nil
             pinRequest = nil
             pinFailure = nil
             if loader.requestedItem != target { loader.clear() }
@@ -288,9 +290,7 @@ struct HistoryPreviewView: View {
         // While the main panel has keyboard focus, it republishes ⌘R
         // through the pane state, applied exactly like the Retry button.
         .onChange(of: previewState.previewRetryRequestGeneration) { _, _ in
-            if loader.phase == .failed, loader.canRetryFailure {
-                retryGeneration += 1
-            }
+            requestRetry()
         }
         .onDisappear {
             if informationItem != nil {
@@ -298,6 +298,7 @@ struct HistoryPreviewView: View {
                 informationItem = nil
             }
             fileConfirmationPresented = false
+            retryItem = nil
             pinRequest = nil
             pinFailure = nil
             loader.clear()
@@ -474,9 +475,7 @@ struct HistoryPreviewView: View {
                 .accessibilityIdentifier("clipy.preview.failed")
             if loader.canRetryFailure {
                 Button(PreviewCopy.text("Retry")) {
-                    if loader.phase == .failed, loader.canRetryFailure {
-                        retryGeneration += 1
-                    }
+                    requestRetry()
                 }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .retryPreview))
                 .accessibilityIdentifier("clipy.preview.retry")
@@ -485,6 +484,15 @@ struct HistoryPreviewView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
+    }
+
+    private func requestRetry() {
+        guard let targetItem, loader.requestedItem == targetItem,
+              loader.phase == .failed, loader.canRetryFailure else { return }
+        // Retry belongs to this exact target. A retry on A must not cancel
+        // B's already-running dwell preparation when selection changes.
+        retryItem = targetItem
+        retryGeneration += 1
     }
 
     // MARK: - Metadata bar

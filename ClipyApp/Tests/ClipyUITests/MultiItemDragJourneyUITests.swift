@@ -26,7 +26,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         let traceURL = directory.appendingPathComponent("native-drag.trace")
         let app = XCUIApplication()
         app.launchArguments += [
-            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES",
             "-panelPosition", "center",
         ]

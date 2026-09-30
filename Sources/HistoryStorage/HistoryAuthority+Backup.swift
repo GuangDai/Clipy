@@ -13,7 +13,7 @@ extension HistoryAuthority {
         didCopyBlob: @Sendable () -> Void = {}
     ) throws -> HistoryBackupReceipt {
         try Task.checkCancellation()
-        guard directory.isFileURL, !directory.path.utf8.contains(0) else {
+        guard directory.isFileURL, !directory.path(percentEncoded: false).utf8.contains(0) else {
             throw HistoryBackupFailure.invalidDestination
         }
         // A backup must outlive this store's cleanup and disposal. Resolve
@@ -90,11 +90,12 @@ extension HistoryAuthority {
                     // Detect missing/truncated sources without hydrating them.
                     let properties: URLResourceValues
                     do {
-                        properties = try source.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                        properties = try source.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
                     } catch {
                         throw HistoryFailure.persistence(.corruptStoredValue)
                     }
-                    guard properties.isRegularFile == true, properties.fileSize == byteCount else {
+                    guard properties.isRegularFile == true, properties.isSymbolicLink == false,
+                          properties.fileSize == byteCount else {
                         throw HistoryFailure.persistence(.corruptStoredValue)
                     }
                     try files.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -159,7 +160,7 @@ extension HistoryAuthority {
         try Task.checkCancellation()
         // DELETE cascades the detached representations; VACUUM removes their
         // free-page bytes as well as content already reclaimed in the source.
-        try exported.execute("VACUUM")
+        try exported.executeCancellable("VACUUM")
         try Task.checkCancellation()
         try exported.execute("PRAGMA journal_mode = DELETE")
         try exported.close()

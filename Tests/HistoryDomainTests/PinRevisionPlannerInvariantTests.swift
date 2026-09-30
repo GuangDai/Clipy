@@ -43,8 +43,8 @@ internal func pinRevisionState(
     contentVersion: ContentVersion = .initial,
     revisions: [ContentRevision] = [],
     activeRevisionID: RevisionID? = nil
-) -> HistoryItemState {
-    HistoryItemState(
+) -> PlannerItemFixture {
+    PlannerItemFixture(
         id: id,
         contentVersion: contentVersion,
         canonical: canonical,

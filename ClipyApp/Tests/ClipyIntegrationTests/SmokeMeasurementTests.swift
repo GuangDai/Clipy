@@ -57,15 +57,16 @@ struct SmokeMeasurementTests {
         let firstPage = await ComposedSupport.waitFor(timeout: 10) {
             viewState.rows.count == 50
         }
-        #expect(firstPage, "loading smoke: the first page converges")
+        try #require(firstPage, "loading smoke: the first page converges")
 
         while viewState.hasNextPage {
+            try #require(viewState.rows.count < itemCount, "loading smoke: continuation must advance")
             let expected = viewState.rows.count + min(50, itemCount - viewState.rows.count)
             viewState.loadNextPage()
             let paged = await ComposedSupport.waitFor(timeout: 10) {
                 viewState.rows.count == expected
             }
-            #expect(paged, "loading smoke: a page turn converges")
+            try #require(paged, "loading smoke: a page turn converges")
         }
         #expect(viewState.rows.count == itemCount)
         #expect(viewState.failure == nil)
@@ -123,10 +124,11 @@ struct SmokeMeasurementTests {
             viewState.rows.count == 50
         }
         let firstPageMs = milliseconds(clock.now - activateStart)
-        #expect(firstPage, "page-arrival smoke: the first page converges")
+        try #require(firstPage, "page-arrival smoke: the first page converges")
 
         var pageTurnMs: [Double] = []
         while viewState.hasNextPage {
+            try #require(viewState.rows.count < itemCount, "page-arrival smoke: continuation must advance")
             let expected = viewState.rows.count + min(50, itemCount - viewState.rows.count)
             let turnStart = clock.now
             viewState.loadNextPage()
@@ -134,7 +136,7 @@ struct SmokeMeasurementTests {
                 viewState.rows.count == expected
             }
             pageTurnMs.append(milliseconds(clock.now - turnStart))
-            #expect(paged, "page-arrival smoke: a page turn converges")
+            try #require(paged, "page-arrival smoke: a page turn converges")
         }
         #expect(viewState.rows.count == itemCount)
         #expect(viewState.failure == nil)

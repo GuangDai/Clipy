@@ -1,28 +1,16 @@
 #if DEBUG
-/// REVIEW Card 11C engine-deadline proofs for the 03b §8 adjudicated scan
-/// operation (Apple's interruptible `enumerateMatches` iterator under a fixed
-/// per-request typed deadline). The seam is the real `SearchWorker.page` value
-/// boundary plus the `setRegexpEngineDeadline` injection point: the fixed
-/// top-level ambiguous-quantifier chain — admitted by the frozen grammar and
-/// proven by two master CI watchdog runs to run the former `firstMatch`
-/// operation uninterruptibly past 2 s over this exact 1,000-Character input —
-/// must now fail typed at an injected zero deadline and release the actor
-/// cooperatively when cancelled mid-scan. Platform dependency (same class
-/// as the characterization suite's): if a future engine resolves this exact
-/// chain-and-input quickly without entering a progress callback, the
-/// deadline test fails informatively (a returned no-match page instead of
-/// the typed throw) — a visible signal, never a silent degradation.
-/// The first-match semantics
-/// anti-regression (title/body UTF-16 `matchedRanges`, snippets, pinned-first
-/// order) stays pinned by the existing WS17 title-lane and SearchModeGapTests
-/// body-lane fixtures, which are deliberately left untouched.
+/// Regexp cancellation through the real `SearchWorker.page` boundary (03b §8).
+/// The long ambiguous-quantifier chain under a 60-second budget exercises
+/// cooperative cancellation in `enumerateMatches` progress callbacks.
+/// Expired-budget admission is covered by RegexpDeadlineAdmissionTests.
+/// First-match ranges and ordering remain covered by WS17 and SearchModeGapTests.
 import Foundation
 import HistoryCore
 import HistoryDomain
 import Testing
 @testable import HistoryStorage
 
-@Suite("SearchWorker regexp engine deadline (REVIEW Card 11C)")
+@Suite("SearchWorker regexp engine cancellation")
 struct SearchWorkerRegexpEngineDeadlineTests {
     /// Spelled independently from the probe executable by design: the test
     /// binds the exact admitted pattern to the exact fixed input, as the
@@ -57,35 +45,6 @@ struct SearchWorkerRegexpEngineDeadlineTests {
                 startedAt: ContinuousClock().now
             )
         )
-    }
-
-    @Test(
-        "admitted chain fails typed at the injected engine deadline without wedging"
-    )
-    func admittedChainFailsTypedAtEngineDeadline() async throws {
-        let worker = SearchWorker()
-        await worker.setRegexpEngineDeadline(.zero)
-        let clock = ContinuousClock()
-        let start = clock.now
-
-        await #expect(
-            throws: HistoryFailure.temporarilyUnavailable(.searchEngineDeadline)
-        ) {
-            _ = try await worker.page(
-                HistoryBrowseRequest(
-                    kind: .search(text: Self.chainPattern, mode: .regexp),
-                    limit: 10
-                ),
-                in: Self.chainCorpus(),
-                continuationAnchor: nil,
-                processMarker: UUID()
-            )
-        }
-
-        // The deadline stop must return through the progress callback in
-        // milliseconds; an unbounded or watchdog-only regression to a
-        // non-interruptible operation fails this wall-clock bound.
-        #expect(clock.now - start < .seconds(5))
     }
 
     @Test(

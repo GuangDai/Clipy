@@ -5,6 +5,14 @@ import ClipboardFormats
 import Testing
 
 struct StableFormatFactsTests {
+    @Test func canonicallyEquivalentIdentifierSpellingsRemainDistinct() {
+        let composed = ClipboardFormatIdentifier(rawValue: "com.example.caf\u{E9}")
+        let decomposed = ClipboardFormatIdentifier(rawValue: "com.example.cafe\u{301}")
+        #expect(composed != decomposed)
+        #expect(Set([composed, decomposed]).count == 2)
+        #expect(Set([composed, .init(rawValue: composed.rawValue)]).count == 1)
+    }
+
     @Test func pdfKeepsItsOfficialIdentifierWithoutDeclaringAStringCodec() {
         #expect(ClipboardFormatIdentifier.pdf.rawValue == "com.adobe.pdf")
         #expect(ClipboardFormatIdentifier.pdf.declaredStringCodec == nil)

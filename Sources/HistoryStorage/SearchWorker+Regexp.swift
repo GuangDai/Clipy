@@ -260,10 +260,11 @@ extension SearchWorker {
     /// and completion flags have no effect for that method). The first
     /// reported result wins and stops the enumeration, so the returned
     /// result and its UTF-16 offsets are exactly `firstMatch`'s over the
-    /// same full-string range. Only the engine's periodic `.progress`
-    /// callback — its sole interruptible moment — observes the request
-    /// deadline and cooperative cancellation; `stop` is out-only and is
-    /// set only inside the block. A `.reportCompletion`
+    /// same full-string range. Entry/exit checks also enforce the request
+    /// deadline and cancellation for fast calls without progress reports.
+    /// Only the engine's periodic `.progress` callback can interrupt a
+    /// running native match; `stop` is out-only and is set only inside the
+    /// block. A `.reportCompletion`
     /// `.internalError` abandonment (e.g. an expression requiring
     /// exponential memory) is an explicit failure, never a silent
     /// no-match. After the call returns, a deadline or internal-error stop
@@ -276,21 +277,21 @@ extension SearchWorker {
         literalPattern: String?,
         deadline: ContinuousClock.Instant
     ) throws -> NSRange? {
+        try Task.checkCancellation()
+        let clock = ContinuousClock()
+        guard clock.now < deadline else {
+            throw HistoryFailure.temporarilyUnavailable(.searchEngineDeadline)
+        }
         if let literalPattern {
-            try Task.checkCancellation()
-            guard ContinuousClock().now < deadline else {
-                throw HistoryFailure.temporarilyUnavailable(.searchEngineDeadline)
-            }
             let range = (text as NSString).range(of: literalPattern, options: .literal)
             try Task.checkCancellation()
-            guard ContinuousClock().now < deadline else {
+            guard clock.now < deadline else {
                 throw HistoryFailure.temporarilyUnavailable(.searchEngineDeadline)
             }
             return range.location == NSNotFound ? nil : range
         }
         var match: NSRange?
         var stopReason: RegexpEngineStop?
-        let clock = ContinuousClock()
         regex.enumerateMatches(
             in: text,
             options: [.reportProgress, .reportCompletion],
@@ -331,6 +332,13 @@ extension SearchWorker {
             case .cancellation:
                 throw CancellationError()
             }
+        }
+        // Fast native matches/misses need not emit a progress callback. The
+        // same request budget still applies before accepting their result;
+        // periodic callbacks remain responsible for interrupting slow scans.
+        try Task.checkCancellation()
+        guard clock.now < deadline else {
+            throw HistoryFailure.temporarilyUnavailable(.searchEngineDeadline)
         }
         return match
     }

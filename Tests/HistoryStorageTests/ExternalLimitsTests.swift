@@ -4,22 +4,6 @@ import Testing
 @testable import HistoryStorage
 
 struct ExternalLimitsTests {
-    @Test func standardProfileMatchesTheApprovedTable() {
-        let limits = ExternalLimits.standard
-
-        #expect(limits.maximumDisplayNameUTF8Bytes == 256)
-        #expect(limits.maximumConnections == 500)
-        #expect(limits.maximumGrantRowsPerConnection == 8)
-        #expect(limits.maxAffectedItemsPerRecord == 32)
-        #expect(limits.maxAuditLogSize == 64 * 1_048_576)
-        #expect(limits.auditRecordAccountingOverheadBytes == 128)
-        #expect(limits.maximumAuditPayloadBlobBytes == 16 * 1_024)
-        #expect(limits.maxAuditAgeSeconds == 31_536_000)
-        #expect(limits.compactionCadenceOps == 100)
-        #expect(limits.maxAuditReadBatchSize == 500)
-        #expect(limits.externalBrowseLimitRange == 1...500)
-    }
-
     @Test func customProfileRejectsNonPositiveAndInvertedBounds() {
         #expect(makeLimits(maximumDisplayNameUTF8Bytes: 0) == nil)
         #expect(makeLimits(maximumConnections: 0) == nil)

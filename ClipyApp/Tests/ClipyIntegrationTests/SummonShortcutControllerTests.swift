@@ -15,6 +15,24 @@ struct SummonShortcutControllerTests {
         modifiers: UInt32(controlKey | optionKey | cmdKey)
     )
 
+    @Test func releasingRegistrationCleansItsTokenExactlyOnce() {
+        var cleanups = 0
+        var registration: SummonHotKeyRegistration? = SummonHotKeyRegistration {
+            cleanups += 1
+        }
+        weak var releasedRegistration = registration
+        registration = nil
+        #expect(releasedRegistration == nil)
+        #expect(cleanups == 1)
+
+        var stoppedRegistration: SummonHotKeyRegistration? = SummonHotKeyRegistration {
+            cleanups += 1
+        }
+        stoppedRegistration?.unregister()
+        stoppedRegistration = nil
+        #expect(cleanups == 2, "explicit cleanup and destruction cannot run cleanup twice")
+    }
+
     @Test func failedSwapRetainsOldBindingAndDoesNotPersistCandidate() throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }

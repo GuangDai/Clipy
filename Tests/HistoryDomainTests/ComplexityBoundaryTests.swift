@@ -1,5 +1,4 @@
-/// Constant-size retention planning, lane-1 byte equality, and bounded
-/// revision lineage resolution (02 §9, §12).
+/// Constant-size retention planning and lane-1 byte equality (02 §9, §12).
 import Foundation
 import HistoryCore
 import Testing
@@ -218,73 +217,5 @@ func largePinnedCountStillProducesConstantSizeRelocations(pinnedCount: Int) thro
     else {
         Issue.record("A one-representation-different hint incorrectly coalesced")
         return
-    }
-}
-
-/// `effectiveContent` (docs/02-domain.md §6) resolves one active revision
-/// among the Part VI maximum of 100 in a single linear walk, and still
-/// detects a duplicated active ID at that depth.
-@Test func effectiveContentResolvesAndRejectsAtTheHundredRevisionBound() throws {
-    let canonical = try captureCanonical([
-        ("public.utf8-plain-text", "canonical", 1),
-    ])
-    let revision = { (index: Int) in
-        ContentRevision(
-            id: capturePlannerRevisionID(UInt8(index)),
-            createdAt: Date(timeIntervalSinceReferenceDate: Double(index)),
-            content: EffectiveContent(
-                representations: [
-                    ContentRepresentation(
-                        typeIdentifier: "public.utf8-plain-text",
-                        bytes: Data("revision-\(index)".utf8)
-                    ),
-                ]
-            )
-        )
-    }
-    // Distinct revisions 1…99, then a 100th entry that reuses revision 1's
-    // ID: resolving active ID 1 must see the duplicate and reject.
-    var revisions: [ContentRevision] = (1...99).map(revision)
-    let duplicateOfFirst = ContentRevision(
-        id: capturePlannerRevisionID(1),
-        createdAt: Date(timeIntervalSinceReferenceDate: 200),
-        content: EffectiveContent(
-            representations: [
-                ContentRepresentation(
-                    typeIdentifier: "public.utf8-plain-text",
-                    bytes: Data("duplicate".utf8)
-                ),
-            ]
-        )
-    )
-    let resolving = captureItem(
-        id: capturePlannerID(1),
-        canonical: canonical,
-        lastCopiedAt: 100,
-        revisions: (1...100).map(revision),
-        activeRevisionID: capturePlannerRevisionID(100)
-    )
-    let resolved = try effectiveContent(of: resolving)
-    #expect(
-        resolved.representations.first?.bytes
-            == Data("revision-100".utf8)
-    )
-
-    revisions.append(duplicateOfFirst)
-    let rejecting = captureItem(
-        id: capturePlannerID(2),
-        canonical: canonical,
-        lastCopiedAt: 100,
-        revisions: revisions,
-        activeRevisionID: capturePlannerRevisionID(1)
-    )
-    do {
-        _ = try effectiveContent(of: rejecting)
-        Issue.record("A duplicated active revision at full depth was accepted")
-    } catch let error as DomainRejection {
-        guard case .corruptLineage = error else {
-            Issue.record("Unexpected rejection \(error)")
-            return
-        }
     }
 }

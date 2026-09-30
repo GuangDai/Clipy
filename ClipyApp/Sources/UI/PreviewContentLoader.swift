@@ -106,7 +106,7 @@ final class PreviewContentLoader {
     private(set) var textSegments: [Substring] = []
     private(set) var textSegmentGroups: [Range<Int>] = []
 
-    /// The applied image's pixel dimensions — the package-observable proof
+    /// The applied image's pixel dimensions — the internal observation
     /// of a decode without exposing the image itself.
     var appliedImageSize: CGSize? {
         raster.map { CGSize(width: $0.width, height: $0.height) }
@@ -175,7 +175,15 @@ final class PreviewContentLoader {
     /// preferences still start a new fenced operation.
     func loadForDisplay(item: HistoryItemReference?,
                         textConfiguration: PreviewTextConfiguration, isRetry: Bool) async {
-        if !isRetry, let preparation,
+        guard !Task.isCancelled else { return }
+        if isRetry, requestedItem == item, phase == .failed, canRetryFailure {
+            self.preparation?.task.cancel()
+            self.preparation = nil
+            self.textConfiguration = textConfiguration
+            await retry()
+            return
+        }
+        if let preparation,
            preparation.item == item, preparation.configuration == textConfiguration {
             await preparation.task.value
             return

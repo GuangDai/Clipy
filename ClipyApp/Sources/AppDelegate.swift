@@ -190,15 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSWorkspace.shared.activateFileViewerSelecting([directory])
         }
         super.init()
-        reloadNativeAppearance()
-        reloadInteractionSettings()
-        installPanelAppearanceObservation()
-        previewState.onFloatingPreviewTransition = { [weak self] transition in
-            self?.handleFloatingPreviewTransition(transition)
-        }
-        previewState.onPreparationTargetChanged = { [weak self] item in
-            self?.prepareFloatingPreview(for: item)
-        }
+        configureSharedState()
     }
 
     init(
@@ -224,6 +216,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.storeURL = storeURL
         self.revealStoreLocationOperation = revealStoreLocationOperation
         super.init()
+        configureSharedState()
+    }
+
+    private func configureSharedState() {
         reloadNativeAppearance()
         reloadInteractionSettings()
         installPanelAppearanceObservation()
@@ -240,6 +236,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The composed application object once `AppComposition.open` has
     /// succeeded; `nil` while opening or after a failure.
     private(set) var composition: AppComposition?
+
+    /// Store-open completion may already be queued when termination begins.
+    /// It must not install a fresh graph after the side-effect owners stop.
+    @ObservationIgnored private var isTerminating = false
 
     /// The failure that ended the open attempt, shown in the failure pane.
     private(set) var openFailure: (any Error)?
@@ -463,8 +463,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        isTerminating = true
+        closePanel()
+        hideFloatingPreviewPane()
         stopSummonShortcut()
         panelContentFitTask?.cancel()
+        panelContentFitTask = nil
         removeMemoryPressureObservation()
         removeWorkspaceLifecycleObservation()
         if let defaultsObserverToken {
@@ -494,13 +498,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// drawing area closes through the existing sole lifecycle owner; only a
     /// later explicit summon starts a fresh session using new screen facts.
     func applicationDidChangeScreenParameters(_ notification: Notification) {
-        guard let panel,
-              panel.isPresented,
-              !panel.isReachable(
-                  in: NSScreen.screens.map(\.visibleFrame)
-              )
-        else { return }
-        closePanel()
+        guard let panel, panel.isPresented else { return }
+        let visibleFrames = NSScreen.screens.map(\.visibleFrame)
+        guard panel.isReachable(in: visibleFrames) else {
+            closePanel()
+            return
+        }
+        panel.fitToVisibleFrames(visibleFrames)
+        followMainPanelFrameWithPreview()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -712,7 +717,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// window. The view state's observation is re-activated per open (the
     /// panel's close deactivates it — browsing state is fresh per summon).
     private func openPanel(at mode: PopupPositionMode) {
-        guard workspaceActivity.permitsProductActivity else { return }
+        guard !isTerminating, workspaceActivity.permitsProductActivity else { return }
         reloadInteractionSettings()
         if !interactionSettings.remembersSearch {
             composition?.viewState.clearSearch()
@@ -981,7 +986,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// shows a progress view; on failure, the failure pane; a cancelled
     /// attempt returns to idle so a later summon retries.
     func openCompositionIfNeeded() {
-        guard composition == nil,
+        guard !isTerminating, composition == nil,
               openFailure == nil,
               compositionOpenAttempt == nil else { return }
         Task { [weak self] in
@@ -1043,6 +1048,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// open failure remains terminal for the app shell and keeps its original
     /// diagnostic value in `openFailure`.
     private func openOrAwaitComposition() async throws -> AppComposition {
+        guard !isTerminating else { throw CancellationError() }
         if let composition {
             return composition
         }
@@ -1093,6 +1099,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             let opened = try await attempt.task.value
+            guard !isTerminating else {
+                opened.stop()
+                await opened.stopLocalAutomation()
+                throw CancellationError()
+            }
             if composition == nil {
                 installComposition(opened)
 #if CLIPY_UDS_F0

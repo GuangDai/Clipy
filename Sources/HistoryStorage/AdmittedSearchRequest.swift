@@ -11,6 +11,25 @@ internal struct AdmittedSearchRequest {
     internal let mode: SearchMode
     internal let expression: HistorySearchExpression?
 
+    /// Metadata/application-only expressions have no body consumer. Their
+    /// SQLite batches should not copy or decode an unrelated text projection
+    /// (03b §8; V2-09 §4). Text under NOT still needs the original body.
+    internal var requiresSearchBody: Bool {
+        guard !term.isEmpty else { return false }
+        guard let expression else { return true }
+        return Self.requiresSearchBody(expression.root)
+    }
+
+    private static func requiresSearchBody(_ node: HistorySearchExpression.Node) -> Bool {
+        switch node {
+        case .text: true
+        case .and(let left, let right), .or(let left, let right):
+            requiresSearchBody(left) || requiresSearchBody(right)
+        case .not(let child): requiresSearchBody(child)
+        default: false
+        }
+    }
+
     internal init(
         _ request: HistoryBrowseRequest,
         limits: HistoryLimits

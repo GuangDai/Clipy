@@ -18,8 +18,10 @@ internal enum PreviewHTMLRenderer {
         do {
             var parser = Parser(source, maximumOutputBytes: maximumOutputBytes, textConfiguration: textConfiguration)
             return .content(.text(try parser.render()))
-        } catch {
+        } catch is CancellationError {
             return .failed(.cancelled)
+        } catch {
+            return .failed(.malformedRepresentation)
         }
     }
 
@@ -30,14 +32,7 @@ internal enum PreviewHTMLRenderer {
             // Consume exactly one encoding signature, then decode code units
             // in that fixed byte order. A second FEFF/FFFE is content, not a
             // fresh signature for Foundation to consume or use to swap bytes.
-            var units: [UInt16] = []
-            units.reserveCapacity((bytes.count - 2) / 2)
-            var iterator = bytes.dropFirst(2).makeIterator()
-            while let first = iterator.next(), let second = iterator.next() {
-                units.append(littleEndian
-                    ? UInt16(first) | UInt16(second) << 8
-                    : UInt16(first) << 8 | UInt16(second))
-            }
+            let units = PreviewUTF16CodeUnits(bytes: bytes.dropFirst(2), littleEndian: littleEndian)
             return String(validating: units, as: UTF16.self)
         }
         let payload = bytes.starts(with: [0xEF, 0xBB, 0xBF]) ? bytes.dropFirst(3) : bytes[...]

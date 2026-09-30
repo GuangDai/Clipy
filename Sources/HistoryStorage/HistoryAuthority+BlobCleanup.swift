@@ -5,13 +5,16 @@ extension HistoryAuthority {
     /// One finite pass per orphan-producing work request. Requests arriving
     /// during a pass coalesce into one subsequent pass, because earlier
     /// visited entries may have lost their last reference in the meantime.
-    internal func requestBlobCleanup() {
+    internal func requestBlobCleanup(scanningOrphans: Bool = false) {
         if blobCleanupTask != nil {
             blobCleanupNeedsAnotherPass = true
+            blobCleanupNextPassScansOrphans = blobCleanupNextPassScansOrphans || scanningOrphans
             return
         }
         blobStore.cancelCleanupPass()
         blobCleanupNeedsAnotherPass = false
+        blobCleanupScansOrphans = blobCleanupScansOrphans || scanningOrphans
+        blobCleanupNextPassScansOrphans = false
         contentCleanupAfterID = ""
         contentCleanupFinished = false
         blobCleanupTask = Task.detached(priority: .utility) { [weak self] in
@@ -33,6 +36,7 @@ extension HistoryAuthority {
     private func performBlobCleanupBatch() -> Bool {
         // A cancelled old task cannot reset a newly requested task or pass.
         guard !Task.isCancelled else { return false }
+        var needsOrphanRetry = false
         do {
             // Logical History deletion has already committed. These are
             // physical reclamation transactions: no accounting, HCR,
@@ -41,10 +45,17 @@ extension HistoryAuthority {
                 contentCleanupFinished = try reclaimDetachedContentBatch()
                 if !contentCleanupFinished { return true }
             }
-            let result = try reclaimUnreferencedBlobBatch()
-            if !result.completedPass { return true }
+            // Committed retire/prune batches already know every removed
+            // blob reference and unlink it below. Only startup and failed
+            // publication can leave unknown orphan files/staging entries.
+            if blobCleanupScansOrphans {
+                let result = try reclaimUnreferencedBlobBatch()
+                if !result.completedPass { return true }
+            }
             if blobCleanupNeedsAnotherPass {
                 blobCleanupNeedsAnotherPass = false
+                blobCleanupScansOrphans = blobCleanupNextPassScansOrphans
+                blobCleanupNextPassScansOrphans = false
                 contentCleanupAfterID = ""
                 contentCleanupFinished = false
                 return true
@@ -53,8 +64,14 @@ extension HistoryAuthority {
             // Cleanup failure cannot change a committed History receipt.
             // Stop this pass; a later actual work request or reopen retries.
             blobStore.cancelCleanupPass()
+            // Reference deletion may already have committed before unlink
+            // failed. Its UUID no longer lives in SQL, so the next real
+            // cleanup request must include a directory scan to recover it.
+            needsOrphanRetry = true
         }
         blobCleanupNeedsAnotherPass = false
+        blobCleanupScansOrphans = needsOrphanRetry
+        blobCleanupNextPassScansOrphans = false
         blobCleanupTask = nil
         return false
     }
@@ -80,17 +97,29 @@ extension HistoryAuthority {
     /// representations. Bounding content count alone would still cascade an
     /// arbitrarily large set of inline payload pages in one transaction.
     private func reclaimDetachedContentBatch() throws -> Bool {
-        let rows = try database.prepare("""
-            SELECT c.id,
-                EXISTS(SELECT 1 FROM history_items h WHERE h.id=c.itemID),
-                EXISTS(SELECT 1 FROM history_items h WHERE h.currentContentID=c.id)
-            FROM contents c WHERE c.id > ? ORDER BY c.id LIMIT 32
-            """, bindings: [.text(contentCleanupAfterID)])
-        var candidates: [(id: String, owned: Bool, active: Bool)] = []
-        while try rows.step() {
-            candidates.append(try (rows.text(at: 0), rows.integer(at: 1) != 0, rows.integer(at: 2) != 0))
+        let candidates: [(id: String, owned: Bool, active: Bool)] = try database.readTransaction(checkingCancellation: true) {
+            // Older current stores may still have an absent owner's UUID.
+            // Startup alone retains the bounded complete metadata walk to
+            // reclaim those rows. Normal requests use the existing
+            // UNIQUE(itemID,revisionOrdinal) index to find NULL owners and
+            // always revisit its first bounded batch. A partially reclaimed
+            // content remains eligible without a cursor or a new index.
+            let owned = blobCleanupScansOrphans
+                ? "EXISTS(SELECT 1 FROM history_items h WHERE h.id=c.itemID)" : "0"
+            let predicate = blobCleanupScansOrphans
+                ? "c.id > ? ORDER BY c.id" : "c.itemID IS NULL"
+            let rows = try database.prepare("""
+                SELECT c.id,\(owned),
+                    EXISTS(SELECT 1 FROM history_items h WHERE h.currentContentID=c.id)
+                FROM contents c WHERE \(predicate) LIMIT 32
+                """, bindings: blobCleanupScansOrphans ? [.text(contentCleanupAfterID)] : [])
+            defer { rows.finalize() }
+            var candidates: [(id: String, owned: Bool, active: Bool)] = []
+            while try rows.step() {
+                candidates.append(try (rows.text(at: 0), rows.integer(at: 1) != 0, rows.integer(at: 2) != 0))
+            }
+            return candidates
         }
-        rows.finalize()
         guard !candidates.isEmpty else { return true }
         // Do not turn a corrupt cross-owner current-content reference into
         // destruction of a value that a live item still claims to own.
@@ -177,6 +206,8 @@ extension HistoryAuthority {
         blobCleanupTask?.cancel()
         blobCleanupTask = nil
         blobCleanupNeedsAnotherPass = false
+        blobCleanupScansOrphans = blobCleanupScansOrphans || blobCleanupNextPassScansOrphans
+        blobCleanupNextPassScansOrphans = false
         contentCleanupAfterID = ""
         contentCleanupFinished = false
         blobStore.cancelCleanupPass()

@@ -264,42 +264,6 @@ internal enum ContentProjector {
         )
     }
 
-    /// Computes only the bounded title for read paths that do not consume a
-    /// search body or type summary. In particular, revision summaries must not
-    /// decode and join the full search corpus merely to display a title
-    /// (docs/05-authority-kernel.md §9, §15; docs/06-cross-cutting.md §9).
-    internal static func projectTitle(
-        _ content: EffectiveContent,
-        limits: HistoryLimits = .standard
-    ) -> String {
-        for representation in content.representations {
-            guard
-                let text = decodedText(of: representation),
-                let title = firstContentLine(of: text)
-            else {
-                continue
-            }
-            return truncatedToUTF8ByteLimit(
-                collectionTitle(title, in: content),
-                limit: limits.maximumStoredTitleUTF8Bytes
-            )
-        }
-        let grouped = Dictionary(grouping: content.representations, by: \.pasteboardItemIndex)
-        var referenceTitle: String?
-        for index in grouped.keys.sorted() {
-            if let reference = referenceProjection(in: EffectiveContent(representations: grouped[index] ?? [])) {
-                referenceTitle = reference.title
-                break
-            }
-        }
-        return truncatedToUTF8ByteLimit(
-            collectionTitle(referenceTitle ?? typeBasedFallbackTitle(
-                typeIdentifiers: content.representations.map(\.typeIdentifier)
-            ), in: content),
-            limit: limits.maximumStoredTitleUTF8Bytes
-        )
-    }
-
     private static func collectionTitle(_ title: String, in content: EffectiveContent) -> String {
         let count = (content.representations.last?.pasteboardItemIndex ?? 0) + 1
         return count > 1 ? "\(count) items: \(title)" : title
