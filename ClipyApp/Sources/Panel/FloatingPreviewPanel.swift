@@ -167,6 +167,9 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 #endif
             return
         }
+        // Adding an ordered child can make it visible synchronously. Retain
+        // the need to restore before reattachment changes AppKit's visibility.
+        let shouldRestoreOrdering = isPresented && !isVisible
         let width = PanelGeometry.persistedFloatingPreviewWidth(from: defaults)
         let gap = PanelGeometry.persistedFloatingPreviewGap(from: defaults)
         if lastParentFrame != mainPanel.frame || resizedAnchor?.width != width || resizedAnchor?.gap != gap {
@@ -209,7 +212,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
                     animator().alphaValue = 1
                 }
             }
-        } else if !isVisible {
+        } else if shouldRestoreOrdering {
             // Native sheet ordering may hide an intended-visible owner.
             // Restore ordering without replaying its arrival animation.
 #if DEBUG
