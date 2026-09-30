@@ -644,8 +644,23 @@ struct HistoryPreviewView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         if informationItem == row.item,
                            let currentRow = observedRow, currentRow.item == row.item {
-                            PreviewMetadataView(history: viewState.history, row: currentRow, sourceIcons: sourceIcons)
-                                .id(currentRow.item)
+                            HStack(alignment: .top, spacing: 12) {
+                                PreviewMetadataView(history: viewState.history, row: currentRow, sourceIcons: sourceIcons)
+                                    .id(currentRow.item)
+                                Button {
+                                    guard informationItem == row.item else { return }
+                                    previewState.isInformationPresented = false
+                                    informationItem = nil
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .frame(width: 24, height: 24)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(AppMotionPressStyle())
+                                .keyboardShortcut(.cancelAction)
+                                .accessibilityLabel(PanelActionsCopy.text("Close"))
+                                .accessibilityIdentifier("clipy.preview.information.close")
+                            }
                         }
                     }
                     .font(.callout)
