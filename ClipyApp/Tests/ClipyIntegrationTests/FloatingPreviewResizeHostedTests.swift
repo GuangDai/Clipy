@@ -33,6 +33,8 @@ struct FloatingPreviewResizeHostedTests {
         #expect(preview.isVisible)
         #expect(preview.alphaValue >= 0.9)
         let layer = try #require(preview.contentView?.layer)
+        preview.contentView?.layoutSubtreeIfNeeded()
+        #expect(preview.frame == firstFrame)
         #expect(layer.animation(forKey: AppMotionSettings.arrivalAnimationKey) != nil)
         preview.present(beside: main)
         #expect(preview.frame == firstFrame)

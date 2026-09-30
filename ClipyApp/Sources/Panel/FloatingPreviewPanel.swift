@@ -82,7 +82,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 12
         hostingView.layer?.masksToBounds = true
-        contentView = hostingView
+        contentView = AppMotionSettings.surface(containing: hostingView)
 
         // Retry's pointer can already be over this non-key window while
         // SwiftUI still reports only the main window's exit. Check actual

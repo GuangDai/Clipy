@@ -84,15 +84,33 @@ enum AppMotionSettings {
         ).animation
     }
 
-    /// Animate the prepared surface on its backing layer. Window geometry,
-    /// layout and action availability remain immediate throughout the pop-in.
+    /// Keep AppKit's hosting-view geometry untouched. The transparent parent
+    /// carries the arrival effect on its sublayers; normal view autoresizing
+    /// still owns the child's size, with no per-frame layout work.
+    @MainActor
+    static func surface(containing view: NSView) -> NSView {
+        let surface = NSView(frame: view.frame)
+        surface.wantsLayer = true
+        view.autoresizingMask = [.width, .height]
+        surface.addSubview(view)
+        return surface
+    }
+
+    /// Animate the prepared child surface without changing the backing layer's
+    /// AppKit-owned transform or anchorPoint (Core Animation Guide, OS X rules).
     @MainActor
     static func animateArrival(in view: NSView?, duration: TimeInterval) {
         cancelArrival(in: view)
-        guard duration > 0, let layer = view?.layer else { return }
-        let animation = CABasicAnimation(keyPath: "transform.scale")
-        animation.fromValue = AppMotionTiming.arrivalScale
-        animation.toValue = 1.0
+        guard duration > 0, let view, let layer = view.layer else { return }
+        let scale = CGFloat(AppMotionTiming.arrivalScale)
+        var start = CATransform3DMakeScale(scale, scale, 1)
+        // AppKit chooses its backing-layer anchor. Read it rather than changing
+        // it, and compensate so the visible content scales around its center.
+        start.m41 = (1 - scale) * view.bounds.width * (0.5 - layer.anchorPoint.x)
+        start.m42 = (1 - scale) * view.bounds.height * (0.5 - layer.anchorPoint.y)
+        let animation = CABasicAnimation(keyPath: "sublayerTransform")
+        animation.fromValue = NSValue(caTransform3D: start)
+        animation.toValue = NSValue(caTransform3D: CATransform3DIdentity)
         animation.duration = duration
         animation.timingFunction = AppMotionTiming.nativeTimingFunction
         layer.add(animation, forKey: arrivalAnimationKey)

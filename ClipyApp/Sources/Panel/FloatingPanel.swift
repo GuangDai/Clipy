@@ -166,7 +166,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         hostingView.wantsLayer = true
         hostingView.layer?.cornerRadius = 12
         hostingView.layer?.masksToBounds = true
-        contentView = hostingView
+        contentView = AppMotionSettings.surface(containing: hostingView)
 
         delegate = self
     }

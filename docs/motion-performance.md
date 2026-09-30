@@ -39,9 +39,9 @@ Clipy 采用十档速度，1 最慢、10 最快；只有最快档以不超过五
 
 SwiftUI 与 AppKit 统一使用三次 Bezier 控制点 `(0.2, 0.8, 0.2, 1)`。由控制点计算，曲线起点斜率为 4、终点斜率为 0，意图是尽早靠近目标、平稳收尾；“更利落”的感受是设计推断，仍需实际交互判断。统一只需共用这个有限值定义，不需要继承注册表或另一层动画调度系统。
 
-面板、浮动预览和 Quick Look 初次出现统一使用 0.92 至 1 的透明度及 0.975 至 1 的小幅缩放，十档只改变时长，不改变动作幅度。原生面板的缩放在已有 hosting layer 上用 Core Animation 执行；窗口位置和内容适配尺寸立即应用，不逐帧重排窗口。关闭会立即移除本次 layer 动画，消失、删除、修订失效及隐藏立即生效，不能等待装饰动画才清理敏感内容。
+面板、浮动预览和 Quick Look 初次出现统一使用 0.92 至 1 的透明度及 0.975 至 1 的小幅缩放，十档只改变时长，不改变动作幅度。原生面板在透明父视图的 `sublayerTransform` 上执行缩放，仅读取锚点并补偿中心，不修改 AppKit 管理的 hosting layer 几何属性；窗口位置和内容适配尺寸立即应用，不逐帧重排窗口。[Apple Core Animation Guide](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/CoreAnimation_guide/CreatingBasicAnimations/CreatingBasicAnimations.html) 明确要求不要修改 layer-backed 视图的 `transform` 和 `anchorPoint`；[Sublayers Content](https://developer.apple.com/library/archive/documentation/Cocoa/Conceptual/CoreAnimation_guide/LayerStyleProperties/LayerStyleProperties.html) 说明父图层的 `sublayerTransform` 相对其锚点应用。关闭会立即移除本次 layer 动画，消失、删除、修订失效及隐藏立即生效，不能等待装饰动画才清理敏感内容。
 
-这些缩放和透明度使用普通 `ViewModifier` 包装框架已有属性，不实现自己的逐帧 `Animatable.body`。这不证明 SwiftUI、AppKit 和 WindowServer 没有其他逐帧计算，只减少应用主动添加的插值工作。具体接线见 [`HistoryPanelView.swift`](../ClipyApp/Sources/UI/HistoryPanelView.swift)、[`FloatingPanel.swift`](../ClipyApp/Sources/Panel/FloatingPanel.swift) 与 [`FloatingPreviewPanel.swift`](../ClipyApp/Sources/Panel/FloatingPreviewPanel.swift)。
+SwiftUI 中的缩放和透明度使用普通 `ViewModifier` 包装框架已有属性，不实现自己的逐帧 `Animatable.body`。这不证明 SwiftUI、AppKit 和 WindowServer 没有其他逐帧计算，只减少应用主动添加的插值工作。具体接线见 [`HistoryPanelView.swift`](../ClipyApp/Sources/UI/HistoryPanelView.swift)、[`FloatingPanel.swift`](../ClipyApp/Sources/Panel/FloatingPanel.swift) 与 [`FloatingPreviewPanel.swift`](../ClipyApp/Sources/Panel/FloatingPreviewPanel.swift)。
 
 ## 可以采用与不能照搬的部分
 
@@ -55,4 +55,4 @@ SwiftUI 与 AppKit 统一使用三次 Bezier 控制点 `(0.2, 0.8, 0.2, 1)`。�
 
 代码中的十档时长、Reduce Motion 与关闭时取消 layer 动画是可检查的确定行为；曲线体验、快速反复开关是否平顺，以及输入至稳定画面的五帧上限仍需要真实 macOS 运行证据。按用户要求只使用 CI，不执行本地 Swift 构建 / 测试。普通 CI 编译和功能测试通过也不能自动证明物理显示链的帧数。
 
-后续判断时分清四段：输入到第一处可见反馈、请求的曲线时长、框架 / 渲染掉帧、内容何时可交互。最慢档允许长于五帧但立即可操作，最快档只省掉装饰，不省略正确的内容与权限检查。没有这些证据时不宣称“端到端五帧已验证”或“主线程无开销”。
+后续判断时分清四段：输入到第一处可见反馈、请求的曲线时长、框架 / 渲染掉帧、内容何时可交互。最慢档允许长于五帧但立即可操作，最快档缩短动态效果，不省略正确的内容与权限检查。没有这些证据时不宣称“端到端五帧已验证”或“主线程无开销”。
