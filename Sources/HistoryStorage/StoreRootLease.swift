@@ -12,8 +12,8 @@
 ///
 /// Chosen semantics, fixed by the review row:
 ///
-/// - acquired nonblocking before the store's SQLite connection opens, held for the
-///   owning facade's lifetime (process lifetime in the app);
+/// - acquired nonblocking before the store's SQLite connection opens, held
+///   until that writer closes, including retained Gateway/Ingress owners;
 /// - a second OWNER PROCESS is refused with the typed sibling failure
 ///   `HistoryFailure.persistence(.storeAlreadyOpen)`;
 /// - the kernel releases the lock on ANY process exit, clean or crashed, so

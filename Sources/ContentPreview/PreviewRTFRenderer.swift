@@ -45,6 +45,10 @@ private struct Parser {
 
     private struct State {
         var skipped = false
+        // Known font tables skip their text but still declare encodings.
+        // Opaque destinations and the unused ANSI alternative skip controls
+        // as well, so they cannot change the document's global font facts.
+        var ignoresControls = false
         var hidden = false
         var deleted = false
         var ignorableDestination = false
@@ -86,6 +90,7 @@ private struct Parser {
                     guard state.alternativeChildren <= 2 else { throw ParseFailure.malformed }
                     stack.append(state)
                     state.skipped = state.skipped || state.alternativeChildren == 1
+                    state.ignoresControls = state.ignoresControls || state.alternativeChildren == 1
                     state.expectsUnicodeDestination = state.alternativeChildren == 2
                     state.unicodeAlternative = false
                     state.alternativeChildren = 0
@@ -179,6 +184,7 @@ private struct Parser {
     }
 
     private mutating func apply(_ word: String, _ value: Int?) throws {
+        guard !state.ignoresControls else { return }
         if state.expectsUnicodeDestination {
             guard word == "ud", state.ignorableDestination else { throw ParseFailure.malformed }
             state.expectsUnicodeDestination = false
@@ -202,13 +208,19 @@ private struct Parser {
                 stack[stack.count - 1].nextGraphicMarker = true
             }
             state.skipped = true
+            state.ignoresControls = true
         }
         if state.ignorableDestination {
             state.skipped = true
             state.ignorableDestination = false
+            if word != "fonttbl" { state.ignoresControls = true }
         }
         if word == "fonttbl" { state.fontTable = true }
-        if Self.skippedDestinations.contains(word) { state.skipped = true }
+        if Self.skippedDestinations.contains(word) {
+            state.skipped = true
+            if word != "fonttbl" { state.ignoresControls = true }
+        }
+        guard !state.ignoresControls else { return }
         switch word {
         case "rtf":
             guard !sawHeader, stack.count == 1, value == 1 else { throw ParseFailure.malformed }

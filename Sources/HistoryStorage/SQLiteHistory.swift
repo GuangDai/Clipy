@@ -9,8 +9,7 @@
 ///
 /// `SQLiteHistory` is a value of six actor references plus the immutable,
 /// `Sendable` App Intents connection identity accepted during startup and,
-/// for a persistent store, the held cross-process StoreRoot lease
-/// (`StoreRootLease`, REVIEW DATA-7). Its `Sendable`
+/// for a persistent store, its Authority's leased writer connection. Its `Sendable`
 /// conformance is fully derived from those fields, so no unsafe
 /// conformance or other escape hatch appears here (Part V §2; Part VI §6).
 import Foundation
@@ -102,12 +101,6 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     /// copies it into the public connection-bound facade and never re-mints it.
     private let appIntentsConnectionID: ExternalConnectionID
 
-    /// The cross-process single-writer lease held for a persistent store's
-    /// whole facade lifetime (REVIEW DATA-7 / PLAY-DISK-0B); `nil` for the
-    /// `.temporary` medium, which owns a private directory. The facade's last
-    /// release closes the descriptor and with it the record lock.
-    private let storeRootLease: StoreRootLease?
-
     /// Assembles the facade from its six actors and startup-validated external
     /// identity. Construction is internal to
     /// `open(configuration:)` — there is no other way to obtain a
@@ -120,8 +113,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         thumbnailService: ThumbnailService,
         externalGateway: ExternalGateway,
         appIntentsConnectionID: ExternalConnectionID,
-        storeLocation: HistoryStoreLocation,
-        storeRootLease: StoreRootLease?
+        storeLocation: HistoryStoreLocation
     ) {
         self.authority = authority
         self.ingestPreparation = ingestPreparation
@@ -131,7 +123,6 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         self.externalGateway = externalGateway
         self.appIntentsConnectionID = appIntentsConnectionID
         self.storeLocation = storeLocation
-        self.storeRootLease = storeRootLease
     }
 
     // MARK: Open (docs/storage.md, §13)
@@ -209,6 +200,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         do {
             authority = try HistoryAuthority(
                 storeLocation: storeLocation,
+                storeRootLease: storeRootLease,
                 limits: limits,
                 storageClock: storageClock,
                 volumeAvailableCapacityReader: volumeAvailableCapacityReader
@@ -248,8 +240,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
             thumbnailService: ThumbnailService(),
             externalGateway: externalGateway,
             appIntentsConnectionID: appIntentsConnectionID,
-            storeLocation: storeLocation,
-            storeRootLease: storeRootLease
+            storeLocation: storeLocation
         )
         // Construction is complete before maintenance is scheduled. This
         // actor call only queues work; startup never walks blob directories.

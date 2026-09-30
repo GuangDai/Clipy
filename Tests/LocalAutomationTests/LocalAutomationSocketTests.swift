@@ -348,6 +348,32 @@ final class LocalAutomationSocketTests: XCTestCase {
         }
     }
 
+    func testAcceptFailureRetiresTheDeadListenerBeforeRestart() async throws {
+        try await withFixture { fixture in
+            try await fixture.history.grantCapability(.browsePreview, to: fixture.connection)
+            let failure = await fixture.service.injectNextAcceptFailureForTesting(EMFILE)
+            let queued = try await LocalAutomationClient.connect(endpointURL: fixture.endpoint)
+            var observed = failure.makeAsyncIterator()
+            guard case .some = await observed.next() else {
+                await queued.close()
+                XCTFail("the actual listener did not reach its injected accept failure")
+                return
+            }
+            // The error signal is sent within accept's non-suspending actor
+            // interval. start must join that failure's real cleanup, rather
+            // than returning because an already closed FD remains recorded.
+            try await fixture.service.start()
+            await queued.close()
+            let output = try await fixture.send(Self.json(arguments: ["limit": 3]))
+            let result = try Self.result(output)
+            let items = try XCTUnwrap(result["items"] as? [[String: Any]])
+            XCTAssertEqual(items.count, 3)
+            XCTAssertTrue(items.allSatisfy {
+                ($0["title"] as? String)?.hasPrefix("wire-secret-") == true
+            })
+        }
+    }
+
     private struct Fixture: Sendable {
         let history: SQLiteHistory
         let connection: ExternalConnectionID

@@ -297,7 +297,9 @@ struct HistoryListScrollAnchorHostedTests {
         }
 
         private func frame(of element: NSObject) -> NSRect {
-            guard element.responds(to: #selector(NSAccessibilityProtocol.accessibilityFrame)) else { return .zero }
+            // AppKit also has accessibilityFrame(for:); select the no-argument
+            // public getter on these informal AX objects without an overload.
+            guard element.responds(to: NSSelectorFromString("accessibilityFrame")) else { return .zero }
             return (element.value(forKey: "accessibilityFrame") as? NSValue)?.rectValue ?? .zero
         }
 

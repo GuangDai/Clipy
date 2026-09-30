@@ -24,6 +24,14 @@ struct PreviewRTFRendererTests {
          "Привет"),
         (#"{\rtf1\ansi{\fonttbl{\f0\fcharset134 Chinese;}}\f0\u20320?\u22909?}"#, "你好"),
         (#"{\rtf1 Before{\upr{ANSI fallback}{\*\ud Unicode \u937?}}After}"#, "BeforeUnicode ΩAfter"),
+        (#"{\rtf1\ansi{\fonttbl{\f0\fcharset0 Arial;}}A{\*\unknown\deff1{\fonttbl{\f1\fcharset204 Arial;}}}\plain\'e9}"#,
+         "Aé"),
+        (#"{\rtf1\ansi{\fonttbl{\f0\fcharset0 Arial;}}A{\*\unknown{\fonttbl{\f0\fcharset204 Arial;}}}\f0\'e9}"#,
+         "Aé"),
+        (#"{\rtf1\ansi{\fonttbl{\f0\fcharset0 Arial;}}A{\upr{\deff1{\fonttbl{\f1\fcharset204 Arial;}}}{\*\ud B}}\plain\'e9}"#,
+         "ABé"),
+        (#"{\rtf1 A{\*\unknown\deff-1\f-1{\fonttbl{\f-1\fcharset204}}}B}"#, "AB"),
+        (#"{\rtf1\ansi{\*\fonttbl{\f0\fcharset204 Arial;}}\f0\'cf\'f0}"#, "Пр"),
     ])
     func extractsVisibleBodyWithScopedControls(source: String, expected: String) throws {
         let text = try artifact(PreviewRTFRenderer.render(Data(source.utf8)))

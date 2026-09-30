@@ -14,6 +14,7 @@ fixture_root="$4"
 export XCODEGEN_HOME="$5"
 project="ClipyApp/ClipyApp.xcodeproj"
 shard="${6:-all}"
+app_test_scheme="ClipyApp"
 
 # Balance the existing running-app journeys by their measured elapsed time.
 # Each CI shard owns a separate runner: General pasteboard, focus and windows
@@ -69,6 +70,7 @@ case "$shard" in
     ;;
 esac
 if [[ "$shard" == 1 || "$shard" == 2 || "$shard" == 3 ]]; then
+  app_test_scheme="ClipyAppGUI"
   for test_class in "${selected_classes[@]}"; do
     test_arguments+=("-only-testing:ClipyUITests/$test_class")
   done
@@ -86,7 +88,7 @@ xcodebuild -list -json -project "$project" > "$log_dir/project-list.json"
 set -o pipefail
 test_exit_code=0
 xcodebuild \
-  -project "$project" -scheme ClipyApp \
+  -project "$project" -scheme "$app_test_scheme" \
   -configuration Debug -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath "$derived_data" \
   -resultBundlePath "$result_dir/app.xcresult" \

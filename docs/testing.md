@@ -37,7 +37,7 @@ xcodebuild -project ClipyApp/ClipyApp.xcodeproj -scheme ClipyApp \
 | `ClipyIntegrationTests` | [`ClipyApp/Tests/ClipyIntegrationTests/`](../ClipyApp/Tests/ClipyIntegrationTests/)：真实 History、捕获、系统桥接、生命周期、intent / CLI 组合 |
 | `ClipyUITests` | [`ClipyApp/Tests/ClipyUITests/`](../ClipyApp/Tests/ClipyUITests/)：运行应用、真实控件、键盘、窗口与跨进程操作 |
 
-[`scripts/ci/run_app_correctness.sh`](../scripts/ci/run_app_correctness.sh) 接收 log、result、DerivedData、fixture、XcodeGen 路径及可选 `1|2|3|4|all`。前三分片选择互斥 UI class 组；第四分片运行两个宿主 bundle 和剩余 / 新增 UI class。分片归属以脚本当前数组为准，维护这些数组时按实际 test duration 平衡，并为第四分片的宿主测试留容量。
+[`scripts/ci/run_app_correctness.sh`](../scripts/ci/run_app_correctness.sh) 接收 log、result、DerivedData、fixture、XcodeGen 路径及可选 `1|2|3|4|all`。前三分片使用 `ClipyAppGUI` scheme，只构建应用、UI test bundle 及它们的既有依赖，选择互斥 UI class 组。第四分片使用 `ClipyApp` scheme，构建并运行两个宿主 bundle 和剩余 / 新增 UI class；`all` 及省略第六参数的五参数调用也使用 `ClipyApp`，运行完整测试集。分片归属以脚本当前数组为准，维护这些数组时按实际 test duration 平衡，并为第四分片的宿主测试留容量。
 
 各分片在独立 runner 并行；同一 runner 内 GUI 测试串行，避免共享桌面、系统剪贴板和焦点互相干扰。UI fixture 使用生产 writer 预置存储，释放后启动应用；动作通过稳定可访问性标识和真实控件进行。结果保留 `app.xcresult`、测试 log 和可导出的附件，失败时同样保留。
 

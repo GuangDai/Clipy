@@ -176,6 +176,16 @@ schemes:
         - ClipyIntegrationTests
         - ClipyPresentationTests
         - ClipyUITests
+  # GUI shards build only their app/UI dependency graph. Hosted bundles are
+  # compiled and tested by ClipyApp in shard 4 and the complete-suite entry.
+  ClipyAppGUI:
+    build:
+      targets:
+        ClipyApp: all
+        ClipyUITests: [test]
+    test:
+      targets:
+        - ClipyUITests
   ClipyUDSF0Evidence:
     build:
       targets:

@@ -86,6 +86,7 @@ internal actor HistoryAuthority {
 
     internal init(
         storeLocation: HistoryStoreLocation,
+        storeRootLease: StoreRootLease? = nil,
         limits: HistoryLimits = .standard,
         storageClock: any StorageClock = SystemStorageClock(),
         gatewayConnectionIDSource: @escaping @Sendable () -> UUID = { UUID() },
@@ -96,7 +97,7 @@ internal actor HistoryAuthority {
         self.storageClock = storageClock
         self.gatewayConnectionIDSource = gatewayConnectionIDSource
         self.volumeAvailableCapacityReader = volumeAvailableCapacityReader
-        database = try SQLiteDatabase(storeLocation: storeLocation)
+        database = try SQLiteDatabase(storeLocation: storeLocation, storeRootLease: storeRootLease)
         blobStore = try ImmutableBlobStore(root: storeLocation.rootURL)
     }
 
