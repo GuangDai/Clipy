@@ -4,6 +4,23 @@ import Testing
 @testable import ClipyApp
 
 struct HistorySearchCompletionEngineTests {
+    @Test func regexpPatternDollarsDoNotOpenCandidatesAndExplicitConditionsUseASeparator() throws {
+        let pattern = input("^report$ty|")
+        #expect(HistorySearchCompletionEngine.context(for: pattern, mode: .regexp) == nil)
+        let anchored = input("^report$|")
+        let explicit = try #require(HistorySearchCompletionEngine.context(for: anchored, explicit: true, mode: .regexp))
+        let field = try #require(HistorySearchCompletionEngine.candidates(for: explicit).first { $0.id == "type:" })
+        #expect(replacing(anchored.text, with: field) == "^report$ $type:$")
+        #expect(field.selectionOffset == 7)
+        let inside = input("^report$\u{3000}$type:te|$")
+        let context = try #require(HistorySearchCompletionEngine.context(for: inside, mode: .regexp))
+        let text = try #require(HistorySearchCompletionEngine.candidates(for: context).first { $0.id == "type:text" })
+        let applied = replacing(inside.text, with: text)
+        let compilation = try HistorySearchQueryCompiler.compile(applied, mode: .regexp)
+        #expect(compilation.literalText == "^report$")
+        #expect(compilation.expression == (try HistorySearchExpression.parse("type:text")))
+        #expect(HistorySearchCompletionEngine.context(for: pattern, mode: .exact) != nil)
+    }
     @Test func ordinaryTextAndEmptyFocusLeaveHistoryArrowNavigationAvailable() throws {
         for draft in ["|", "source:Saf|", "普通🧪文字|", "$|", #"\$ty|"#, #"\\$ty|"#] {
             #expect(HistorySearchCompletionEngine.context(for: input(draft)) == nil)
@@ -82,6 +99,23 @@ struct HistorySearchCompletionEngineTests {
             #expect(valueContext.closingText.isEmpty)
             #expect(HistorySearchCompletionEngine.candidates(for: valueContext).contains { $0.id == "type:images" })
         }
+    }
+
+    @Test func completingTheMiddleOfAnUnclosedBlockKeepsItsFollowingConditionsInside() throws {
+        let draft = input("$source:Sa|fari AND type:text")
+        let context = try #require(HistorySearchCompletionEngine.context(for: draft))
+        let choice = HistorySearchCompletionEngine.candidate(
+            id: "safari", title: "Safari", term: "source-id:" + HistorySearchExpression.quoted("com.apple.Safari"),
+            context: context
+        )
+        let applied = replacing(draft.text, with: choice)
+        #expect(applied == "$source-id:\"com.apple.Safari\" AND type:text")
+        let unfinished = try HistorySearchQueryCompiler.compile(applied)
+        #expect(unfinished.expression == nil)
+        #expect(unfinished.literalText == applied)
+        let completed = try HistorySearchQueryCompiler.compile(applied + "$")
+        #expect(completed.literalText.isEmpty)
+        #expect(completed.expression == (try HistorySearchExpression.parse("source-id:\"com.apple.Safari\" AND type:text")))
     }
 
     @Test func sourceInsertionEscapesDollarsAndMapsTheCaretWithoutChangingRawIDBytes() throws {

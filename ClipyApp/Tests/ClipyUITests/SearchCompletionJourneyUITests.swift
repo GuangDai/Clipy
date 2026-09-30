@@ -55,6 +55,19 @@ final class SearchCompletionJourneyUITests: XCTestCase {
                 && rows.firstMatch.label.contains("source:literal") && !popup.exists
         }, app.debugDescription)
 
+        try replaceSearch(with: "$type:missing$", search: search, in: app)
+        let issue = app.buttons["clipy.search.expression.error"]
+        try require(waitUntil {
+            issue.exists && issue.isHittable && !issue.label.isEmpty
+                && search.value as? String == "$type:missing$" && panel.exists
+        }, "A malformed closed condition must show its diagnostic.\n" + app.debugDescription)
+        // Delete through the current responder, without restoring focus, to
+        // keep the rejected query editable and return to unfinished input.
+        app.typeKey(.delete, modifierFlags: [])
+        try require(waitUntil {
+            search.value as? String == "$type:missing" && !issue.exists && panel.exists
+        }, "The diagnostic must clear when the native editor repairs the query.\n" + app.debugDescription)
+
         try replaceSearch(with: "$ty", search: search, in: app)
         let typeCandidate = app.buttons["clipy.search.completion.type:"]
         try require(typeCandidate.waitForExistence(timeout: 5), app.debugDescription)

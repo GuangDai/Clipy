@@ -153,9 +153,10 @@ final class SearchHistoryStore {
             }
             let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
             let definition = stored.favorites[index].definition
-            if let rejection = rejection(for: definition, name: name, preferences: stored.preferences) {
-                return finish(rejection)
-            }
+            // Renaming changes no query bytes and must remain available for
+            // a stored draft that execution now rejects under current syntax.
+            guard Self.isWellFormed(definition, name: name) else { return finish(.invalidDefinition) }
+            guard !stored.preferences.excludes(definition, name: name) else { return finish(.excluded) }
             stored.favorites[index].name = name
             try persist(stored)
             return finish(.saved)
@@ -229,15 +230,22 @@ final class SearchHistoryStore {
     }
 
     private static func isValid(_ definition: HistorySearchDefinition, name: String) -> Bool {
+        guard isWellFormed(definition, name: name) else { return false }
+        guard let compilation = try? HistorySearchQueryCompiler.compile(definition.query, mode: definition.mode) else { return false }
+        if definition.mode == .regexp {
+            return compilation.literalText.isEmpty || (try? NSRegularExpression(pattern: compilation.literalText)) != nil
+        }
+        return true
+    }
+
+    /// Stored raw drafts survive changes to query syntax. Resource and DTO
+    /// checks still protect decoding; execution reports any query diagnostic.
+    private static func isWellFormed(_ definition: HistorySearchDefinition, name: String) -> Bool {
         guard name.utf8.count <= 200,
               definition.query.utf8.count + definition.filters.sourceApplication.utf8.count + name.utf8.count <= maximumDefinitionBytes,
               definition.filters.startDate.timeIntervalSince1970.isFinite,
               definition.filters.endDate.timeIntervalSince1970.isFinite,
               definition.filters.hasValidDates() else { return false }
-        guard let compilation = try? HistorySearchQueryCompiler.compile(definition.query) else { return false }
-        if definition.mode == .regexp {
-            return compilation.literalText.isEmpty || (try? NSRegularExpression(pattern: compilation.literalText)) != nil
-        }
         return true
     }
 
@@ -266,7 +274,7 @@ final class SearchHistoryStore {
                   Set(stored.favorites.map(\.id)).count == stored.favorites.count,
                   Set(stored.recentSearches.map(\.id)).count == stored.recentSearches.count,
                   (stored.favorites + stored.recentSearches).allSatisfy({
-                      $0.definition.hasCriteria && Self.isValid($0.definition, name: $0.name)
+                      $0.definition.hasCriteria && Self.isWellFormed($0.definition, name: $0.name)
                           && $0.savedAt.timeIntervalSince1970.isFinite
                   }) else { throw SearchHistoryFailure.unreadableStore }
             let original = stored

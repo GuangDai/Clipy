@@ -41,15 +41,20 @@ final class HistorySearchCompletionState {
     @ObservationIgnored private var historyPosition: ChangePosition?
     @ObservationIgnored private var requestsOnFocus = false
     @ObservationIgnored private var episodeGeneration = 0
+    @ObservationIgnored private var mode: SearchMode = .fuzzy
 
     func configure(
         history: any ClipboardHistory,
+        mode: SearchMode = .fuzzy,
         applications: @escaping @MainActor @Sendable () async -> [SourceApplicationSearchResolver.Application]
     ) {
         let needsWorker = sourceWorker == nil
+        let changedMode = self.mode != mode
+        self.mode = mode
         if needsWorker { sourceWorker = HistorySearchSourceCompletionWorker(history: history) }
         applicationProvider = applications
-        if needsWorker, context?.kind == .source, isInputFocused, !isComposing {
+        if isInputFocused, !isComposing, input != nil,
+           changedMode || (needsWorker && context?.kind == .source) {
             refresh(explicit: context?.explicit ?? false)
         }
     }
@@ -183,7 +188,7 @@ final class HistorySearchCompletionState {
 
     private func refresh(explicit: Bool) {
         guard isInputFocused, !isComposing, let input,
-              let context = HistorySearchCompletionEngine.context(for: input, explicit: explicit) else {
+              let context = HistorySearchCompletionEngine.context(for: input, explicit: explicit, mode: mode) else {
             dismiss()
             return
         }
@@ -259,7 +264,10 @@ actor HistorySearchSourceCompletionWorker {
             names = Dictionary(applications.map { (Data($0.bundleID.utf8), $0) }, uniquingKeysWith: { first, _ in first })
             applicationNames = names
         }
-        if let cachedApplications, position == nil || cachedPosition == position {
+        // The UI's observed position is a lower bound: this metadata read
+        // may already include a newer commit than its still-settling query.
+        let canReusePosition = position.map { hint in cachedPosition.map { $0 >= hint } ?? false } ?? true
+        if let cachedApplications, canReusePosition {
             return try rank(cachedApplications, prefix: prefix, names: names)
         }
         cachedApplications = nil

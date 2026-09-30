@@ -944,8 +944,7 @@ struct HistoryPanelView: View {
             showsPaginationControl:
                 viewState.hasNextPage || viewState.isLoadingPage,
             usesPinnedGrouping: viewState.sortOrder == .automatic,
-            isFilterChipVisible:
-                viewState.hasActiveFilters || viewState.searchMode == .expression || viewState.sortOrder != .automatic,
+            isFilterChipVisible: viewState.isSearchStatusVisible,
             isFailureBannerVisible: isFailureBannerVisible,
             prefersFullHeight:
                 !surfaceState.detailsPath.isEmpty

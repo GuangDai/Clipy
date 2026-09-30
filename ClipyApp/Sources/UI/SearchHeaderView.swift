@@ -61,7 +61,7 @@ struct SearchHeaderView: View {
                 filterMenu
                     .frame(width: 24, height: 24)
             }
-            if hasActiveFilters || viewState.hasWrappedSearchConditions || viewState.sortOrder != .automatic {
+            if viewState.isSearchStatusVisible {
                 searchStatusRow.frame(height: 15)
             }
         }
@@ -99,10 +99,11 @@ struct SearchHeaderView: View {
         .onChange(of: viewState.sourceCompletionPosition) { _, position in
             completion.updateHistoryPosition(position)
         }
+        .onChange(of: viewState.searchMode) { _, _ in configureCompletion() }
     }
 
     private func configureCompletion() {
-        completion.configure(history: viewState.history) { await viewState.sourceApplicationsForCompletion() }
+        completion.configure(history: viewState.history, mode: viewState.searchMode) { await viewState.sourceApplicationsForCompletion() }
         completion.updateHistoryPosition(viewState.sourceCompletionPosition)
     }
 

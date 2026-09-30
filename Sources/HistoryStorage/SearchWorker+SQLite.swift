@@ -97,9 +97,13 @@ extension SearchWorker {
             defer { try? database.execute("ROLLBACK") }
             try database.setReadInterruptionDeadline(lifetimeDeadline)
             defer { try? database.setReadInterruptionDeadline(nil) }
-            let expressionSources = expression.map { _ in
-                SQLiteExpressionSources(database: database, limits: limits, deadline: lifetimeDeadline)
-            }
+            // The connection and its lazy source statements share this actor's
+            // request scope; construct directly instead of capturing the
+            // connection in a value-transform closure.
+            let expressionSources: SQLiteExpressionSources?
+            if expression != nil || request.filter.sourceApplication != nil || request.filter.sourceApplicationIDs != nil {
+                expressionSources = SQLiteExpressionSources(database: database, limits: limits, deadline: lifetimeDeadline)
+            } else { expressionSources = nil }
             defer { expressionSources?.finish() }
 
             let positionStatement = try database.prepare(
@@ -211,7 +215,7 @@ extension SearchWorker {
                     orderedAnchor: isRankedFuzzy ? fuzzyOrderedAnchor : anchor,
                     reversesOrder: reversesOrderedRows || reversesFuzzyPredecessors,
                     completesFuzzyPrefix: completesFuzzyPrefix,
-                    work: work
+                    work: work, sourceValidation: expressionSources
                 )
             }
             defer { reader?.finish() }
@@ -509,7 +513,7 @@ extension SearchWorker {
             includesSearchBody: admitted.requiresSearchBody,
             expressionPredicate: expressionPredicate, candidateExpression: nil,
             orderedAnchor: nil, reversesOrder: false, completesFuzzyPrefix: false,
-            work: work, targetedID: id
+            work: work, sourceValidation: expressionSources, targetedID: id
         )
         defer { targetReader.finish() }
         let targetBatch = try targetReader.nextBatch(includesRevisionCounts: false)
@@ -547,7 +551,7 @@ extension SearchWorker {
             candidateExpression: admitted.expressionRoot.flatMap(PreparedSearchExpression.candidateExpression)
                 ?? SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
             orderedAnchor: predecessorAnchor, reversesOrder: predecessorAnchor != nil,
-            completesFuzzyPrefix: false, work: work
+            completesFuzzyPrefix: false, work: work, sourceValidation: expressionSources
         )
         defer { predecessors.finish() }
         while true {
@@ -671,6 +675,7 @@ private final class SQLiteSearchRows {
     let defersBody: Bool
     let includesSearchBody: Bool
     let work: SearchWorkCounter
+    let sourceValidation: SQLiteExpressionSources?
     let fuzzyPrefixLane: Int?
 
     init(
@@ -679,7 +684,7 @@ private final class SQLiteSearchRows {
         expressionPredicate: (sql: String, bindings: [SQLiteValue])?,
         candidateExpression: String?, orderedAnchor: StoredOrderingAnchor?, reversesOrder: Bool,
         completesFuzzyPrefix: Bool,
-        work: SearchWorkCounter, targetedID: HistoryItemID? = nil
+        work: SearchWorkCounter, sourceValidation: SQLiteExpressionSources?, targetedID: HistoryItemID? = nil
     ) throws {
         self.database = database
         self.limits = limits
@@ -687,6 +692,7 @@ private final class SQLiteSearchRows {
         self.expressionPredicate = expressionPredicate
         self.candidateExpression = candidateExpression
         self.work = work
+        self.sourceValidation = sourceValidation
         self.includesSearchBody = includesSearchBody
         self.fuzzyPrefixLane = completesFuzzyPrefix ? 2 : nil
         if let candidateExpression {
@@ -814,6 +820,16 @@ private final class SQLiteSearchRows {
                     // any skipped fuzzy prefix needs to be decoded at all.
                     if lane == fuzzyPrefixLane, !rows.isEmpty { break }
                     continue
+                }
+                if let sourceValidation, filter.sourceApplication != nil || filter.sourceApplicationIDs != nil {
+                    guard try statement.textByteCount(at: 0) == 36 else {
+                        throw HistoryFailure.persistence(.corruptStoredValue)
+                    }
+                    let rawID = try statement.text(at: 0)
+                    guard let uuid = UUID(uuidString: rawID), uuid.uuidString == rawID else {
+                        throw HistoryFailure.persistence(.corruptStoredValue)
+                    }
+                    try sourceValidation.validateFilter(HistoryItemID(rawValue: uuid), filter: filter)
                 }
                 pendingRow = true
             }

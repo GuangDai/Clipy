@@ -1,5 +1,6 @@
 import Foundation
 import HistoryCore
+import HistoryStorage
 @testable import ClipyApp
 import Testing
 
@@ -149,6 +150,59 @@ struct SearchHistoryStoreTests {
             #expect(restored.mode == .regexp)
             #expect(store.saveFavorite(.init(query: "$type:missing$", mode: .exact)) == .invalidDefinition)
             #expect(store.saveFavorite(.init(query: "source:Safari", mode: .expression)) == .saved)
+        }
+    }
+
+    @Test func anOlderStoredDraftWithANewSyntaxErrorRemainsReadableAndReportsItsReplayDiagnostic() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try withStore { store, defaults in
+            enableAll(store)
+            #expect(store.saveFavorite(.init(query: "placeholder"), name: "Original draft") == .saved)
+            #expect(store.saveFavorite(.init(query: "unaffected"), name: "Other search") == .saved)
+            let raw = try #require(defaults.data(forKey: SearchHistoryStore.defaultsKey))
+            var value = try #require(JSONSerialization.jsonObject(with: raw) as? [String: Any])
+            var favorites = try #require(value["favorites"] as? [[String: Any]])
+            let index = try #require(favorites.firstIndex { $0["name"] as? String == "Original draft" })
+            var definition = try #require(favorites[index]["definition"] as? [String: Any])
+            // A plain fuzzy query could contain these exact bytes before
+            // dollar blocks gained their current condition meaning.
+            let originalQuery = "notes $type:missing$"
+            definition["query"] = originalQuery
+            favorites[index]["definition"] = definition
+            value["favorites"] = favorites
+            let stored = try JSONSerialization.data(withJSONObject: value)
+            defaults.set(stored, forKey: SearchHistoryStore.defaultsKey)
+
+            let reopened = SearchHistoryStore(defaults: defaults)
+            #expect(reopened.failure == nil)
+            #expect(reopened.preferences.isEnabled)
+            #expect(reopened.favorites.count == 2)
+            let record = try #require(reopened.favorites.first { $0.name == "Original draft" })
+            let restored = record.definition
+            #expect(restored.query.utf8.elementsEqual(originalQuery.utf8))
+            #expect(defaults.data(forKey: SearchHistoryStore.defaultsKey) == stored)
+            #expect(reopened.favorites.contains { $0.definition.query == "unaffected" })
+
+            let state = HistoryViewState(history: history)
+            defer { state.deactivate() }
+            restored.apply(to: state)
+            #expect(state.searchText.utf8.elementsEqual(originalQuery.utf8))
+            #expect(state.expressionValidationError?.reason == .invalidType)
+            #expect(state.isSearchStatusVisible)
+            #expect(reopened.saveFavorite(restored) == .invalidDefinition)
+            #expect(reopened.saveFavorite(.init(query: "next valid query")) == .saved)
+            #expect(reopened.favorites.count == 3)
+            #expect(reopened.renameFavorite(record.id, name: "Needs editing") == .saved)
+            #expect(reopened.favorites.first { $0.id == record.id }?.definition.query.utf8.elementsEqual(originalQuery.utf8) == true)
+            reopened.updatePreferences { $0.recordsRecentSearches = false }
+            let edited = SearchHistoryStore(defaults: defaults)
+            #expect(!edited.preferences.recordsRecentSearches)
+            #expect(edited.favorites.first { $0.id == record.id }?.name == "Needs editing")
+            edited.removeFavorite(record.id)
+            let removed = SearchHistoryStore(defaults: defaults)
+            #expect(removed.failure == nil)
+            #expect(!removed.favorites.contains { $0.id == record.id })
+            #expect(removed.favorites.map(\.definition.query) == ["next valid query", "unaffected"])
         }
     }
 

@@ -4,6 +4,37 @@ import Testing
 @testable import ClipyApp
 
 struct HistorySearchQueryCompilerTests {
+    @Test func outsideDollarEscapesKeepRegexpMeaningBesideWrappedConditions() throws {
+        let pattern = #"\$\d+$"#
+        let plain = try HistorySearchQueryCompiler.compile(pattern, mode: .regexp)
+        let mixed = try HistorySearchQueryCompiler.compile(pattern + " $type:text$", mode: .regexp)
+        #expect(plain.literalText == pattern)
+        #expect(plain.expression == nil)
+        #expect(mixed.literalText == pattern)
+        #expect(mixed.expression == (try HistorySearchExpression.parse("type:text")))
+        let matcher = try NSRegularExpression(pattern: mixed.literalText)
+        #expect(matcher.firstMatch(in: "$20", range: NSRange(location: 0, length: 3)) != nil)
+        #expect(matcher.firstMatch(in: "20", range: NSRange(location: 0, length: 2)) == nil)
+        #expect(matcher.firstMatch(in: "$20 suffix", range: NSRange(location: 0, length: 10)) == nil)
+        let anchored = try HistorySearchQueryCompiler.compile("^report$ $type:text$", mode: .regexp)
+        #expect(anchored.literalText == "^report$")
+        #expect(anchored.expression == mixed.expression)
+        let inline = try HistorySearchQueryCompiler.compile("report$ty$", mode: .regexp)
+        #expect(inline.literalText == "report$ty$")
+        #expect(inline.expression == nil)
+        let unicodeSeparator = try HistorySearchQueryCompiler.compile("^report$\u{3000}$type:text$", mode: .regexp)
+        #expect(unicodeSeparator.literalText == "^report$")
+        #expect(unicodeSeparator.expression == mixed.expression)
+        for mode in [SearchMode.exact, .fuzzy] {
+            let literal = try HistorySearchQueryCompiler.compile(#"\$20"#, mode: mode)
+            #expect(literal.literalText == "$20")
+            #expect(literal.expression == nil)
+        }
+        let unfinished = #"$pending \$20"#
+        let editing = try HistorySearchQueryCompiler.compile(unfinished, mode: .regexp)
+        #expect(editing.literalText == unfinished)
+        #expect(editing.expression == nil)
+    }
     @Test(arguments: [
         "source:Safari", "app:Notes", "source-id:com.apple.Safari", "type:text",
         "is:pinned", "before:2026-09-30", "NOT source:Safari OR type:images"

@@ -20,6 +20,10 @@ struct HistorySearchCompletionStateTests {
         let recent = try await base.browse(.init(kind: .recent, limit: 1))
         #expect(recent.rows.count == 1)
         #expect(recent.rows.first?.lastSource == source(69))
+        // The query's position hint can lag behind the latest metadata read
+        // while a copy commits and the replacement observation is settling.
+        let newest = try await capture("same retained item", source: source(70), at: 70, in: base)
+        #expect(position.map { newest.position > $0 } == true)
         let history = CompletionSourceReadHistory(base: base)
         let worker = HistorySearchSourceCompletionWorker(history: history)
         let names: [SourceApplicationSearchResolver.Application] = [
@@ -41,6 +45,11 @@ struct HistorySearchCompletionStateTests {
         #expect(earlier.map(\.bundleID) == [source(0)])
         #expect(repeated.map(\.bundleID) == earlier.map(\.bundleID))
         #expect(await history.requests.count == 3)
+
+        let fresh = try await capture("same retained item", source: "com.example.fresh", at: 71, in: base)
+        let refreshed = try await worker.suggestions(prefix: "fresh", position: fresh.position, applications: names)
+        #expect(refreshed.map(\.bundleID) == ["com.example.fresh"])
+        #expect(await history.requests.count == 6)
     }
 
     @Test func anAdvancedHistoryPositionWithdrawsRemovedSourcesAndCachesTheNewVocabulary() async throws {

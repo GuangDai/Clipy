@@ -11,7 +11,7 @@ struct HistorySearchQueryCompilation: Sendable {
 }
 
 enum HistorySearchQueryCompiler {
-    static func compile(_ text: String) throws(HistorySearchExpressionError) -> HistorySearchQueryCompilation {
+    static func compile(_ text: String, mode: SearchMode = .fuzzy) throws(HistorySearchExpressionError) -> HistorySearchQueryCompilation {
         let limit = HistoryLimits.standard.maximumSearchTermUTF8Bytes
         // Inspect a bounded admission prefix before considering the legacy
         // oversized-text path, which returns the original literal String.
@@ -37,12 +37,22 @@ enum HistorySearchQueryCompiler {
 
         while cursor < bytes.count {
             if bytes[cursor] == 92, cursor + 1 < bytes.count, bytes[cursor + 1] == 36 {
+                // This escape blocks wrapper admission in every mode. A
+                // regexp still needs its backslash to match a literal dollar.
+                if mode == .regexp { literal.append(92) }
                 literal.append(36)
                 cursor += 2
                 continue
             }
             guard bytes[cursor] == 36 else {
                 literal.append(bytes[cursor])
+                cursor += 1
+                continue
+            }
+            // Regexp dollar anchors belong to the pattern. Conditions begin
+            // at the input start or after whitespace in that matching mode.
+            if mode == .regexp, cursor > 0, !hasWhitespaceBefore(cursor, in: bytes) {
+                literal.append(36)
                 cursor += 1
                 continue
             }
@@ -80,7 +90,8 @@ enum HistorySearchQueryCompiler {
                 // The final dollar and every tail byte survive while a user
                 // is still typing the closing delimiter or quoted value.
                 literal.append(36)
-                literal.append(contentsOf: condition)
+                if mode == .regexp { literal.append(contentsOf: bytes[conditionStart...]) }
+                else { literal.append(contentsOf: condition) }
                 break
             }
             let conditionEnd = cursor
@@ -247,5 +258,14 @@ enum HistorySearchQueryCompiler {
             return false
         }
         return CharacterSet.decimalDigits.contains(scalar)
+    }
+
+    private static func hasWhitespaceBefore(_ index: Int, in bytes: [UInt8]) -> Bool {
+        var start = index - 1
+        // Decode only the preceding complete UTF-8 scalar, including Unicode
+        // separators; the admitted query is already valid Swift text.
+        while start > 0, bytes[start] & 0xC0 == 0x80 { start -= 1 }
+        guard let scalar = String(decoding: bytes[start..<index], as: UTF8.self).unicodeScalars.first else { return false }
+        return CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 }

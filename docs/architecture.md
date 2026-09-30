@@ -61,6 +61,7 @@ AppKit 窗口、系统剪贴板写入与 SwiftUI 状态属于 MainActor。跨模
 | `details` | 标题、表示描述、修订摘要、次数与置顶位置，不读内容载荷 |
 | `representationMetadata` / `representation` | 按精确项目版本读取描述 / 指定表示形式 |
 | `copySources` | 按需读取复制来源，每页最多 32 个；次数变化使旧页失效 |
+| `sourceApplications` | 全部保留复制来源中的不同应用 ID，每页最多 32 个；不读标题、正文或载荷，提交或更换 History 实例使游标失效 |
 | `pastePayload` | 读取当前 Effective 内容及 lineage 提示 |
 | `thumbnail` | 按精确版本与尺寸返回编码 PNG，或无支持图片时返回 nil |
 | `usage` / `retentionConfiguration` | 同一快照的逻辑内容总量 / 已持久化的配置 |

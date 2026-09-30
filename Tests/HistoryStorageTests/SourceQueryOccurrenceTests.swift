@@ -4,6 +4,38 @@ import Testing
 @testable import HistoryStorage
 
 struct SourceQueryOccurrenceTests {
+    @Test(arguments: ["X'6170702E626164'", "CAST(X'6170702EFF' AS TEXT)", "'app.' || CAST(zeroblob(1021) AS TEXT)"])
+    func ordinarySourceFiltersRejectTheCorruptApplicationThatSQLMatched(storedSQL: String) async throws {
+        let history = try await WSSupport.makeHistory()
+        _ = try await copy("needle", source: "app.valid", at: 1, in: history)
+        try await history.authority.withTestDatabase { authority in
+            try authority.database.execute("UPDATE copy_sources SET application=" + storedSQL)
+        }
+        let kinds: [HistoryBrowseKind] = [.recent, .search(text: "needle", mode: .exact),
+            .search(text: "needle", mode: .fuzzy), .search(text: "needle", mode: .regexp),
+            .search(text: "type:all", mode: .expression)]
+        for kind in kinds {
+            await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+                try await history.browse(.init(kind: kind, limit: 1, filter: .init(sourceApplication: "app.")))
+            }
+        }
+    }
+
+    @Test func strictSourceFilterConfirmationNeverReadsUnusedBodies() async throws {
+        let history = try await WSSupport.makeHistory()
+        let item = try await copy("note", source: "app.valid", at: 1, in: history)
+        try await history.authority.withTestDatabase { authority in
+            try authority.database.execute("UPDATE history_items SET searchBodyUTF8=X'FF'")
+        }
+        for kind in [HistoryBrowseKind.recent, .search(text: "", mode: .fuzzy),
+                     .search(text: "type:all", mode: .expression)] {
+            for filter in [HistoryFilter(sourceApplication: "app."), .init(sourceApplicationIDs: ["app.valid"])] {
+                let page = try await history.browse(.init(kind: kind, limit: 1, filter: filter))
+                #expect(page.rows.map(\.item) == [item])
+            }
+        }
+    }
+
     @Test func ordinaryFiltersAndExpressionLeavesMatchAnyPriorSourceWithCorrectNegation() async throws {
         let history = try await WSSupport.makeHistory()
         let shared = try await copy("needle shared", source: "com.Éditeur", at: 1, in: history)

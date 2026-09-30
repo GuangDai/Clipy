@@ -23,7 +23,12 @@ final class VisualLayoutJourneyUITests: XCTestCase {
             "Reading notes\nA short paragraph with a second line for the clipboard list.", forType: .string
         ))
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system"]
+        app.launchArguments += [
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
+            "-clipy.appearance.rowDensity", "compact",
+            "-clipy.appearance.rowFontSize", "medium",
+            "-clipy.appearance.snippetLineCount", "automatic",
+        ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.sqlite").path
@@ -70,6 +75,17 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setString("https://example.org/reading-notes", forType: .URL))
         XCTAssertTrue(waitUntil { rows.count == 2 }, app.debugDescription)
+        // Two short compact records establish the real row pitch. Even
+        // this small history retains five such slots below its toolbar.
+        let shortRowFrames = rows.allElementsBoundByIndex.map(\.frame).sorted { $0.minY < $1.minY }
+        let firstShortRow = try XCTUnwrap(shortRowFrames.first)
+        let secondShortRow = try XCTUnwrap(shortRowFrames.dropFirst().first)
+        let rowPitch = secondShortRow.minY - firstShortRow.minY
+        let toolbarHeight = firstShortRow.minY - panel.frame.minY
+        XCTAssertGreaterThan(rowPitch, 0, app.debugDescription)
+        XCTAssertGreaterThan(toolbarHeight, 0, app.debugDescription)
+        XCTAssertGreaterThanOrEqual(panel.frame.height + 2, toolbarHeight + 5 * rowPitch,
+                                    "A short history must retain its toolbar and five compact record slots.\n\(app.debugDescription)")
         let previousIDs = Set(rows.allElementsBoundByIndex.map(\.identifier))
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setData(try samplePNG(), forType: .png))
@@ -94,6 +110,8 @@ final class VisualLayoutJourneyUITests: XCTestCase {
         HistoryJourneyControls.select(imageRow, in: app)
         let image = preview.descendants(matching: .any)["clipy.preview.image"]
         XCTAssertTrue(waitUntil { preview.exists && image.exists && image.isHittable }, app.debugDescription)
+        XCTAssertEqual(preview.frame.height, panel.frame.height, accuracy: 2,
+                       "The image preview must keep the History panel's actual height.\n\(app.debugDescription)")
         // The floating pane sits beside the panel: capture the whole app so
         // the attachment shows both windows.
         attach(app, named: "History — Floating image preview")

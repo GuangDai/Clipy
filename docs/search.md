@@ -29,7 +29,9 @@ $10.50$
 \$literalDollar
 ```
 
-前两例的文字部分分别遵循当前所选搜索模式；第三例只有条件，第四例没有条件包装，因此 `source:literal` 是普通文字。成对的整数 / 小数金额仍按普通文字搜索，反斜杠美元符 `\$` 表示字面 `$`；条件引号内的 `$` 不结束条件块。未闭合块保留为当前编辑文字，闭合但语法错误的块给出明确解析失败，不静默退回更宽查询。外层包装和组合在建立大中间值前检查 4,096 UTF-8 字节上限。
+前两例的文字部分分别遵循当前所选搜索模式；第三例只有条件，第四例没有条件包装，因此 `source:literal` 是普通文字。成对的整数 / 小数金额仍按普通文字搜索，反斜杠美元符 `\$` 表示字面 `$`；条件引号内的 `$` 不结束条件块。未配对的金额与条件混用时，应写成 `\$10 and \$20 $type:text$`，避免美元符之间的配对歧义。未闭合块保留为当前编辑文字，闭合但语法错误的块给出明确解析失败，不静默退回更宽查询。外层包装和组合在建立大中间值前检查 4,096 UTF-8 字节上限。
+
+regexp 模式只在输入开头或空白后的 `$` 开启条件块，模式内部的 `$` 保留正则含义，因此 `^report$ $type:text$` 同时保留末尾锚点和类型条件。该模式的外部 `\$` 保留反斜杠供正则匹配字面美元符；exact / fuzzy 则将它解为普通 `$`。regexp 中的条件块应与模式用空白分开，exact / fuzzy 仍支持行内条件块。保存的查询原文不改写；旧收藏在当前语法下无效时仍可读取、改名或删除，回放显示对应查询错误，不使整份收藏不可读。
 
 History 的请求和观察分别携带文字 kind 与 `conditionExpression`；两者一起参与分页和观察身份。只有来源、类型、时间或置顶等元数据条件时不读取正文；条件含文字匹配时仍按需读搜索投影。混合查询保持外部文字模式的匹配和排序。直接 History `.expression` 接口仍接受未加 `$` 的原始表达式，包装语法由应用输入层拥有，不能把外部 API 的所有普通 term 重新解释成条件。
 
@@ -54,11 +56,11 @@ source-id:com.apple.TextEdit NOT draft
 
 [`HistorySearchCompletionEngine.swift`](../ClipyApp/Sources/UI/HistorySearchCompletionEngine.swift) 按搜索框实际 UTF-16 selection / caret 识别当前条件字段和值；普通外部文本不自动出现字段候选。候选包括字段、AND / OR / NOT、类型值、置顶值、日期和真实来源应用。匹配考虑忽略大小写前缀、有序子序列及短词的一次编辑 / 相邻交换；这是输入辅助，不调用正文搜索，也不是另一个完整表达式 parser。
 
-空查询、刚获得焦点或空条件词不自动抢列表方向键；显式请求补全（Ctrl+Space）在块外插入成对 `$`，在块内列出当前可用字段。type 候选为 text / images / links / all，is 候选为 pinned，日期提供当日 UTC 模板。纯 quoted phrase 不自动给字段建议。接受候选替换 caret 所在整个 term；未闭合块补一个 `$`，已有闭合符不重复。选区按完整字簇扩展，跨 term 的选区或落在半个字簇的 caret 拒绝补全，不切碎 Unicode 内容。
+空查询、刚获得焦点或空条件词不自动抢列表方向键。显式入口为搜索框的 AppKit 标准完成命令 `complete:`（通常是 ⌥Esc），或搜索模式菜单的“插入条件 / 显示候选”；在块外插入成对 `$`，在块内列出当前可用字段。regexp 模式末尾的显式插入会按需增加分隔空格，补全与查询编译使用同一模式边界。Ctrl+Space 仅在应用实际收到该组合时兼容，系统可能先将它用于切换输入法。type 候选为 text / images / links / all，is 候选为 pinned，日期提供当日 UTC 模板。纯 quoted phrase 不自动给字段建议。接受候选替换 caret 所在整个 term；只有未闭合块的最后一个 term 补 `$`，在中间补全时保留后续条件，已有闭合符不重复。选区按完整字簇扩展，跨 term 的选区或落在半个字簇的 caret 拒绝补全，不切碎 Unicode 内容。
 
 [`HistorySearchCompletionState.swift`](../ClipyApp/Sources/UI/HistorySearchCompletionState.swift) 每个输入框最多显示八条候选，控制候选选择和 replacement range。输入法正在组合时不生成候选、不替换 marked text；输入法命令优先，补全候选其次，列表导航与复制最后。插入经实际 field editor 应用并由正常文字变化回调更新查询，不由候选 owner 越过输入框直接改 History 选择。关闭候选、焦点离开、输入或查询代次变化都会取消旧请求，旧来源结果不得重新打开已关闭候选。
 
-候选存在时方向键选候选、Tab / Return 接受、Esc 先收起候选；没有候选时保留列表及文本输入的原行为。引擎只检查有界输入：最多 8,192 UTF-8 字节、caret 前 4,096 个 UTF-16 unit 和后 512 unit；当前 term 最多 256 unit，匹配 prefix 最多 128 unit，目标最多 1,024 unit。超出输入辅助范围时不给候选，不截断或改变真实查询；History 查询本身仍有独立 4,096 UTF-8 字节限制。
+候选存在时方向键选候选、Tab / Return 接受、Esc 先收起候选；来源候选仍在加载或显示读取失败时，这些导航 / 确认命令也由候选框处理，不能误触列表复制。候选框关闭后恢复列表及文本输入的原行为。引擎只检查有界输入：最多 8,192 UTF-8 字节、caret 前 4,096 个 UTF-16 unit 和后 512 unit；当前 term 最多 256 unit，匹配 prefix 最多 128 unit，目标最多 1,024 unit。超出输入辅助范围时不给候选，不截断或改变真实查询；History 查询本身仍有独立 4,096 UTF-8 字节限制。
 
 来源候选读取 [`ClipboardHistory.sourceApplications`](../Sources/HistoryCore/ClipboardHistory.swift) 的 `HistorySourceApplicationPage`，默认 / 最大每页 32 个不同 application ID，加一条有限 lookahead。ID 来自所有 retained `copy_sources.application`，排除 nil / 空观察，以字面顺序做 keyset seek 跳过重复；这个读取不打开 title、searchBody 或表示载荷。提交位置变化或另一 History 实例的游标返回 `snapshotExpired`，不会混合不同快照词汇。接口和值定义见 [`HistorySourceApplications.swift`](../Sources/HistoryCore/HistorySourceApplications.swift)，实际读取见 [`HistoryAuthority+SourceApplications.swift`](../Sources/HistoryStorage/HistoryAuthority+SourceApplications.swift)。
 

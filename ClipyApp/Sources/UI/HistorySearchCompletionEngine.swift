@@ -1,4 +1,5 @@
 import Foundation
+import HistoryCore
 
 /// The field editor reports UTF-16 ranges. Keep its raw spelling so a composed
 /// and a decomposed edit cannot reuse suggestions for the previous input.
@@ -102,7 +103,7 @@ enum HistorySearchCompletionEngine {
     private static let maximumMatchTargetUTF16 = 1_024
 
     static func context(
-        for input: HistorySearchCompletionInput, explicit: Bool = false
+        for input: HistorySearchCompletionInput, explicit: Bool = false, mode: SearchMode = .fuzzy
     ) -> HistorySearchCompletionContext? {
         // Count only a bounded prefix before bridging to NSString. A pasted
         // megabyte value must not become a megabyte allocation or scan here.
@@ -129,7 +130,11 @@ enum HistorySearchCompletionEngine {
             }
             if blockStart != nil, unit == 34 { quoted.toggle() }
             if unit == 36, !quoted {
-                if blockStart == nil { blockStart = cursor + 1 }
+                if blockStart == nil {
+                    if mode != .regexp || cursor == 0 || isWhitespace(text.character(at: cursor - 1)) {
+                        blockStart = cursor + 1
+                    }
+                }
                 else if !isAmountDigitAfter(cursor, in: text) { blockStart = nil }
             }
             cursor += 1
@@ -137,8 +142,11 @@ enum HistorySearchCompletionEngine {
 
         guard let blockStart else {
             guard explicit else { return nil }
+            let needsSeparator = mode == .regexp && selection.length == 0
+                && selection.location == text.length && selection.location > 0
+                && !isWhitespace(text.character(at: selection.location - 1))
             return .init(kind: .term, prefix: "", replacementRange: selection,
-                         field: nil, explicit: true, openingText: "$", closingText: "$")
+                         field: nil, explicit: true, openingText: needsSeparator ? " $" : "$", closingText: "$")
         }
 
         let endLimit = min(text.length, selection.location + maximumLookAheadUTF16)
@@ -198,15 +206,18 @@ enum HistorySearchCompletionEngine {
                 let prefixRange = NSRange(location: start, length: selection.location - start)
                 let token = text.substring(with: range) as NSString
                 let rawPrefix = text.substring(with: prefixRange)
+                // A missing delimiter can close this term only when it is
+                // the block's final term. Closing in the middle would turn
+                // the remaining conditions into ordinary outside text.
                 return termContext(token: token, rawPrefix: rawPrefix, range: range,
-                                   explicit: explicit, closingText: closing == nil ? "$" : "")
+                                   explicit: explicit, closingText: closing == nil && cursor == blockEnd ? "$" : "")
             }
             if start > selection.location { break }
         }
 
         guard explicit else { return nil }
         return .init(kind: .term, prefix: "", replacementRange: selection,
-                     field: nil, explicit: true, openingText: "", closingText: closing == nil ? "$" : "")
+                     field: nil, explicit: true, openingText: "", closingText: closing == nil && NSMaxRange(selection) == blockEnd ? "$" : "")
     }
 
     static func candidates(

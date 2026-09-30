@@ -175,7 +175,7 @@ final class HistoryViewState {
         let limit = HistoryLimits.standard.maximumSearchTermUTF8Bytes
         guard searchText.utf8.prefix(limit + 1).count <= limit else { return }
         do {
-            let compiled = try HistorySearchQueryCompiler.compile(searchText)
+            let compiled = try HistorySearchQueryCompiler.compile(searchText, mode: searchMode)
             compiledSearchQuery = compiled
             parsedSearchExpression = compiled.expression
         } catch {
@@ -184,6 +184,13 @@ final class HistoryViewState {
     }
 
     var hasWrappedSearchConditions: Bool { parsedSearchExpression != nil }
+
+    /// The status row and the native content-height calculation use the
+    /// same visibility, including rejected closed conditions with no AST.
+    var isSearchStatusVisible: Bool {
+        hasActiveFilters || hasWrappedSearchConditions || sortOrder != .automatic
+            || HistorySearchCopy.issue(for: self) != nil
+    }
 
     var sourceCompletionPosition: ChangePosition? {
         if let observedPosition, let latestReceiptPosition { return max(observedPosition, latestReceiptPosition) }
@@ -543,8 +550,8 @@ final class HistoryViewState {
     }
 
     /// The admitted query shape derived atomically from raw draft + mode.
-    /// Exact/regexp preserve the draft byte-for-byte. Fuzzy admission is a
-    /// bounded view of that draft, leaving the raw value intact for a later
+    /// Exact/regexp use the compiled outside text. Fuzzy admission is a
+    /// bounded view of that text, leaving the raw draft intact for a later
     /// mode switch (03b §8; 06 §2).
     private var admittedKind: HistoryBrowseKind {
         guard !searchText.isEmpty else { return .recent }
@@ -1135,9 +1142,10 @@ final class HistoryViewState {
     private func prepareSearchConditions() async -> Bool {
         if compiledSearchQuery == nil, !searchText.isEmpty {
             let text = searchText
+            let mode = searchMode
             let compiling = Task.detached {
                 try Task.checkCancellation()
-                let result = try HistorySearchQueryCompiler.compile(text)
+                let result = try HistorySearchQueryCompiler.compile(text, mode: mode)
                 try Task.checkCancellation()
                 return result
             }

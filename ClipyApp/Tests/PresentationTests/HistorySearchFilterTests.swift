@@ -8,15 +8,20 @@ import Testing
 /// calendar assertions cover local days whose lengths are not 24 hours.
 @MainActor
 struct HistorySearchFilterTests {
-    @Test(arguments: [(SearchMode.fuzzy, "meting"), (.exact, "meeting"), (.regexp, "^meeting")])
+    @Test(arguments: [
+        (SearchMode.fuzzy, "meting", "meeting final"),
+        (.exact, "meeting", "meeting final"),
+        (.regexp, "^meeting final$", "meeting final"),
+        (.regexp, #"\$\d+$"#, "meeting $20")
+    ])
     func outsideTextKeepsItsModeWhileConditionsMatchAnOlderCopySource(
-        mode: SearchMode, literal: String
+        mode: SearchMode, literal: String, content: String
     ) async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let date = Date(timeIntervalSinceReferenceDate: 800_000_000)
-        let target = try await capture("meeting final", source: "org.example.old", at: date, in: history)
+        let target = try await capture(content, source: "org.example.old", at: date, in: history)
         _ = try await history.perform(.capture(ClipboardCapture(
-            representations: [.init(typeIdentifier: "public.utf8-plain-text", bytes: Data("meeting final".utf8))],
+            representations: [.init(typeIdentifier: "public.utf8-plain-text", bytes: Data(content.utf8))],
             origin: .init(sourceApplication: "org.example.new", lineageHint: nil), observedAt: date.addingTimeInterval(1)
         )))
         _ = try await capture("meeting elsewhere", source: "org.example.other", at: date, in: history)
