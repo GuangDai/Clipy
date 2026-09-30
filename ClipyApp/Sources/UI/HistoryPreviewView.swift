@@ -342,7 +342,7 @@ struct HistoryPreviewView: View {
         case .failed: "failed"
         case .unsupported: "unsupported"
         }
-        recordPreviewLifecycle("view-\(event) open=\(previewState.isOpen) local_confirmation=\(fileConfirmationPresented) confirmation=\(previewState.isFileConfirmationPresented) phase=\(phase)")
+        recordPreviewLifecycle("view-\(event) open=\(previewState.isOpen) local_confirmation=\(fileConfirmationPresented) confirmation=\(previewState.isFileConfirmationPresented) pointer_mode=\(previewState.isPointerInteractionActive) phase=\(phase)")
 #endif
     }
 

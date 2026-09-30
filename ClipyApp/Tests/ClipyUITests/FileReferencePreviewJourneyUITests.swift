@@ -297,6 +297,9 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertEqual(text(of: address), originalAddress)
         XCTAssertFalse(renderedText.exists, app.debugDescription)
 
+        // Enter through real pointer movement before the modal changes its
+        // owner's geometry; leave the pointer on each confirmation action.
+        request.hover()
         request.click()
         // AppKit also exposes Cancel/Load File in the Touch Bar. Scope both
         // actions to the visible confirmation sheet rather than selecting
@@ -317,6 +320,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         // The second confirmation reads the file's then-current bytes, not a
         // cached copy captured while it was merely a clipboard reference.
         try Data(loadedContents.utf8).write(to: file)
+        request.hover()
         request.click()
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
         confirm.click()
