@@ -35,6 +35,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     private var mouseDownScreenX: CGFloat?
     private var widthResize: (pointerX: CGFloat, frame: NSRect, placement: PreviewPlacement)?
     private var nativeSheetCount = 0
+    private var frameFollowTask: Task<Void, Never>?
 
     init(
         rootView: FloatingPreviewRootView,
@@ -244,12 +245,33 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
             guard let self else { return }
             defer {
                 self.nativeSheetCount -= 1
-                if self.isPresented { self.previewState.pointerExited(.preview) }
+                if self.isPresented {
+                    self.followParentAfterNativeResize()
+                    self.previewState.pointerExited(.preview)
+                }
             }
             // Return from the actual completion before applying geometry;
             // AppKit can finish its owner-frame restoration on that stack.
             guard self.isPresented, self.previewState.isOpen,
                   let parent = self.parent, parent.isVisible else { return }
+            self.present(beside: parent)
+        }
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        followParentAfterNativeResize()
+    }
+
+    private func followParentAfterNativeResize() {
+        guard isPresented, nativeSheetCount == 0, attachedSheet == nil, widthResize == nil,
+              let parent, parent.isVisible,
+              frame.width <= 0 || frame.height != parent.frame.height else { return }
+        frameFollowTask?.cancel()
+        frameFollowTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled, let self else { return }
+            self.frameFollowTask = nil
+            guard self.isPresented, self.nativeSheetCount == 0, self.attachedSheet == nil,
+                  self.widthResize == nil, let parent = self.parent, parent.isVisible else { return }
             self.present(beside: parent)
         }
     }
@@ -327,6 +349,8 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     /// Orders the pane out and detaches it from its parent; the instance is
     /// reused on the next `present(beside:)`.
     func dismiss() {
+        frameFollowTask?.cancel()
+        frameFollowTask = nil
         motionPresentation.cancel()
         // Explicit retirement wins over modal ownership. Mark the intent
         // closed before ending the sheet so didEndSheet cannot resurrect it.
