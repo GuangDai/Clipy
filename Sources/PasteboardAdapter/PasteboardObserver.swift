@@ -77,7 +77,7 @@ public final class PasteboardObserver {
     /// delivered. A PARTIAL freeze — a
     /// declared representation's bytes unavailable — IS delivered, marked
     /// by `CaptureOutcome.declaredUnavailable`, for the handler owner to
-    /// judge). Calling `start` again while running replaces the handler
+    /// judge. Calling `start` again while running replaces the handler
     /// without re-capturing.
     public func start(
         captureCurrent: Bool = true,
