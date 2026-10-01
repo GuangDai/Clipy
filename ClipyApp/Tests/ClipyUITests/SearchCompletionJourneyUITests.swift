@@ -52,6 +52,23 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         }, "The denied-access notice must occupy space above the editable search field.\n" + app.debugDescription)
         try require(!popup.exists, "An empty focused search must leave list navigation available.")
 
+        // Start with the tall history window: the asynchronous search then
+        // replaces it with an empty result and fits the window to that result.
+        search.click()
+        app.typeText("$type:")
+        try require(app.staticTexts["No Results"].waitForExistence(timeout: 10), app.debugDescription)
+        try require(waitUntil {
+            popup.exists && popup.frame.height > 40
+                && panel.frame.insetBy(dx: -1, dy: -1).contains(popup.frame)
+        }, "The idle completion popup must remain visible inside the resized panel.\n" + app.debugDescription)
+        let initialTextCandidate = app.buttons["clipy.search.completion.type:text"]
+        try require(initialTextCandidate.isHittable, app.debugDescription)
+        initialTextCandidate.click()
+        try require(waitUntil {
+            search.value as? String == "$type:text$" && !popup.exists && rows.count > 0
+        }, app.debugDescription)
+        try replaceSearch(with: "", search: search, in: app)
+
         // A bare field-like spelling remains ordinary Exact text.
         search.click()
         app.typeKey("1", modifierFlags: .command)
