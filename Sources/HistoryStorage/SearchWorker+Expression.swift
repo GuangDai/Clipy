@@ -43,17 +43,26 @@ internal indirect enum PreparedSearchExpression {
     static func candidateExpression(
         _ node: HistorySearchExpression.Node, in database: SQLiteDatabase
     ) throws -> SearchCandidateSelection? {
-        try candidateExpression(node, in: database, checkingSparsity: true)
+        var probeResults: [Data: Bool] = [:]
+        return try candidateExpression(node, in: database, probeResults: &probeResults)
+    }
+
+    static func candidateExpression(
+        _ node: HistorySearchExpression.Node, in database: SQLiteDatabase, probeResults: inout [Data: Bool]
+    ) throws -> SearchCandidateSelection? {
+        try candidateExpression(node, in: database, checkingSparsity: true, probeResults: &probeResults)
     }
 
     private static func candidateExpression(
-        _ node: HistorySearchExpression.Node, in database: SQLiteDatabase, checkingSparsity: Bool
+        _ node: HistorySearchExpression.Node, in database: SQLiteDatabase, checkingSparsity: Bool,
+        probeResults: inout [Data: Bool]
     ) throws -> SearchCandidateSelection? {
         switch node {
         case .text(let term):
             guard let expression = SQLiteSearchIndex.matchExpression(term: term, mode: .exact) else { return nil }
             let isSparse = checkingSparsity
-                ? try SQLiteSearchIndex.prefersSparseCandidates(expression: expression, in: database) : false
+                ? try SQLiteSearchIndex.prefersSparseCandidates(expression: expression, in: database,
+                                                               probeResults: &probeResults) : false
             return (expression, isSparse)
         case .and(let lhs, let rhs):
             // Every hit must satisfy both operands. A sparse necessary
@@ -62,9 +71,9 @@ internal indirect enum PreparedSearchExpression {
             // the matcher: its original left operand still owns presentation.
             // Keep one condition rather than expanding a long AND into a
             // deeply nested FTS intersection or reprobing each dense prefix.
-            let left = try candidateExpression(lhs, in: database)
+            let left = try candidateExpression(lhs, in: database, probeResults: &probeResults)
             if left?.isSparse == true { return left }
-            let right = try candidateExpression(rhs, in: database)
+            let right = try candidateExpression(rhs, in: database, probeResults: &probeResults)
             return right?.isSparse == true ? right : (left ?? right)
         case .or:
             var branches: [HistorySearchExpression.Node] = []
@@ -74,7 +83,8 @@ internal indirect enum PreparedSearchExpression {
                 // The union, rather than each leaf or left-associated OR
                 // prefix, needs a posting proof. AND branches still select
                 // their own necessary sparse operand before joining it.
-                guard let candidate = try candidateExpression(branch, in: database, checkingSparsity: false) else {
+                guard let candidate = try candidateExpression(branch, in: database, checkingSparsity: false,
+                                                              probeResults: &probeResults) else {
                     return nil
                 }
                 expressions.append(candidate.expression)
@@ -85,7 +95,8 @@ internal indirect enum PreparedSearchExpression {
             // Sparse branches do not prove their union is sparse. Count the
             // actual union under the same 4,097-output probe as ordinary FTS.
             let isSparse = checkingSparsity
-                ? try SQLiteSearchIndex.prefersSparseCandidates(expression: expression, in: database) : false
+                ? try SQLiteSearchIndex.prefersSparseCandidates(expression: expression, in: database,
+                                                               probeResults: &probeResults) : false
             return (expression, isSparse)
         default: return nil
         }

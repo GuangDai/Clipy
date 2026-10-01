@@ -4,6 +4,53 @@ import Testing
 @testable import HistoryStorage
 
 struct LocalAutomationEnrollmentTests {
+#if DEBUG
+    @Test func cancelledWaiterCannotFinishAnotherWaitersEnrollmentSignal() async throws {
+        let fixture = try await fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let ingress = fixture.ingress
+        let directory = fixture.directory
+        let boundary = EnrollmentCompletionBoundary()
+        let enabling = LocalAutomationEnrollmentDebugInstrumentation.$beforeVerifiedPublication.withValue({
+            await boundary.park()
+        }) {
+            Task {
+                do {
+                    let state = try await ingress.enable(clientDirectory: directory)
+                    await boundary.finished()
+                    return state
+                } catch {
+                    await boundary.finished()
+                    throw error
+                }
+            }
+        }
+        var waiters: [Task<LocalAutomationEnrollmentState, any Error>] = []
+        do {
+            try #require(await boundary.waitUntilParked())
+            let joining = LocalAutomationEnrollmentDebugInstrumentation.$didJoinPendingChange.withValue({
+                await boundary.joined()
+            }) {
+                (Task { try await ingress.stateWhenAvailable(clientDirectory: directory) },
+                 Task { try await ingress.stateWhenAvailable(clientDirectory: directory) })
+            }
+            waiters = [joining.0, joining.1]
+            try #require(await boundary.waitUntilJoined())
+            joining.0.cancel()
+            await boundary.release()
+            let enabled = try await enabling.value
+            await #expect(throws: CancellationError.self) { try await joining.0.value }
+            #expect(try await joining.1.value == enabled)
+            #expect(try await ingress.stateWhenAvailable(clientDirectory: directory) == enabled)
+        } catch {
+            await boundary.release()
+            _ = await enabling.result
+            for waiter in waiters { _ = await waiter.result }
+            throw error
+        }
+    }
+#endif
+
     @Test func disabledStatusDoesNotRequireServerCustodyAccess() async throws {
         let fixture = try await fixture(credentials: CredentialStore(
             operations: EnrollmentCredentialOperations(refusesEnumeration: true)
@@ -195,6 +242,55 @@ struct LocalAutomationEnrollmentTests {
         )
     }
 }
+
+#if DEBUG
+private actor EnrollmentCompletionBoundary {
+    private var parked = false
+    private var isFinished = false
+    private var released = false
+    private var joinCount = 0
+    private var didPark: CheckedContinuation<Void, Never>?
+    private var didJoin: CheckedContinuation<Void, Never>?
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func park() async {
+        guard !released else { return }
+        parked = true
+        didPark?.resume()
+        didPark = nil
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func joined() {
+        joinCount += 1
+        if joinCount >= 2 { didJoin?.resume(); didJoin = nil }
+    }
+
+    func finished() {
+        isFinished = true
+        didPark?.resume()
+        didPark = nil
+        didJoin?.resume()
+        didJoin = nil
+    }
+
+    func waitUntilParked() async -> Bool {
+        if !parked && !isFinished { await withCheckedContinuation { didPark = $0 } }
+        return parked
+    }
+
+    func waitUntilJoined() async -> Bool {
+        if joinCount < 2 && !isFinished { await withCheckedContinuation { didJoin = $0 } }
+        return joinCount >= 2
+    }
+
+    func release() {
+        released = true
+        continuation?.resume()
+        continuation = nil
+    }
+}
+#endif
 
 /// Fault injection only: successful custody uses the real private files.
 /// Every durable connection, grant, denial and revoke uses HistoryAuthority.

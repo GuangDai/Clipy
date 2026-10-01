@@ -21,7 +21,8 @@ struct WorkloadFixture: Codable, Sendable {
     let bullet: String
     /// Human-readable size labels, one per measurement point.
     let sizes: [String]
-    /// Median milliseconds per size point (1 warmup + 5 timed iterations).
+    /// Median milliseconds per size point; the workload note identifies its
+    /// sample count. Most workloads use 1 warmup + 5 timed iterations.
     let mediansMs: [Double]
     /// A one-shot wall-clock construct when the workload compares a total
     /// concurrent duration against a sampled median. It is deliberately not
@@ -29,15 +30,26 @@ struct WorkloadFixture: Codable, Sendable {
     var wallTimeMs: Double? = nil
     /// large/small ratio (nil when N/A).
     let ratio: Double?
-    /// Complexity bound (nil = record-only, no check).
+    /// Observed timing-ratio bound (nil = record-only, no check).
     let bound: Double?
-    /// Whether the complexity claim holds at this bound.
+    /// Whether this workload's result validation and timing check passed.
+    /// This does not establish asymptotic complexity or an absolute budget.
     let pass: Bool
     /// Interpretation and limits of the recorded measurement.
     let note: String
     /// Disposable or persistent storage used by the experiment.
     /// `var` lets the memberwise initializer override the default medium.
     var medium: String = ".temporary"
+    /// Search latency and row work from the same timed production requests,
+    /// grouped by retained-row scale. Warmups are validated but omitted.
+    var searchMeasurements: [WorkloadSearchMeasurements]? = nil
+}
+
+struct WorkloadSearchMeasurements: Codable, Sendable {
+    let retainedRows: Int
+    let warmupCount: Int
+    let rawSamplesMs: [Double]
+    let searchWork: [SQLiteScaleSearchWork]
 }
 
 /// The complete fixture document written as JSON.

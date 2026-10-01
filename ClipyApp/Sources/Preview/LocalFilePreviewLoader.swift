@@ -18,6 +18,18 @@ enum LocalFilePreviewDebugInstrumentation {
 actor LocalFilePreviewLoader {
     static let maximumBytes = 64 * 1_048_576
     private static let chunkBytes = 64 * 1_024
+    private static let maximumQueuedReads = 32
+
+    private struct ReadWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, any Error>
+    }
+    private var isReading = false
+    private var readWaiters: [ReadWaiter] = []
+
+    #if DEBUG
+    var debugQueuedReadCount: Int { readWaiters.count }
+    #endif
 
     /// This checks the copied address and supported suffix only, with no
     /// destination lookup or I/O. The confirmed load uses the same rules.
@@ -31,6 +43,13 @@ actor LocalFilePreviewLoader {
         let url = try Self.localFileURL(address)
         let path = url.path(percentEncoded: false)
         let type = try Self.typeIdentifier(forExtension: url.pathExtension)
+
+        // Chunk reads deliberately yield for cancellation. Actor reentrancy
+        // must not turn that into many simultaneously accumulated 64 MiB
+        // files. Waiting calls retain only their already bounded address.
+        try await acquireReadSlot()
+        defer { releaseReadSlot() }
+        try Task.checkCancellation()
 
         // lstat reads metadata, not file contents. Dataless placeholders and
         // symlinks are not regular local-file input for this explicit action;
@@ -116,6 +135,45 @@ actor LocalFilePreviewLoader {
             && (bytes.starts(with: [0xFF, 0xFE]) || bytes.starts(with: [0xFE, 0xFF]))
             ? "public.utf16-external-plain-text" : type
         return HistoryRepresentation(typeIdentifier: finalType, bytes: bytes)
+    }
+
+    private func acquireReadSlot() async throws {
+        try Task.checkCancellation()
+        guard isReading else {
+            isReading = true
+            return
+        }
+        guard readWaiters.count < Self.maximumQueuedReads else {
+            throw FilePreviewFailure.unavailable
+        }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                readWaiters.append(ReadWaiter(id: id, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelReadWaiter(id) }
+        }
+    }
+
+    private func cancelReadWaiter(_ id: UUID) {
+        guard let index = readWaiters.firstIndex(where: { $0.id == id }) else { return }
+        readWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
+    }
+
+    private func releaseReadSlot() {
+        guard !readWaiters.isEmpty else {
+            isReading = false
+            return
+        }
+        // Handoff keeps the slot occupied. A cancellation racing this resume
+        // is checked by load before metadata lookup or opening the next file;
+        // its defer then passes ownership to the next remaining caller.
+        readWaiters.removeFirst().continuation.resume()
     }
 
     private nonisolated static func localFileURL(_ address: String) throws -> URL {

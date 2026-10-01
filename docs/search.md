@@ -74,6 +74,8 @@ source-id:com.apple.TextEdit NOT draft
 
 候选稀疏时从 postings 读取候选；密集时直接按目标顺序读取并执行实际匹配，不再为每行重复查询 FTS 成员关系。选择稀疏路径只读有限 postings 输出，超过 4,096 个候选便视为密集；不通过完整词汇频次扫描决定路径。FTS 仅减少需要解码和匹配的行，最终匹配仍遵循 Foundation / Fuse 语义。metadata-only 表达式不读取无关搜索正文。
 
+AND 两侧都检查必要文本条件，任一稀疏条件可以驱动候选读取；原有条件顺序仍决定匹配与高亮。独立条件密集时，也会检查外层搜索文本。重复 postings 探测只在本请求的同一快照中复用，键保留精确 UTF-8 字节，不跨请求保存结果。
+
 ## 复杂度与资源限制
 
 [`ExactLiteralMatcher.swift`](../Sources/HistoryStorage/ExactLiteralMatcher.swift) 对适合的 ASCII 前缀预编译查询，按字扫描候选首字节，再确认候选。重复前缀导致失败确认过多时转入 KMP，使这条快速路径保持 `O(n + m)` 最坏时间和 `O(m)` 查询准备空间，`n` 为被检查文本长度、`m` 为查询长度。非 ASCII 或 CR 等不适用情形交给 Foundation 保留既有匹配与坐标语义，不能把 ASCII 路径复杂度承诺套在所有 Unicode 输入上。
@@ -83,6 +85,8 @@ fuzzy 的 Fuse 固定参数是 threshold 0.7、location 0、distance 100、忽�
 正则在访问存储前验证长度、可编译性和已知危险形状。复杂匹配使用带 progress callback 的迭代器，整个请求的正则匹配时间预算为 2 秒；SQL 获取和主动让出执行权的时间不计入这个匹配预算。超时或引擎中途放弃会使整次请求失败，不返回看似完整的部分结果。这不是所有 native matcher 的任意时刻抢占保证。
 
 搜索快照最长持有 30 秒；过期明确失败并释放事务。SQLite progress callback 和每 32 行检查共同让取消及截止时间影响 SQL 与扫描。读取完整正文、构造片段及修订计数只为真正需要的结果进行。
+
+每个 History 实例最多同时持有四个搜索快照，包含定位目标及前后页读取。额外请求在打开连接前返回 `temporarilyUnavailable(.factProof)`，不进入等待队列。取消、失败和完成均先关闭读取事务再释放名额；界面结束加载并提供刷新重试。
 
 ## 分页与观察
 

@@ -27,6 +27,7 @@ struct SQLiteScaleSearchCase: Sendable {
     let expectedRows: [HistoryRow]
     let expectedTotalMatches: Int
     var expectedSnippetMatch: String? = nil
+    var maximumMeasuredPages: Int = 2
 
     var modeName: String {
         switch mode {
@@ -77,6 +78,9 @@ func sqliteScaleSearchCases(corpus: SQLiteScaleBrowseEvidence) -> [SQLiteScaleSe
         SQLiteScaleSearchCase(name: "expression-rare-large-common-title", text: "largebodyhit AND perf-item-", mode: .expression,
                               expectedRows: largeBody, expectedTotalMatches: largeBody.count,
                               expectedSnippetMatch: "largebodyhit"),
+        SQLiteScaleSearchCase(name: "expression-repeated-common", text: Array(repeating: "perf-item-", count: 128).joined(separator: " "), mode: .expression,
+                              expectedRows: corpus.leadingRows, expectedTotalMatches: corpus.count,
+                              maximumMeasuredPages: 1),
         SQLiteScaleSearchCase(name: "regexp-no-hit", text: "ZZZZZZZZ", mode: .regexp,
                               expectedRows: [], expectedTotalMatches: 0),
         SQLiteScaleSearchCase(name: "regexp-common-grams-no-intersection", text: "1234567", mode: .regexp,
@@ -160,7 +164,7 @@ func exerciseSQLiteScaleSearches(
     let limit = 50
     for fixture in sqliteScaleSearchCases(corpus: corpus) {
         var cursor: HistoryPageCursor?
-        let pageCount = fixture.expectedTotalMatches > limit ? 2 : 1
+        let pageCount = min(fixture.maximumMeasuredPages, fixture.expectedTotalMatches > limit ? 2 : 1)
         for pageIndex in 0..<pageCount {
             let query = SQLiteScaleQuery(
                 text: fixture.text, mode: fixture.modeName, pageIndex: pageIndex,

@@ -81,7 +81,9 @@ struct RealHistoryThumbnailPurgeTests {
             #expect(store.cachedEntryCount == 1)
             #expect(store.cachedDecodedBytes == original.pixels.count)
             #expect(try await history.details(for: pinned.id).item == pinned)
-            let remaining = try await history.browse(.init(kind: .pinned, limit: 10))
+            let remaining = try await history.browse(.init(
+                kind: .recent, limit: 10, filter: .init(pinnedOnly: true)
+            ))
             #expect(Set(remaining.rows.map(\.item)) == Set([pinned, coldPinned]))
             await #expect(throws: HistoryFailure.notFound(removed.id)) {
                 try await history.details(for: removed.id)

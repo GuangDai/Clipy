@@ -26,10 +26,13 @@ struct SQLiteSearchSnapshotTests {
 
     private actor SnapshotParkNames {
         private var nextIndex = 0
+        private var completed: Set<Int> = []
         func next() -> String {
             defer { nextIndex += 1 }
             return "search-snapshot-\(nextIndex)"
         }
+        func didComplete(_ index: Int) { completed.insert(index) }
+        func hasCompleted(_ index: Int) -> Bool { completed.contains(index) }
     }
 
     @Test func concurrentSnapshotsRejectExcessReadsAndReleaseCapacityOnCancellation() async throws {
@@ -41,14 +44,36 @@ struct SQLiteSearchSnapshotTests {
         await worker.setSuspensionHandler { point in
             if point == .evaluationEntry {
                 let name = await names.next()
-                await gate.park(at: name)
+                await gate.parkUnlessCancelled(at: name)
             }
         }
         var tasks: [Task<HistoryPage, any Error>] = []
         do {
             for index in 0..<SearchWorker.maximumConcurrentSnapshots {
-                tasks.append(Task { try await fixture.history.browse(request) })
-                await gate.waitForPark("search-snapshot-\(index)")
+                let task = Task {
+                    do {
+                        let page = try await fixture.history.browse(request)
+                        await names.didComplete(index)
+                        return page
+                    } catch {
+                        await names.didComplete(index)
+                        throw error
+                    }
+                }
+                tasks.append(task)
+                let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+                while !(await gate.isParked("search-snapshot-\(index)")) {
+                    if await names.hasCompleted(index) {
+                        _ = try await task.value
+                        Issue.record("The search finished before establishing the expected parked snapshot")
+                        throw HistoryFailure.persistence(.invariantViolation)
+                    }
+                    guard ContinuousClock.now < deadline else {
+                        Issue.record("The live search did not reach its snapshot suspension")
+                        throw HistoryFailure.persistence(.invariantViolation)
+                    }
+                    await Task.yield()
+                }
             }
             await worker.setSuspensionHandler(nil)
             // All four real transactions already read history_state. The

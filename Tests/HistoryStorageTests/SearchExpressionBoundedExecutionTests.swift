@@ -117,6 +117,27 @@ struct SearchExpressionBoundedExecutionTests {
         }
     }
 
+    @Test func candidatePostingProofsDoNotOutliveTheRequestSnapshot() async throws {
+        let history = try await fixture(count: 3)
+        let kind = HistoryBrowseKind.search(text: "entry AND newcomer", mode: .expression)
+        let missing = try await history.browse(.init(kind: kind, limit: 7))
+        #expect(missing.rows.isEmpty)
+        let receipt = try await history.perform(.capture(WSSupport.textCapture(
+            "entry newcomer", observedAt: Date(timeIntervalSinceReferenceDate: 10)
+        )))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            Issue.record("Expected a new expression posting to be committed")
+            return
+        }
+        let added = try await history.browse(.init(kind: kind, limit: 7))
+        #expect(added.rows.map(\.item) == [item])
+        #expect(added.position > missing.position)
+        _ = try await history.perform(.remove(item.id))
+        let removed = try await history.browse(.init(kind: kind, limit: 7))
+        #expect(removed.rows.isEmpty)
+        #expect(removed.position > added.position)
+    }
+
     private func fixture(count: Int) async throws -> SQLiteHistory {
         let history = try await WSSupport.makeHistory()
         _ = try await history.seedPerformanceFixture(rowCount: count) { index in

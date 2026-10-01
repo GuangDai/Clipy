@@ -15,6 +15,44 @@ import Testing
 struct AppCaptureLaneTests {
 
     @Test @MainActor
+    func aCaptureSubmittedByTheCompletionHealthCallbackKeepsTheLaneSerialized() async throws {
+        let base = try await ComposedSupport.openMemoryHistory()
+        let history = FirstCaptureSuspendingHistory(base: base)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history, adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        defer { composition.stop() }
+        let healthProbe = CaptureHealthProbe()
+        var injectOnNextHealth = false
+        var injected = false
+        composition.onCaptureHealthChanged = { health in
+            healthProbe.receive(health)
+            guard injectOnNextHealth else { return }
+            injectOnNextHealth = false
+            injected = true
+            composition.submitCaptureForTesting(Self.capture("C", at: 3))
+            #expect(composition.captureHealth.activeCommitCount == 1)
+            #expect(composition.captureHealth.pendingCaptureCount == 1)
+        }
+
+        composition.submitCaptureForTesting(Self.capture("A", at: 1))
+        await history.waitUntilFirstCaptureIsSuspended()
+        composition.submitCaptureForTesting(Self.capture("B", at: 2))
+        injectOnNextHealth = true
+        await history.resumeFirstCapture()
+        await healthProbe.waitForIdle(failedCaptureCount: 0, lastFailure: nil)
+
+        #expect(injected)
+        let page = try await base.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
+        #expect(page.rows.map(\.title) == ["C", "B", "A"])
+        #expect(await history.captureAttemptCount == 3)
+        #expect(composition.captureHealth.replacedCaptureCount == 0)
+    }
+
+    @Test @MainActor
     func stoppingBeforeTheCaptureTaskStartsDoesNotCallHistory() async throws {
         let base = try await ComposedSupport.openMemoryHistory()
         let history = FirstCaptureSuspendingHistory(base: base, suspendsFirstCapture: false)

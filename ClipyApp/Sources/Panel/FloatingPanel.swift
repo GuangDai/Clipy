@@ -332,6 +332,10 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         deferredFocusLossCloseTask = nil
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         outsideClickMonitor = nil
+        // Closing cancels an unfinished drag. Retire its intent before AppKit
+        // can report a final resize while hiding this reusable window.
+        isLiveResizeActive = false
+        liveResizeStartingSize = nil
         super.close()
         isPresented = false
         onPanelClosed()
@@ -440,9 +444,10 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         _ sheetWindow: NSWindow,
         completionHandler handler: ((NSApplication.ModalResponse) -> Void)? = nil
     ) {
-        super.beginSheet(sheetWindow) { [weak self] response in
+        childWindows?.compactMap { $0 as? FloatingPreviewPanel }.first?.stopModalPointerObservation()
+        super.beginSheet(sheetWindow) { [weak self, weak sheetWindow] response in
             guard let self else { handler?(response); return }
-            self.finishSheet(response, handler: handler)
+            self.finishSheet(response, sheetFrame: sheetWindow?.frame ?? .zero, handler: handler)
         }
     }
 
@@ -450,22 +455,32 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         _ sheetWindow: NSWindow,
         completionHandler handler: ((NSApplication.ModalResponse) -> Void)?
     ) {
-        super.beginCriticalSheet(sheetWindow) { [weak self] response in
+        childWindows?.compactMap { $0 as? FloatingPreviewPanel }.first?.stopModalPointerObservation()
+        super.beginCriticalSheet(sheetWindow) { [weak self, weak sheetWindow] response in
             guard let self else { handler?(response); return }
-            self.finishSheet(response, handler: handler)
+            self.finishSheet(response, sheetFrame: sheetWindow?.frame ?? .zero, handler: handler)
         }
     }
 
     private func finishSheet(
         _ response: NSApplication.ModalResponse,
+        sheetFrame: NSRect,
         handler: ((NSApplication.ModalResponse) -> Void)?
     ) {
+        let pointer = NSEvent.mouseLocation
+        let item = previewState.previewedItem
         handler?(response)
         // The preview treats our attached sheet as pointer ownership. Native
         // modal tracking can consume its last exit, so ending this parent's
         // sheet must also resume containment after AppKit detaches the sheet.
         Task { @MainActor [weak self] in
             guard let self, self.isPresented else { return }
+            if let preview = self.childWindows?.compactMap({ $0 as? FloatingPreviewPanel }).first {
+                preview.resumePointerAfterModal(
+                    sheetFrame: self.previewState.previewedItem == item ? sheetFrame : .zero,
+                    pointerAtCompletion: pointer
+                )
+            }
             self.previewState.recheckPointerAfterModal()
         }
     }
@@ -497,6 +512,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// Content fit must not fight the user's drag: while a live resize is
     /// active the retained demand is kept but not applied.
     func windowWillStartLiveResize(_ notification: Notification) {
+        guard isPresented else { return }
         isLiveResizeActive = true
         liveResizeStartingSize = frame.size
     }
@@ -511,11 +527,14 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// retained fit demand re-applies immediately, shrinking the panel back
     /// to its displayed content (Maccy's popup semantics).
     func windowDidEndLiveResize(_ notification: Notification) {
+        // A cancelled or already-settled drag cannot save the closed frame or
+        // overwrite the next session's ceiling with its content-fitted height.
+        guard isPresented, isLiveResizeActive, let startingSize = liveResizeStartingSize else { return }
         isLiveResizeActive = false
         isSettlingLiveResize = true
         let saved = PanelGeometry.persistedSize(from: .standard)
-        let widthChanged = liveResizeStartingSize?.width != frame.width
-        let heightChanged = liveResizeStartingSize?.height != frame.height
+        let widthChanged = startingSize.width != frame.width
+        let heightChanged = startingSize.height != frame.height
         // An edge dragged through the toolbar is not a usable future
         // ceiling. Recover the previous preference; an untouched fitted
         // dimension keeps its saved height ceiling.

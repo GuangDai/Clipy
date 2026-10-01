@@ -7,6 +7,7 @@ import Foundation
 enum PerfError: Error, Sendable {
     case captureUnexpectedOutcome
     case reviseUnexpectedOutcome
+    case searchUnexpectedResult
 }
 
 // MARK: - Measurement helpers

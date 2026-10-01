@@ -15,10 +15,11 @@ extension SearchWorker {
         corpus: SearchCorpusSnapshot, processMarker: UUID
     ) async throws -> HistoryPage {
         guard let source = corpus.rows.first(where: { $0.id == id }) else { throw HistoryFailure.notFound(id) }
+        var targetDeadline = ContinuousClock.now.advanced(by: regexpEngineDeadline)
         let targetEvaluation = try await evaluateSeekBatch(
             [source], admitted: admitted, position: corpus.position, exact: nil, fuzzy: nil, regexp: nil,
             expression: admitted.expressionRoot.map(PreparedSearchExpression.init),
-            deadline: ContinuousClock.now.advanced(by: regexpEngineDeadline), work: SearchWorkCounter()
+            deadline: &targetDeadline, work: SearchWorkCounter()
         )
         guard let target = targetEvaluation.rows.first else { throw HistoryFailure.notFound(id) }
         let anchor = request.sortOrder == .automatic ? target.anchor : HistorySortSQL.anchor(for: source)
@@ -46,10 +47,11 @@ extension SearchWorker {
                let lastSource = corpus.rows.first(where: { $0.id == lastID }) {
                 if request.sortOrder != .automatic { lastAnchor = HistorySortSQL.anchor(for: lastSource) }
                 else if admitted.mode == .fuzzy && !admitted.term.isEmpty {
+                    var matchDeadline = ContinuousClock.now.advanced(by: regexpEngineDeadline)
                     let match = try await evaluateSeekBatch(
                         [lastSource], admitted: admitted, position: corpus.position,
                         exact: nil, fuzzy: nil, regexp: nil, expression: nil,
-                        deadline: ContinuousClock.now.advanced(by: regexpEngineDeadline), work: SearchWorkCounter()
+                        deadline: &matchDeadline, work: SearchWorkCounter()
                     )
                     guard let last = match.rows.first else { throw HistoryFailure.persistence(.invariantViolation) }
                     lastAnchor = last.anchor

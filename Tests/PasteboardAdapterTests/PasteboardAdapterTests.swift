@@ -953,17 +953,33 @@ func observerStopHaltsDelivery() {
 /// cases do not overlap their provider allocations with one another.
 @Suite(.serialized) @MainActor
 struct CaptureResourceLimitTests {
+    /// Use UTI syntax accepted by NSPasteboardItem, with short DNS-style
+    /// components. A bare repeated word enters the legacy pasteboard-type
+    /// path and does not establish this identifier-byte boundary.
+    private func resourceLimitIdentifier(utf8ByteCount: Int) -> String {
+        let prefix = "com.clipy.tests."
+        let suffixCount = utf8ByteCount - prefix.utf8.count
+        let suffix = (0..<suffixCount).map { index in
+            index % 32 == 31 && index < suffixCount - 1 ? "." : "x"
+        }.joined()
+        return prefix + suffix
+    }
+
     @Test(arguments: [false, true])
     func oversizedIdentifiersRejectBeforePayloadReadsAndPreservePrivacyPrecedence(concealed: Bool) throws {
         let pasteboard = makePasteboard()
         defer { pasteboard.releaseGlobally() }
         let item = NSPasteboardItem()
-        let oversized = String(repeating: "x", count: HistoryLimits.standard.maximumTypeIdentifierUTF8Bytes + 1)
+        let oversized = resourceLimitIdentifier(
+            utf8ByteCount: HistoryLimits.standard.maximumTypeIdentifierUTF8Bytes + 1
+        )
         try #require(item.setData(Data([1]), forType: .init(oversized)))
         try #require(item.setData(Data("sibling content".utf8), forType: .string))
         let marker = "org.nspasteboard.ConcealedType"
         if concealed { try #require(item.setData(Data([1]), forType: .init(marker))) }
         try #require(pasteboard.writeObjects([item]))
+        let published = try #require(pasteboard.pasteboardItems?.first)
+        try #require(published.types.contains { $0.rawValue.utf8.elementsEqual(oversized.utf8) })
         var reads = 0
         var adapter = PasteboardAdapter(pasteboard: pasteboard)
         adapter.payloadReadObserver = { _ in reads += 1 }
@@ -987,9 +1003,15 @@ struct CaptureResourceLimitTests {
     @Test func identifierAtTheByteLimitRetainsItsExactSpellingAndBytes() throws {
         let pasteboard = makePasteboard()
         defer { pasteboard.releaseGlobally() }
-        let identifier = String(repeating: "x", count: HistoryLimits.standard.maximumTypeIdentifierUTF8Bytes)
+        let identifier = resourceLimitIdentifier(
+            utf8ByteCount: HistoryLimits.standard.maximumTypeIdentifierUTF8Bytes
+        )
         let bytes = Data([0x00, 0xFF, 0x61])
-        try #require(pasteboard.setData(bytes, forType: .init(identifier)))
+        let item = NSPasteboardItem()
+        try #require(item.setData(bytes, forType: .init(identifier)))
+        try #require(pasteboard.writeObjects([item]))
+        let published = try #require(pasteboard.pasteboardItems?.first)
+        try #require(published.types.contains { $0.rawValue.utf8.elementsEqual(identifier.utf8) })
         let capture = try #require(PasteboardAdapter(pasteboard: pasteboard).capture())
         #expect(capture.representations == [CapturedRepresentation(typeIdentifier: identifier, bytes: bytes)])
     }

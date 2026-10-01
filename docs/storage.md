@@ -18,6 +18,8 @@
 
 [`HistoryConfiguration`](../Sources/HistoryStorage/Configuration.swift) 的 `initialMaximumUnpinnedItems` 只用于新存储；默认 200，nil 关闭数量保留，正数没有额外的人为历史总量上限。重开存储读取持久配置。已有不兼容、部分或损坏布局会报错，代码没有旧存储读取、双写、迁移、自动修复或自动删除路径。
 
+预先取消的打开请求不会创建存储文件；启动事务内的取消回滚 schema 和初始记录，允许随后重新打开。写操作入口同样检查预先取消，已有提交的成功回执仍保留。
+
 持久存储打开前获取 [`StoreRootLease`](../Sources/HistoryStorage/StoreRootLease.swift)，同一租约由实际 SQLite 写连接持有，防止多个进程同时持有写入者。外部 facade、自动化 ingress 或清理任务继续持有旧写入者时，释放 `SQLiteHistory` 不会提前释放租约；写连接成功关闭后才释放。应用组合也防止一个进程重复打开同一存储。只读连接不另取写租约，由自身 owner 管理；位置对象让文件至少存活到最后连接关闭。
 
 ## SQLite 与内容文件

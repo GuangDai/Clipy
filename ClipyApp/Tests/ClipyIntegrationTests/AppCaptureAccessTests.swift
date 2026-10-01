@@ -10,6 +10,71 @@ import Testing
 
 @Suite("App capture access state")
 struct AppCaptureAccessTests {
+    @Test(arguments: [false, true]) @MainActor
+    func pauseStateCallbackCanResumeOrStopWithoutLeavingADeadline(stop: Bool) async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            captureAccessBehaviorProvider: { .allowed }
+        )
+        defer { composition.stop() }
+        var cancelledDeadline: Task<Void, Never>?
+        composition.onCaptureAccessStateChanged = { state in
+            guard state == .userPaused else { return }
+            #expect(!composition.isCaptureObservationActiveForTesting)
+            cancelledDeadline = composition.capturePauseTaskForTesting
+            if stop {
+                composition.stop()
+            } else {
+                composition.resumeCapture()
+            }
+        }
+
+        composition.pauseCapture()
+
+        let deadline = try #require(cancelledDeadline)
+        #expect(deadline.isCancelled)
+        #expect(!composition.hasCapturePauseDeadlineForTesting)
+        #expect(composition.captureAccessState == (stop ? .userPaused : .allowed))
+        #expect(composition.isCaptureObservationActiveForTesting == !stop)
+        await deadline.value
+    }
+
+    @Test @MainActor
+    func accessStateCallbackCannotAdmitACaptureAfterPermissionWasRevoked() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let accessBehavior = Mutex(PasteboardAccessBehavior.allowed)
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            captureAccessBehaviorProvider: { accessBehavior.withLock { $0 } }
+        )
+        defer { composition.stop() }
+        var deniedCallbackReceived = false
+        composition.onCaptureAccessStateChanged = { state in
+            guard state == .denied else { return }
+            deniedCallbackReceived = true
+            composition.submitCaptureForTesting(ComposedSupport.textCapture(
+                "must not enter the revoked lane", observedAt: Date(timeIntervalSinceReferenceDate: 1)
+            ))
+        }
+
+        accessBehavior.withLock { $0 = .denied }
+        composition.retryCaptureAccess()
+
+        #expect(deniedCallbackReceived)
+        #expect(composition.captureHealth.activeCommitCount == 0)
+        if let task = composition.activeCaptureForTesting { await task.value }
+        #expect(try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10)).rows.isEmpty)
+    }
+
     @Test("only explicit allow admits background polling")
     @MainActor
     func onlyExplicitAllowAdmitsBackgroundPolling() {

@@ -21,11 +21,16 @@ struct SearchSQLiteNativeInterruptionTests {
         #expect(try await reader.checkpointIsUnblocked())
     }
 
-    @Test func snapshotDeadlineCapsTheNativeRegexpMatcher() async throws {
+    @Test(arguments: [false, true])
+    func snapshotDeadlineCapsTheNativeRegexpMatcher(startAround: Bool) async throws {
         let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
-        _ = try await history.perform(.capture(WSSupport.textCapture(
+        let receipt = try await history.perform(.capture(WSSupport.textCapture(
             String(repeating: "a", count: 1_000), observedAt: Date(timeIntervalSinceReferenceDate: 10)
         )))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            Issue.record("Expected a retained regexp scan target")
+            return
+        }
         let location = await history.authority.withTestDatabase { $0.storeLocation }
         let worker = SearchWorker()
         await worker.setRegexpEngineDeadline(.seconds(60))
@@ -34,12 +39,44 @@ struct SearchSQLiteNativeInterruptionTests {
         await #expect(throws: HistoryFailure.temporarilyUnavailable(.searchEngineDeadline)) {
             _ = try await worker.page(
                 HistoryBrowseRequest(
-                    kind: .search(text: "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b", mode: .regexp), limit: 1
+                    kind: .search(text: "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b", mode: .regexp), limit: 1,
+                    startAround: startAround ? item.id : nil
                 ), store: location, processMarker: UUID()
             )
         }
         #expect(ContinuousClock().now - started < .seconds(5))
         #expect(try await NativeReader(location: location).checkpointIsUnblocked())
+    }
+
+    @Test func seekingAQuickMatchStillCapsASlowPredecessorAndReleasesItsReader() async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
+        let receipt = try await history.perform(.capture(WSSupport.textCapture(
+            "b", observedAt: Date(timeIntervalSinceReferenceDate: 1)
+        )))
+        guard case .committed(let commit) = receipt, case .inserted(let target) = commit.outcome else {
+            Issue.record("Expected a quick regexp match for the seek target")
+            return
+        }
+        _ = try await history.perform(.capture(WSSupport.textCapture(
+            String(repeating: "a", count: 1_000), observedAt: Date(timeIntervalSinceReferenceDate: 2)
+        )))
+        let location = await history.authority.withTestDatabase { $0.storeLocation }
+        let worker = history.searchWorker
+        await worker.setRegexpEngineDeadline(.milliseconds(100))
+        let started = ContinuousClock.now
+        await #expect(throws: HistoryFailure.temporarilyUnavailable(.searchEngineDeadline)) {
+            _ = try await history.browse(.init(
+                kind: .search(text: "a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b", mode: .regexp),
+                limit: 1, startAround: target.id
+            ))
+        }
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(try await NativeReader(location: location).checkpointIsUnblocked())
+        let restored = try await history.browse(.init(
+            kind: .search(text: "b", mode: .regexp), limit: 1, startAround: target.id
+        ))
+        #expect(restored.rows.map(\.item) == [target])
+        #expect(restored.previous == nil && restored.next == nil)
     }
 
     private actor NativeReader {

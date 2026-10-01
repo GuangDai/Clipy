@@ -54,6 +54,7 @@ public actor LocalAutomationIngress {
     internal let authority: HistoryAuthority
     internal let credentialStore: CredentialStore
     internal var isChangingEnrollment = false
+    internal var enrollmentCompletion: Task<Void, Never>?
     private let authenticator: LocalAutomationCredentialAuthenticator
     private let gateway: ExternalGateway
     private let onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)?

@@ -305,6 +305,17 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertFalse(renderedText.exists, app.debugDescription)
         XCTAssertEqual(text(of: address), originalAddress)
 
+        // A completed sheet can leave its action's stationary pointer below
+        // the restored pane. The next actual movement outside both surfaces
+        // must still hide it, and entering the row must re-open the reference.
+        panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1))
+            .withOffset(CGVector(dx: 0, dy: 40)).hover()
+        XCTAssertTrue(waitUntil(timeout: 5) { !preview.exists }, app.debugDescription)
+        XCTAssertTrue(panel.exists, app.debugDescription)
+        rows.firstMatch.hover()
+        XCTAssertTrue(request.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(text(of: address), originalAddress)
+
         // The second confirmation reads the file's then-current bytes, not a
         // cached copy captured while it was merely a clipboard reference.
         try Data(loadedContents.utf8).write(to: file)

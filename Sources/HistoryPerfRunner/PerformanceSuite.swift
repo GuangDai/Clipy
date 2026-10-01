@@ -61,7 +61,7 @@ func runAll() async -> Int {
     allFixtures.append(contentsOf: await workloadThumbnailSingleFlight())
 
     let perfFixture = PerfFixture(
-        schemaVersion: 3,
+        schemaVersion: 4,
         machine: metadata,
         swiftVersion: swiftVersion,
         date: dateString,

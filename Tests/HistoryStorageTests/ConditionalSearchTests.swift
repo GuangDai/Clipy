@@ -115,6 +115,7 @@ struct ConditionalSearchTests {
         for (query, hasBodySnippet) in [
             ("all AND quartz", false), ("quartz AND all", true),
             ("(all AND quartz) OR (all AND absent)", false),
+            (Array(repeating: "all", count: 127).joined(separator: " ") + " quartz", false),
         ] {
             let measured = await history.measureSearch(.init(
                 kind: .search(text: query, mode: .expression), limit: 2

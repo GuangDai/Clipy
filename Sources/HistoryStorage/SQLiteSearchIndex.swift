@@ -41,7 +41,7 @@ internal enum SQLiteSearchIndex {
             // scalar. Preserve marks here: a combining-only Character can
             // be that sole equal Character. Unusually large queries scan.
             guard !scalars.isEmpty, scalars.count <= 128 else { return nil }
-            return scalars.map { "f" + String($0, radix: 16) }.joined(separator: " OR ")
+            return scalars.sorted().map { "f" + String($0, radix: 16) }.joined(separator: " OR ")
         }
         let scalars = normalized.unicodeScalars.filter { !isMark($0) }.map { UInt64($0.value) + 1 }
         guard !scalars.isEmpty else { return nil }
@@ -57,7 +57,10 @@ internal enum SQLiteSearchIndex {
             for scalar in scalars[offset..<(offset + width)] { gram = (gram << 21) | scalar }
             grams.insert(gram)
         }
-        return grams.map { "g" + String($0, radix: 16) }.joined(separator: " AND ")
+        // Set iteration order varies between instances. Stable token order
+        // lets repeated terms reuse their complete intersection proof as well
+        // as constituent posting proofs inside this request's snapshot.
+        return grams.sorted().map { "g" + String($0, radix: 16) }.joined(separator: " AND ")
     }
 
     /// Choose the driving table from limited posting reads. fts5vocab's row
@@ -66,10 +69,19 @@ internal enum SQLiteSearchIndex {
     /// Sparse searches visit only candidate items; dense ordered searches
     /// walk recent rows directly and use the native matcher to confirm hits.
     internal static func prefersSparseCandidates(expression: String, in database: SQLiteDatabase) throws -> Bool {
+        var probeResults: [Data: Bool] = [:]
+        return try prefersSparseCandidates(expression: expression, in: database, probeResults: &probeResults)
+    }
+
+    /// A request may reuse a posting proof only inside its own read snapshot.
+    /// Cache exact query bytes, never store IDs or a cross-request corpus.
+    internal static func prefersSparseCandidates(
+        expression: String, in database: SQLiteDatabase, probeResults: inout [Data: Bool]
+    ) throws -> Bool {
         if expression.contains(" OR ") {
             // Count actual union outputs, including overlap only once. OR
             // can stop as soon as the sparse threshold has been exceeded.
-            return try hasAtMostSparseCandidateLimit(expression: expression, in: database)
+            return try hasAtMostSparseCandidateLimit(expression: expression, in: database, probeResults: &probeResults)
         }
         var termCount = 0
         for token in expression.split(separator: " ") where token.first == "g" || token.first == "f" {
@@ -77,7 +89,7 @@ internal enum SQLiteSearchIndex {
             // An AND result is a subset of every individual posting list.
             // A sparse constituent proves the whole expression sparse
             // without first computing its intersection with common terms.
-            if try hasAtMostSparseCandidateLimit(expression: String(token), in: database) {
+            if try hasAtMostSparseCandidateLimit(expression: String(token), in: database, probeResults: &probeResults) {
                 return true
             }
         }
@@ -87,11 +99,15 @@ internal enum SQLiteSearchIndex {
         // correlated path would restart that work for every outer row.
         // Finding even the first AND result may traverse substantial postings;
         // LIMIT bounds outputs, not that internal intersection work.
-        return try hasAtMostSparseCandidateLimit(expression: expression, in: database)
+        return try hasAtMostSparseCandidateLimit(expression: expression, in: database, probeResults: &probeResults)
     }
 
-    private static func hasAtMostSparseCandidateLimit(expression: String, in database: SQLiteDatabase) throws -> Bool {
+    private static func hasAtMostSparseCandidateLimit(
+        expression: String, in database: SQLiteDatabase, probeResults: inout [Data: Bool]
+    ) throws -> Bool {
         try Task.checkCancellation()
+        let key = Data(expression.utf8)
+        if let known = probeResults[key] { return known }
         let statement = try database.prepare(
             """
             SELECT count(*) FROM (
@@ -107,7 +123,9 @@ internal enum SQLiteSearchIndex {
         try Task.checkCancellation()
         // SQLite counts only the limited subquery. One scalar crosses into
         // Swift, and the request's native progress callback remains active.
-        return try statement.integer(at: 0) <= 4_096
+        let isSparse = try statement.integer(at: 0) <= 4_096
+        probeResults[key] = isSparse
+        return isSparse
     }
 
     /// Fuse counts edits in lowercased Characters. If any normalized scalar

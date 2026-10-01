@@ -750,8 +750,6 @@ final class AppComposition {
         guard isStarted, captureAccessState == .allowed else { return }
         capturePauseTask?.cancel()
         captureAccessReducer.pause()
-        publishCaptureAccessStateIfChanged()
-        reconcileCaptureObservation()
 
         let duration = capturePauseDuration
         capturePauseTask = Task { @MainActor [weak self] in
@@ -777,6 +775,11 @@ final class AppComposition {
             self.capturePauseTask = nil
             self.resumeCapture()
         }
+        // A state observer may synchronously Resume or stop the composition.
+        // Install ownership first so that callback cancels this deadline,
+        // and cannot leave a newly allocated sleep behind after returning.
+        reconcileCaptureObservation()
+        publishCaptureAccessStateIfChanged()
     }
 
     /// Manual and timed Resume share one privacy-preserving path. Re-reading
@@ -887,7 +890,9 @@ final class AppComposition {
     /// active operation and one replaceable pending capture; no observation
     /// creates an independent task (REVIEW Card 6).
     private func admitCapture(_ capture: ClipboardCapture, runAutomaticWorkflows: Bool = true) {
-        guard isStarted, acceptsCaptures else { return }
+        guard isStarted, acceptsCaptures,
+              captureAccessState.permitsBackgroundPolling,
+              workspaceActivity.permitsProductActivity else { return }
         // The Settings ▸ Privacy ignore list is re-read on EVERY admission
         // (a cheap immutable-struct load; no cached copy can go stale, so a
         // Settings edit applies to the very next copy). An ignored source
@@ -968,8 +973,9 @@ final class AppComposition {
         capture: ClipboardCapture?,
         failureCountAtAdmission: Int
     ) {
-        captureTask = nil
-        activeCaptureBytes = 0
+        // Keep the finishing task's slot reserved through synchronous receipt
+        // and health callbacks. A reentrant observation then replaces the
+        // pending value instead of starting a second task before this drain.
         switch outcome {
         case .completed(let receipt):
             viewState.acceptCaptureReceipt(receipt)
@@ -1002,12 +1008,17 @@ final class AppComposition {
         else {
             pendingCapture = nil
             drainsPreInactivityPendingCapture = false
+            captureTask = nil
+            activeCaptureBytes = 0
             publishCaptureHealthIfChanged()
             return
         }
         pendingCapture = nil
         drainsPreInactivityPendingCapture = false
-        publishCaptureHealthIfChanged()
+        captureTask = nil
+        activeCaptureBytes = 0
+        // Reserve the next task before publishing its health. There is no
+        // callback-visible empty slot between these two owned operations.
         startCapture(next)
     }
 

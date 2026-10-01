@@ -36,6 +36,8 @@
 
 `ContentPreview` 分别保留一个图片和一个文字工作槽，等待槽位各有 2 秒上限。文字工作可越过慢图像工作，同一时刻最多一份文本进入解码、分段和字体预热；一个已开始的同步 native 解码只能在引擎允许的边界完成，因此取消不会凭空释放仍执行中的真实槽位。
 
+每个 renderer 的正在处理和排队请求合计最多保留 128 MiB 源数据，包含同一输入中未选的表示形式；每种工作槽最多等待 32 个请求。名额或字节预算不足时返回可重试的 `.renderer`，取消等待会释放其预算。
+
 ## 缩略图与显示缓存
 
 [`ThumbnailService.swift`](../Sources/HistoryStorage/ThumbnailService.swift) 拥有精确 item version / size 的 source 读取与同请求 single-flight，返回编码 PNG。尺寸允许每轴 1 至 2,048 px，编码结果最多 16 MiB。没有支持图片返回 nil；选中图片不能解码返回 `thumbnailUnavailable`，原始字节仍可复制和读取。
@@ -49,5 +51,7 @@
 文件读取确认期间，预览保留其窗口，鼠标进入确认框不会触发离开两个浏览窗口后的隐藏。SwiftUI 确认状态清除后，实际附着的 AppKit sheet 仍保护其所属窗口；父窗口在确认期间变化时，预览等原生 sheet 结束后再同步实际几何。目标失效或关闭会结束所属 sheet 并退役窗口，结束回调不能重新显示它。确认仍是读取文件的前置条件。
 
 普通 file URL 预览只显示复制的地址。用户明确确认“读取文件”后，应用层 [`LocalFilePreviewLoader.swift`](../ClipyApp/Sources/Preview/LocalFilePreviewLoader.swift) 才访问其目标，结果不写入 History。读取最多 64 MiB，按 64 KiB 分块检查取消，并比较打开前后 descriptor 的大小与修改 / 状态时间。
+
+HTML、RTF 的 1 MiB 格式上限在打开前、打开后和每次追加前检查，文件增长不能绕过它。每个 loader 同时只读取一个文件，最多排队 32 个地址；排队取消或超限不会打开文件。
 
 只允许本地 regular file 和已有 renderer 支持的扩展名；不跟随 symlink，不打开 FIFO / 目录，不从非本地卷或 dataless 占位文件读取。原始 URL、访问失败、资源超限和读取中发生变化分别反馈，不自动重新打开目标。打开外部应用、导出与文件预览是不同的明确动作。

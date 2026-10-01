@@ -513,8 +513,9 @@ extension SearchWorker {
     private func searchCandidates(
         for admitted: AdmittedSearchRequest, in database: SQLiteDatabase
     ) throws -> SearchCandidateSelection? {
+        var probeResults: [Data: Bool] = [:]
         let conditionCandidates = try admitted.expressionRoot.map {
-            try PreparedSearchExpression.candidateExpression($0, in: database)
+            try PreparedSearchExpression.candidateExpression($0, in: database, probeResults: &probeResults)
         } ?? nil
         if conditionCandidates?.isSparse == true { return conditionCandidates }
         guard let expression = SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode) else {
@@ -522,7 +523,8 @@ extension SearchWorker {
         }
         let literalCandidates = (
             expression: expression,
-            isSparse: try SQLiteSearchIndex.prefersSparseCandidates(expression: expression, in: database)
+            isSparse: try SQLiteSearchIndex.prefersSparseCandidates(expression: expression, in: database,
+                                                                   probeResults: &probeResults)
         )
         // The outer search and the independent condition are both required.
         // A dense condition must not hide the outer literal's sparse posting
@@ -545,6 +547,7 @@ extension SearchWorker {
         anchor: StoredOrderingAnchor, hasPrevious: Bool, lowestPossibleFuzzyScore: Double,
         candidates: SearchCandidateSelection?
     ) {
+        let targetFetchedAt = ContinuousClock.now
         let targetReader = try SQLiteSearchRows(
             database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
             includesSearchBody: admitted.requiresSearchBody,
@@ -554,10 +557,11 @@ extension SearchWorker {
         )
         defer { targetReader.finish() }
         let targetBatch = try targetReader.nextBatch(includesRevisionCounts: false)
+        regexpDeadline = regexpDeadline.advanced(by: targetFetchedAt.duration(to: ContinuousClock.now))
         guard !targetBatch.rows.isEmpty else { throw HistoryFailure.notFound(id) }
         let targetEvaluation = try await evaluateSeekBatch(
             targetBatch.rows, admitted: admitted, position: position, exact: exact, fuzzy: fuzzy,
-            regexp: regexp, expression: expression, deadline: min(regexpDeadline, lifetimeDeadline), work: work,
+            regexp: regexp, expression: expression, deadline: &regexpDeadline, work: work,
             expressionSources: expressionSources, snapshotDeadline: lifetimeDeadline
         )
         guard let target = targetEvaluation.rows.first else { throw HistoryFailure.notFound(id) }
@@ -603,7 +607,7 @@ extension SearchWorker {
             guard !batch.rows.isEmpty else { return (anchor, false, lowestPossibleFuzzyScore, candidates) }
             let matches = try await evaluateSeekBatch(
                 batch.rows, admitted: admitted, position: position, exact: exact, fuzzy: fuzzy,
-                regexp: regexp, expression: expression, deadline: min(regexpDeadline, lifetimeDeadline), work: work,
+                regexp: regexp, expression: expression, deadline: &regexpDeadline, work: work,
                 expressionSources: expressionSources, snapshotDeadline: lifetimeDeadline
             )
             for match in matches.rows {
@@ -624,13 +628,17 @@ extension SearchWorker {
     internal func evaluateSeekBatch(
         _ rows: [SearchCorpusRow], admitted: AdmittedSearchRequest, position: ChangePosition,
         exact: ExactLiteralMatcher?, fuzzy: Fuse.Pattern?, regexp: NSRegularExpression?,
-        expression: PreparedSearchExpression?, deadline: ContinuousClock.Instant, work: SearchWorkCounter,
+        expression: PreparedSearchExpression?, deadline: inout ContinuousClock.Instant, work: SearchWorkCounter,
         expressionSources: SQLiteExpressionSources? = nil, snapshotDeadline: ContinuousClock.Instant? = nil
     ) async throws -> EvaluationResult {
         let conditionStarted = ContinuousClock.now
         let rows = try rowsAdmittedByCondition(rows, admitted: admitted, expression: expression, sources: expressionSources, work: work)
-        let adjustedDeadline = deadline.advanced(by: conditionStarted.duration(to: ContinuousClock.now))
-        let engineDeadline = snapshotDeadline.map { min(adjustedDeadline, $0) } ?? adjustedDeadline
+        // Carry excluded condition work into every following seek batch and
+        // the returned page, while the absolute snapshot lifetime still caps
+        // every native match. A local adjustment only would charge that same
+        // condition time to the next batch's shared regexp budget.
+        deadline = deadline.advanced(by: conditionStarted.duration(to: ContinuousClock.now))
+        let engineDeadline = snapshotDeadline.map { min(deadline, $0) } ?? deadline
 #if DEBUG
         let corpus = SearchCorpusSnapshot(position: position, rows: rows,
                                           debugTrace: SearchDebugTrace(id: UUID(), startedAt: ContinuousClock.now))
