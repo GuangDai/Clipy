@@ -52,6 +52,23 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         }, "The denied-access notice must occupy space above the editable search field.\n" + app.debugDescription)
         try require(!popup.exists, "An empty focused search must leave list navigation available.")
 
+        // Keep a populated result viewport behind the popup. Keyboard-only
+        // checks still pass when the native scroll view covers the candidates.
+        search.click()
+        app.typeText("$")
+        try require(waitUntil { rows.count > 1 && popup.exists }, app.debugDescription)
+        let refreshedCandidates = XCTAttachment(screenshot: app.screenshot())
+        refreshedCandidates.name = "completion-over-refreshed-results"
+        refreshedCandidates.lifetime = .keepAlways
+        add(refreshedCandidates)
+        let appCandidate = app.buttons["clipy.search.completion.app:"]
+        try require(appCandidate.exists, app.debugDescription)
+        appCandidate.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).click()
+        try require(waitUntil { search.value as? String == "$app:$" && !popup.exists && panel.exists },
+                    "The visible candidate must receive the click instead of the refreshed history row.\n" + app.debugDescription)
+        try require(pasteboard.string(forType: .string) == "completion must not copy")
+        try replaceSearch(with: "", search: search, in: app)
+
         // A bare opening dollar starts condition completion. Its literal
         // search settles independently and shrinks the tall history window.
         search.click()
