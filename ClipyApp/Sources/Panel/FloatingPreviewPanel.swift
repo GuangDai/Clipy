@@ -220,15 +220,33 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         nativeSheetCount += 1
         super.beginSheet(sheetWindow) { [weak self] response in
             guard let self else { handler?(response); return }
-            defer {
-                self.nativeSheetCount -= 1
-                if self.isPresented { self.previewState.pointerExited(.preview) }
-            }
-            handler?(response)
-            guard self.isPresented, self.previewState.isOpen,
-                  let parent = self.parent, parent.isVisible else { return }
-            self.present(beside: parent)
+            self.finishSheet(response, handler: handler)
         }
+    }
+
+    override func beginCriticalSheet(
+        _ sheetWindow: NSWindow,
+        completionHandler handler: ((NSApplication.ModalResponse) -> Void)?
+    ) {
+        nativeSheetCount += 1
+        super.beginCriticalSheet(sheetWindow) { [weak self] response in
+            guard let self else { handler?(response); return }
+            self.finishSheet(response, handler: handler)
+        }
+    }
+
+    private func finishSheet(
+        _ response: NSApplication.ModalResponse,
+        handler: ((NSApplication.ModalResponse) -> Void)?
+    ) {
+        defer {
+            nativeSheetCount -= 1
+            if isPresented { previewState.pointerExited(.preview) }
+        }
+        handler?(response)
+        guard isPresented, previewState.isOpen,
+              let parent, parent.isVisible else { return }
+        present(beside: parent)
     }
 
     /// SwiftUI owns the drag gesture; AppKit supplies screen-space pointer

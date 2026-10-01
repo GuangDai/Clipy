@@ -62,8 +62,8 @@ struct FloatingPreviewResizeHostedTests {
         #expect(!preview.isPresented && !preview.isVisible)
     }
 
-    @Test
-    func anAttachedSheetRetainsItsOwnerFrameUntilEndAndDismissalEndsTheModal() async throws {
+    @Test(arguments: [false, true])
+    func anAttachedSheetRetainsItsOwnerFrameUntilEndAndDismissalEndsTheModal(critical: Bool) async throws {
         let item = try await capturedReference()
         let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
         let visible = screen.visibleFrame
@@ -82,6 +82,7 @@ struct FloatingPreviewResizeHostedTests {
         owner.previewState.togglePreview(for: item)
         let preview = FloatingPreviewPanel(rootView: FloatingPreviewRootView(appDelegate: owner))
         let alert = NSAlert()
+        alert.alertStyle = critical ? .critical : .warning
         alert.messageText = "Hosted preview confirmation"
         alert.addButton(withTitle: "OK")
         defer {
