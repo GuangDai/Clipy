@@ -77,6 +77,10 @@ package struct ExactLiteralMatcher: Sendable {
     private let asciiNeedle: [UInt8]?
     private let failureTable: [Int]
 
+    /// Request compilation may reuse an adjacent identical text operand.
+    /// Compare the returned string's UTF-8 view, preserving literal spelling.
+    internal var literalTerm: String { term }
+
     package init(term: String) {
         self.term = term
         let bytes = Array(term.utf8)

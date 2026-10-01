@@ -206,6 +206,11 @@ struct ConditionalSearchTests {
                           mode: .expression), limit: 2
         ))
         #expect(negative.rows.map(\.item) == [nfc])
+        let differentLiterals = try await history.browse(.init(
+            kind: .search(text: HistorySearchExpression.quoted("é") + " AND "
+                + HistorySearchExpression.quoted("e\u{301}"), mode: .expression), limit: 2
+        ))
+        #expect(differentLiterals.rows.isEmpty)
         let complement = try await history.browse(.init(
             kind: .search(text: "NOT " + union + " " + repeated, mode: .expression), limit: 1
         ))

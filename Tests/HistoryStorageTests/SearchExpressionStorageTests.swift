@@ -6,6 +6,49 @@ import Testing
 @testable import HistoryStorage
 
 struct SearchExpressionStorageTests {
+    @Test func duplicateTextOperandsKeepFirstPresentationAndOtherBooleanPredicates() async throws {
+        let history = try await WSSupport.makeHistory()
+        let notesBody = "heading\nalpha beta"
+        let safariBody = "different\nalpha beta"
+        let notes = try await capture(notesBody, in: history, at: 1, source: "com.apple.Notes")
+        let safari = try await capture(safariBody, in: history, at: 2, source: "com.apple.Safari")
+        _ = try await capture("outside\nbeta only", in: history, at: 3)
+        let metadataOnly = try await capture("notes only\nunrelated", in: history, at: 4, source: "com.apple.Notes")
+        for (query, baseline) in [
+            ("alpha alpha", "alpha"),
+            ("alpha OR alpha", "alpha"),
+            ("((alpha AND alpha) OR (alpha OR alpha)) AND beta", "alpha AND beta"),
+            ("beta AND (alpha alpha)", "beta AND alpha"),
+            ("(alpha OR alpha) OR beta", "alpha OR beta"),
+            ("NOT (alpha OR alpha)", "NOT alpha"),
+            ("app:notes AND (alpha alpha)", "app:notes AND alpha"),
+            ("(alpha alpha) AND NOT app:safari", "alpha AND NOT app:safari"),
+            ("(alpha alpha) OR app:notes", "alpha OR app:notes"),
+            ("type:text AND (alpha alpha)", "type:text AND alpha"),
+        ] {
+            let expected = try await search(baseline, in: history)
+            let actual = try await search(query, in: history)
+            #expect(actual.rows == expected.rows)
+        }
+        let firstAlpha = try await search("(alpha alpha) AND beta", in: history)
+        #expect(firstAlpha.rows.map(\.item.id) == [safari, notes])
+        let firstBeta = try await search("beta AND (alpha OR alpha)", in: history)
+        #expect(firstBeta.rows.map(\.item.id) == [safari, notes])
+        for (id, body, alphaOffset, betaOffset) in [(notes, notesBody, 8, 14), (safari, safariBody, 10, 16)] {
+            let alphaRow = try #require(firstAlpha.rows.first { $0.item.id == id })
+            let betaRow = try #require(firstBeta.rows.first { $0.item.id == id })
+            #expect(alphaRow.search?.snippet.map { Data($0.utf8) } == Data(body.utf8))
+            #expect(betaRow.search?.snippet.map { Data($0.utf8) } == Data(body.utf8))
+            #expect(alphaRow.search?.matchedRanges == [UTF16TextRange(location: alphaOffset, length: 5)])
+            #expect(betaRow.search?.matchedRanges == [UTF16TextRange(location: betaOffset, length: 4)])
+        }
+        let metadata = try await search("(alpha alpha) OR app:notes", in: history)
+        let metadataRow = try #require(metadata.rows.first { $0.item.id == metadataOnly })
+        #expect(metadataRow.search == nil)
+        #expect(try await ids("app:notes AND (alpha alpha)", in: history) == [notes])
+        #expect(try await ids("(alpha alpha) AND NOT app:safari", in: history) == [notes])
+    }
+
     @Test func booleanPrecedenceGroupingAndImplicitAndUseWholeRowContent() async throws {
         let history = try await WSSupport.makeHistory()
         let alpha = try await capture("alpha alone", in: history, at: 1)

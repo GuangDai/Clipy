@@ -31,8 +31,27 @@ internal indirect enum PreparedSearchExpression {
         case .copiedDate(let from, let until): self = .copiedDate(from: from, until: until)
         case .type(let type): self = .type(type)
         case .pinned: self = .pinned
-        case .and(let lhs, let rhs): self = .and(Self(lhs), Self(rhs))
-        case .or(let lhs, let rhs): self = .or(Self(lhs), Self(rhs))
+        case .and(let lhs, let rhs), .or(let lhs, let rhs):
+            let left = Self(lhs)
+            if case .text(let leftMatcher) = left, case .text(let rightTerm) = rhs,
+               leftMatcher.literalTerm.utf8.elementsEqual(rightTerm.utf8) {
+                // A left-associated run of identical literal operands keeps
+                // its first matcher without constructing every right copy.
+                self = left
+                return
+            }
+            let right = Self(rhs)
+            if case .text(let leftMatcher) = left, case .text(let rightMatcher) = right,
+               leftMatcher.literalTerm.utf8.elementsEqual(rightMatcher.literalTerm.utf8) {
+                // Parenthesized runs can also compile to one text operand.
+                // Idempotence preserves acceptance and the first highlight;
+                // metadata, application and NOT operands remain unchanged.
+                self = left
+            } else if case .and = node {
+                self = .and(left, right)
+            } else {
+                self = .or(left, right)
+            }
         case .not(let child): self = .not(Self(child))
         }
     }
