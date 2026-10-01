@@ -38,11 +38,14 @@ jobs:
         shell: bash
         run: bash scripts/ci/verify_macos_runner.sh "$LOG_DIR/diagnostics.log"
 
-      - name: Run selected evidence suite
+      - name: Run isolated recent index experiment in Release
         shell: bash
-        run: >-
-          bash scripts/ci/run_performance_proofs.sh
-          "${{ inputs.suite }}" "$LOG_DIR"
+        run: |
+          set -euo pipefail
+          mkdir -p "$LOG_DIR"
+          swift test -c release --filter 'HistoryPerfTests.RecentIndexExperimentTests' \
+            2>&1 | tee "$LOG_DIR/perf-test.log"
+          python3 scripts/diagnostic_scan.py --profile strict "$LOG_DIR/perf-test.log"
 
       - name: Upload evidence
         if: always()
