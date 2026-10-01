@@ -69,3 +69,4 @@
 "Use ⌥Esc or Insert condition / show suggestions to open candidates. Arrow keys choose; Tab or Return inserts; Escape dismisses." = "按 ⌥Esc 或选择“插入条件 / 显示候选”打开候选。方向键选择，Tab 或 Return 插入，Escape 关闭。";
 "Escape a literal dollar as \\$; numeric amounts such as $10.50$ stay plain text. An unfinished condition stays plain text while you type." = "字面美元符号写为 \\$；$10.50$ 等数字金额仍是普通文字。输入时未闭合的条件也按普通文字处理。";
 "Retry" = "重试";
+"Updating results…" = "正在更新结果…";

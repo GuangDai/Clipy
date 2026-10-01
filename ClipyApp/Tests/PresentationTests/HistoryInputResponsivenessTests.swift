@@ -29,12 +29,18 @@ struct HistoryInputResponsivenessTests {
             announcedCount = count
         }
         let input = ContinuousClock.now
+        let previous = state.rows
+        var pasted: [HistoryItemReference] = []
+        state.onPaste = { pasted.append($0) }
         state.searchText = "intermediate query with no match"
         state.searchText = "needle final"
         let loading = ContinuousClock.now
         #expect(state.rows.isEmpty)
         #expect(state.isLoadingFirstPage)
         #expect(!state.hasAuthoritativeFirstPage)
+        #expect(state.rowsForPresentation == previous)
+        for row in previous { state.requestPasteFromDisplayedRow(row.item) }
+        #expect(pasted.isEmpty)
         try #require(await pollUntil {
             state.hasAuthoritativeFirstPage && state.rows.map(\.item) == [target]
         })
@@ -45,6 +51,7 @@ struct HistoryInputResponsivenessTests {
         #expect(!state.isLoadingFirstPage)
         #expect(announcedCount == 1)
         #expect(state.failure == nil)
+        #expect(state.rowsForPresentation.map(\.item) == [target])
         print(String(format: "CLIPY_HISTORY_INPUT mode=%@ rows=%d input_to_loading_ms=%.3f input_to_authoritative_ms=%.3f",
                      String(describing: mode), state.rows.count,
                      milliseconds(input.duration(to: loading)), milliseconds(input.duration(to: authoritative))))

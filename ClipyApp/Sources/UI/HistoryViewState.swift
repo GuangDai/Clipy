@@ -79,6 +79,20 @@ final class HistoryViewState {
     /// the opposite page's DTOs; observation replaces the window (04 §5/§6).
     private(set) var rows: [HistoryRow] = []
 
+    /// One bounded previous window keeps the list visible while a replacement
+    /// query runs. These DTOs never participate in selection, copy, drag or
+    /// mutation: those operations continue to resolve only `rows`.
+    private var retainedRows: [HistoryRow] = []
+    private var retainedRowRange: ClosedRange<Int>?
+
+    var rowsForPresentation: [HistoryRow] {
+        isLoadingFirstPage ? retainedRows : displayedRows
+    }
+
+    var rowRangeForPresentation: ClosedRange<Int>? {
+        isLoadingFirstPage ? retainedRowRange : loadedRowRange
+    }
+
     /// True while a one-shot `browse` pagination request is in flight.
     /// Package (GOV-3): the pagination footer and owner tests read it;
     /// ClipyApp observes loading only through the first-page seam below.
@@ -88,7 +102,14 @@ final class HistoryViewState {
     /// the replacement observation produces its first authoritative page (or
     /// typed failure). This is intentionally separate from pagination: no
     /// prior-query row remains executable during this phase.
-    private(set) var isLoadingFirstPage = false
+    private(set) var isLoadingFirstPage = false {
+        didSet {
+            if !isLoadingFirstPage {
+                retainedRows = []
+                retainedRowRange = nil
+            }
+        }
+    }
 
     /// The latest typed failure to surface in the panel banner; `nil` when
     /// its owning operation has recovered.
@@ -1031,6 +1052,10 @@ final class HistoryViewState {
         observationTask = nil
         invalidatePagination()
         observationGeneration += 1
+        if hasAuthoritativeFirstPage {
+            retainedRows = rows
+            retainedRowRange = loadedRowRange
+        }
         // Retire the old generation's authority before publishing its empty
         // loading placeholder. Selection reconciliation must never observe
         // `rows == []` while this still describes the prior settled page.
@@ -1381,6 +1406,7 @@ final class HistoryViewState {
             generation: generation,
             scope: scope
         )
+        purgeRetainedRows(scope)
         surfacePurge = purge
         return purge
     }
@@ -1421,6 +1447,7 @@ final class HistoryViewState {
     private func applyReceiptConfirmedRowPurge(
         _ scope: HistorySurfacePurge.Scope
     ) {
+        purgeRetainedRows(scope)
         invalidatePagination()
         observationGeneration += 1
         resetPageWindow()
@@ -1439,6 +1466,22 @@ final class HistoryViewState {
             rows.removeAll { $0.item.id == id }
         case .revision(let old, _):
             rows.removeAll { $0.item == old }
+        }
+    }
+
+    private func purgeRetainedRows(_ scope: HistorySurfacePurge.Scope) {
+        // A destructive change invalidates the retained display too. Its old
+        // pin facts cannot classify Clear Unpinned after a concurrent Unpin.
+        switch scope {
+        case .all, .unpinned:
+            retainedRows = []
+        case .item(let id):
+            retainedRows.removeAll { $0.item.id == id }
+        case .revision(let old, _):
+            retainedRows.removeAll { $0.item == old }
+        }
+        retainedRowRange = retainedRows.isEmpty ? nil : retainedRowRange.map {
+            $0.lowerBound...($0.lowerBound + retainedRows.count - 1)
         }
     }
 

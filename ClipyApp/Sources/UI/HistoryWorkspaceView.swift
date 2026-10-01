@@ -54,6 +54,12 @@ struct HistoryWorkspaceView: View {
         guard offsets.upperBound <= viewState.rows.count else { return [] }
         return viewState.rows[offsets]
     }
+    private var pageRowsForPresentation: ArraySlice<HistoryRow> {
+        let rows = viewState.rowsForPresentation
+        let offsets = paging.rowOffsets(in: viewState.rowRangeForPresentation)
+        guard offsets.upperBound <= rows.count else { return [] }
+        return rows[offsets]
+    }
     private var selectedRow: HistoryRow? {
         guard selectedIDs.count == 1, let id = selectedIDs.first else { return nil }
         return pageRows.first { $0.item.id == id }
@@ -72,7 +78,7 @@ struct HistoryWorkspaceView: View {
 
     private var workspaceContent: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header.padding(16)
+            header.padding(16).zIndex(1)
             Divider()
             HistoryWorkspaceSplitView(listWidth: $listWidth) {
                 historyColumn
@@ -129,7 +135,6 @@ struct HistoryWorkspaceView: View {
         .onChange(of: viewState.isLoadingPage) { _, _ in reconcilePage() }
         .onChange(of: viewState.isLoadingFirstPage) { _, loading in
             if loading {
-                paging.reset()
                 if !isMutating { selectedIDs = [] }
             }
         }
@@ -285,12 +290,12 @@ struct HistoryWorkspaceView: View {
 
     private var historyColumn: some View {
         let viewportHeight = listViewportHeight
-        let rows = pageRows
+        let rows = pageRowsForPresentation
         return VStack(spacing: 0) {
             selectionToolbar.padding(10)
             Divider()
-            if viewState.isLoadingFirstPage {
-                ProgressView(text("Loading history…")).frame(maxWidth: .infinity, maxHeight: .infinity)
+            if viewState.isLoadingFirstPage && rows.isEmpty {
+                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if rows.isEmpty {
                 ContentUnavailableView {
                     Label(text(viewState.isSearchActive || viewState.hasActiveFilters ? "No matching items" : "History is empty"),
@@ -307,7 +312,7 @@ struct HistoryWorkspaceView: View {
                             .contextMenu {
                                 rowContextMenu(for: row).disabled(isMutating)
                             }
-                            .disabled(isMutating)
+                            .disabled(isMutating || viewState.isLoadingFirstPage)
                             .onGeometryChange(for: Bool.self) { proxy in
                                 let frame = proxy.frame(in: .named("history-workspace-list"))
                                 return frame.height > 0 && frame.maxY > 0 && frame.minY < viewportHeight
@@ -616,6 +621,7 @@ struct HistoryWorkspaceView: View {
     }
 
     private func reconcilePage() {
+        guard !viewState.isLoadingFirstPage else { return }
         paging.reconcile(loadedRange: viewState.loadedRowRange, isLoadingPage: viewState.isLoadingPage)
         guard !isMutating else { return }
         var allowed = Set(pageRows.map(\.item.id))

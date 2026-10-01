@@ -97,7 +97,7 @@ struct HistoryListView: View {
         .onChange(of: viewState.hasAuthoritativeFirstPage) { _, hasPage in
             // A new query or return-to-latest request starts at its first
             // result even if that query happens to include the old anchor.
-            if !hasPage { firstVisibleRowID = nil }
+            if hasPage { firstVisibleRowID = nil }
         }
         .onChange(of: viewState.restoredReadingItemID, initial: true) { _, id in
             guard let id else { return }
@@ -108,13 +108,9 @@ struct HistoryListView: View {
 
     @ViewBuilder
     private func content(now: Date) -> some View {
-        let rows = viewState.displayedRows
-        if viewState.rows.isEmpty {
+        let rows = viewState.rowsForPresentation
+        if rows.isEmpty {
             emptyState
-        } else if rows.isEmpty {
-            // Keep the displayed-row fallback consistent with the current
-            // query while presentation reconciles its loaded lanes.
-            filteredEmptyState
         } else {
             list(rows: rows, now: now)
         }
@@ -252,12 +248,14 @@ struct HistoryListView: View {
             bottom: PanelContentFit.listRowVerticalInset,
             trailing: PanelContentFit.listRowHorizontalInset
         ))
+        .disabled(viewState.isLoadingFirstPage)
+        .allowsHitTesting(!viewState.isLoadingFirstPage)
         // Hover selection (Maccy's HoverSelectionModifier): the surface
         // state arbitrates pointer-vs-keyboard mode, so hover selects
         // without scrolling only in mouse mode and otherwise defers until
         // the mouse next moves.
         .onHover { inside in
-            if inside { onHoverRow(row.item.id) }
+            if inside, !viewState.isLoadingFirstPage { onHoverRow(row.item.id) }
         }
     }
 
@@ -293,9 +291,10 @@ struct HistoryListView: View {
     @ViewBuilder
     private var emptyState: some View {
         if viewState.isLoadingFirstPage {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel(HistoryListCopy.text("Loading clipboard history"))
+            // Search already owns the loading indicator. Keep an empty
+            // viewport until the first page arrives instead of a second
+            // full-surface spinner.
+            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let issue = HistorySearchCopy.issue(for: viewState) {
             emptyMessage(HistorySearchCopy.text("Check search conditions"), symbol: "exclamationmark.magnifyingglass",
                          description: issue)

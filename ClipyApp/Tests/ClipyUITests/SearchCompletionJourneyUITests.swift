@@ -75,7 +75,7 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         app.typeKey("1", modifierFlags: .command)
         app.typeText("$")
         try require(waitUntil {
-            rows.count == 1 && rows.firstMatch.label.contains("$ retained")
+            rows.count == 2 && rows.firstMatch.label.contains("$ retained")
         }, app.debugDescription)
         try require(waitUntil {
             popup.exists && popup.frame.height > 40
@@ -139,6 +139,35 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         }, app.debugDescription)
         try require(pasteboard.string(forType: .string) == "completion must not copy",
                     "Tab must insert the candidate without copying a history item.")
+
+        // A completed source is longer than the narrow native viewport. Keep
+        // the viewport inside the header and use real arrows without clicking
+        // or restoring focus after the asynchronous results have settled.
+        try replaceSearch(with: "$source-id:com.apple.Saf", search: search, in: app)
+        let safariCandidate = app.buttons["clipy.search.completion.source."
+            + Data("com.apple.Safari".utf8).base64EncodedString()]
+        try require(safariCandidate.waitForExistence(timeout: 10), app.debugDescription)
+        app.typeKey(.tab, modifierFlags: [])
+        let safariExpression = "$source-id:\"com.apple.Safari\"$"
+        try require(waitUntil {
+            search.value as? String == safariExpression && !popup.exists && rows.count == 1
+        }, app.debugDescription)
+        let clear = app.buttons["clipy.search.clear"]
+        try require(search.frame.maxX <= clear.frame.minX && panel.frame.contains(search.frame),
+                    "Query length must not expand the native editor outside its search row.\n" + app.debugDescription)
+        let completedSource = XCTAttachment(screenshot: app.screenshot())
+        completedSource.name = "completed-safari-source-visible"
+        completedSource.lifetime = .keepAlways
+        add(completedSource)
+        app.typeKey(.leftArrow, modifierFlags: [])
+        app.typeText("X")
+        try require(waitUntil { search.value as? String == "$source-id:\"com.apple.Safari\"X$" },
+                    "Left Arrow must move the retained native insertion point.\n" + app.debugDescription)
+        app.typeKey(.delete, modifierFlags: [])
+        app.typeKey(.rightArrow, modifierFlags: [])
+        app.typeText(" retained")
+        try require(waitUntil { search.value as? String == safariExpression + " retained" },
+                    "Right Arrow must move back past the closing dollar.\n" + app.debugDescription)
 
         try replaceSearch(with: "$ty", search: search, in: app)
         try require(typeCandidate.waitForExistence(timeout: 5), app.debugDescription)
@@ -229,6 +258,9 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         )))
         _ = try await history.perform(.capture(capture(
             "$ retained", source: nil, at: base.addingTimeInterval(101)
+        )))
+        _ = try await history.perform(.capture(capture(
+            "$ retained Safari", source: "com.apple.Safari", at: base.addingTimeInterval(102)
         )))
         let details = try await history.details(for: target.id)
         try require(details.occurrence.firstSource == oldSource)

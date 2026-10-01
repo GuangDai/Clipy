@@ -860,6 +860,10 @@ struct HistoryPanelView: View {
     private var browsingRoot: some View {
         VStack(spacing: 0) {
             browsingHeader
+                // The header's candidates extend over the list. Its whole
+                // sibling must be above the native scroll view, not only the
+                // SearchHeaderView nested inside its HStack.
+                .zIndex(1)
 
             HistoryListView(
                 viewState: viewState,

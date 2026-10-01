@@ -19,6 +19,11 @@ struct HistorySearchField: NSViewRepresentable {
         HistorySearchTextField()
     }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: HistorySearchTextField, context: Context) -> CGSize? {
+        guard let width = proposal.width, width.isFinite else { return nil }
+        return CGSize(width: max(0, width), height: nsView.intrinsicContentSize.height)
+    }
+
     func updateNSView(_ field: HistorySearchTextField, context: Context) {
         field.placeholderString = placeholder
         field.setAccessibilityLabel(accessibilityLabel)
@@ -66,6 +71,7 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
         isSelectable = true
         usesSingleLineMode = true
         lineBreakMode = .byClipping
+        cell?.isScrollable = true
         font = .systemFont(ofSize: NSFont.systemFontSize)
         focusRingType = .none
         delegate = self
@@ -75,6 +81,17 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
     }
 
     required init?(coder: NSCoder) { nil }
+
+    override var intrinsicContentSize: NSSize {
+        // Query length must not enlarge the native view beyond SwiftUI's
+        // search row. AppKit scrolls the editor inside this bounded viewport.
+        NSSize(width: NSView.noIntrinsicMetric, height: super.intrinsicContentSize.height)
+    }
+
+    override func layout() {
+        super.layout()
+        reportAvailableHeight()
+    }
 
     func update(text: String, isFocused: Bool) {
         // SwiftUI updates during composition must not replace the field
@@ -208,6 +225,7 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
         editor.insertText(insertion.text, replacementRange: insertion.replacementRange)
         let offset = insertion.selectionOffset ?? (insertion.text as NSString).length
         editor.setSelectedRange(NSRange(location: insertion.replacementRange.location + offset, length: 0))
+        editor.scrollRangeToVisible(editor.selectedRange())
         textRevision += 1
         onTextChange(editor.string)
         reportInput()

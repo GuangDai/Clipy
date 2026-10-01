@@ -242,9 +242,19 @@ struct SearchHeaderView: View {
 
     private var searchField: some View {
         HStack(spacing: PanelTheme.spacingXSmall) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
+            ZStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .opacity(viewState.isLoadingFirstPage ? 0 : 1)
+                    .accessibilityHidden(true)
+                if viewState.isLoadingFirstPage {
+                    ProgressView().controlSize(.small)
+                        .accessibilityLabel(HistorySearchCopy.text("Updating results…", bundle: copyBundle))
+                        .accessibilityIdentifier("clipy.search.updating")
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(width: 16)
             HistorySearchField(
                 text: searchTextBinding,
                 isFocused: searchFieldFocused,
@@ -259,6 +269,7 @@ struct SearchHeaderView: View {
                 },
                 completion: completion
             )
+            .frame(minWidth: 0, maxWidth: .infinity)
             // Keep the editor's width and text position stable as the user
             // enters the first character or clears the query (V2-07 §3).
             // The empty slot has no control or accessibility element.
@@ -311,7 +322,10 @@ struct SearchHeaderView: View {
         locale: Locale = .current,
         bundle: Bundle = AppLocalization.bundle
     ) -> String {
-        HistoryCountCopy.results(
+        if viewState.isLoadingFirstPage {
+            return HistorySearchCopy.text("Updating results…", bundle: bundle)
+        }
+        return HistoryCountCopy.results(
             count: viewState.displayedCount,
             hasNextPage: viewState.displayedCountIsLowerBound,
             locale: locale,

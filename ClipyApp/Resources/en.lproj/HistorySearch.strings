@@ -69,3 +69,4 @@
 "Use ⌥Esc or Insert condition / show suggestions to open candidates. Arrow keys choose; Tab or Return inserts; Escape dismisses." = "Use ⌥Esc or Insert condition / show suggestions to open candidates. Arrow keys choose; Tab or Return inserts; Escape dismisses.";
 "Escape a literal dollar as \\$; numeric amounts such as $10.50$ stay plain text. An unfinished condition stays plain text while you type." = "Escape a literal dollar as \\$; numeric amounts such as $10.50$ stay plain text. An unfinished condition stays plain text while you type.";
 "Retry" = "Retry";
+"Updating results…" = "Updating results…";
