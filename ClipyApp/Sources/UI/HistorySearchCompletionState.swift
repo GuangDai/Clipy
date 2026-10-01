@@ -97,7 +97,9 @@ final class HistorySearchCompletionState {
     func updateHistoryPosition(_ position: ChangePosition?) {
         guard let position, historyPosition.map({ position > $0 }) ?? true else { return }
         historyPosition = position
-        if context?.kind == .source, isInputFocused, !isComposing { refresh(explicit: context?.explicit ?? false) }
+        if context?.kind == .source, isInputFocused, !isComposing {
+            refresh(explicit: context?.explicit ?? false, preservingSourceCandidates: true)
+        }
     }
 
     func command(_ command: HistorySearchCompletionCommand) -> HistorySearchCompletionDecision {
@@ -192,25 +194,26 @@ final class HistorySearchCompletionState {
         return try await sourceWorker.suggestions(prefix: prefix, position: position, applications: names)
     }
 
-    private func refresh(explicit: Bool) {
+    private func refresh(explicit: Bool, preservingSourceCandidates: Bool = false) {
         guard isInputFocused, !isComposing, let input,
               let context = HistorySearchCompletionEngine.context(for: input, explicit: explicit, mode: mode) else {
             dismiss()
             return
         }
+        let preservesCandidates = preservingSourceCandidates && context.kind == .source && self.context == context
         requestGeneration += 1
         let generation = requestGeneration
         sourceTask?.cancel()
         sourceTask = nil
         self.context = context
-        selectedIndex = 0
+        if !preservesCandidates { selectedIndex = 0 }
         sourceFailure = false
         isLoadingSources = false
         if context.kind != .source {
             candidates = Array(HistorySearchCompletionEngine.candidates(for: context).prefix(8))
             return
         }
-        candidates = []
+        if !preservesCandidates { candidates = [] }
         guard sourceWorker != nil else { return }
         isLoadingSources = true
         let position = historyPosition
@@ -220,13 +223,22 @@ final class HistorySearchCompletionState {
                 let sources = try await self.historySourceSuggestions(prefix: context.prefix, position: position)
                 guard !Task.isCancelled, self.requestGeneration == generation,
                       self.isInputFocused, !self.isComposing else { return }
-                self.candidates = sources.map { source in
+                // Navigation remains available during a metadata refresh.
+                // Preserve the user's choice at delivery, including any move
+                // made while the read was waiting, by its exact identity.
+                let selectedID = preservesCandidates && self.candidates.indices.contains(self.selectedIndex)
+                    ? self.candidates[self.selectedIndex].id : nil
+                let candidates = sources.map { source in
                     HistorySearchCompletionEngine.candidate(
                         id: "source." + Data(source.bundleID.utf8).base64EncodedString(),
                         title: source.displayName, subtitle: source.bundleID,
                         term: "source-id:" + HistorySearchExpression.quoted(source.bundleID), context: context
                     )
                 }
+                self.candidates = candidates
+                self.selectedIndex = selectedID.flatMap { selectedID in
+                    candidates.firstIndex { $0.id.utf8.elementsEqual(selectedID.utf8) }
+                } ?? 0
                 self.isLoadingSources = false
                 self.sourceTask = nil
             } catch {

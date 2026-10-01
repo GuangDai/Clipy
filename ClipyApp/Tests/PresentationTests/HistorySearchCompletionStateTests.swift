@@ -76,6 +76,78 @@ struct HistorySearchCompletionStateTests {
         #expect(await history.requests.count == 6)
     }
 
+    @Test func historyRefreshKeepsVisibleSourcesAndRemapsTheCurrentSelectionByIdentity() async throws {
+        let base = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        _ = try await capture("aardvark item", source: "com.example.Aardvark", at: 1, in: base)
+        _ = try await capture("beta item", source: "com.example.Beta", at: 2, in: base)
+        let gamma = try await capture("gamma item", source: "com.example.Gamma", at: 3, in: base)
+        guard case .inserted(let gammaItem) = gamma.outcome else { throw FixtureFailure.expectedInsertion }
+        let history = CompletionSourceReadHistory(base: base)
+        let state = completion(history: history, position: gamma.position)
+        defer {
+            state.close()
+            Task { await history.releaseRead() }
+        }
+        state.update(input("$source:"))
+        try #require(await pollUntil {
+            !state.isLoadingSources && state.candidates.map(\.subtitle) == [
+                "com.example.Aardvark", "com.example.Beta", "com.example.Gamma"
+            ]
+        })
+        _ = state.command(.next)
+        let previous = state.candidates
+        let selected = try #require(previous.indices.contains(state.selectedIndex) ? previous[state.selectedIndex] : nil)
+        #expect(selected.subtitle == "com.example.Beta")
+
+        let alpha = try await capture("alpha item", source: "com.example.Alpha", at: 4, in: base)
+        await history.holdNextRead()
+        state.updateHistoryPosition(alpha.position)
+        #expect(state.isLoadingSources && state.isPresented)
+        #expect(state.candidates == previous)
+        try #require(state.candidates.indices.contains(state.selectedIndex))
+        #expect(state.candidates[state.selectedIndex].id == selected.id)
+        try #require(await pollUntil { await history.isHoldingRead })
+        #expect(state.candidates == previous)
+        try #require(state.candidates.indices.contains(state.selectedIndex))
+        #expect(state.candidates[state.selectedIndex].id == selected.id)
+
+        // A later arrow command owns selection even while metadata waits.
+        // The new Alpha source moves Gamma from index two to index three.
+        _ = state.command(.next)
+        let movedSelection = try #require(state.candidates.indices.contains(state.selectedIndex)
+            ? state.candidates[state.selectedIndex] : nil)
+        #expect(movedSelection.subtitle == "com.example.Gamma")
+        await history.releaseRead()
+        try #require(await pollUntil {
+            !state.isLoadingSources && state.candidates.map(\.subtitle) == [
+                "com.example.Aardvark", "com.example.Alpha", "com.example.Beta", "com.example.Gamma"
+            ]
+        })
+        #expect(state.selectedIndex == 3)
+        try #require(state.candidates.indices.contains(state.selectedIndex))
+        #expect(state.candidates[state.selectedIndex].id == movedSelection.id)
+
+        let beforeRemoval = state.candidates
+        let receipt = try await base.perform(.remove(gammaItem.id))
+        guard case .committed(let removal) = receipt else { throw FixtureFailure.expectedCommit }
+        await history.holdNextRead()
+        state.updateHistoryPosition(removal.position)
+        try #require(await pollUntil { await history.isHoldingRead })
+        #expect(state.isLoadingSources && state.isPresented)
+        #expect(state.candidates == beforeRemoval)
+        try #require(state.candidates.indices.contains(state.selectedIndex))
+        #expect(state.candidates[state.selectedIndex].id == movedSelection.id)
+        await history.releaseRead()
+        try #require(await pollUntil {
+            !state.isLoadingSources && state.candidates.map(\.subtitle) == [
+                "com.example.Aardvark", "com.example.Alpha", "com.example.Beta"
+            ]
+        })
+        #expect(!state.candidates.contains { $0.id == movedSelection.id })
+        #expect(state.selectedIndex == 0)
+        #expect(state.isPresented)
+    }
+
     @Test func anAdvancedHistoryPositionWithdrawsRemovedSourcesAndCachesTheNewVocabulary() async throws {
         let base = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let alpha = try await capture("alpha item", source: "com.example.Alpha", at: 1, in: base)

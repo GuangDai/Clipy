@@ -60,11 +60,11 @@ source-id:com.apple.TextEdit NOT draft
 
 [`HistorySearchCompletionState.swift`](../ClipyApp/Sources/UI/HistorySearchCompletionState.swift) 每个输入框最多显示八条候选，控制候选选择和 replacement range。输入法正在组合时不生成候选、不替换 marked text；输入法命令优先，补全候选其次，列表导航与复制最后。插入经实际 field editor 应用并由正常文字变化回调更新查询，不由候选 owner 越过输入框直接改 History 选择。关闭候选、焦点离开、输入或查询代次变化都会取消旧请求，旧来源结果不得重新打开已关闭候选。
 
-候选存在时方向键选候选、Tab / Return 接受、Esc 先收起候选；来源候选仍在加载或显示读取失败时，这些导航 / 确认命令也由候选框处理，不能误触列表复制。候选框关闭后恢复列表及文本输入的原行为。引擎只检查有界输入：最多 8,192 UTF-8 字节、caret 前 4,096 个 UTF-16 unit 和后 512 unit；当前 term 最多 256 unit，匹配 prefix 最多 128 unit，目标最多 1,024 unit。超出输入辅助范围时不给候选，不截断或改变真实查询；History 查询本身仍有独立 4,096 UTF-8 字节限制。
+候选存在时上下方向键选候选、Tab / Return 接受、Esc 先收起候选；左右方向键继续移动文字光标。来源候选仍在加载或显示读取失败时，上下导航 / 确认命令也由候选框处理，不能误触列表复制。候选框关闭后恢复列表及文本输入的原行为。引擎只检查有界输入：最多 8,192 UTF-8 字节、caret 前 4,096 个 UTF-16 unit 和后 512 unit；当前 term 最多 256 unit，匹配 prefix 最多 128 unit，目标最多 1,024 unit。超出输入辅助范围时不给候选，不截断或改变真实查询；History 查询本身仍有独立 4,096 UTF-8 字节限制。
 
 来源候选读取 [`ClipboardHistory.sourceApplications`](../Sources/HistoryCore/ClipboardHistory.swift) 的 `HistorySourceApplicationPage`，默认 / 最大每页 32 个不同 application ID，加一条有限 lookahead。ID 来自所有 retained `copy_sources.application`，排除 nil / 空观察，以字面顺序做 keyset seek 跳过重复；这个读取不打开 title、searchBody 或表示载荷。提交位置变化或另一 History 实例的游标返回 `snapshotExpired`，不会混合不同快照词汇。接口和值定义见 [`HistorySourceApplications.swift`](../Sources/HistoryCore/HistorySourceApplications.swift)，实际读取见 [`HistoryAuthority+SourceApplications.swift`](../Sources/HistoryStorage/HistoryAuthority+SourceApplications.swift)。
 
-补全 worker 在后台分页检查完整来源词汇，只带回八条最佳结果。最多缓存 2,048 个 ID、256 KiB 元数据；更大词汇继续逐页选择候选，不常驻完整集合。应用显示名和标识一起参加候选匹配，选择后写入精确的 source-id 条件。并发提交使分页过期时至多重取一次；连续变化或读取失败显示可重试状态，不用当前可见历史页假造完整来源列表。
+补全 worker 在后台分页检查完整来源词汇，只带回八条最佳结果。最多缓存 2,048 个 ID、256 KiB 元数据；更大词汇继续逐页选择候选，不常驻完整集合。应用显示名和标识一起参加候选匹配，选择后写入精确的 source-id 条件。输入不变而历史提交位置推进时，等待刷新期间保留当前候选和选择；新候选到达后按来源 ID 保留仍存在的选择，移除已无记录的来源。输入改变、失焦、关闭和输入法组合仍取消旧请求。并发提交使分页过期时至多重取一次；连续变化或读取失败显示可重试状态，不用当前可见历史页假造完整来源列表。
 
 ## 存储搜索路径
 
@@ -92,4 +92,4 @@ fuzzy 的 Fuse 固定参数是 threshold 0.7、location 0、distance 100、忽�
 
 性能辅助程序会报告读取行数、投影字节、匹配行数和进程资源；实际测量方法见 [testing.md](testing.md)。有界批次和页面空间是源码约束，运行时间和 RSS 改善需要同输入实测。
 
-包装条件、旧来源查询、来源词汇分页与补全接线尚待本轮 macOS CI。旧版本查询测试通过不能作为此次新接口和交互通过的证据；本文不声明补全、输入法或条件混合查询已经在运行应用验证完成。
+搜索刷新、条件补全和原生输入的回归用例分别位于 [`HistoryInputResponsivenessTests.swift`](../ClipyApp/Tests/PresentationTests/HistoryInputResponsivenessTests.swift)、[`HistorySearchCompletionStateTests.swift`](../ClipyApp/Tests/PresentationTests/HistorySearchCompletionStateTests.swift)、[`HistorySearchFieldHostedTests.swift`](../ClipyApp/Tests/ClipyIntegrationTests/HistorySearchFieldHostedTests.swift) 和 [`SearchCompletionJourneyUITests.swift`](../ClipyApp/Tests/ClipyUITests/SearchCompletionJourneyUITests.swift)。实际应用用例验证结果刷新后的候选点击、Tab 插入 Safari 来源、左右键编辑及旧来源命中；原生宿主用例验证窄输入框的光标可见、窗口调整后的候选高度及 marked text。marked text 宿主验证不代表已覆盖所有系统输入法。
