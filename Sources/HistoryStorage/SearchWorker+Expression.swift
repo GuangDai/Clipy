@@ -4,10 +4,6 @@
 import Foundation
 import HistoryCore
 
-/// One request's necessary FTS condition and its bounded posting proof.
-/// Readers reuse this choice inside that request's existing SQLite snapshot.
-internal typealias SearchCandidateSelection = (expression: String, isSparse: Bool)
-
 internal indirect enum PreparedSearchExpression {
     case all
     case noMatch
@@ -40,76 +36,21 @@ internal indirect enum PreparedSearchExpression {
     /// Only necessary positive text grams may reduce the candidate set.
     /// Negation cannot invert an approximate posting match; metadata-only
     /// OR branches likewise need rows without any text posting.
-    static func candidateExpression(
-        _ node: HistorySearchExpression.Node, in database: SQLiteDatabase
-    ) throws -> SearchCandidateSelection? {
-        var probeResults: [Data: Bool] = [:]
-        return try candidateExpression(node, in: database, probeResults: &probeResults)
-    }
-
-    static func candidateExpression(
-        _ node: HistorySearchExpression.Node, in database: SQLiteDatabase, probeResults: inout [Data: Bool]
-    ) throws -> SearchCandidateSelection? {
-        try candidateExpression(node, in: database, checkingSparsity: true, probeResults: &probeResults)
-    }
-
-    private static func candidateExpression(
-        _ node: HistorySearchExpression.Node, in database: SQLiteDatabase, checkingSparsity: Bool,
-        probeResults: inout [Data: Bool]
-    ) throws -> SearchCandidateSelection? {
+    static func candidateExpression(_ node: HistorySearchExpression.Node) -> String? {
         switch node {
-        case .text(let term):
-            guard let expression = SQLiteSearchIndex.matchExpression(term: term, mode: .exact) else { return nil }
-            let isSparse = checkingSparsity
-                ? try SQLiteSearchIndex.prefersSparseCandidates(expression: expression, in: database,
-                                                               probeResults: &probeResults) : false
-            return (expression, isSparse)
+        case .text(let term): return SQLiteSearchIndex.matchExpression(term: term, mode: .exact)
         case .and(let lhs, let rhs):
-            // Every hit must satisfy both operands. A sparse necessary
-            // condition on either side therefore bounds candidate decoding,
-            // even when the caller wrote a common term first. Do not reorder
-            // the matcher: its original left operand still owns presentation.
-            // Keep one condition rather than expanding a long AND into a
-            // deeply nested FTS intersection or reprobing each dense prefix.
-            let left = try candidateExpression(lhs, in: database, probeResults: &probeResults)
-            if left?.isSparse == true { return left }
-            let right = try candidateExpression(rhs, in: database, probeResults: &probeResults)
-            return right?.isSparse == true ? right : (left ?? right)
-        case .or:
-            var branches: [HistorySearchExpression.Node] = []
-            collectOrBranches(node, into: &branches)
-            var expressions: [String] = []
-            for branch in branches {
-                // The union, rather than each leaf or left-associated OR
-                // prefix, needs a posting proof. AND branches still select
-                // their own necessary sparse operand before joining it.
-                guard let candidate = try candidateExpression(branch, in: database, checkingSparsity: false,
-                                                              probeResults: &probeResults) else {
-                    return nil
-                }
-                expressions.append(candidate.expression)
-            }
+            // One required operand is sufficient. Keeping a single necessary
+            // posting avoids expanding 128 adjacent terms into thousands of
+            // grams and a deeply nested FTS expression; the row matcher still
+            // evaluates every Boolean condition.
+            return candidateExpression(lhs) ?? candidateExpression(rhs)
+        case .or(let lhs, let rhs):
+            guard let left = candidateExpression(lhs), let right = candidateExpression(rhs) else { return nil }
             // Leaves contain only AND-ed grams; FTS AND binds before OR.
             // Flatten the union rather than nesting every left-associated OR.
-            let expression = expressions.joined(separator: " OR ")
-            // Sparse branches do not prove their union is sparse. Count the
-            // actual union under the same 4,097-output probe as ordinary FTS.
-            let isSparse = checkingSparsity
-                ? try SQLiteSearchIndex.prefersSparseCandidates(expression: expression, in: database,
-                                                               probeResults: &probeResults) : false
-            return (expression, isSparse)
+            return "\(left) OR \(right)"
         default: return nil
-        }
-    }
-
-    private static func collectOrBranches(
-        _ node: HistorySearchExpression.Node, into branches: inout [HistorySearchExpression.Node]
-    ) {
-        if case .or(let lhs, let rhs) = node {
-            collectOrBranches(lhs, into: &branches)
-            collectOrBranches(rhs, into: &branches)
-        } else {
-            branches.append(node)
         }
     }
 

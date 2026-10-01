@@ -64,12 +64,6 @@ package struct ExactLiteralMatcher: Sendable {
     /// verification loop would otherwise lose on `aaaa…` against `aaa…ab`.
     private static let maxFailedVerifications = 256
 
-    /// Bound failed comparison work as well as attempts. A 4,096-byte needle
-    /// formerly repeated its almost-complete prefix 256 times before KMP.
-    /// One verification may cross this budget; total failed comparison work
-    /// before switching stays below this bound plus one needle's length.
-    private static let maxFailedVerificationBytes = 4_096
-
     private static let swarHighs: UInt64 = 0x8080_8080_8080_8080
     private static let swarOnes: UInt64 = 0x0101_0101_0101_0101
 
@@ -162,7 +156,6 @@ package struct ExactLiteralMatcher: Sendable {
             let headIsLetter = (0x61...0x7A).contains(head)
             var firstMatchOffset: Int?
             var failedVerifications = 0
-            var failedVerificationBytes = 0
             var useAutomaton = false
             var automatonMatched = 0
             var index = 0
@@ -214,16 +207,14 @@ package struct ExactLiteralMatcher: Sendable {
                                     utf8,
                                     needle: needle,
                                     at: candidate,
-                                    count: count,
-                                    failedVerificationBytes: &failedVerificationBytes
+                                    count: count
                                 ) {
                                     firstMatchOffset = start
                                     matchEndLimit = start &+ needle.count
                                     break wordScan
                                 }
                                 failedVerifications &+= 1
-                                if failedVerifications >= Self.maxFailedVerifications
-                                    || failedVerificationBytes >= Self.maxFailedVerificationBytes {
+                                if failedVerifications >= Self.maxFailedVerifications {
                                     adversarySwitched = true
                                     break wordScan
                                 }
@@ -290,18 +281,13 @@ package struct ExactLiteralMatcher: Sendable {
         _ bytes: UnsafeBufferPointer<UInt8>,
         needle: [UInt8],
         at start: Int,
-        count: Int,
-        failedVerificationBytes: inout Int
+        count: Int
     ) -> Int? {
         guard start &+ needle.count <= count else {
             return nil
         }
         for offset in needle.indices {
             guard Self.foldsEqual(bytes[start &+ offset], needle[offset]) else {
-                // Charge the compared prefix once at failure; successful
-                // verification and each individual comparison pay no counter
-                // update, and no haystack or needle bytes are copied.
-                failedVerificationBytes += offset + 1
                 return nil
             }
         }
