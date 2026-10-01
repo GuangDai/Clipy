@@ -166,7 +166,14 @@ extension BuiltInAutomation {
                 frame.notificationAllowed = true
             case .recognizeText:
                 guard case let .image(data) = frame.value else { throw BuiltInAutomationFailure.requiresImage }
-                let recognized = try await recognizeText(data)
+                let recognized: String
+                do { recognized = try await recognizeText(data) }
+                catch {
+                    // An OCR operation can report its own error while the
+                    // workflow was cancelled. Preserve the task's cancellation.
+                    try Task.checkCancellation()
+                    throw error
+                }
                 try Task.checkCancellation()
                 try checkSize(recognized)
                 guard !recognized.isEmpty else { throw BuiltInAutomationFailure.noRecognizedText }

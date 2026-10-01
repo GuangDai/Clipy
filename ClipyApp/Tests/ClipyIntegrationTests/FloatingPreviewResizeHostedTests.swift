@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -214,8 +215,10 @@ struct FloatingPreviewResizeHostedTests {
         #expect(main.childWindows?.contains(preview) != true)
     }
 
-    @Test(arguments: [false, true])
-    func endingASheetWithThePointerOnItsActionKeepsTheRestoredPreview(critical: Bool) async throws {
+    @Test(arguments: [false, true], [false, true])
+    func endingASheetWithThePointerOnItsActionKeepsOnlyItsOriginalPresentation(
+        critical: Bool, reopensInCompletion: Bool
+    ) async throws {
         let item = try await capturedReference()
         let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
         let visible = screen.visibleFrame
@@ -224,12 +227,11 @@ struct FloatingPreviewResizeHostedTests {
         var interaction = AdvancedInteractionSettings()
         interaction.pointerGraceMilliseconds = 0
         owner.previewState.applyInteractionSettings(interaction)
-        let pointer = NSEvent.mouseLocation
         let height = PanelGeometry.minimumHeight + 20
         try #require(height < visible.height / 2)
         let main = NSWindow(
             contentRect: NSRect(x: visible.minX,
-                                y: pointer.y < visible.midY ? visible.maxY - height : visible.minY,
+                                y: visible.maxY - height,
                                 width: 360, height: height),
             styleMask: [.borderless], backing: .buffered, defer: false
         )
@@ -250,21 +252,40 @@ struct FloatingPreviewResizeHostedTests {
         let alert = NSAlert()
         alert.alertStyle = critical ? .critical : .warning
         alert.messageText = "Hosted stationary sheet action"
+        alert.informativeText = String(repeating: "Loading this local file keeps clipboard history unchanged.\n", count: 7)
         alert.addButton(withTitle: "OK")
         var sheetCompleted = false
         owner.previewState.isPointerInteractionActive = true
         owner.previewState.pointerEntered(.preview)
         owner.previewState.isFileConfirmationPresented = true
-        alert.beginSheetModal(for: preview) { _ in sheetCompleted = true }
+        alert.beginSheetModal(for: preview) { _ in
+            if reopensInCompletion {
+                preview.dismiss()
+                preview.present(beside: main)
+            }
+            sheetCompleted = true
+        }
         try #require(await ComposedSupport.waitFor { preview.attachedSheet === alert.window })
-        // Represent the action underneath the unchanged system pointer. The
-        // real UI journey supplies the actual button click and native frame.
-        alert.window.setFrameOrigin(NSPoint(x: pointer.x - 40, y: pointer.y - 40))
+        let originalPointer = try #require(CGEvent(source: nil)).location
+        defer { _ = CGWarpMouseCursorPosition(originalPointer) }
+        try movePointer(to: try #require(alert.buttons.first), in: alert.window)
         try #require(alert.window.frame.contains(NSEvent.mouseLocation))
         try #require(!main.frame.contains(NSEvent.mouseLocation))
+        try #require(!preview.frame.contains(NSEvent.mouseLocation))
         owner.previewState.pointerExited(.preview)
         owner.previewState.isFileConfirmationPresented = false
         preview.endSheet(alert.window)
+        if reopensInCompletion {
+            try #require(await ComposedSupport.waitFor {
+                sheetCompleted && preview.attachedSheet == nil && preview.frame.height == main.frame.height
+                    && owner.previewState.pointerSurfacesContainingPointer?().isEmpty == true
+            })
+            #expect(owner.previewState.isOpen && preview.isPresented && preview.isVisible)
+            #expect(owner.previewState.previewedItem == item)
+            owner.previewState.recheckPointerAfterModal()
+            try #require(await ComposedSupport.waitFor { !owner.previewState.isOpen && !preview.isPresented })
+            return
+        }
         try #require(await ComposedSupport.waitFor {
             sheetCompleted && preview.attachedSheet == nil && preview.frame.height == main.frame.height
                 && owner.previewState.pointerSurfacesContainingPointer?().contains(.preview) == true
@@ -538,5 +559,12 @@ struct FloatingPreviewResizeHostedTests {
         )))
         let page = try await history.browse(.init(kind: .recent, limit: 1))
         return try #require(page.rows.first).item
+    }
+
+    private func movePointer(to button: NSButton, in window: NSWindow) throws {
+        let buttonFrame = window.convertToScreen(button.convert(button.bounds, to: nil))
+        let point = CGPoint(x: buttonFrame.midX,
+                            y: CGDisplayBounds(CGMainDisplayID()).height - buttonFrame.midY)
+        try #require(CGWarpMouseCursorPosition(point) == .success)
     }
 }

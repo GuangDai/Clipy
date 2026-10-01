@@ -111,6 +111,16 @@ struct SQLiteScaleTests {
             history: history, corpus: corpus, position: position, samples: &samples
         )
         #expect(samples.allSatisfy { $0.failure == nil })
+        for repetitions in Dictionary(grouping: samples, by: \.phase).values {
+            #expect(repetitions.count == sqliteScaleSearchTimedSampleCount + 1)
+            #expect(repetitions.compactMap(\.sampleIndex) == Array(0...sqliteScaleSearchTimedSampleCount))
+            #expect(repetitions.filter { $0.isWarmup == true }.map(\.sampleIndex) == [0])
+            #expect(repetitions.filter { $0.isWarmup == false }.count == sqliteScaleSearchTimedSampleCount)
+            #expect(repetitions.allSatisfy {
+                $0.query != nil && $0.searchWork != nil && $0.elapsedMilliseconds.isFinite
+                    && $0.elapsedMilliseconds > 0
+            })
+        }
         for phase in [
             "search-exact-body-dense-page1", "search-exact-body-dense-page2",
             "search-exact-body-rare-page1", "search-expression-common-rare-page1",
@@ -193,7 +203,9 @@ struct SQLiteScaleTests {
         let history = try await openMemoryStore()
         var samples: [SQLiteScaleSample] = []
         do {
-            _ = try await measureSQLiteScale(phase: "invalid-regexp", samples: &samples) {
+            _ = try await measureSQLiteScale(
+                phase: "invalid-regexp", samples: &samples, sampleIndex: 3, isWarmup: false
+            ) {
                 await history.measureSearch(HistoryBrowseRequest(
                     kind: .search(text: "[", mode: .regexp), limit: 50
                 ))
@@ -204,12 +216,56 @@ struct SQLiteScaleTests {
         } catch {
             let sample = try #require(samples.first)
             #expect(sample.failure != nil)
+            #expect(sample.sampleIndex == 3)
+            #expect(sample.isWarmup == false)
             #expect(sample.returnedRows == nil)
             let work = try #require(sample.searchWork)
             #expect(work.rowsDecoded == 0)
             #expect(work.rowsEvaluated == 0)
             #expect(work.stopReason == "failed")
         }
+    }
+
+    @Test func failedSearchValidationKeepsLaterEvidenceButFailsTheWholeWorkload() async throws {
+        let count = 4
+        let history = try await openMemoryStore()
+        let profile = SQLiteScaleFixtureProfile(kind: .mixed, fixedBodyBytes: 128)
+        let largeBodyIndex = profile.largestBodyIndex(in: count)
+        _ = try await history.seedPerformanceFixture(rowCount: count) { index in
+            profile.capture(at: index, includeLargeBodyHit: index == largeBodyIndex)
+        }
+        let actual = try await traverseSQLiteScale(
+            history: history, expectedCount: count, largeBodyIndex: largeBodyIndex
+        )
+        // Deliberately remove one known expected identity. The real oldest
+        // query still returns that row and must fail result validation.
+        let wrongExpectedRows = SQLiteScaleBrowseEvidence(
+            count: actual.count, leadingRows: actual.leadingRows, oldestRow: nil, largeBodyRow: actual.largeBodyRow
+        )
+        let position = try await history.usage().position
+        var samples: [SQLiteScaleSample] = []
+        await #expect(throws: SQLiteScaleError.self) {
+            try await exerciseSQLiteScaleSearches(
+                history: history, corpus: wrongExpectedRows, position: position, samples: &samples
+            )
+        }
+        let failed = try #require(samples.first { $0.phase == "search-exact-oldest-page1" })
+        #expect(failed.failure != nil)
+        #expect(failed.returnedRows == nil)
+        #expect(failed.searchWork?.matchesFound == 1)
+        #expect(failed.sampleIndex == 0)
+        let later = samples.filter { $0.phase == "search-fuzzy-typo-page1" }
+        #expect(later.count == sqliteScaleSearchTimedSampleCount + 1)
+        #expect(later.allSatisfy { $0.failure == nil && $0.returnedRows == count })
+    }
+
+    @Test func historicalSamplesDecodeWithoutSearchRepetitionFields() throws {
+        let historical = Data(#"{"phase":"search-exact-oldest-page1","elapsedMilliseconds":7.2,"before":{"residentBytes":16000000,"peakResidentBytesSinceLaunch":17000000,"footprintBytes":5000000},"returnedRows":1,"searchWork":{"rowsDecoded":1,"rowsEvaluated":1,"matchesFound":1,"batchCount":1,"stopReason":"exhausted"}}"#.utf8)
+        let decoded = try JSONDecoder().decode(SQLiteScaleSample.self, from: historical)
+        #expect(decoded.sampleIndex == nil)
+        #expect(decoded.isWarmup == nil)
+        #expect(decoded.returnedRows == 1)
+        #expect(decoded.searchWork?.rowsDecoded == 1)
     }
 
     @Test func failedOperationRetainsCompletedAndFailedPhaseEvidence() async throws {
@@ -224,6 +280,7 @@ struct SQLiteScaleTests {
             #expect(samples.map(\.phase) == ["complete", "failed"])
             #expect(samples[0].failure == nil)
             #expect(samples[1].failure != nil)
+            #expect(samples.allSatisfy { $0.sampleIndex == nil && $0.isWarmup == nil })
             #expect(samples[1].returnedRows == nil)
             #expect(samples[1].returnedContentBytes == nil)
         }

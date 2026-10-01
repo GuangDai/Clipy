@@ -42,6 +42,10 @@ struct SQLiteScaleSample: Codable, Sendable {
     let failure: String?
     let query: SQLiteScaleQuery?
     let searchWork: SQLiteScaleSearchWork?
+    /// Search-page repetition only: 0 is the saved warmup, 1...5 are timed
+    /// samples. Nil in older reports and in non-search phases.
+    let sampleIndex: Int?
+    let isWarmup: Bool?
 }
 
 struct SQLiteScaleDisk: Codable, Sendable {
@@ -111,6 +115,8 @@ func measureSQLiteScale<T>(
     phase: String,
     samples: inout [SQLiteScaleSample],
     query: SQLiteScaleQuery? = nil,
+    sampleIndex: Int? = nil,
+    isWarmup: Bool? = nil,
     operation: () async throws -> T,
     facts: (T) throws -> (rows: Int, contentBytes: Int) = { _ in (0, 0) },
     searchWork: (T) -> SQLiteScaleSearchWork? = { _ in nil },
@@ -120,31 +126,37 @@ func measureSQLiteScale<T>(
     let clock = ContinuousClock()
     let start = clock.now
     var work: SQLiteScaleSearchWork?
+    var completedOperationMilliseconds: Double?
     do {
         let result = try await operation()
-        work = searchWork(result)
         let elapsed = durationToMs(start.duration(to: clock.now))
+        completedOperationMilliseconds = elapsed
+        work = searchWork(result)
         let after = try SQLiteScaleMemory.read()
         let resultFacts = try facts(result)
         samples.append(SQLiteScaleSample(
             phase: phase, elapsedMilliseconds: elapsed,
             before: before, after: after,
             returnedRows: resultFacts.rows, processedFixtureRows: fixtureRows(result), returnedContentBytes: resultFacts.contentBytes,
-            failure: nil, query: query, searchWork: work
+            failure: nil, query: query, searchWork: work,
+            sampleIndex: sampleIndex, isWarmup: isWarmup
         ))
-        print("sqlite-scale phase=\(phase) elapsedMs=\(elapsed) rss=\(after.residentBytes)")
+        let repetition = sampleIndex.map { " sampleIndex=\($0) isWarmup=\(isWarmup == true)" } ?? ""
+        print("sqlite-scale phase=\(phase)\(repetition) elapsedMs=\(elapsed) rss=\(after.residentBytes)")
         return result
     } catch {
         // Keep completed and failed timing evidence when a later workload
         // cannot finish. A failed phase carries no fabricated row/payload facts.
-        let elapsed = durationToMs(start.duration(to: clock.now))
+        let elapsed = completedOperationMilliseconds ?? durationToMs(start.duration(to: clock.now))
         samples.append(SQLiteScaleSample(
             phase: phase, elapsedMilliseconds: elapsed,
             before: before, after: try? SQLiteScaleMemory.read(),
             returnedRows: nil, processedFixtureRows: nil, returnedContentBytes: nil,
-            failure: String(describing: error), query: query, searchWork: work
+            failure: String(describing: error), query: query, searchWork: work,
+            sampleIndex: sampleIndex, isWarmup: isWarmup
         ))
-        print("sqlite-scale phase=\(phase) failed=\(error)")
+        let repetition = sampleIndex.map { " sampleIndex=\($0) isWarmup=\(isWarmup == true)" } ?? ""
+        print("sqlite-scale phase=\(phase)\(repetition) failed=\(error)")
         throw error
     }
 }

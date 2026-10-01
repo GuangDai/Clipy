@@ -136,6 +136,7 @@ final class PreviewPaneState {
     /// eligibility is independent of AppKit key status: hiding a key side
     /// pane returns focus to the main window and can synchronously re-arm it.
     private(set) var isBrowsingHistory = true
+    private var isRetiringScreenPreview = false
 
     func setBrowsingHistory(_ isBrowsing: Bool) {
         guard isBrowsingHistory != isBrowsing else { return }
@@ -411,8 +412,14 @@ final class PreviewPaneState {
     /// A screen change retires the old preview and its pending dwell while
     /// keeping this browsing session's selection and manual-close choice.
     func screenChanged() {
+        guard !isRetiringScreenPreview else { return }
+        isRetiringScreenPreview = true
+        defer { isRetiringScreenPreview = false }
         cancelPendingAutoOpen()
         cancelPendingPointerExit()
+        // Retiring a key preview synchronously returns focus to the main
+        // panel. Keep that callback armed without re-dwelling this selection
+        // while its old screen presentation is still being retired.
         if isOpen { closePreview() }
         isInformationPresented = false
         isFileConfirmationPresented = false
@@ -604,7 +611,7 @@ final class PreviewPaneState {
     /// just applied by the caller); a pending dwell — including one
     /// retained for memory-pressure recovery — is left untouched.
     private func armAndDwellCurrentSelection() {
-        guard !isOpen,
+        guard !isRetiringScreenPreview, !isOpen,
               pendingAutoOpenItem == nil,
               let currentSelectionReference,
               isAutoOpenPreferenceEnabled,
@@ -614,7 +621,7 @@ final class PreviewPaneState {
     }
 
     private func scheduleAutoOpen(for item: HistoryItemReference) {
-        guard isBrowsingHistory else { return }
+        guard isBrowsingHistory, !isRetiringScreenPreview else { return }
         // Selection observation can arrive after the native exit event. Keep
         // its current target for re-entry, without starting new work outside
         // the list or retargeting while preview controls are under the pointer.

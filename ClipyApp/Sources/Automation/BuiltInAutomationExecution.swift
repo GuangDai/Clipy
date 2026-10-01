@@ -1,6 +1,13 @@
 import Foundation
 import HistoryCore
 
+#if DEBUG
+enum BuiltInAutomationHistoryDebugInstrumentation {
+    @TaskLocal static var afterHistoryBrowse: (@Sendable () async throws -> Void)?
+    @TaskLocal static var afterInputMetadata: (@Sendable () async throws -> Void)?
+}
+#endif
+
 extension BuiltInAutomation {
     /// Select one representation per original clipboard item. An OCR workflow
     /// prefers image bytes; ordinary text workflows prefer the exact text codec.
@@ -47,6 +54,76 @@ extension BuiltInAutomation {
                      originalInput: result.originalInput)
     }
 
+    /// History workflows need only one supported input per original clipboard
+    /// item. Keep metadata and one selected input in flight; unrelated formats
+    /// and later inputs never become a complete paste payload in memory.
+    private static func evaluateHistoryItem(
+        _ item: HistoryItemReference, workflow: BuiltInAutomationWorkflow,
+        history: any ClipboardHistory
+    ) async throws -> BuiltInAutomationOutput {
+        let metadata = try await history.representationMetadata(for: item)
+#if DEBUG
+        try await BuiltInAutomationHistoryDebugInstrumentation.afterInputMetadata?()
+#endif
+        try Task.checkCancellation()
+        let groups = Dictionary(grouping: metadata, by: \.pasteboardItemIndex)
+        let imageFirst = prefersImage(workflow.steps)
+        var first: BuiltInAutomationOutput?
+        var firstInput: BuiltInAutomationInput?
+        var count = 0
+        var requestsNotification = false
+        for index in groups.keys.sorted() {
+            try Task.checkCancellation()
+            guard let input = try await historyInput(
+                groups[index] ?? [], item: item, imageFirst: imageFirst, history: history
+            ) else { continue }
+            if first == nil, firstInput == nil { firstInput = input }
+            let result = try await runValidated(input, steps: workflow.steps)
+            if result.matchedConditions {
+                count += 1
+                requestsNotification = requestsNotification || result.requestsNotification
+                if first == nil {
+                    first = result
+                    firstInput = nil
+                }
+            }
+        }
+        let result = first ?? .init(value: firstInput ?? .text(""), requestsNotification: false,
+                                    matchedConditions: false, originalInput: firstInput)
+        return .init(value: result.value, requestsNotification: requestsNotification,
+                     matchedConditions: result.matchedConditions, matchedItemCount: count,
+                     originalInput: result.originalInput)
+    }
+
+    private static func historyInput(
+        _ metadata: [HistoryRepresentationMetadata], item: HistoryItemReference,
+        imageFirst: Bool, history: any ClipboardHistory
+    ) async throws -> BuiltInAutomationInput? {
+        let image = metadata.first {
+            ["public.png", "public.jpeg", "public.tiff", "public.heic"].contains($0.typeIdentifier)
+        }
+        func read(_ source: HistoryRepresentationMetadata) async throws -> HistoryRepresentation {
+            try Task.checkCancellation()
+            let representation = try await history.representation(.init(
+                item: item, basis: .effective, typeIdentifier: source.typeIdentifier,
+                pasteboardItemIndex: source.pasteboardItemIndex
+            ))
+            try Task.checkCancellation()
+            return representation
+        }
+        if imageFirst, let image { return .image(try await read(image).bytes) }
+        for source in metadata where [
+            "public.utf8-plain-text", "public.utf16-plain-text", "public.utf16-external-plain-text",
+        ].contains(source.typeIdentifier) {
+            let representation = try await read(source)
+            // Preserve the original codec fallback: malformed Unicode in one
+            // text format may still leave another usable text format or image.
+            if let text = EditorTextCodec.decode(representation)?.text { return .text(text) }
+        }
+        if let image { return .image(try await read(image).bytes) }
+        return nil
+    }
+
     static func evaluateManual(
         input: BuiltInAutomationInput, workflow: BuiltInAutomationWorkflow,
         history: (any ClipboardHistory)?
@@ -84,13 +161,20 @@ extension BuiltInAutomation {
             repeat {
                 try Task.checkCancellation()
                 let page = try await history.browse(.init(kind: .recent, limit: pageSize, cursor: cursor))
+#if DEBUG
+                try await BuiltInAutomationHistoryDebugInstrumentation.afterHistoryBrowse?()
+#endif
                 for row in page.rows.prefix(remaining) {
                     remaining -= 1
                     guard workflow.scope.includes(application: row.lastSource, copiedAt: row.lastCopiedAt, now: now,
                                                   allowedApplicationIDs: allowedApplicationIDs) else { continue }
-                    let payload = try await history.pastePayload(for: row.item.id)
-                    guard payload.item == row.item else { throw BuiltInAutomationFailure.historyUnavailable }
-                    let result = try await evaluateValidated(inputs(from: payload.representations, workflow: workflow), workflow: workflow)
+                    let result: BuiltInAutomationOutput
+                    do { result = try await evaluateHistoryItem(row.item, workflow: workflow, history: history) }
+                    catch HistoryFailure.staleContent(_, _) {
+                        // The old complete-payload path rejected a version
+                        // changed after browse with this same workflow failure.
+                        throw BuiltInAutomationFailure.historyUnavailable
+                    }
                     if firstInput == nil { firstInput = result.originalInput }
                     if result.matchedConditions {
                         count += 1

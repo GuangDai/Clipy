@@ -444,7 +444,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         _ sheetWindow: NSWindow,
         completionHandler handler: ((NSApplication.ModalResponse) -> Void)? = nil
     ) {
-        childWindows?.compactMap { $0 as? FloatingPreviewPanel }.first?.stopModalPointerObservation()
+        childWindows?.compactMap { $0 as? FloatingPreviewPanel }.first?.beginNativeSheetInteraction()
         super.beginSheet(sheetWindow) { [weak self, weak sheetWindow] response in
             guard let self else { handler?(response); return }
             self.finishSheet(response, sheetFrame: sheetWindow?.frame ?? .zero, handler: handler)
@@ -455,7 +455,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         _ sheetWindow: NSWindow,
         completionHandler handler: ((NSApplication.ModalResponse) -> Void)?
     ) {
-        childWindows?.compactMap { $0 as? FloatingPreviewPanel }.first?.stopModalPointerObservation()
+        childWindows?.compactMap { $0 as? FloatingPreviewPanel }.first?.beginNativeSheetInteraction()
         super.beginCriticalSheet(sheetWindow) { [weak self, weak sheetWindow] response in
             guard let self else { handler?(response); return }
             self.finishSheet(response, sheetFrame: sheetWindow?.frame ?? .zero, handler: handler)
@@ -469,18 +469,22 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     ) {
         let pointer = NSEvent.mouseLocation
         let item = previewState.previewedItem
+        let presentation = childWindows?.compactMap { $0 as? FloatingPreviewPanel }.first?.presentationIdentity
         handler?(response)
         // The preview treats our attached sheet as pointer ownership. Native
         // modal tracking can consume its last exit, so ending this parent's
         // sheet must also resume containment after AppKit detaches the sheet.
         Task { @MainActor [weak self] in
-            guard let self, self.isPresented else { return }
+            guard let self, self.isPresented,
+                  self.previewState.previewedItem == item else { return }
             if let preview = self.childWindows?.compactMap({ $0 as? FloatingPreviewPanel }).first {
+                guard preview.presentationIdentity == presentation else { return }
                 preview.resumePointerAfterModal(
-                    sheetFrame: self.previewState.previewedItem == item ? sheetFrame : .zero,
-                    pointerAtCompletion: pointer
+                    sheetFrame: sheetFrame,
+                    pointerAtCompletion: pointer,
+                    presentation: presentation
                 )
-            }
+            } else if presentation != nil { return }
             self.previewState.recheckPointerAfterModal()
         }
     }

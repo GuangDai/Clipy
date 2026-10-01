@@ -42,6 +42,42 @@ struct PreviewPaneStateTests {
         PreviewPaneState(autoOpenDelay: .zero)
     }
 
+    @Test(arguments: [false, true])
+    func screenRetirementSkipsFocusRedwellAndPreservesReentrantSelectionChanges(selectionCleared: Bool) async {
+        let state = makeState()
+        defer { state.panelClosed() }
+        let first = reference()
+        let next = reference()
+        state.handleSelectionChange(first)
+        state.togglePreview(for: first)
+        var preparationTargets: [HistoryItemReference] = []
+        state.onPreparationTargetChanged = { target in
+            if let target { preparationTargets.append(target) }
+        }
+        state.onFloatingPreviewTransition = { [weak state] transition in
+            guard case .hide = transition, let state else { return }
+            state.panelBecameKey()
+            state.handleSelectionChange(selectionCleared ? nil : next, isExplicit: true)
+        }
+
+        state.screenChanged()
+        #expect(preparationTargets.isEmpty)
+        #expect(state.isAutoOpenEnabled)
+        #expect(!state.isOpen && state.previewedItem == nil)
+        state.pointerMoved(over: .mainPanel)
+        if selectionCleared {
+            await Task.yield()
+            await Task.yield()
+            #expect(preparationTargets.isEmpty)
+            #expect(!state.isOpen)
+        } else {
+            await waitForScheduledDwell { state.isOpen }
+            #expect(preparationTargets == [next])
+            #expect(state.previewedItem == next)
+        }
+        state.onFloatingPreviewTransition = nil
+    }
+
     @Test func leavingBrowsingCancelsAlreadyQueuedDwell() async {
         let state = makeState()
         defer { state.panelClosed() }

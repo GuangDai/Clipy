@@ -4,6 +4,8 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 
+let sqliteScaleSearchTimedSampleCount = 5
+
 struct SQLiteScaleBrowseEvidence: Sendable {
     let count: Int
     let leadingRows: [HistoryRow]
@@ -162,39 +164,63 @@ func exerciseSQLiteScaleSearches(
     samples: inout [SQLiteScaleSample]
 ) async throws {
     let limit = 50
+    var firstFailure: (any Error)?
     for fixture in sqliteScaleSearchCases(corpus: corpus) {
         var cursor: HistoryPageCursor?
         let pageCount = min(fixture.maximumMeasuredPages, fixture.expectedTotalMatches > limit ? 2 : 1)
         for pageIndex in 0..<pageCount {
+            let phase = "search-\(fixture.name)-page\(pageIndex + 1)"
             let query = SQLiteScaleQuery(
                 text: fixture.text, mode: fixture.modeName, pageIndex: pageIndex,
                 requestedLimit: limit, expectedTotalMatches: fixture.expectedTotalMatches,
                 expectedSnippetMatch: fixture.expectedSnippetMatch
             )
+            let initialSampleCount = samples.count
+            var attemptedSampleIndex = 0
             do {
-                let measured = try await measureSQLiteScale(
-                    phase: "search-\(fixture.name)-page\(pageIndex + 1)", samples: &samples, query: query
-                ) {
-                    await history.measureSearch(HistoryBrowseRequest(
-                        kind: .search(text: fixture.text, mode: fixture.mode), limit: limit, cursor: cursor
-                    ))
-                } facts: { measured in
-                    let result = try measured.result.get()
-                    try validateSQLiteScaleSearchPage(
-                        result, expectedRows: fixture.expectedRows, expectedPosition: position,
-                        expectedTotalMatches: fixture.expectedTotalMatches, pageIndex: pageIndex, limit: limit,
-                        expectedSnippetMatch: fixture.expectedSnippetMatch
-                    )
-                    return (result.rows.count, 0)
-                } searchWork: { SQLiteScaleSearchWork($0.metrics) }
-                cursor = try measured.result.get().next
+                // Reuse this page's input cursor throughout its repetitions;
+                // repeated requests must not advance to later result pages.
+                let request = HistoryBrowseRequest(
+                    kind: .search(text: fixture.text, mode: fixture.mode), limit: limit, cursor: cursor
+                )
+                for sampleIndex in 0...sqliteScaleSearchTimedSampleCount {
+                    attemptedSampleIndex = sampleIndex
+                    try Task.checkCancellation()
+                    let measured = try await measureSQLiteScale(
+                        phase: phase, samples: &samples, query: query,
+                        sampleIndex: sampleIndex, isWarmup: sampleIndex == 0
+                    ) {
+                        await history.measureSearch(request)
+                    } facts: { measured in
+                        let result = try measured.result.get()
+                        try validateSQLiteScaleSearchPage(
+                            result, expectedRows: fixture.expectedRows, expectedPosition: position,
+                            expectedTotalMatches: fixture.expectedTotalMatches, pageIndex: pageIndex, limit: limit,
+                            expectedSnippetMatch: fixture.expectedSnippetMatch
+                        )
+                        return (result.rows.count, 0)
+                    } searchWork: { SQLiteScaleSearchWork($0.metrics) }
+                    // The final successful repetition supplies the cursor
+                    // used by the next page. Every repetition was validated
+                    // independently against the original recent-row evidence.
+                    cursor = try measured.result.get().next
+                }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 // Do not use a nonexistent/failed cursor. The sample keeps the
-                // error and final exit is nonzero; independent cases continue.
+                // error; independent cases continue before the first failure
+                // is rethrown to populate the report failure and fail CI.
+                firstFailure = firstFailure ?? error
+                if samples.count == initialSampleCount || samples.last?.failure == nil {
+                    // A pre-operation resource read can fail before a sample
+                    // exists. Preserve that failure without inventing memory,
+                    // latency or row facts for an operation that never began.
+                    print("sqlite-scale phase=\(phase) sampleIndex=\(attemptedSampleIndex) didNotBegin=\(error)")
+                }
                 break
             }
         }
     }
+    if let firstFailure { throw firstFailure }
 }

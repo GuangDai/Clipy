@@ -24,6 +24,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 
     /// Whether the pane is currently on screen.
     private(set) var isPresented = false
+    private(set) var presentationIdentity: UUID?
     private let previewState: PreviewPaneState
     private let defaults: UserDefaults
     private let presentationDuration: @MainActor (NSScreen?) -> TimeInterval
@@ -167,6 +168,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     /// Frame following alone keeps the original presentation uninterrupted.
     func cancelArrival() {
         motionPresentation.cancel()
+        if isPresented { presentationIdentity = UUID() }
         stopModalPointerObservation()
         previewState.recheckPointerAfterModal()
     }
@@ -181,6 +183,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         guard attachedSheet == nil else {
             return
         }
+        if !isPresented { presentationIdentity = UUID() }
         // Adding an ordered child can make it visible synchronously. Retain
         // the need to restore before reattachment changes AppKit's visibility.
         let shouldRestoreOrdering = isPresented && !isVisible
@@ -229,7 +232,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         // The native completion owns the actual end of the modal session.
         // A notification plus Task.yield cannot establish that attachment and
         // ordering have finished. Let the caller's close/purge intent run first.
-        stopModalPointerObservation()
+        beginNativeSheetInteraction()
         nativeSheetCount += 1
         super.beginSheet(sheetWindow) { [weak self, weak sheetWindow] response in
             guard let self else { handler?(response); return }
@@ -241,7 +244,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         _ sheetWindow: NSWindow,
         completionHandler handler: ((NSApplication.ModalResponse) -> Void)?
     ) {
-        stopModalPointerObservation()
+        beginNativeSheetInteraction()
         nativeSheetCount += 1
         super.beginCriticalSheet(sheetWindow) { [weak self, weak sheetWindow] response in
             guard let self else { handler?(response); return }
@@ -256,6 +259,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     ) {
         let pointer = NSEvent.mouseLocation
         let item = previewState.previewedItem
+        let presentation = presentationIdentity
         handler?(response)
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -265,13 +269,14 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
                     self.followParentAfterNativeResize()
                     self.resumePointerAfterModal(
                         sheetFrame: self.previewState.previewedItem == item ? sheetFrame : .zero,
-                        pointerAtCompletion: pointer
+                        pointerAtCompletion: pointer,
+                        presentation: presentation
                     )
                 }
             }
             // Return from the actual completion before applying geometry;
             // AppKit can finish its owner-frame restoration on that stack.
-            guard self.isPresented, self.previewState.isOpen,
+            guard self.isPresented, self.presentationIdentity == presentation, self.previewState.isOpen,
                   let parent = self.parent, parent.isVisible else { return }
             self.present(beside: parent)
         }
@@ -280,7 +285,8 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     /// A confirmation button can lie outside this pane's restored frame.
     /// Its stationary pointer still belongs to that completed interaction;
     /// only a new real movement resumes the ordinary pointer-exit policy.
-    func resumePointerAfterModal(sheetFrame: NSRect, pointerAtCompletion: NSPoint) {
+    func resumePointerAfterModal(sheetFrame: NSRect, pointerAtCompletion: NSPoint, presentation: UUID?) {
+        guard isPresented, presentationIdentity == presentation else { return }
         let pointer = NSEvent.mouseLocation
         if isPresented, nativeSheetCount == 0, attachedSheet == nil,
            pointer == pointerAtCompletion, sheetFrame.contains(pointer),
@@ -305,7 +311,12 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         if isPresented { previewState.recheckPointerAfterModal() }
     }
 
-    func stopModalPointerObservation() {
+    func beginNativeSheetInteraction() {
+        if isPresented { presentationIdentity = UUID() }
+        stopModalPointerObservation()
+    }
+
+    private func stopModalPointerObservation() {
         if let localModalPointerMonitor { NSEvent.removeMonitor(localModalPointerMonitor) }
         if let globalModalPointerMonitor { NSEvent.removeMonitor(globalModalPointerMonitor) }
         localModalPointerMonitor = nil
@@ -404,6 +415,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     /// Orders the pane out and detaches it from its parent; the instance is
     /// reused on the next `present(beside:)`.
     func dismiss() {
+        presentationIdentity = nil
         stopModalPointerObservation()
         frameFollowTask?.cancel()
         frameFollowTask = nil

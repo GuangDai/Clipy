@@ -189,8 +189,9 @@ private static func asciiString(
 
 /// The repeated-prefix adversary that makes candidate+memcmp implementations
 /// approach O(n*m) remains bounded by the matcher's linear KMP fallback.
-@Test func repeatedPrefixAdversaryFindsOrRejectsAtTheBoundary() {
-    let term = String(repeating: "a", count: 4_095) + "b"
+@Test(arguments: [64, 256, 4_096])
+func repeatedPrefixAdversaryFindsOrRejectsAtTheBoundary(needleLength: Int) {
+    let term = String(repeating: "a", count: needleLength - 1) + "b"
     let absentBody = String(repeating: "a", count: 256 * 1_024)
     #expect(ExactLiteralMatcher(term: term).firstMatch(in: absentBody) == nil)
 
@@ -198,12 +199,52 @@ private static func asciiString(
     #expect(
         ExactLiteralMatcher(term: term).firstMatch(in: presentBody)
             == ExactLiteralMatch(
-                characterOffset: absentBody.count - 4_095,
+                characterOffset: absentBody.count - (needleLength - 1),
                 characterLength: term.count,
-                utf16Offset: absentBody.utf16.count - 4_095,
+                utf16Offset: absentBody.utf16.count - (needleLength - 1),
                 utf16Length: term.utf16.count
             )
     )
+}
+
+@Test func longFailedPrefixesKeepFoundationFallbackAndCaseFoldedFirstMatch() {
+    let term = String(repeating: "a", count: 63) + "b"
+    for separator in ["\u{212A}", "\r\n"] {
+        let text = String(repeating: "A", count: 4_096) + separator + term.uppercased()
+        #expect(ExactLiteralMatcher(term: term).firstMatch(in: text)
+            == Self.foundationMatch(term: term, in: text))
+    }
+}
+
+@Test func longRepeatedPrefixesPreservePersistedPagingAndClippedHighlights() async throws {
+    let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
+    let bodies = [
+        ("second\n" + String(repeating: "a", count: 131_000) + "b", 1.0),
+        ("first\n" + String(repeating: "A", count: 262_000) + "B", 2.0),
+        ("miss\n" + String(repeating: "a", count: 262_000) + "x aab", 3.0),
+    ]
+    for (body, time) in bodies {
+        _ = try await history.perform(.capture(WSSupport.textCapture(
+            body, observedAt: Date(timeIntervalSinceReferenceDate: time)
+        )))
+    }
+    let kind = HistoryBrowseKind.search(text: String(repeating: "a", count: 4_095) + "b", mode: .exact)
+    let first = try await history.browse(.init(kind: kind, limit: 1))
+    #expect(first.rows.map(\.title) == ["first"])
+    #expect(first.rows.first?.search?.snippet == "…" + String(repeating: "A", count: 320) + "…")
+    #expect(first.rows.first?.search?.matchedRanges == [UTF16TextRange(location: 1, length: 320)])
+    let forward = try #require(first.next)
+    let second = try await history.browse(.init(kind: kind, limit: 1, cursor: forward))
+    #expect(second.rows.map(\.title) == ["second"])
+    #expect(second.rows.first?.search?.snippet == "…" + String(repeating: "a", count: 320) + "…")
+    #expect(second.rows.first?.search?.matchedRanges == [UTF16TextRange(location: 1, length: 320)])
+    #expect(second.next == nil)
+    let backward = try #require(second.previous)
+    #expect(try await history.browse(.init(kind: kind, limit: 1, cursor: backward)).rows == first.rows)
+    let target = try #require(second.rows.first?.item.id)
+    let located = try await history.browse(.init(kind: kind, limit: 1, startAround: target))
+    #expect(located.rows == second.rows)
+    #expect(located.previous != nil && located.next == nil)
 }
 
 /// A block-scanning implementation (SIMD/SWAR word prefilter ahead of the
