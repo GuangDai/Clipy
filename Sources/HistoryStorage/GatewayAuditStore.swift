@@ -202,14 +202,12 @@ internal enum GatewayAuditStore {
                 config: config,
                 in: context
             )
-            var firstCommittedAt: Date?
             let validatedBytes = try validateInterval(
                 lowerBound: config.compactionFloor,
                 upperBound: config.nextAuditSequence,
                 config: config,
                 in: context,
-                limits: limits,
-                firstCommittedAt: &firstCommittedAt
+                limits: limits
             )
             guard validatedBytes == config.auditBytes else {
                 throw StoreRejection.invariantViolation
@@ -241,14 +239,6 @@ internal enum GatewayAuditStore {
             ).contribution
             let maximumBytes = try checkedUInt64(limits.maxAuditLogSize)
             let maximumAge = TimeInterval(limits.maxAuditAgeSeconds)
-            // The complete retained interval and marker arithmetic have
-            // already been proved. Its first validated timestamp is enough
-            // to reject a no-op without fetching another batch of full rows.
-            guard let firstCommittedAt else { throw StoreRejection.invariantViolation }
-            guard validatedBytes > maximumBytes
-                    || max(0, now.timeIntervalSince(firstCommittedAt)) > maximumAge else {
-                return false
-            }
 
             var newFloor = config.compactionFloor
             var discardedCount: UInt32 = 0
@@ -258,7 +248,7 @@ internal enum GatewayAuditStore {
             var shouldContinue = true
 
             while cursor < config.nextAuditSequence, shouldContinue {
-                let rows = try fetchCompactionRows(
+                let rows = try fetchRows(
                     lowerBound: cursor,
                     upperBound: config.nextAuditSequence,
                     limit: limits.maxAuditReadBatchSize,
@@ -287,7 +277,7 @@ internal enum GatewayAuditStore {
                     }
 
                     let contribution = try logicalContribution(
-                        payloadByteCount: row.payloadByteCount,
+                        payloadByteCount: row.payloadBlob.count,
                         limits: limits
                     )
                     discardedLogicalBytes = try checkedAdd(
@@ -296,7 +286,7 @@ internal enum GatewayAuditStore {
                     )
                     discardedPayloadBytes = try checkedAdd(
                         discardedPayloadBytes,
-                        try checkedUInt64(row.payloadByteCount)
+                        try checkedUInt64(row.payloadBlob.count)
                     )
                     discardedCount = try checkedIncrement(discardedCount)
                     newFloor = try checkedIncrement(row.auditSequence)
@@ -785,22 +775,6 @@ fileprivate extension GatewayAuditStore {
         in context: SQLiteDatabase,
         limits: ExternalLimits
     ) throws -> UInt64 {
-        var firstCommittedAt: Date?
-        return try validateInterval(
-            lowerBound: lowerBound, upperBound: upperBound, config: config,
-            in: context, limits: limits, firstCommittedAt: &firstCommittedAt
-        )
-    }
-
-    static func validateInterval(
-        lowerBound: UInt64,
-        upperBound: UInt64,
-        config: GatewayConfigRow,
-        in context: SQLiteDatabase,
-        limits: ExternalLimits,
-        firstCommittedAt: inout Date?
-    ) throws -> UInt64 {
-        firstCommittedAt = nil
         var cursor = lowerBound
         var total: UInt64 = 0
         while cursor < upperBound {
@@ -819,7 +793,6 @@ fileprivate extension GatewayAuditStore {
                     throw StoreRejection.invariantViolation
                 }
                 try decodePayload(row, config: config, limits: limits)
-                if cursor == lowerBound { firstCommittedAt = row.committedAt }
                 total = try checkedAdd(
                     total,
                     try logicalContribution(
@@ -831,53 +804,6 @@ fileprivate extension GatewayAuditStore {
             }
         }
         return total
-    }
-
-    struct CompactionRow {
-        let auditSequence: UInt64
-        let committedAt: Date
-        let payloadByteCount: Int
-    }
-
-    /// Called only after full retained-row validation, within the same writer
-    /// transaction. Prefix accounting needs no second payload copy, UUID parse
-    /// or raw-enum projection from those already validated immutable rows.
-    static func fetchCompactionRows(
-        lowerBound: UInt64,
-        upperBound: UInt64,
-        limit: Int,
-        limits: ExternalLimits,
-        in context: SQLiteDatabase
-    ) throws -> [CompactionRow] {
-        guard limit > 0 else { throw StoreRejection.invariantViolation }
-        do {
-            let statement = try context.prepare("""
-                SELECT auditSequence, committedAt, length(payloadBlob)
-                FROM operation_records
-                WHERE auditSequence >= ? AND auditSequence < ?
-                ORDER BY auditSequence LIMIT ?
-                """, bindings: [.blob(sqliteUInt64(lowerBound)), .blob(sqliteUInt64(upperBound)), .integer(Int64(limit))])
-            defer { statement.finalize() }
-            var rows: [CompactionRow] = []
-            while try statement.step() {
-                guard try statement.blobByteCount(at: 0) == 8,
-                      let byteCount = Int(exactly: try statement.integer(at: 2)),
-                      (0...limits.maximumAuditPayloadBlobBytes).contains(byteCount) else {
-                    throw StoreRejection.corruptStoredValue
-                }
-                let committedAt = Date(timeIntervalSinceReferenceDate: try statement.real(at: 1))
-                guard committedAt.timeIntervalSinceReferenceDate.isFinite else { throw StoreRejection.corruptStoredValue }
-                rows.append(CompactionRow(auditSequence: try sqliteUInt64(statement.blob(at: 0)),
-                                          committedAt: committedAt, payloadByteCount: byteCount))
-            }
-            return rows
-        } catch let rejection as StoreRejection {
-            throw rejection
-        } catch is HistoryFailure {
-            throw StoreRejection.corruptStoredValue
-        } catch {
-            throw StoreRejection.persistenceRead
-        }
     }
 
     static func accountRawInterval(
