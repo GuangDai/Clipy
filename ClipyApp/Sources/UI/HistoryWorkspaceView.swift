@@ -310,7 +310,7 @@ struct HistoryWorkspaceView: View {
                                             compact: compactRows)
                             .tag(row.item.id)
                             .contextMenu {
-                                rowContextMenu(for: row).disabled(isMutating)
+                                rowContextMenu(for: row).disabled(isMutating || viewState.isLoadingFirstPage)
                             }
                             .disabled(isMutating || viewState.isLoadingFirstPage)
                             .onGeometryChange(for: Bool.self) { proxy in
@@ -356,9 +356,15 @@ struct HistoryWorkspaceView: View {
             Button(text(row.pinnedPosition == nil ? "Pin this item" : "Unpin this item")) {
                 submit(row.pinnedPosition == nil ? .pin(row.item.id) : .unpin(row.item.id))
             }
-            Button(text("View and edit this item…")) { detailsItem = row.item }
+            Button(text("View and edit this item…")) {
+                guard viewState.displayedRow(for: row.item.id)?.item == row.item else { return }
+                detailsItem = row.item
+            }
             Divider()
-            Button(text("Remove this item…"), role: .destructive) { removalItem = row.item }
+            Button(text("Remove this item…"), role: .destructive) {
+                guard viewState.displayedRow(for: row.item.id)?.item == row.item else { return }
+                removalItem = row.item
+            }
         }
     }
 
@@ -630,7 +636,6 @@ struct HistoryWorkspaceView: View {
     }
 
     private func refresh() {
-        paging.reset()
         selectedIDs = []
         viewState.refresh()
     }
@@ -650,6 +655,12 @@ struct HistoryWorkspaceView: View {
 
     private func submit(_ intent: ItemAction) {
         guard !isMutating else { return }
+        switch intent {
+        case .pin(let id), .unpin(let id), .remove(let id):
+            guard viewState.displayedRow(for: id) != nil else { return }
+        case .clear:
+            break
+        }
         mutationStatus = nil
         action = intent
     }

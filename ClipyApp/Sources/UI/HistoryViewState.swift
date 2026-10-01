@@ -532,6 +532,7 @@ final class HistoryViewState {
     /// speculative onAppear. A full window may advance only once the page
     /// being retired has left the viewport (04 §6; V2-09 bounded UI DTOs).
     func prefetchPagesIfNeeded(visibleRowIDs ids: [HistoryItemID]) {
+        guard hasAuthoritativeFirstPage, !isLoadingFirstPage else { return }
         recordReadingPosition(visibleRowIDs: ids)
         guard !isLoadingPage, !ids.isEmpty else { return }
         let displayed = displayedRows

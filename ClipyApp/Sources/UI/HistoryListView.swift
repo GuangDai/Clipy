@@ -233,14 +233,27 @@ struct HistoryListView: View {
             dragSource: dragSource,
             externalOpener: viewState.externalOpener,
             onCopy: { reference in
+                guard viewState.displayedRow(for: reference.id)?.item == reference else { return }
                 selection.wrappedValue = reference.id
                 onFocusHistory()
                 viewState.requestPasteFromDisplayedRow(reference)
             },
-            onPin: { id, placement in viewState.pin(id, at: placement) },
-            onUnpin: { id in viewState.unpin(id) },
-            onRemove: { id in viewState.remove(id) },
-            onShowDetails: onShowDetails
+            onPin: { id, placement in
+                guard viewState.displayedRow(for: id)?.item == row.item else { return }
+                viewState.pin(id, at: placement)
+            },
+            onUnpin: { id in
+                guard viewState.displayedRow(for: id)?.item == row.item else { return }
+                viewState.unpin(id)
+            },
+            onRemove: { id in
+                guard viewState.displayedRow(for: id)?.item == row.item else { return }
+                viewState.remove(id)
+            },
+            onShowDetails: { reference in
+                guard viewState.displayedRow(for: reference.id)?.item == reference else { return }
+                onShowDetails(reference)
+            }
         )
         .padding(EdgeInsets(
             top: PanelContentFit.listRowVerticalInset,
