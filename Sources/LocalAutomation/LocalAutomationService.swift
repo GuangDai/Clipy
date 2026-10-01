@@ -199,8 +199,10 @@ public actor LocalAutomationService {
             )
             let shape = try LocalAutomationFrames.decodeRequestHeader(header)
             let json = try await LocalAutomationSocket.receive(shape.count, from: descriptor, deadline: deadline)
-            try Task.checkCancellation()
-            let output = await LocalAutomationReplyMapping.execute(json: json, credential: shape.credential, ingress: ingress)
+            let ingress = self.ingress
+            let output = try await LocalAutomationSocket.withDeadline(deadline) {
+                await LocalAutomationReplyMapping.execute(json: json, credential: shape.credential, ingress: ingress)
+            }
             try await LocalAutomationSocket.send(LocalAutomationFrames.responseHeader(output), to: descriptor, deadline: deadline)
             try await LocalAutomationSocket.send(output.stdout, to: descriptor, deadline: deadline)
             try await LocalAutomationSocket.send(output.stderr, to: descriptor, deadline: deadline)

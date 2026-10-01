@@ -168,6 +168,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         guard configuration.initialMaximumUnpinnedItems.map(limits.userMaximumUnpinnedRange.contains) ?? true else {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
+        try Task.checkCancellation()
 
         let storeLocation = try HistoryStoreLocation(persistence: configuration.persistence)
         // Persistent ownership is established before SQLite opens. Disposable
@@ -273,6 +274,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     /// `.setRetentionPolicies` case is implemented by the R.6 policy sweep
     /// (`V2-02` §4.4; `V2-roadmap` §6).
     public func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
+        try Task.checkCancellation()
         do {
             switch action {
             case .capture(let raw):

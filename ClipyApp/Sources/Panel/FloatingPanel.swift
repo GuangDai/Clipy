@@ -436,6 +436,40 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         scheduleFocusLossClose()
     }
 
+    override func beginSheet(
+        _ sheetWindow: NSWindow,
+        completionHandler handler: ((NSApplication.ModalResponse) -> Void)? = nil
+    ) {
+        super.beginSheet(sheetWindow) { [weak self] response in
+            guard let self else { handler?(response); return }
+            self.finishSheet(response, handler: handler)
+        }
+    }
+
+    override func beginCriticalSheet(
+        _ sheetWindow: NSWindow,
+        completionHandler handler: ((NSApplication.ModalResponse) -> Void)?
+    ) {
+        super.beginCriticalSheet(sheetWindow) { [weak self] response in
+            guard let self else { handler?(response); return }
+            self.finishSheet(response, handler: handler)
+        }
+    }
+
+    private func finishSheet(
+        _ response: NSApplication.ModalResponse,
+        handler: ((NSApplication.ModalResponse) -> Void)?
+    ) {
+        handler?(response)
+        // The preview treats our attached sheet as pointer ownership. Native
+        // modal tracking can consume its last exit, so ending this parent's
+        // sheet must also resume containment after AppKit detaches the sheet.
+        Task { @MainActor [weak self] in
+            guard let self, self.isPresented else { return }
+            self.previewState.recheckPointerAfterModal()
+        }
+    }
+
     // MARK: - Window delegate
 
     /// Persists the user-dragged position as the normalized `.lastPosition`

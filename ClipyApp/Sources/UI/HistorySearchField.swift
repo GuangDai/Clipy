@@ -227,14 +227,17 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
     }
 
     private func scheduleAvailableHeightReport() {
-        availableHeightTask?.cancel()
+        guard availableHeightTask == nil else { return }
         availableHeightTask = Task { [weak self] in
             guard !Task.isCancelled, let self else { return }
-            self.availableHeightTask = nil
+            defer {
+                if !Task.isCancelled { self.availableHeightTask = nil }
+            }
             // The window resizes after SwiftUI has updated the query. Read
             // native coordinates on the next actor turn after layout, even
             // when only ancestors move and the field's own size is unchanged.
             self.window?.contentView?.layoutSubtreeIfNeeded()
+            guard !Task.isCancelled else { return }
             self.reportAvailableHeight()
         }
     }

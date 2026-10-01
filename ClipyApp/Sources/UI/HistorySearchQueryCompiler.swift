@@ -26,6 +26,7 @@ enum HistorySearchQueryCompiler {
 
         var literalSegments: [String] = []
         var conditionSegments: [ConditionSegment] = []
+        var soleExpression: HistorySearchExpression?
         var literal: [UInt8] = []
         var cursor = 0
 
@@ -115,10 +116,12 @@ enum HistorySearchQueryCompiler {
                 ))
             }
             flushLiteral()
+            let isEmptyCondition = conditionText.allSatisfy(\.isWhitespace)
+            soleExpression = conditionSegments.isEmpty && !isEmptyCondition ? parsed : nil
             // The raw parser accepts an empty expression as all rows. Give
             // that value a usable term when joining it with another block.
             conditionSegments.append(ConditionSegment(
-                text: conditionText.allSatisfy(\.isWhitespace) ? parsed.serialized : conditionText,
+                text: isEmptyCondition ? parsed.serialized : conditionText,
                 opening: opening
             ))
         }
@@ -149,13 +152,18 @@ enum HistorySearchQueryCompiler {
             ? conditionSegments.map { "(" + $0.text + ")" }.joined(separator: " AND ")
             : conditionSegments[0].text
         let expression: HistorySearchExpression
-        do {
-            expression = try HistorySearchExpression.parse(expressionText)
-        } catch {
-            let opening = relatedOpening(for: error.offset, in: conditionSegments, isCompound: isCompound)
-            throw HistorySearchExpressionError(
-                reason: error.reason, offset: characterOffset(at: opening, in: text)
-            )
+        if let soleExpression {
+            // Its source and parser limits are unchanged after wrapper admission.
+            expression = soleExpression
+        } else {
+            do {
+                expression = try HistorySearchExpression.parse(expressionText)
+            } catch {
+                let opening = relatedOpening(for: error.offset, in: conditionSegments, isCompound: isCompound)
+                throw HistorySearchExpressionError(
+                    reason: error.reason, offset: characterOffset(at: opening, in: text)
+                )
+            }
         }
         return HistorySearchQueryCompilation(
             literalText: literalText,

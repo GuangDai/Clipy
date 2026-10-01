@@ -341,3 +341,13 @@ func admissionExactSearchRequest() -> HistoryBrowseRequest {
         limit: admissionPageLimit
     )
 }
+
+/// A negative query whose common indexed trigrams retain every fixture row.
+/// The full query is absent because the corpus has no q. This construction
+/// is not trusted as proof of a scan: the workload validates the same-request
+/// decoded/evaluated counts on every warmup and measured request. If candidate
+/// pruning improves, update this fixture to retain a genuine all-row workload.
+func admissionExactScanRequest() -> HistoryBrowseRequest {
+    let term = String(repeating: "x", count: 5) + "q" + String(repeating: "x", count: 122)
+    return HistoryBrowseRequest(kind: .search(text: term, mode: .exact), limit: admissionPageLimit)
+}

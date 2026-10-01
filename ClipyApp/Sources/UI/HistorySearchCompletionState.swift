@@ -77,6 +77,7 @@ final class HistorySearchCompletionState {
         // mode changes and newer History positions have their own refreshes.
         if self.input == input, context != nil, isInputFocused,
            !input.isComposing, !requestsOnFocus { return }
+        let previousInput = self.input
         self.input = input
         isComposing = input.isComposing
         guard isInputFocused, !input.isComposing else { dismiss(); return }
@@ -85,6 +86,14 @@ final class HistorySearchCompletionState {
         suppressedText = nil
         let explicit = requestsOnFocus
         requestsOnFocus = false
+        // A selection can grow inside the same term without changing its
+        // prefix or replacement range. Keep its candidates and pending read;
+        // insertion still uses the latest native input stored above.
+        if !explicit, let context,
+           previousInput.map({ $0.text.utf8.elementsEqual(input.text.utf8) }) == true,
+           HistorySearchCompletionEngine.context(for: input, explicit: context.explicit, mode: mode) == context {
+            return
+        }
         refresh(explicit: explicit)
     }
 

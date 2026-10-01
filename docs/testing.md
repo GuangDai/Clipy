@@ -58,6 +58,12 @@ swift build -c release --product HistoryPerfRunner
 
 [`.github/workflows/sqlite-scale.yml`](../.github/workflows/sqlite-scale.yml) 为真实 SQLite 独立测量入口：可选 10,000 / 100,000 行，mixed 或固定长度 profile，固定正文可选 1,024 / 65,536 / 262,144 字节。先 seed 临时存储，再用新进程 measure，保留报告与 `/usr/bin/time -l` 资源数据。查询算法的候选、batch、正文读取指标和实际进程资源应放在一起解释，不能用简单输入的耗时推断最坏情况。
 
+mixed 每 10,000 行包含 2,000 条 32–512 字节、6,400 条 1–8 KiB、1,440 条 8–64 KiB、152 条 64–512 KiB 和 8 条 1–8 MiB 原始文本。报告分别统计原始字节长度、实际保存的标题和搜索正文长度；搜索正文仍受产品 256 KiB 上限约束。正文重复七种文本片段，固定长度 profile 使用 ASCII 填充。这些夹具可以比较相同输入下的改动，不能代表真实用户文本的多样性或所有索引分布。
+
+scale 查询分别测量常见标题、常见正文、最老条目的稀有正文，以及最大原始文本在搜索投影尾部的唯一标记；还测量常见正文 / 稀有正文和常见标题 / 稀有大型正文的两种 AND 顺序。正文命中校验摘录和 UTF-16 标记范围，预期条目来自独立 recent 分页读取。常见查询测两页，稀有查询校验唯一结果。每次查询附带同一次生产请求的解码行数、求值行数、命中数、batch 数和终止原因；这些计数不包括 SQLite 内部的 posting-list / planner 工作。各 phase 只有一次操作计时，不提供 p50 / p95 / p99；RSS 和 footprint 是整进程的操作前后读数，峰值 RSS 从进程启动累计，不能解释成单次查询新增的内存。
+
+[`performance-admission.yml`](../.github/workflows/performance-admission.yml) 使用独立的 5,000 × 256 KiB 临时语料。`exact-search` 保留原有不存在的查询，候选索引可以直接排除它，不能再当作全库扫描证据。`exact-scan` 使用候选不能排除的负查询，并在验证、warmup 和每个样本中要求实际解码 / 求值全部 5,000 行、零命中且正常耗尽。若候选策略改变而不再扫描全部行，测量失败，需重新设计该夹具。两个搜索 mode 各记录 11 个样本和 p50，省略样本数不足的 p95 / p99；browse / warm-open 各记录 101 个样本。JSON 与同 mode 的 `.time` 文件配合读取，独立进程 warm-open 保留系统页缓存，不代表冷启动。这些读数不自行设定产品时间或内存上限。
+
 其他已有 manual / reusable 工作流提供 exact matcher、性能 helper、APFS ENOSPC、跨进程剪贴板或 runtime 的独立检查，不参与普通 push / PR。它们的存在不代表本次已经运行，也不证明当前改动所有 runtime 范围通过。普通产品修复不新增或调用证书、签名、公证与 release identity 流程。
 
 [`.github/workflows/package-app.yml`](../.github/workflows/package-app.yml) 仅手动构建 unsigned Release `Clipy.app` 并上传 zip；`CODE_SIGNING_ALLOWED=NO`。打包成功说明 bundle 构建完成，不代替功能测试。

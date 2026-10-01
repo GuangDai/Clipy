@@ -120,7 +120,7 @@ public struct PasteboardAdapter {
     ///   index, exact type identifier and bytes. Item order is never flattened
     ///   into a joined string or a single set of types.
     /// - Privacy declarations are checked before the standard item/format
-    ///   limit. Oversized declarations stop before payload reads; per-format
+    ///   limit. Oversized identifiers or declarations stop before payload reads; per-format
     ///   and cumulative byte limits stop further provider reads immediately.
     /// - A type the item DECLARES but whose `data(forType:)` comes back
     ///   nil is never silently dropped: the type identifier is recorded in
@@ -179,6 +179,7 @@ public struct PasteboardAdapter {
         let limits = HistoryLimits.standard
         let maximumRepresentations = limits.maximumRepresentationsPerCaptureOrRevision
         var declaredRepresentationCount = 0
+        var hasInvalidTypeIdentifier = false
         var itemTypeIdentifiers: [[String]] = []
         // Privacy belongs to the complete gesture and precedes resource
         // rejection. Visit declarations without retaining a flattened corpus;
@@ -202,6 +203,10 @@ public struct PasteboardAdapter {
                         changeCount: startChangeCount
                     ))
                 }
+                if typeIdentifier.isEmpty
+                    || typeIdentifier.utf8.count > limits.maximumTypeIdentifierUTF8Bytes {
+                    hasInvalidTypeIdentifier = true
+                }
                 if typeIdentifier != PasteboardLineageHint.typeIdentifier,
                    declaredRepresentationCount <= maximumRepresentations {
                     declaredRepresentationCount += 1
@@ -216,7 +221,8 @@ public struct PasteboardAdapter {
             }
         }
         guard items.count <= maximumRepresentations,
-              declaredRepresentationCount <= maximumRepresentations else {
+              declaredRepresentationCount <= maximumRepresentations,
+              !hasInvalidTypeIdentifier else {
             return unsupportedCaptureOutcome(itemCount: items.count, startChangeCount: startChangeCount)
         }
 

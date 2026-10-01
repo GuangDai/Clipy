@@ -73,6 +73,75 @@ private func replaceString(
     pasteboard.setData(Data(value.utf8), forType: .string)
 }
 
+@Test(arguments: [
+    PasteboardAccessBehavior.denied, .ask, .systemDefault, .unavailable
+]) @MainActor
+func observerAbandonsAStableFreezeWhenAccessChangesDuringAPayloadRead(
+    revokedBehavior: PasteboardAccessBehavior
+) {
+    let pasteboard = makeRetryPasteboard()
+    defer { pasteboard.releaseGlobally() }
+    replaceString(on: pasteboard, with: "first representation")
+    #expect(pasteboard.setData(
+        Data("<p>sibling representation</p>".utf8),
+        forType: NSPasteboard.PasteboardType("public.html")
+    ))
+    let generation = pasteboard.changeCount
+    let accessBehavior = RetryAccessBehavior()
+    var payloadReads = 0
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadCompletionHook = { _ in
+        payloadReads += 1
+        accessBehavior.value = revokedBehavior
+    }
+    let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+    observer.setAccessBehaviorProviderForTesting { accessBehavior.value }
+    defer { observer.stop() }
+    var accessEvents: [PasteboardAccessBehavior] = []
+    var received: [CaptureOutcome] = []
+
+    observer.start(
+        onAccessBehaviorChanged: { accessEvents.append($0) },
+        handler: { received.append($0) }
+    )
+
+    #expect(pasteboard.changeCount == generation)
+    #expect(payloadReads == 1)
+    #expect(accessEvents == [.allowed, revokedBehavior])
+    #expect(received.isEmpty)
+    observer.pollForTesting()
+    #expect(payloadReads == 1)
+    #expect(received.isEmpty)
+}
+
+@Test @MainActor
+func observerRechecksAccessAfterTheInitialAccessCallback() {
+    let pasteboard = makeRetryPasteboard()
+    defer { pasteboard.releaseGlobally() }
+    replaceString(on: pasteboard, with: "do not read after revocation")
+    let accessBehavior = RetryAccessBehavior()
+    var payloadReads = 0
+    var adapter = PasteboardAdapter(pasteboard: pasteboard)
+    adapter.payloadReadObserver = { _ in payloadReads += 1 }
+    let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+    observer.setAccessBehaviorProviderForTesting { accessBehavior.value }
+    defer { observer.stop() }
+    var accessEvents: [PasteboardAccessBehavior] = []
+    var received: [CaptureOutcome] = []
+
+    observer.start(
+        onAccessBehaviorChanged: { behavior in
+            accessEvents.append(behavior)
+            accessBehavior.value = .denied
+        },
+        handler: { received.append($0) }
+    )
+
+    #expect(accessEvents == [.allowed, .denied])
+    #expect(payloadReads == 0)
+    #expect(received.isEmpty)
+}
+
 @Test @MainActor
 func observerRetriesChangedFreezeOnceAndEmitsOnlyStableCompleteOutcome() throws {
     let pasteboard = makeRetryPasteboard()

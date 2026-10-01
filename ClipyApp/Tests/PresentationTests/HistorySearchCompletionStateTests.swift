@@ -34,6 +34,47 @@ struct HistorySearchCompletionStateTests {
         #expect(insertion.text == selected.insertion)
     }
 
+    @Test func extendingASelectionInsideTheSameSourceKeepsItsPendingReadAndKeyboardChoice() async throws {
+        let base = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        _ = try await capture("brave item", source: "com.example.Brave", at: 1, in: base)
+        let latest = try await capture("browser item", source: "com.example.Browser", at: 2, in: base)
+        let history = CompletionSourceReadHistory(base: base)
+        await history.holdNextRead()
+        let state = completion(history: history, position: latest.position)
+        defer {
+            state.close()
+            Task { await history.releaseRead() }
+        }
+        let draft = "$source:Browser$"
+        let location = "$source:Br".utf16.count
+        state.update(.init(text: draft, selection: NSRange(location: location, length: 0), isComposing: false))
+        try #require(await pollUntil { await history.isHoldingRead })
+
+        // Shift-Right can extend native selection without changing the term
+        // prefix or replacement. The same pending metadata read still owns it.
+        state.update(.init(text: draft, selection: NSRange(location: location, length: 2), isComposing: false))
+        await history.releaseRead()
+        try #require(await pollUntil { !state.isLoadingSources && state.candidates.count == 2 })
+        #expect(await history.requests.count == 1)
+        #expect(await history.cancelledDeliveries == 0)
+        _ = state.command(.next)
+        let selected = try #require(state.candidates.indices.contains(state.selectedIndex)
+            ? state.candidates[state.selectedIndex] : nil)
+        #expect(selected.subtitle == "com.example.Browser")
+
+        state.update(.init(text: draft, selection: NSRange(location: location, length: 5), isComposing: false))
+        try #require(state.candidates.indices.contains(state.selectedIndex))
+        #expect(state.candidates[state.selectedIndex].id == selected.id)
+        #expect(!state.isLoadingSources)
+        guard case .insert(let insertion) = state.command(.accept) else {
+            Issue.record("The retained keyboard choice must remain insertable")
+            return
+        }
+        let applied = (draft as NSString).replacingCharacters(in: insertion.replacementRange, with: insertion.text)
+        #expect(applied == "$source-id:\"com.example.Browser\"$")
+        #expect(await history.requests.count == 1)
+    }
+
     @Test func sourcesBeyondTheFirstTwoPagesAndEarlierCopiesShareOneBoundedVocabularyRead() async throws {
         let base = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         var position: ChangePosition?

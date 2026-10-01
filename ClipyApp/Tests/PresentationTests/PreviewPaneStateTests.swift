@@ -863,9 +863,10 @@ struct PreviewPaneStateTests {
     }
 
     @Test(arguments: [false, true])
-    func popoverOrFileConfirmationKeepsItsPreviewAliveOutsideBothWindowSurfaces(fileConfirmation: Bool) async {
+    func closingPopoverOrFileConfirmationRestoresTheExitGraceOutsideBothWindows(fileConfirmation: Bool) async {
         let state = makePointerState()
         defer { state.panelClosed() }
+        state.pointerSurfacesContainingPointer = { [] }
         let item = reference()
         state.togglePreview(for: item)
         state.pointerEntered(.preview)
@@ -876,10 +877,69 @@ struct PreviewPaneStateTests {
         await Task.yield()
         #expect(state.isOpen)
         #expect(state.previewedItem == item)
-        // Escape's first step dismisses information, preserving the preview.
-        state.isInformationPresented = false
-        state.isFileConfirmationPresented = false
+        // Dismissal starts the ordinary grace without another native exit.
+        if fileConfirmation { state.isFileConfirmationPresented = false }
+        else { state.isInformationPresented = false }
         #expect(state.isOpen)
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+    }
+
+    @Test(arguments: [false, true], [false, true])
+    func closingPopoverOrFileConfirmationKeepsThePreviewUnderTheActualPointer(
+        fileConfirmation: Bool, insideMainPanel: Bool
+    ) async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        let surface: PreviewPaneState.PreviewPointerSurface = insideMainPanel ? .mainPanel : .preview
+        var nativePresence: Set<PreviewPaneState.PreviewPointerSurface> = [surface]
+        state.pointerSurfacesContainingPointer = { nativePresence }
+        let item = reference()
+        state.togglePreview(for: item)
+        state.pointerEntered(.preview)
+        if fileConfirmation { state.isFileConfirmationPresented = true }
+        else { state.isInformationPresented = true }
+        state.pointerExited(.preview)
+
+        // No entry event accompanies modal dismissal. Native containment
+        // must restore presence in either browsing window.
+        if fileConfirmation { state.isFileConfirmationPresented = false }
+        else { state.isInformationPresented = false }
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isOpen)
+        #expect(state.previewedItem == item)
+
+        nativePresence = []
+        state.pointerExited(surface)
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func retiringThePreviewDuringAModalDoesNotScheduleAnotherHide(fileConfirmation: Bool) async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        state.pointerSurfacesContainingPointer = { [] }
+        let item = reference()
+        var transitions: [PreviewPaneState.FloatingPreviewTransition] = []
+        state.onFloatingPreviewTransition = { transitions.append($0) }
+        state.togglePreview(for: item)
+        state.pointerEntered(.preview)
+        if fileConfirmation { state.isFileConfirmationPresented = true }
+        else { state.isInformationPresented = true }
+        state.pointerExited(.preview)
+
+        #expect(state.dismissPreview())
+        if fileConfirmation { state.isFileConfirmationPresented = false }
+        else { state.isInformationPresented = false }
+        await Task.yield()
+        await Task.yield()
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+        #expect(transitions == [.show(item), .hide])
     }
 
     @Test(arguments: [false, true])

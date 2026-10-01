@@ -4,6 +4,33 @@ import Testing
 @testable import HistoryPerfRunner
 
 extension HistoryPerfRunnerHelperTests {
+    @Test func admissionAllCandidateNegativeQueryMeasuresTheCompleteRealCorpus() async throws {
+        let rowCount = 12
+        let history = try await openMemoryStore()
+        let profile = AdmissionProfile(
+            retainedRows: rowCount, searchBodyBytes: 1_024,
+            sampleCount: 0, warmupCount: 0, pageLimit: 5
+        )
+        _ = try await history.seedPerformanceFixture(rowCount: rowCount) { index in
+            admissionCapture(index: index, profile: profile)
+        }
+        let measured = await history.measureSearch(admissionExactScanRequest())
+        let page = try validateAdmissionNoHitSearch(measured, expectedScannedRows: rowCount)
+        #expect(page.rows.isEmpty && page.next == nil)
+        #expect(measured.metrics.rowsDecoded == rowCount)
+        #expect(measured.metrics.rowsEvaluated == rowCount)
+        #expect(measured.metrics.matchesFound == 0)
+        #expect(measured.metrics.stopReason == .exhausted)
+
+        // An indexed negative request remains useful, but cannot masquerade
+        // as the separately requested full-candidate measurement.
+        let indexed = await history.measureSearch(admissionExactSearchRequest())
+        _ = try validateAdmissionNoHitSearch(indexed)
+        #expect(throws: AdmissionError.unexpectedPage) {
+            try validateAdmissionNoHitSearch(indexed, expectedScannedRows: rowCount)
+        }
+    }
+
     @Test func admissionCaptureUsesProfileBoundAndUniqueEdgeMarkers() throws {
         let profile = AdmissionProfile(
             retainedRows: 2,

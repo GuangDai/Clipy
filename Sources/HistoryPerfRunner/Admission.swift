@@ -3,7 +3,8 @@
 ///
 /// These workloads are intentionally absent from per-push CI. The full
 /// dispatch runs the release binary against one 5,000-row persistent corpus,
-/// records 101 latency samples plus nearest-rank p50/p95/p99, and wraps each
+/// records 101 browse/open latency samples plus nearest-rank p50/p95/p99,
+/// and 11 samples with p50 only for each negative search mode. It wraps each
 /// process with macOS `/usr/bin/time -l` for peak-RSS evidence. A separate
 /// short, store-free Release A/B can reject matcher experiments before that
 /// cost. Results are record-only until an authoritative product budget is
@@ -45,23 +46,12 @@ let admissionSampleCount = admissionProfile.sampleCount
 let admissionWarmupCount = admissionProfile.warmupCount
 let admissionPageLimit = admissionProfile.pageLimit
 
-/// Reduced per-mode measurement budget for `--admission exact-search`
-/// (IND-07). The original basis — roughly 125 s per absent-term request
-/// over the 5,000 × 256 KiB corpus, the Foundation-oracle diagnostic that
-/// opened IND-07 — is stale: with the compiled exact matcher, GOV-1 manual
-/// run 32685185124 (PR #34) measured p50 2,666 ms per request (11 samples,
-/// range 1,810–3,827 ms; the thirteen requests — one validation outside
-/// this budget, one warmup, eleven samples — took ≈35 s, ≈48 s of step
-/// wall time). At that cost the profile's 101-sample budget would fit the
-/// dispatch lane's 90-minute step ceiling (103 × 3.8 s ≈ 7 min), so cost
-/// no longer forces the reduction. The budget stays at 11: the fixture is
-/// record-only IND-07 evidence whose admitted need is a p50 trend, and
-/// thirteen requests still finish in ≈27 min even if a matcher regression
-/// routes the scan back to the Foundation oracle at its historical ~125 s,
-/// where 103 requests would need ≈3.6 h and forfeit the lane. At n = 11
-/// the nearest-rank p95 and p99 fall below their 20/100-sample support
-/// floors and are omitted from the encoded JSON entirely instead of
-/// disguising a sample maximum; the fixture notes record that limitation.
+/// Both indexed-negative and all-candidate-negative search workloads retain
+/// 11 record-only samples. They report p50; p95/p99 are omitted below their
+/// 20/100-sample support floors rather than reporting the sample maximum.
+/// Current same-request work counters establish whether candidate pruning
+/// or a complete scan actually occurred. Historical matcher timings cannot
+/// establish the work or cost of the current production indexed path.
 let admissionExactSearchWarmupCount = 1
 let admissionExactSearchSampleCount = 11
 
@@ -72,6 +62,7 @@ enum AdmissionMode: String, Sendable, Equatable {
     case prepareSmoke = "prepare-smoke"
     case browseTies = "browse-ties"
     case exactSearch = "exact-search"
+    case exactScan = "exact-scan"
     case exactMatcherAB = "exact-matcher-ab"
     case exactSearchProbe = "exact-search-probe"
     case openOnce = "open-once"
@@ -82,7 +73,7 @@ enum AdmissionMode: String, Sendable, Equatable {
         switch self {
         case .seed, .seedSmoke:
             return true
-        case .prepare, .prepareSmoke, .browseTies, .exactSearch,
+        case .prepare, .prepareSmoke, .browseTies, .exactSearch, .exactScan,
              .exactMatcherAB,
              .exactSearchProbe,
              .openOnce, .openOnceAndValidate, .warmOpen:
@@ -94,7 +85,7 @@ enum AdmissionMode: String, Sendable, Equatable {
         switch self {
         case .seedSmoke, .prepareSmoke:
             return .prepareSmoke
-        case .seed, .prepare, .browseTies, .exactSearch, .exactMatcherAB,
+        case .seed, .prepare, .browseTies, .exactSearch, .exactScan, .exactMatcherAB,
              .exactSearchProbe,
              .openOnce,
              .openOnceAndValidate, .warmOpen:
@@ -108,7 +99,7 @@ enum AdmissionMode: String, Sendable, Equatable {
             return .seed
         case .prepareSmoke:
             return .seedSmoke
-        case .seed, .seedSmoke, .browseTies, .exactSearch, .exactMatcherAB,
+        case .seed, .seedSmoke, .browseTies, .exactSearch, .exactScan, .exactMatcherAB,
              .exactSearchProbe,
              .openOnce,
              .openOnceAndValidate, .warmOpen:
@@ -177,6 +168,11 @@ func runAdmission(arguments: [String]) async -> Int {
             )
         case .exactSearch:
             try await measureAdmissionExactSearch(
+                storeURL: storeURL,
+                outputPath: arguments[2]
+            )
+        case .exactScan:
+            try await measureAdmissionExactScan(
                 storeURL: storeURL,
                 outputPath: arguments[2]
             )

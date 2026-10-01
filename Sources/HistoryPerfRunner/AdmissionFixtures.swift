@@ -33,6 +33,7 @@ struct AdmissionFixture: Codable, Sendable {
     let percentiles: AdmissionPercentiles?
     let validation: [String: String]
     let notes: [String]
+    let searchWork: [SQLiteScaleSearchWork]?
 }
 
 struct AdmissionSeedFixture: Codable, Sendable, Equatable {

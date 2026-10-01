@@ -78,6 +78,13 @@ extension SearchWorker {
         }
         let admitted = try AdmittedSearchRequest(request, limits: limits)
         try Task.checkCancellation()
+        guard activeSnapshots < Self.maximumConcurrentSnapshots else {
+            // Same retryable failure as a native busy read. There is no
+            // suspended admission queue retaining requests or store owners.
+            throw HistoryFailure.temporarilyUnavailable(.factProof)
+        }
+        activeSnapshots += 1
+        defer { activeSnapshots -= 1 }
         let clock = ContinuousClock()
         let startedAt = clock.now
         let lifetimeDeadline = startedAt.advanced(by: snapshotLifetime)
@@ -151,6 +158,7 @@ extension SearchWorker {
             var regexpDeadline = clock.now.advanced(by: regexpEngineDeadline)
             let seekHasPrevious: Bool
             let lowestPossibleFuzzyScore: Double
+            let candidates: SearchCandidateSelection?
             if let target = request.startAround {
                 let seek = try await resolveSearchStart(
                     target, request: request, admitted: admitted, database: database, position: position,
@@ -161,10 +169,17 @@ extension SearchWorker {
                 anchor = seek.anchor
                 seekHasPrevious = seek.hasPrevious
                 lowestPossibleFuzzyScore = seek.lowestPossibleFuzzyScore
+                candidates = seek.candidates
             } else {
                 seekHasPrevious = false
                 lowestPossibleFuzzyScore = isRankedFuzzy
                     ? try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: admitted.term, in: database) : 0
+                let plannedAt = clock.now
+                candidates = isRankedFuzzy && lowestPossibleFuzzyScore > 0.7
+                    ? nil : try searchCandidates(for: admitted, in: database)
+                // Necessary-condition posting probes are SQL work, not time
+                // spent inside the native regular-expression matcher.
+                regexpDeadline = regexpDeadline.advanced(by: plannedAt.duration(to: clock.now))
             }
             if let anchor, hasExplicitOrder {
                 guard case .metadata = anchor else { throw HistoryFailure.snapshotExpired(current: position) }
@@ -210,8 +225,7 @@ extension SearchWorker {
                     database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
                     includesSearchBody: admitted.requiresSearchBody,
                     expressionPredicate: expressionPredicate,
-                    candidateExpression: admitted.expressionRoot.flatMap(PreparedSearchExpression.candidateExpression)
-                        ?? SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
+                    candidates: candidates,
                     orderedAnchor: isRankedFuzzy ? fuzzyOrderedAnchor : anchor,
                     reversesOrder: reversesOrderedRows || reversesFuzzyPredecessors,
                     completesFuzzyPrefix: completesFuzzyPrefix,
@@ -496,6 +510,26 @@ extension SearchWorker {
         }
     }
 
+    private func searchCandidates(
+        for admitted: AdmittedSearchRequest, in database: SQLiteDatabase
+    ) throws -> SearchCandidateSelection? {
+        let conditionCandidates = try admitted.expressionRoot.map {
+            try PreparedSearchExpression.candidateExpression($0, in: database)
+        } ?? nil
+        if conditionCandidates?.isSparse == true { return conditionCandidates }
+        guard let expression = SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode) else {
+            return conditionCandidates
+        }
+        let literalCandidates = (
+            expression: expression,
+            isSparse: try SQLiteSearchIndex.prefersSparseCandidates(expression: expression, in: database)
+        )
+        // The outer search and the independent condition are both required.
+        // A dense condition must not hide the outer literal's sparse posting
+        // proof; either necessary condition can drive the same matcher.
+        return literalCandidates.isSparse ? literalCandidates : (conditionCandidates ?? literalCandidates)
+    }
+
     /// A reading-position request resolves its target in this same snapshot,
     /// confirms the actual matcher, then looks for one matching predecessor.
     /// The latter scan is also bounded by batches; no ID or content corpus is
@@ -507,11 +541,14 @@ extension SearchWorker {
         expression: PreparedSearchExpression?, expressionPredicate: (sql: String, bindings: [SQLiteValue])?,
         lifetimeDeadline: ContinuousClock.Instant, regexpDeadline: inout ContinuousClock.Instant,
         work: SearchWorkCounter, expressionSources: SQLiteExpressionSources?
-    ) async throws -> (anchor: StoredOrderingAnchor, hasPrevious: Bool, lowestPossibleFuzzyScore: Double) {
+    ) async throws -> (
+        anchor: StoredOrderingAnchor, hasPrevious: Bool, lowestPossibleFuzzyScore: Double,
+        candidates: SearchCandidateSelection?
+    ) {
         let targetReader = try SQLiteSearchRows(
             database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
             includesSearchBody: admitted.requiresSearchBody,
-            expressionPredicate: expressionPredicate, candidateExpression: nil,
+            expressionPredicate: expressionPredicate, candidates: nil,
             orderedAnchor: nil, reversesOrder: false, completesFuzzyPrefix: false,
             work: work, sourceValidation: expressionSources, targetedID: id
         )
@@ -530,6 +567,11 @@ extension SearchWorker {
         let rankedFuzzy = admitted.mode == .fuzzy && !admitted.term.isEmpty && request.sortOrder == .automatic
         let lowestPossibleFuzzyScore = rankedFuzzy
             ? try SQLiteSearchIndex.lowestPossibleFuzzyScore(term: admitted.term, in: database) : 0
+        // Resolve and confirm the target first, then plan once for its
+        // predecessor proof and the following page in this same snapshot.
+        let plannedAt = ContinuousClock.now
+        let candidates = try searchCandidates(for: admitted, in: database)
+        regexpDeadline = regexpDeadline.advanced(by: plannedAt.duration(to: ContinuousClock.now))
         let predecessorAnchor: StoredOrderingAnchor?
         if rankedFuzzy, target.corpusRow.pinOrdinal == nil {
             if case .fuzzyUnpinned(let score, let date, let id) = anchor, score == lowestPossibleFuzzyScore {
@@ -548,8 +590,7 @@ extension SearchWorker {
             database: database, limits: limits, filter: request.filter, sortOrder: request.sortOrder,
             includesSearchBody: admitted.requiresSearchBody,
             expressionPredicate: expressionPredicate,
-            candidateExpression: admitted.expressionRoot.flatMap(PreparedSearchExpression.candidateExpression)
-                ?? SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode),
+            candidates: candidates,
             orderedAnchor: predecessorAnchor, reversesOrder: predecessorAnchor != nil,
             completesFuzzyPrefix: false, work: work, sourceValidation: expressionSources
         )
@@ -559,7 +600,7 @@ extension SearchWorker {
             let fetchedAt = ContinuousClock.now
             let batch = try predecessors.nextBatch(includesRevisionCounts: false)
             regexpDeadline = regexpDeadline.advanced(by: fetchedAt.duration(to: ContinuousClock.now))
-            guard !batch.rows.isEmpty else { return (anchor, false, lowestPossibleFuzzyScore) }
+            guard !batch.rows.isEmpty else { return (anchor, false, lowestPossibleFuzzyScore, candidates) }
             let matches = try await evaluateSeekBatch(
                 batch.rows, admitted: admitted, position: position, exact: exact, fuzzy: fuzzy,
                 regexp: regexp, expression: expression, deadline: min(regexpDeadline, lifetimeDeadline), work: work,
@@ -568,10 +609,10 @@ extension SearchWorker {
             for match in matches.rows {
                 if rankedFuzzy {
                     if FuzzyPageSelection.precedes(match.anchor, anchor) {
-                        return (anchor, true, lowestPossibleFuzzyScore)
+                        return (anchor, true, lowestPossibleFuzzyScore, candidates)
                     }
                 } else if match.corpusRow.id != id {
-                    return (anchor, true, lowestPossibleFuzzyScore)
+                    return (anchor, true, lowestPossibleFuzzyScore, candidates)
                 }
             }
             let yieldedAt = ContinuousClock.now
@@ -682,7 +723,7 @@ private final class SQLiteSearchRows {
         database: SQLiteDatabase, limits: HistoryLimits, filter: HistoryFilter, sortOrder: HistorySortOrder,
         includesSearchBody: Bool,
         expressionPredicate: (sql: String, bindings: [SQLiteValue])?,
-        candidateExpression: String?, orderedAnchor: StoredOrderingAnchor?, reversesOrder: Bool,
+        candidates: SearchCandidateSelection?, orderedAnchor: StoredOrderingAnchor?, reversesOrder: Bool,
         completesFuzzyPrefix: Bool,
         work: SearchWorkCounter, sourceValidation: SQLiteExpressionSources?, targetedID: HistoryItemID? = nil
     ) throws {
@@ -690,16 +731,12 @@ private final class SQLiteSearchRows {
         self.limits = limits
         self.filter = filter
         self.expressionPredicate = expressionPredicate
-        self.candidateExpression = candidateExpression
+        self.candidateExpression = candidates?.expression
         self.work = work
         self.sourceValidation = sourceValidation
         self.includesSearchBody = includesSearchBody
         self.fuzzyPrefixLane = completesFuzzyPrefix ? 2 : nil
-        if let candidateExpression {
-            prefersSparseCandidates = try SQLiteSearchIndex.prefersSparseCandidates(
-                expression: candidateExpression, in: database
-            )
-        } else { prefersSparseCandidates = false }
+        prefersSparseCandidates = candidates?.isSparse ?? false
         defersBody = includesSearchBody && targetedID == nil
             && (prefersSparseCandidates || sortOrder != .automatic)
         // Each range starts directly at the adjacent anchor in the existing

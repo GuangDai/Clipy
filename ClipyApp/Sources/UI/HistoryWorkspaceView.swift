@@ -136,6 +136,11 @@ struct HistoryWorkspaceView: View {
         .onChange(of: viewState.isLoadingFirstPage) { _, loading in
             if loading {
                 if !isMutating { selectedIDs = [] }
+            } else {
+                // An empty result or failed preparation leaves rows == []
+                // across the whole load. Its completion still retires the
+                // previous page and any pending navigation.
+                reconcilePage()
             }
         }
         .onChange(of: paging.startOrdinal) { _, _ in if !isMutating { selectedIDs = [] } }

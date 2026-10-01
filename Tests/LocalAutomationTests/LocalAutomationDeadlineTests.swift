@@ -7,6 +7,55 @@ import XCTest
 /// actor readiness, or the parallel Swift Testing fixture workload.
 @MainActor
 final class LocalAutomationDeadlineTests: XCTestCase {
+    func testRequestDeadlineCancelsAndJoinsHistoryWork() async throws {
+        let state = RequestDeadlineState()
+        do {
+            let _: Int = try await LocalAutomationSocket.withDeadline(.now.advanced(by: .milliseconds(50))) {
+                do {
+                    try await Task.sleep(for: .seconds(60))
+                    return 1
+                } catch is CancellationError {
+                    await state.finishedCancellation()
+                    throw CancellationError()
+                }
+            }
+            XCTFail("History work must share the connection's deadline")
+        } catch let failure as LocalAutomationSocket.Failure {
+            XCTAssertEqual(failure, .timeout)
+        }
+        let finished = await state.cancelled
+        XCTAssertTrue(finished, "The connection slot cannot be released before cancelled work exits")
+    }
+
+    func testCompletedRequestKeepsItsActualResultAndCancelsDeadlineWait() async throws {
+        let expected = LocalAutomationOutput(exitCode: 0, stdout: Data([0, 255, 10]), stderr: Data())
+        let output = try await LocalAutomationSocket.withDeadline(.now.advanced(by: .seconds(60))) {
+            expected
+        }
+        XCTAssertEqual(output, expected)
+    }
+
+    func testCancelledRequestDoesNotBeginHistoryWork() async throws {
+        let state = RequestDeadlineState()
+        let request = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            do {
+                let _: Int = try await LocalAutomationSocket.withDeadline(.now.advanced(by: .seconds(2))) {
+                    await state.finishedCancellation()
+                    return 1
+                }
+                XCTFail("A cancelled connection must not begin History work")
+            } catch is CancellationError {
+                // Cancellation is checked before creating either child task.
+            } catch {
+                XCTFail("expected cancellation, got \(error)")
+            }
+        }
+        await request.value
+        let ran = await state.cancelled
+        XCTAssertFalse(ran)
+    }
+
     func testEmptyReadStillHonorsCancellationAndDeadline() async throws {
         try await withSocketPair { _, receiver in
             do {
@@ -31,6 +80,33 @@ final class LocalAutomationDeadlineTests: XCTestCase {
                 }
             }
             await reading.value
+        }
+    }
+
+    func testEmptyWriteStillHonorsCancellationAndDeadline() async throws {
+        try await withSocketPair { sender, _ in
+            do {
+                try await LocalAutomationSocket.send(
+                    Data(), to: sender, deadline: .now.advanced(by: .seconds(-1))
+                )
+                XCTFail("an empty write must still honor its deadline")
+            } catch let failure as LocalAutomationSocket.Failure {
+                XCTAssertEqual(failure, .timeout)
+            }
+            let writing = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                do {
+                    try await LocalAutomationSocket.send(
+                        Data(), to: sender, deadline: .now.advanced(by: .seconds(2))
+                    )
+                    XCTFail("an empty write must still honor cancellation")
+                } catch is CancellationError {
+                    // An empty stderr still belongs to the request deadline.
+                } catch {
+                    XCTFail("expected cancellation, got \(error)")
+                }
+            }
+            await writing.value
         }
     }
 
@@ -225,4 +301,9 @@ final class LocalAutomationDeadlineTests: XCTestCase {
         try LocalAutomationSocket.configure(descriptors[1])
         try await body(descriptors[0], descriptors[1])
     }
+}
+
+private actor RequestDeadlineState {
+    private(set) var cancelled = false
+    func finishedCancellation() { cancelled = true }
 }

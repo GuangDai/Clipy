@@ -142,9 +142,15 @@ public actor ContentPreview {
     }
     private var renderSlots = [RenderSlotState(), RenderSlotState()]
 
+    /// Waiting requests retain their supplied Data just as active requests
+    /// do. Share the two existing 64 MiB native-source budgets across active
+    /// and queued work instead of allocating one budget for every caller.
+    private static let maximumRetainedSourceBytes = 2 * ResourceProfile.historyPane.maximumInputBytes
+    private static let maximumQueuedRendersPerSlot = 32
+    private var retainedSourceBytes = 0
+
     #if DEBUG
     private var debugActiveJobs = 0
-    private var debugRetainedSourceBytes = 0
     #endif
 
     public init() {}
@@ -208,16 +214,9 @@ public actor ContentPreview {
         })
         var outcome = PreviewOutcome.unavailable(.unsupported)
         for source in sources {
-            #if DEBUG
-            // The selected renderer accounts for its own bytes. Include the
-            // siblings still retained by this wrapper, exactly once per await.
-            let siblingBytes = totalInputBytes - source.byteCount
-            debugRetainedSourceBytes += siblingBytes
-            defer { debugRetainedSourceBytes -= siblingBytes }
-            #endif
-            outcome = await renderSelectedHistoryPane(
+            outcome = await renderSelectedSource(
                 source, representation: representations[source.representationIndex],
-                textConfiguration: textConfiguration
+                textConfiguration: textConfiguration, retainedInputBytes: totalInputBytes
             )
             if !source.permitsFallback(after: outcome) { return outcome }
         }
@@ -228,12 +227,22 @@ public actor ContentPreview {
         _ source: PreviewSource, representation: PreviewRepresentation,
         textConfiguration: PreviewTextConfiguration = .init()
     ) async -> PreviewOutcome {
+        await renderSelectedSource(source, representation: representation,
+                                   textConfiguration: textConfiguration,
+                                   retainedInputBytes: representation.bytes.count)
+    }
+
+    private func renderSelectedSource(
+        _ source: PreviewSource, representation: PreviewRepresentation,
+        textConfiguration: PreviewTextConfiguration, retainedInputBytes: Int
+    ) async -> PreviewOutcome {
         if let failure = source.preflightFailure { return failure }
         guard representation.typeIdentifier.utf8.elementsEqual(source.typeIdentifier.utf8),
               representation.bytes.count == source.byteCount else { return .failed(.malformedRepresentation) }
         let outcome = await renderRepresentation(
             representation, kind: source.kind, maximumInputBytes: source.maximumInputBytes,
-            profile: .historyPane, textConfiguration: textConfiguration
+            profile: .historyPane, textConfiguration: textConfiguration,
+            retainedInputBytes: retainedInputBytes
         )
         return Task.isCancelled ? .failed(.cancelled) : outcome
     }
@@ -250,15 +259,23 @@ public actor ContentPreview {
     private func renderRepresentation(
         _ representation: PreviewRepresentation, kind: PreviewSource.Kind,
         maximumInputBytes: Int, profile: ResourceProfile,
-        textConfiguration: PreviewTextConfiguration = .init()
+        textConfiguration: PreviewTextConfiguration = .init(),
+        retainedInputBytes: Int? = nil
     ) async -> PreviewOutcome {
         guard representation.bytes.count <= maximumInputBytes else { return .failed(.resourceLimit) }
+        guard !Task.isCancelled else { return .failed(.cancelled) }
+        let inputBytes = retainedInputBytes ?? representation.bytes.count
+        guard inputBytes <= Self.maximumRetainedSourceBytes - retainedSourceBytes else {
+            // Other requests own this capacity. The same source can succeed
+            // when they finish, so expose the existing retryable outcome.
+            return .failed(.renderer)
+        }
+        retainedSourceBytes += inputBytes
+        defer { retainedSourceBytes -= inputBytes }
         #if DEBUG
         debugActiveJobs += 1
-        debugRetainedSourceBytes += representation.bytes.count
         defer {
             debugActiveJobs -= 1
-            debugRetainedSourceBytes -= representation.bytes.count
         }
         #endif
         guard !Task.isCancelled else { return .failed(.cancelled) }
@@ -307,7 +324,7 @@ public actor ContentPreview {
 
     #if DEBUG
     public func debugSnapshot() -> ContentPreviewDebugSnapshot {
-        ContentPreviewDebugSnapshot(activeJobs: debugActiveJobs, retainedSourceBytes: debugRetainedSourceBytes,
+        ContentPreviewDebugSnapshot(activeJobs: debugActiveJobs, retainedSourceBytes: retainedSourceBytes,
                                     queuedRasterJobs: renderSlots[RenderSlot.raster.rawValue].waiters.count,
                                     queuedTextJobs: renderSlots[RenderSlot.text.rawValue].waiters.count)
     }
@@ -356,6 +373,12 @@ public actor ContentPreview {
         guard renderSlots[slot.rawValue].active else {
             renderSlots[slot.rawValue].active = true
             return nil
+        }
+        // Byte admission alone cannot bound thousands of tiny sources and
+        // their continuations/timers. Refuse excess waiters before creating
+        // either object; current exact demand may retry after a slot drains.
+        guard renderSlots[slot.rawValue].waiters.count < Self.maximumQueuedRendersPerSlot else {
+            return .renderer
         }
         let id = UUID()
         // ImageIO, FileWrapper deserialization, strict text decoding, and

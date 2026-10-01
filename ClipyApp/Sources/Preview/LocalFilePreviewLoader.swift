@@ -1,3 +1,4 @@
+import ContentPreview
 import Darwin
 import Foundation
 import HistoryCore
@@ -39,6 +40,7 @@ actor LocalFilePreviewLoader {
             throw Self.failure(for: errno)
         }
         try Self.checkFile(initialStatus)
+        try Self.checkPreviewSize(initialStatus, typeIdentifier: type)
         let isLocalVolume: Bool?
         do {
             isLocalVolume = try url.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal
@@ -59,6 +61,7 @@ actor LocalFilePreviewLoader {
             throw Self.failure(for: errno)
         }
         try Self.checkFile(openedStatus)
+        try Self.checkPreviewSize(openedStatus, typeIdentifier: type)
 
         var bytes = Data()
         bytes.reserveCapacity(Int(openedStatus.st_size))
@@ -79,6 +82,10 @@ actor LocalFilePreviewLoader {
             guard chunk.count <= Self.maximumBytes - bytes.count else {
                 throw FilePreviewFailure.tooLarge
             }
+            // A writer can grow a file after both metadata checks. Enforce
+            // the selected renderer's smaller limit on every chunk before
+            // appending, so rich text never accumulates up to the image cap.
+            try Self.checkPreviewByteCount(bytes.count + chunk.count, typeIdentifier: type)
             bytes.append(chunk)
 #if DEBUG
             if let didReadChunk = LocalFilePreviewDebugInstrumentation.didReadChunk {
@@ -131,6 +138,21 @@ actor LocalFilePreviewLoader {
         guard status.st_mode & S_IFMT == S_IFREG else { throw FilePreviewFailure.unsupported }
         guard status.st_flags & UInt32(SF_DATALESS) == 0 else { throw FilePreviewFailure.unavailable }
         guard status.st_size >= 0, status.st_size <= Int64(maximumBytes) else {
+            throw FilePreviewFailure.tooLarge
+        }
+    }
+
+    private static func checkPreviewSize(_ status: stat, typeIdentifier: String) throws {
+        try checkPreviewByteCount(Int(status.st_size), typeIdentifier: typeIdentifier)
+    }
+
+    private static func checkPreviewByteCount(_ byteCount: Int, typeIdentifier: String) throws {
+        // Metadata already proves whether the selected renderer will reject
+        // the file. Reuse its format limit before allocating or reading bytes.
+        let source = ContentPreview.prepareHistoryPane([
+            PreviewRepresentationMetadata(typeIdentifier: typeIdentifier, byteCount: byteCount)
+        ]).first
+        if source?.preflightFailure == .failed(.resourceLimit) {
             throw FilePreviewFailure.tooLarge
         }
     }

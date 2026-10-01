@@ -219,6 +219,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureSharedState()
     }
 
+    isolated deinit {
+        // A disposable owner can be released without an application-wide
+        // termination callback. Block observers otherwise remain registered
+        // with their notification center after their weak owner disappears.
+        removePanelAppearanceObservation()
+        removeWorkspaceLifecycleObservation()
+        removeMemoryPressureObservation()
+        panelContentFitTask?.cancel()
+        compositionOpenAttempt?.task.cancel()
+    }
+
     private func configureSharedState() {
         reloadNativeAppearance()
         reloadInteractionSettings()
@@ -472,10 +483,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingPanelContentFitInput = nil
         removeMemoryPressureObservation()
         removeWorkspaceLifecycleObservation()
-        if let defaultsObserverToken {
-            NotificationCenter.default.removeObserver(defaultsObserverToken)
-            self.defaultsObserverToken = nil
-        }
+        removePanelAppearanceObservation()
         compositionOpenAttempt?.task.cancel()
 #if CLIPY_UDS_F0
         unixSocketF0Listener?.stop()
@@ -785,7 +793,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.isPanelKeepOpenActive ?? false
             },
             onDidChangeScreen: { [weak self] in
-                self?.hideFloatingPreviewPane()
+                self?.previewState.screenChanged()
             },
             onFrameChanged: { [weak self] in
                 self?.followMainPanelFrameWithPreview()
@@ -1506,6 +1514,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    private func removePanelAppearanceObservation() {
+        guard let defaultsObserverToken else { return }
+        NotificationCenter.default.removeObserver(defaultsObserverToken)
+        self.defaultsObserverToken = nil
     }
 
     /// Republishes the appearance snapshot after any defaults write. The

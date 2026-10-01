@@ -65,6 +65,18 @@ struct HistorySearchFieldHostedTests {
         let expected = max(0, field.convert(field.bounds, to: content).minY - content.bounds.minY - 8)
         try #require(expected < before)
         try #require(await ComposedSupport.waitFor { available == expected })
+
+        // Resize notifications and editor updates share one actor turn. The
+        // next report must use the final native viewport, not an earlier frame.
+        let heights: [CGFloat] = [360, 180, 300]
+        for height in heights {
+            panel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.maxY - height,
+                                  width: panel.frame.width, height: height), display: true)
+            field.update(text: "$source:Saf", isFocused: true)
+        }
+        let finalExpected = max(0, field.convert(field.bounds, to: content).minY - content.bounds.minY - 8)
+        try #require(finalExpected != expected)
+        try #require(await ComposedSupport.waitFor { available == finalExpected })
     }
 
     @Test

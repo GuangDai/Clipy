@@ -113,6 +113,40 @@ struct LocalFilePreviewLoaderTests {
         #expect(await probe.chunkCounts.isEmpty)
     }
 
+    @Test(arguments: ["rtf", "html", "htm"])
+    func oversizedRichTextSparseFileIsRejectedBeforeAnyChunkRead(suffix: String) async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("large.\(suffix)")
+        try Data().write(to: file)
+        let handle = try FileHandle(forWritingTo: file)
+        try handle.truncate(atOffset: 1_048_577)
+        try handle.close()
+        let probe = FilePreviewReadProbe()
+        await LocalFilePreviewDebugInstrumentation.$didReadChunk.withValue({ count in
+            await probe.record(count)
+        }) {
+            await #expect(throws: FilePreviewFailure.tooLarge) {
+                try await LocalFilePreviewLoader().load(file.absoluteString)
+            }
+        }
+        #expect(await probe.chunkCounts.isEmpty)
+    }
+
+    @Test(arguments: [
+        ("rtf", "public.rtf"), ("html", "public.html"), ("htm", "public.html"),
+    ])
+    func richTextFilesAtTheRendererLimitReturnExactBytes(suffix: String, type: String) async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("preview.\(suffix)")
+        let bytes = Data(repeating: 0x41, count: 1_048_576)
+        try bytes.write(to: file)
+        let result = try await LocalFilePreviewLoader().load(file.absoluteString)
+        #expect(result.typeIdentifier == type)
+        #expect(result.bytes == bytes)
+    }
+
     @Test func cancellationBetweenRealChunksStopsTheRead() async throws {
         let directory = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -153,6 +187,35 @@ struct LocalFilePreviewLoaderTests {
         await probe.resume()
         await #expect(throws: FilePreviewFailure.tooLarge) { try await request.value }
         #expect(await probe.chunkCounts.last == LocalFilePreviewLoader.maximumBytes)
+    }
+
+    @Test(arguments: ["rtf", "html", "htm"])
+    func growingRichTextStopsAtTheRendererLimit(suffix: String) async throws {
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("growing.\(suffix)")
+        try Data(repeating: 0x41, count: 64 * 1_024).write(to: file)
+        let probe = FilePreviewReadProbe(parkFirst: true)
+        let request = Task {
+            try await LocalFilePreviewDebugInstrumentation.$didReadChunk.withValue({ count in
+                await probe.record(count)
+            }) {
+                try await LocalFilePreviewLoader().load(file.absoluteString)
+            }
+        }
+        await probe.waitUntilFirstChunk()
+        do {
+            let handle = try FileHandle(forWritingTo: file)
+            defer { try? handle.close() }
+            try handle.truncate(atOffset: UInt64(LocalFilePreviewLoader.maximumBytes))
+        } catch {
+            await probe.resume()
+            _ = await request.result
+            throw error
+        }
+        await probe.resume()
+        await #expect(throws: FilePreviewFailure.tooLarge) { try await request.value }
+        #expect(await probe.chunkCounts.last == 1_048_576)
     }
 
     enum MidReadChange: Sendable { case append, truncate, overwrite }

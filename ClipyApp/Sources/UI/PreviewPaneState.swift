@@ -75,12 +75,20 @@ final class PreviewPaneState {
 
     /// Shared with the panel's Escape action so the topmost information
     /// popover closes before the preview, search, Quick Look, or the panel.
-    var isInformationPresented = false
+    var isInformationPresented = false {
+        didSet {
+            guard isInformationPresented != oldValue else { return }
+            if isInformationPresented { cancelPendingPointerExit() }
+            else { recheckPointerAfterModal() }
+        }
+    }
     /// A file-read confirmation belongs to the visible preview. Leaving its
     /// two native windows for the attached alert must not hide that owner.
     var isFileConfirmationPresented = false {
         didSet {
+            guard isFileConfirmationPresented != oldValue else { return }
             if isFileConfirmationPresented { cancelPendingPointerExit() }
+            else { recheckPointerAfterModal() }
         }
     }
 
@@ -400,6 +408,17 @@ final class PreviewPaneState {
         isAutoOpenEnabled = false
     }
 
+    /// A screen change retires the old preview and its pending dwell while
+    /// keeping this browsing session's selection and manual-close choice.
+    func screenChanged() {
+        cancelPendingAutoOpen()
+        cancelPendingPointerExit()
+        if isOpen { closePreview() }
+        isInformationPresented = false
+        isFileConfirmationPresented = false
+        pointerPresence = []
+    }
+
     // MARK: - Pointer lifecycle (both windows)
 
     /// Real movement anywhere in either window activates the pointer lifecycle.
@@ -453,6 +472,22 @@ final class PreviewPaneState {
         cancelPendingAutoOpen()
         guard isOpen, !isInformationPresented, !isFileConfirmationPresented, !isResizingPreview else { return }
         schedulePointerExit()
+    }
+
+    /// Modal interaction can consume the real exit while the pane is
+    /// protected. Resume from native containment rather than inventing
+    /// another exit for a surface whose presence was already removed.
+    func recheckPointerAfterModal() {
+        guard isOpen, isPointerInteractionActive,
+              !isInformationPresented, !isFileConfirmationPresented, !isResizingPreview,
+              let pointerSurfacesContainingPointer else { return }
+        pointerPresence = pointerSurfacesContainingPointer()
+        if pointerPresence.isEmpty {
+            cancelPendingAutoOpen()
+            schedulePointerExit()
+        } else {
+            cancelPendingPointerExit()
+        }
     }
 
     /// A resize may move the frame away from its pointer between native
@@ -616,10 +651,10 @@ final class PreviewPaneState {
     }
 
     private func closePreview() {
+        isOpen = false
         cancelPendingPointerExit()
         isFileConfirmationPresented = false
         isResizingPreview = false
-        isOpen = false
         previewedItem = nil
         onFloatingPreviewTransition?(.hide)
     }

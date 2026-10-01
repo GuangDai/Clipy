@@ -83,7 +83,7 @@ struct HistorySearchOptionsView: View {
         .frame(width: 360)
         .accessibilityIdentifier("clipy.search.options")
         .task { applications = await viewState.sourceApplicationsForCompletion() }
-        .task(id: SourceSuggestionQuery(prefix: draft.sourceApplication, position: viewState.sourceCompletionPosition)) {
+        .task(id: SourceSuggestionQuery(prefix: Data(draft.sourceApplication.utf8), position: viewState.sourceCompletionPosition)) {
             historySources = []
             historySourceReadFailed = false
             isLoadingHistorySources = true
@@ -246,7 +246,9 @@ struct HistorySearchOptionsView: View {
     }
 
     private struct SourceSuggestionQuery: Equatable {
-        let prefix: String
+        // String equality merges composed/decomposed spellings, but source
+        // matching and exact bundle identifiers preserve their UTF-8 bytes.
+        let prefix: Data
         let position: ChangePosition?
     }
 

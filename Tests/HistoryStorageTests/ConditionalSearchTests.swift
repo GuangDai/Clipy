@@ -99,6 +99,71 @@ struct ConditionalSearchTests {
         }
     }
 
+#if DEBUG
+    @Test func eitherRequiredTextConditionCanBoundAnIndependentSearch() async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
+            persistence: .temporary, initialMaximumUnpinnedItems: 5_000
+        ))
+        _ = try await history.seedPerformanceFixture(rowCount: 4_105) { index in
+            WSSupport.textCapture(
+                "all record \(index)\n" + (index < 6 ? "quartz" : "ordinary"),
+                observedAt: Date(timeIntervalSinceReferenceDate: Double(index))
+            )
+        }
+        // Candidate planning may inspect either required operand, but the
+        // original Boolean order continues to select the returned highlight.
+        for (query, hasBodySnippet) in [
+            ("all AND quartz", false), ("quartz AND all", true),
+            ("(all AND quartz) OR (all AND absent)", false),
+        ] {
+            let measured = await history.measureSearch(.init(
+                kind: .search(text: query, mode: .expression), limit: 2
+            ))
+            let page = try measured.result.get()
+            #expect(page.rows.map(\.title) == ["all record 5", "all record 4"])
+            #expect(measured.metrics.rowsDecoded <= 6)
+            #expect(page.rows.allSatisfy { ($0.search?.snippet != nil) == hasBodySnippet })
+        }
+        for mode in [SearchMode.exact, .regexp] {
+            for (literal, conditionText) in [("quartz", "all"), ("all", "quartz")] {
+                let kind = HistoryBrowseKind.search(text: literal, mode: mode)
+                let condition = try HistorySearchExpression.parse(conditionText)
+                let request = HistoryBrowseRequest(kind: kind, limit: 2, conditionExpression: condition)
+                let first = await history.measureSearch(request)
+                let firstPage = try first.result.get()
+                #expect(firstPage.rows.map(\.title) == ["all record 5", "all record 4"])
+                #expect(first.metrics.rowsDecoded <= 6)
+                #expect(firstPage.rows.allSatisfy { row in
+                    literal == "quartz" ? row.search?.snippet?.contains("quartz") == true
+                        : row.search?.snippet == nil && row.search?.matchedRanges == [UTF16TextRange(location: 0, length: 3)]
+                })
+
+                let forward = try #require(firstPage.next)
+                let second = await history.measureSearch(.init(
+                    kind: kind, limit: 2, cursor: forward, conditionExpression: condition
+                ))
+                let secondPage = try second.result.get()
+                #expect(secondPage.rows.map(\.title) == ["all record 3", "all record 2"])
+                #expect(second.metrics.rowsDecoded <= 6)
+                let backward = try #require(secondPage.previous)
+                let restored = await history.measureSearch(.init(
+                    kind: kind, limit: 2, cursor: backward, conditionExpression: condition
+                ))
+                #expect(try restored.result.get().rows == firstPage.rows)
+                #expect(restored.metrics.rowsDecoded <= 6)
+                let target = try #require(secondPage.rows.first?.item.id)
+                let located = await history.measureSearch(.init(
+                    kind: kind, limit: 2, startAround: target, conditionExpression: condition
+                ))
+                let locatedPage = try located.result.get()
+                #expect(locatedPage.rows == secondPage.rows)
+                #expect(locatedPage.previous != nil && locatedPage.next != nil)
+                #expect(located.metrics.rowsDecoded <= 12)
+            }
+        }
+    }
+#endif
+
     private func copy(_ text: String, source: String?, at time: Int, in history: SQLiteHistory) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(WSSupport.textCapture(
             text, observedAt: Date(timeIntervalSinceReferenceDate: Double(time)), source: source

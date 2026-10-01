@@ -50,6 +50,12 @@ internal actor SearchWorker {
     /// or mutable state leaves this actor (review playbook §16).
     internal static let cancellationRowInterval = 32
 
+    /// Reentrant scans each own a WAL snapshot and SQLite page cache. Limit
+    /// those live resources across requests as well as each request's batch;
+    /// excess requests fail before opening a connection and never queue here.
+    internal static let maximumConcurrentSnapshots = 4
+    internal var activeSnapshots = 0
+
     /// REVIEW Card 11C: the fixed per-request regexp engine deadline — the
     /// same bound as the two-run master watchdog evidence that proved the
     /// former `firstMatch` operation runs uninterruptibly past it on an

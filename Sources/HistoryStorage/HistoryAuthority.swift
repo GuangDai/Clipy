@@ -106,8 +106,9 @@ internal actor HistoryAuthority {
         guard initialMaximumUnpinnedItems.map(limits.userMaximumUnpinnedRange.contains) ?? true else {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
+        try Task.checkCancellation()
         do {
-            return try database.writeTransaction {
+            return try database.writeTransaction(checkingCancellation: true) {
                 try SQLiteHistorySchema.create(in: database)
                 try Self.ensurePositionSingleton(
                     in: database,
@@ -119,14 +120,22 @@ internal actor HistoryAuthority {
                 try HCRBootstrap.ensureReady(in: database, now: storageClock.now())
                 return identity
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let failure as HistoryFailure {
+            // Startup readers translate their own SQL failures. A cancelled
+            // native query may therefore already be wrapped as openStore;
+            // keep cancellation after the transaction has rolled back.
+            try Task.checkCancellation()
             throw failure
         } catch let failure as SQLiteFailure {
+            try Task.checkCancellation()
             if case .temporarilyUnavailable = failure.historyFailure {
                 throw failure.historyFailure
             }
             throw HistoryFailure.persistence(.openStore)
         } catch {
+            try Task.checkCancellation()
             throw HistoryFailure.persistence(.openStore)
         }
     }

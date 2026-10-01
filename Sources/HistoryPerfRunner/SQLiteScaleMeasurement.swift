@@ -97,6 +97,8 @@ struct SQLiteScaleReport: Codable, Sendable {
     let fixtureStatistics: SQLiteScaleFixtureStatistics
     let operatingSystem: String
     let physicalMemoryBytes: UInt64
+    let machine: MachineMetadata
+    let swiftVersion: String
     let samples: [SQLiteScaleSample]
     let logicalBefore: SQLiteScaleUsage?
     let logicalAfter: SQLiteScaleUsage?

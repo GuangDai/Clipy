@@ -720,6 +720,9 @@ final class AppComposition {
     /// Lets hosted tests join the exact cancelled task after its deliberately
     /// non-cooperative History read returns, without scheduler-turn guesses.
     var pendingPasteForTesting: Task<Void, Never>? { pasteTask }
+
+    /// Joins a capture cancelled before the owned task starts executing.
+    var activeCaptureForTesting: Task<Void, Never>? { captureTask }
 #endif
 
     /// Card 14C: apply the AppDelegate-owned power/login-session facts without
@@ -942,6 +945,7 @@ final class AppComposition {
         _ capture: ClipboardCapture,
         history: any ClipboardHistory
     ) async -> CaptureExecutionOutcome {
+        guard !Task.isCancelled else { return .cancelled }
         do {
             let receipt = try await history.perform(.capture(capture))
             return .completed(receipt)
@@ -1149,6 +1153,7 @@ final class AppComposition {
     /// remain out of scope (05-recommended-target-design.md product
     /// decisions).
     private func requestPaste(_ item: HistoryItemReference, source: PasteSource = .panel) {
+        guard isStarted else { return }
         // Exclusive first-accepted policy (REVIEW CLIP-5/Card 7): the first
         // request reserves the slot before any suspension. There is no
         // pending request because a later pasteboard overwrite is not a
@@ -1223,6 +1228,7 @@ final class AppComposition {
         adapter: PasteboardAdapter,
         pasteWriteFailureForTesting: PasteboardWriteFailure?
     ) async -> PasteExecutionOutcome {
+        guard !Task.isCancelled else { return .cancelled }
         let payload: PastePayload
         do {
             payload = try await history.pastePayload(for: item.id)

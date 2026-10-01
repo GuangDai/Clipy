@@ -62,69 +62,104 @@ func measureAdmissionExactSearch(
     storeURL: URL,
     outputPath: String
 ) async throws {
-    let history = try await openStore(url: storeURL)
-    let request = admissionExactSearchRequest()
-    let clock = ContinuousClock()
-    writeAdmissionProgress(mode: .exactSearch, event: .validationBegan)
-    let validationStart = clock.now
-    let validationPage = try await history.browse(request)
-    guard validationPage.position.rawValue > 0,
-          validationPage.rows.isEmpty,
-          validationPage.next == nil
-    else {
+    try await measureAdmissionNoHitSearch(
+        storeURL: storeURL, outputPath: outputPath,
+        mode: .exactSearch, request: admissionExactSearchRequest(), expectedScannedRows: nil,
+        notes: [
+            "The historical absent term is retained for comparison. Necessary-gram indexing can reject it without decoding the whole corpus; this is not full-scan evidence.",
+            "Request-local decoded/evaluated rows accompany every latency sample. SQLite posting-list and planner work are outside these row counters.",
+        ]
+    )
+}
+
+func measureAdmissionExactScan(
+    storeURL: URL,
+    outputPath: String
+) async throws {
+    try await measureAdmissionNoHitSearch(
+        storeURL: storeURL, outputPath: outputPath,
+        mode: .exactScan, request: admissionExactScanRequest(), expectedScannedRows: admissionRetainedRows,
+        notes: [
+            "The negative query retains every fixture candidate. Each validation, warmup and sample must decode and evaluate all 5,000 rows with no result, or the workload fails instead of claiming a complete scan.",
+            "This measures full-candidate projection reads and exact evaluation with bounded batches, not a single in-memory corpus snapshot or a proven slowest possible matcher input.",
+        ]
+    )
+}
+
+func validateAdmissionNoHitSearch(
+    _ measured: MeasuredSearchPage,
+    expectedPosition: ChangePosition? = nil,
+    expectedScannedRows: Int? = nil
+) throws -> HistoryPage {
+    let page = try measured.result.get()
+    guard page.position.rawValue > 0,
+          expectedPosition.map({ page.position == $0 }) ?? true,
+          page.rows.isEmpty, page.next == nil else {
         throw AdmissionError.unexpectedPage
     }
+    if let expectedScannedRows {
+        guard measured.metrics.rowsDecoded == expectedScannedRows,
+              measured.metrics.rowsEvaluated == expectedScannedRows,
+              measured.metrics.matchesFound == 0,
+              measured.metrics.batchCount > 0,
+              measured.metrics.stopReason == .exhausted else {
+            throw AdmissionError.unexpectedPage
+        }
+    }
+    return page
+}
+
+private func measureAdmissionNoHitSearch(
+    storeURL: URL,
+    outputPath: String,
+    mode: AdmissionMode,
+    request: HistoryBrowseRequest,
+    expectedScannedRows: Int?,
+    notes: [String]
+) async throws {
+    let history = try await openStore(url: storeURL)
+    let clock = ContinuousClock()
+    writeAdmissionProgress(mode: mode, event: .validationBegan)
+    let validationStart = clock.now
+    let validation = await history.measureSearch(request)
+    let validationPage = try validateAdmissionNoHitSearch(validation, expectedScannedRows: expectedScannedRows)
     writeAdmissionProgress(
-        mode: .exactSearch,
+        mode: mode,
         event: .validationCompleted(
             elapsedMs: durationToMs(validationStart.duration(to: clock.now))
         )
     )
 
+    var work: [SQLiteScaleSearchWork] = []
     let samples = try await measureAdmissionSamples(
         warmups: admissionExactSearchWarmupCount,
         samples: admissionExactSearchSampleCount,
         progress: { event in
-            writeAdmissionProgress(mode: .exactSearch, event: event)
+            writeAdmissionProgress(mode: mode, event: event)
         }
     ) {
-        let page = try await history.browse(request)
-        guard page.position == validationPage.position,
-              page.rows.isEmpty,
-              page.next == nil
-        else {
-            throw AdmissionError.unexpectedPage
-        }
+        let measured = await history.measureSearch(request)
+        _ = try validateAdmissionNoHitSearch(
+            measured, expectedPosition: validationPage.position, expectedScannedRows: expectedScannedRows
+        )
+        work.append(SQLiteScaleSearchWork(measured.metrics))
     }
     let fixture = makeAdmissionFixture(
-        mode: .exactSearch,
-        sampleUnit: "public-exact-search-request",
+        mode: mode,
+        sampleUnit: "production-exact-search-request",
         samples: samples,
         validation: [
             "matchedRows": "0",
             "position": String(validationPage.position.rawValue),
+            "rowsDecoded": String(validation.metrics.rowsDecoded),
+            "rowsEvaluated": String(validation.metrics.rowsEvaluated),
         ],
-        notes: [
-            "Each public search snapshots 5,000 inline 256 KiB searchBody projections before exact evaluation.",
-            "The absent term forces a complete bounded-corpus scan without result DTO retention.",
-            "IND-07 measurement budget: 11 samples, reduced from the "
-                + "101-sample profile budget. The original ~125 s/request "
-                + "basis (the Foundation-oracle diagnostic that opened "
-                + "IND-07) is stale: GOV-1 run 32685185124 measured p50 "
-                + "2,666 ms per absent-term request (11 samples, range "
-                + "1,810–3,827 ms), at which 101 samples would fit the "
-                + "90-minute step ceiling (103 × 3.8 s ≈ 7 min). The "
-                + "reduction is retained so the record-only p50 trend "
-                + "survives even a regression to the ~125 s Foundation "
-                + "path (13 × 125 s ≈ 27 min vs 103 × 125 s ≈ 3.6 h). "
-                + "Per-rank support gating reports p50 only — p95 and p99 "
-                + "are omitted below their 20/100-sample nearest-rank "
-                + "support floors instead of a disguised sample maximum.",
-            "Peak RSS is a worst-bound process high-water ceiling, not "
-                + "transient-hydration attribution or representative "
-                + "concurrent-DTO G8 evidence.",
-            "Pair this JSON with exact-search.time; no G2 or G8 budget is inferred.",
-        ]
+        notes: notes + [
+            "11 timed samples follow one warmup and a separate validation. Only p50 is supported; p95/p99 are omitted instead of reporting the sample maximum.",
+            "Peak RSS is the whole-process high-water mark, not per-query transient allocation or concurrent DTO ownership.",
+            "Pair this JSON with its matching time file; no absolute product budget is inferred.",
+        ],
+        searchWork: Array(work.dropFirst(admissionExactSearchWarmupCount))
     )
     try writeAdmissionFixture(fixture, to: outputPath)
 }

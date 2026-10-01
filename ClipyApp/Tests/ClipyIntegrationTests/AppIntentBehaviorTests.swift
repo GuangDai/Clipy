@@ -57,6 +57,34 @@ struct AppIntentBehaviorTests {
         #expect(try await support.lastAuditOperation() == .readDetails)
     }
 
+    @Test("Details preserves exact identifier spellings from separate clipboard items")
+    func detailsKeepsCanonicallyEquivalentFormatSpellings() async throws {
+        let support = try await AppIntentTestSupport.make(grants: [.readContent])
+        let first = "com.example.\u{00E9}"
+        let second = "com.example.e\u{0301}"
+        let receipt = try await support.history.perform(.capture(.init(
+            representations: [
+                .init(typeIdentifier: first, bytes: Data([1]), pasteboardItemIndex: 0),
+                .init(typeIdentifier: second, bytes: Data([2]), pasteboardItemIndex: 1),
+                .init(typeIdentifier: first, bytes: Data([3]), pasteboardItemIndex: 2),
+            ],
+            origin: .init(sourceApplication: nil, lineageHint: nil), observedAt: Date()
+        )))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            Issue.record("The multi-item format fixture did not insert")
+            return
+        }
+        let intent = GetItemDetailsIntent(
+            itemID: item.id.description, history: support.ingress,
+            dependencyManager: support.manager
+        )
+        let result = try await intent.perform()
+        let details = try #require(result.value)
+        #expect(details.typeIdentifiers.count == 2)
+        #expect(Set(details.typeIdentifiers.map { Data($0.utf8) }) == Set([Data(first.utf8), Data(second.utf8)]))
+        #expect(try await support.lastAuditOperation() == .readDetails)
+    }
+
     @Test("Paste writes every byte and lineage hint to a private pasteboard")
     func paste() async throws {
         let support = try await AppIntentTestSupport.make(grants: [.readContent])

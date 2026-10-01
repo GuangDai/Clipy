@@ -247,7 +247,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
                 self.nativeSheetCount -= 1
                 if self.isPresented {
                     self.followParentAfterNativeResize()
-                    self.previewState.pointerExited(.preview)
+                    self.previewState.recheckPointerAfterModal()
                 }
             }
             // Return from the actual completion before applying geometry;

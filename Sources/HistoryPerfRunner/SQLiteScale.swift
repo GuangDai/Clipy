@@ -21,6 +21,7 @@ struct SQLiteScaleArguments: Sendable {
     let bodyBytes: Int
     let outputURL: URL
     let fixtureProfile: SQLiteScaleFixtureProfile
+    let largeBodyIndex: Int
 
     init(_ arguments: [String]) throws {
         guard (5...6).contains(arguments.count),
@@ -33,6 +34,7 @@ struct SQLiteScaleArguments: Sendable {
             throw SQLiteScaleError.invalidArguments
         }
         fixtureProfile = SQLiteScaleFixtureProfile(kind: profile, fixedBodyBytes: bytes)
+        largeBodyIndex = fixtureProfile.largestBodyIndex(in: rows)
         self.mode = mode
         storeURL = URL(fileURLWithPath: arguments[1])
         retainedRows = rows
@@ -128,6 +130,8 @@ func runSQLiteScale(arguments: [String]) async -> Int {
             ),
             operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
             physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory,
+            machine: admissionMachineMetadata(),
+            swiftVersion: commandOutput("/usr/bin/xcrun", arguments: ["swift", "--version"]),
             samples: samples, logicalBefore: before.map(SQLiteScaleUsage.init),
             logicalAfter: usage.map(SQLiteScaleUsage.init),
             diskAfter: disk, failure: failure,
@@ -139,9 +143,10 @@ func runSQLiteScale(arguments: [String]) async -> Int {
                 "RSS/footprint are whole-process endpoint samples. Peak RSS is since process launch, not a resettable per-phase peak; no sampled peak-footprint claim.",
                 "Logical content bytes, returned payload bytes, and observed filesystem allocation are different quantities. No total owned-memory attribution is available in this standalone runner.",
                 "Disk enumeration runs after operation samples; compare seed/measure diskAfter values for growth. APFS shared/compressed blocks are not exclusive allocation.",
-                "The synthetic corpus contains one distinct UTF-8 text representation per item. Scroll retains at most the first 100 rows plus the current page and oldest row to independently check search result identities.",
+                "The synthetic corpus contains one distinct UTF-8 text representation per item. Each title is its first-line marker; all bodies contain bodyhit, only the oldest contains rarebody, and the largest raw value contains largebodyhit near its durable projection tail. Scroll retains at most the first 100 rows plus the current page, oldest row and designated large row to independently check search identities.",
+                "Mixed lengths do not imply diverse text entropy: bodies repeat seven text-shaped blocks. Fixed bodies use ASCII padding. These synthetic cases do not establish performance for arbitrary user text or worst-case index posting distributions.",
                 "Seed and traversal report processedFixtureRows separately; returnedRows is the count of returned browse/search DTO rows. searchWork records same-request Swift decode/evaluation work, including partial work on failure, and excludes SQLite posting-list/planner work.",
-                "Search cases cover absent terms, the oldest item, dense prefixes, a structural regexp, and a fuzzy substitution typo. Dense matches measure two pages separately. Query metadata records expected total matches; returnedRows records returned rows, not internal decoded/evaluated rows.",
+                "Search cases cover absent terms, the oldest item, dense title/body hits, rare large-body tail snippets with UTF-16 match validation, both common/rare AND operand orders including a common title term, a structural regexp, and a fuzzy substitution typo. Dense matches measure two pages separately. Query metadata records expected total matches; returnedRows records returned rows, not internal decoded/evaluated rows.",
                 "Canonical copy reads the original content after revision. Inactive revision payload copy and real OS pressure/app-cache recovery are not measured here.",
             ]
         )
@@ -165,15 +170,18 @@ private func seedSQLiteScale(
 ) async throws {
     let rowCount = options.retainedRows
     let profile = options.fixtureProfile
+    let largeBodyIndex = options.largeBodyIndex
     _ = try await measureSQLiteScale(phase: "seed", samples: &samples) {
         try await history.seedPerformanceFixture(rowCount: rowCount - 1) { index in
-            profile.capture(at: index)
+            profile.capture(at: index, includeLargeBodyHit: index == largeBodyIndex)
         } progress: { rows in
             if rows.isMultiple(of: 10_000) { print("sqlite-scale seededRows=\(rows)") }
         }
     } fixtureRows: { $0.retainedRows }
     _ = try await measureSQLiteScale(phase: "public-capture", samples: &samples) {
-        try await capturePreparedItem(history, capture: profile.capture(at: rowCount - 1))
+        try await capturePreparedItem(history, capture: profile.capture(
+            at: rowCount - 1, includeLargeBodyHit: rowCount - 1 == largeBodyIndex
+        ))
     }
 }
 
@@ -188,7 +196,9 @@ private func exerciseSQLiteScale(
     } facts: { ($0.rows.count, 0) }
     guard let selected = page.rows.first?.item else { throw SQLiteScaleError.unexpectedResult }
     let traversed = try await measureSQLiteScale(phase: "full-scroll", samples: &samples) {
-        try await traverseSQLiteScale(history: history, expectedCount: options.retainedRows)
+        try await traverseSQLiteScale(
+            history: history, expectedCount: options.retainedRows, largeBodyIndex: options.largeBodyIndex
+        )
     } fixtureRows: { $0.count }
     try await exerciseSQLiteScaleSearches(
         history: history, corpus: traversed, position: page.position, samples: &samples
@@ -201,7 +211,7 @@ private func exerciseSQLiteScale(
     } facts: { (0, $0.representations.reduce(0) { $0 + $1.bytes.count }) }
     guard payload.representations.count == 1,
           payload.representations[0].bytes == options.fixtureProfile.capture(
-            at: options.retainedRows - 1
+            at: options.retainedRows - 1, includeLargeBodyHit: options.retainedRows - 1 == options.largeBodyIndex
           ).representations[0].bytes else { throw SQLiteScaleError.unexpectedResult }
     _ = try await measureSQLiteScale(phase: "enable-revision-pruning", samples: &samples) {
         try await history.perform(.setRetentionPolicies(HistoryRetentionPolicies(
@@ -237,17 +247,20 @@ private func exerciseSQLiteScale(
     }
 }
 
-/// Keep100 leading rows and the oldest row as an independent search oracle.
+/// Keep 100 leading rows, the oldest row and one designated large-body row as
+/// an independent search oracle.
 /// Caller memory stays bounded; the position check detects mixed snapshots.
 func traverseSQLiteScale(
     history: SQLiteHistory,
-    expectedCount: Int
+    expectedCount: Int,
+    largeBodyIndex: Int? = nil
 ) async throws -> SQLiteScaleBrowseEvidence {
     var cursor: HistoryPageCursor?
     var position: ChangePosition?
     var count = 0
     var leadingRows: [HistoryRow] = []
     var oldestRow: HistoryRow?
+    var largeBodyRow: HistoryRow?
     repeat {
         let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 50, cursor: cursor))
         if let position, page.position != position { throw SQLiteScaleError.unexpectedResult }
@@ -260,11 +273,16 @@ func traverseSQLiteScale(
                 throw SQLiteScaleError.unexpectedResult
             }
             if leadingRows.count < 100 { leadingRows.append(row) }
+            if expectedIndex == largeBodyIndex { largeBodyRow = row }
             oldestRow = row
             count += 1
         }
         cursor = page.next
     } while cursor != nil
-    guard count == expectedCount else { throw SQLiteScaleError.unexpectedResult }
-    return SQLiteScaleBrowseEvidence(count: count, leadingRows: leadingRows, oldestRow: oldestRow)
+    guard count == expectedCount, largeBodyIndex == nil || largeBodyRow != nil else {
+        throw SQLiteScaleError.unexpectedResult
+    }
+    return SQLiteScaleBrowseEvidence(
+        count: count, leadingRows: leadingRows, oldestRow: oldestRow, largeBodyRow: largeBodyRow
+    )
 }

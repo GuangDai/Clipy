@@ -14,6 +14,30 @@ import Testing
 
 struct AppCaptureLaneTests {
 
+    @Test @MainActor
+    func stoppingBeforeTheCaptureTaskStartsDoesNotCallHistory() async throws {
+        let base = try await ComposedSupport.openMemoryHistory()
+        let history = FirstCaptureSuspendingHistory(base: base, suspendsFirstCapture: false)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+
+        composition.submitCaptureForTesting(Self.capture("cancelled before execution", at: 1))
+        let task = try #require(composition.activeCaptureForTesting)
+        // No suspension between admission and stop: the MainActor task has
+        // been allocated, but has not reached the History boundary.
+        composition.stop()
+        await task.value
+
+        #expect(await history.captureAttemptCount == 0)
+        #expect(try await base.browse(HistoryBrowseRequest(kind: .recent, limit: 10)).rows.isEmpty)
+        #expect(composition.captureHealth.activeCommitCount == 0)
+    }
+
     /// Card 6 discriminator: with A active, B occupies the one pending slot,
     /// and C replaces B. After dismissing that episode, D replaces C and must
     /// surface again. Resuming the real History commit therefore retains
@@ -818,15 +842,19 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
     }
 
     private let base: SQLiteHistory
+    private let suspendsFirstCapture: Bool
     private var captureCount = 0
     private var didCompleteSecondCapture = false
     private var firstCaptureContinuation: CheckedContinuation<Void, Never>?
     private var firstCaptureWaiters: [CheckedContinuation<Void, Never>] = []
     private var secondCaptureWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(base: SQLiteHistory) {
+    init(base: SQLiteHistory, suspendsFirstCapture: Bool = true) {
         self.base = base
+        self.suspendsFirstCapture = suspendsFirstCapture
     }
+
+    var captureAttemptCount: Int { captureCount }
 
     func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
         guard case .capture = action else {
@@ -835,7 +863,7 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
 
         captureCount += 1
         let captureOrdinal = captureCount
-        guard captureOrdinal == 1 else {
+        guard captureOrdinal == 1, suspendsFirstCapture else {
             let receipt = try await base.perform(action)
             if captureOrdinal == 2 {
                 didCompleteSecondCapture = true

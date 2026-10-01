@@ -210,31 +210,32 @@ public final class PasteboardObserver {
         observedChangeCount: Int
     ) -> CaptureOutcome? {
         let shouldContinue: @MainActor () -> Bool = {
-            self.timer === activeTimer && self.lastChangeCount == observedChangeCount
+            guard self.timer === activeTimer,
+                  self.lastChangeCount == observedChangeCount else { return false }
+            // A promised-data provider can spin the run loop without changing
+            // clipboard ownership. Recheck access at each payload boundary so
+            // a revocation abandons this freeze before any sibling read or
+            // delivery, rather than waiting for the next timer tick.
+            let accessBehavior = self.accessBehaviorProvider()
+            if accessBehavior != self.lastAccessBehavior {
+                self.lastAccessBehavior = accessBehavior
+                self.accessBehaviorHandler?(accessBehavior)
+            }
+            return self.timer === activeTimer
+                && self.lastChangeCount == observedChangeCount
+                && accessBehavior == .allowed
         }
         guard let firstOutcome = adapter.captureOutcome(shouldContinue: shouldContinue) else { return nil }
+        guard shouldContinue() else { return nil }
         guard case .changedDuringRead = firstOutcome else {
             return firstOutcome
         }
-        guard self.timer === activeTimer,
-              lastChangeCount == observedChangeCount else { return nil }
-
-        // A synchronous promised-data provider may have allowed a privacy
-        // change while the first freeze was in progress (Card 5A / CLIP-1).
-        // The second freeze is another payload read: report revocation to
-        // the owner before retrying, including its synchronous stop/restart.
-        let accessBehavior = accessBehaviorProvider()
-        if accessBehavior != lastAccessBehavior {
-            lastAccessBehavior = accessBehavior
-            accessBehaviorHandler?(accessBehavior)
-        }
-        guard self.timer === activeTimer,
-              lastChangeCount == observedChangeCount,
-              accessBehavior == .allowed else { return nil }
 
         guard let retryOutcome = adapter.captureOutcome(shouldContinue: shouldContinue) else {
+            guard shouldContinue() else { return nil }
             return firstOutcome
         }
+        guard shouldContinue() else { return nil }
         switch retryOutcome {
         case .complete, .changedDuringRead:
             return retryOutcome

@@ -61,6 +61,9 @@ struct SearchHeaderView: View {
                 filterMenu
                     .frame(width: 24, height: 24)
             }
+            // Candidates extend below this row over the status controls.
+            // The outer header's ordering does not order these siblings.
+            .zIndex(completion.isPresented ? 1 : 0)
             if viewState.isSearchStatusVisible {
                 searchStatusRow.frame(height: 15)
             }

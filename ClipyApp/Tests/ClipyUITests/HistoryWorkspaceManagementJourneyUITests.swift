@@ -141,6 +141,38 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         workspace.buttons["clipy.history.workspace.select-page"].click()
         try assertSelectionCount(5, in: workspace, app: app)
 
+        // Every fixture has an unknown source, so this closed condition must
+        // settle on an authoritative empty page in every matching mode.
+        let search = workspace.textFields["clipy.search.field"]
+        try require(search.exists && search.isHittable, app.debugDescription)
+        let missingQuery = "$source-id:\"com.clipy.workspace.no-matches\"$"
+        search.click()
+        search.typeText(missingQuery)
+        let page = workspace.descendants(matching: .any)["clipy.history.workspace.page-number"]
+        let items = workspace.descendants(matching: .any)["clipy.history.workspace.page-range"]
+        let workspaceRows = workspace.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "clipy.history.workspace.row."
+        ))
+        try require(waitUntil {
+            workspace.staticTexts["No matching items"].exists
+                && search.value as? String == missingQuery
+                && page.exists && ((page.value as? String) ?? page.label) == "Page 1"
+                && !items.exists && workspaceRows.count == 0
+                && !next.isEnabled && !previous.isEnabled
+        }, "An empty replacement query must retire the previous page.\n" + app.debugDescription)
+        try assertSelectionCount(0, in: workspace, app: app)
+
+        let clearSearch = workspace.buttons["clipy.search.clear"]
+        try require(clearSearch.exists && clearSearch.isHittable, app.debugDescription)
+        clearSearch.click()
+        try assertPage(1, range: "Items 1–50", in: workspace, app: app)
+        try require(waitUntil {
+            search.value as? String == "" && self.row(for: fixtures[54].id, in: workspace).isHittable
+                && next.isEnabled && !previous.isEnabled
+        }, app.debugDescription)
+        next.click()
+        try assertPage(2, range: "Items 51–55", in: workspace, app: app)
+
         try chooseSort("Oldest copied first", in: workspace, app: app)
         try assertPage(1, range: "Items 1–50", in: workspace, app: app)
         try require(waitUntil {

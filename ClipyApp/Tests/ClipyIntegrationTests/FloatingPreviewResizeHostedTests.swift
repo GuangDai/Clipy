@@ -148,6 +148,139 @@ struct FloatingPreviewResizeHostedTests {
     }
 
     @Test(arguments: [false, true])
+    func endingTheNativeSheetRestoresPointerExitAfterTheConfirmationBindingClears(critical: Bool) async throws {
+        let item = try await capturedReference()
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visible = screen.visibleFrame
+        try #require(visible.height >= 500)
+        let owner = AppDelegate()
+        var interaction = AdvancedInteractionSettings()
+        interaction.pointerGraceMilliseconds = 0
+        owner.previewState.applyInteractionSettings(interaction)
+        let height = PanelGeometry.minimumHeight + 20
+        try #require(height < visible.height / 2)
+        let pointer = NSEvent.mouseLocation
+        let main = NSWindow(
+            contentRect: NSRect(x: visible.minX,
+                                y: pointer.y < visible.midY ? visible.maxY - height : visible.minY,
+                                width: 360, height: height),
+            styleMask: [.borderless], backing: .buffered, defer: false
+        )
+        main.isReleasedWhenClosed = false
+        main.orderFrontRegardless()
+        owner.previewState.togglePreview(for: item)
+        let preview = FloatingPreviewPanel(rootView: FloatingPreviewRootView(appDelegate: owner))
+        owner.previewState.onFloatingPreviewTransition = { [weak preview] transition in
+            if case .hide = transition { preview?.dismiss() }
+        }
+        defer {
+            owner.previewState.onFloatingPreviewTransition = nil
+            owner.previewState.panelClosed()
+            preview.dismiss()
+            main.close()
+        }
+        preview.present(beside: main)
+        let alert = NSAlert()
+        alert.alertStyle = critical ? .critical : .warning
+        alert.messageText = "Hosted preview confirmation exit"
+        alert.addButton(withTitle: "OK")
+        var sheetCompleted = false
+        owner.previewState.isPointerInteractionActive = true
+        owner.previewState.pointerEntered(.preview)
+        owner.previewState.isFileConfirmationPresented = true
+        alert.beginSheetModal(for: preview) { _ in sheetCompleted = true }
+        try #require(await ComposedSupport.waitFor { preview.attachedSheet === alert.window })
+        try #require(!preview.frame.contains(NSEvent.mouseLocation))
+        try #require(!main.frame.contains(NSEvent.mouseLocation))
+        try #require(owner.previewState.pointerIsBetweenSurfaces?() == false)
+        owner.previewState.pointerExited(.preview)
+
+        // SwiftUI can clear its binding while the native sheet still owns
+        // the preview. That binding change must keep the sheet's owner alive.
+        owner.previewState.isFileConfirmationPresented = false
+        await Task.yield()
+        await Task.yield()
+        #expect(owner.previewState.isOpen)
+        #expect(preview.isPresented)
+        #expect(preview.attachedSheet === alert.window)
+
+        preview.endSheet(alert.window)
+        try #require(await ComposedSupport.waitFor {
+            sheetCompleted && preview.attachedSheet == nil && !owner.previewState.isOpen
+                && !preview.isPresented
+        })
+        #expect(owner.previewState.previewedItem == nil)
+        #expect(!preview.isVisible)
+        #expect(main.childWindows?.contains(preview) != true)
+    }
+
+    @Test(arguments: [false, true])
+    func endingTheParentsNativeSheetRestoresThePreviewsPointerExit(critical: Bool) async throws {
+        let item = try await capturedReference()
+        let screen = try #require(NSScreen.main ?? NSScreen.screens.first)
+        let visible = screen.visibleFrame
+        try #require(visible.height >= 500)
+        let owner = AppDelegate()
+        var interaction = AdvancedInteractionSettings()
+        interaction.pointerGraceMilliseconds = 0
+        owner.previewState.applyInteractionSettings(interaction)
+        let main = FloatingPanel(
+            rootView: PanelRootView(appDelegate: owner),
+            previewState: owner.previewState,
+            onClosed: { owner.previewState.panelClosed() }
+        )
+        main.open(at: .center, statusItemButtonScreenFrame: nil)
+        let pointer = NSEvent.mouseLocation
+        let height = PanelGeometry.minimumHeight + 20
+        try #require(height < visible.height / 2)
+        main.setFrameForScreenChangeTesting(NSRect(
+            x: visible.minX,
+            y: pointer.y < visible.midY ? visible.maxY - height : visible.minY,
+            width: 360, height: height
+        ))
+        owner.previewState.togglePreview(for: item)
+        let preview = FloatingPreviewPanel(rootView: FloatingPreviewRootView(appDelegate: owner))
+        owner.previewState.onFloatingPreviewTransition = { [weak preview] transition in
+            if case .hide = transition { preview?.dismiss() }
+        }
+        defer {
+            owner.previewState.onFloatingPreviewTransition = nil
+            if let sheet = main.attachedSheet {
+                main.endSheet(sheet)
+                sheet.orderOut(nil)
+            }
+            preview.dismiss()
+            main.close()
+        }
+        preview.present(beside: main)
+        let alert = NSAlert()
+        alert.alertStyle = critical ? .critical : .warning
+        alert.messageText = "Hosted parent confirmation exit"
+        alert.addButton(withTitle: "OK")
+        var sheetCompleted = false
+        alert.beginSheetModal(for: main) { _ in sheetCompleted = true }
+        try #require(await ComposedSupport.waitFor { main.attachedSheet === alert.window })
+        try #require(!main.frame.contains(NSEvent.mouseLocation))
+        try #require(!preview.frame.contains(NSEvent.mouseLocation))
+        try #require(owner.previewState.pointerIsBetweenSurfaces?() == false)
+        owner.previewState.isPointerInteractionActive = true
+        owner.previewState.pointerEntered(.preview)
+        owner.previewState.pointerExited(.preview)
+        owner.previewState.recheckPointerAfterModal()
+        #expect(owner.previewState.pointerSurfacesContainingPointer?().contains(.mainPanel) == true)
+        #expect(owner.previewState.isOpen && preview.isPresented)
+
+        main.endSheet(alert.window)
+        try #require(await ComposedSupport.waitFor {
+            sheetCompleted && main.attachedSheet == nil && !owner.previewState.isOpen
+                && !preview.isPresented
+        })
+        #expect(main.isPresented)
+        #expect(!preview.isVisible)
+        #expect(main.childWindows?.contains(preview) != true)
+    }
+
+    @Test(arguments: [false, true])
     func resizingKeepsItsSideAndSavesOnlyAtMouseUp(leading: Bool) async throws {
         let item = try await capturedReference()
         let screen = try #require(NSScreen.main ?? NSScreen.screens.first)

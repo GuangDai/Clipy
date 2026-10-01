@@ -21,6 +21,8 @@ package enum ExternalReadPublicationDebugInstrumentation {
         (@Sendable () -> Void)?
     @TaskLocal internal static var beforeLocalAutomationSearchPublication:
         (@Sendable () async -> Void)?
+    @TaskLocal internal static var beforeSearchSnapshotRead:
+        (@Sendable () async throws -> Void)?
 }
 #endif
 
@@ -399,7 +401,9 @@ private extension HistoryAuthority {
 
     /// A fresh request retries only a snapshot invalidated before its reader
     /// could start. Each attempt rechecks the grant; intermediate snapshots do
-    /// not publish an operation result or audit. Continuations never rebase.
+    /// not publish an operation result or audit. Repeated writes return a
+    /// retryable busy result after four attempts rather than retaining the
+    /// external request indefinitely. Continuations never rebase.
     func evaluateAuthorizedSearch(
         _ request: HistoryBrowseRequest,
         descriptor: ExternalOperationDescriptor,
@@ -408,13 +412,19 @@ private extension HistoryAuthority {
         requestedAt: Date,
         searchWorker: SearchWorker
     ) async throws -> SearchPageResult {
+        var attempts = 0
         while true {
             try Task.checkCancellation()
+            attempts += 1
             let position = try captureExternalSearchPosition(
                 descriptor: descriptor, connection: connection,
                 expectedConnectionKind: expectedConnectionKind, requestedAt: requestedAt
             )
             do {
+#if DEBUG
+                try await ExternalReadPublicationDebugInstrumentation
+                    .beforeSearchSnapshotRead?()
+#endif
                 switch expectedConnectionKind {
                 case .appIntents:
                     return try await searchWorker.searchPage(
@@ -429,6 +439,10 @@ private extension HistoryAuthority {
                     return SearchPageResult(page: page, revisionCounts: [:])
                 }
             } catch HistoryFailure.snapshotExpired(_) where request.cursor == nil {
+                try Task.checkCancellation()
+                guard attempts < 4 else {
+                    throw HistoryFailure.temporarilyUnavailable(.factProof)
+                }
                 continue
             }
         }

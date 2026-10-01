@@ -954,6 +954,47 @@ func observerStopHaltsDelivery() {
 @Suite(.serialized) @MainActor
 struct CaptureResourceLimitTests {
     @Test(arguments: [false, true])
+    func oversizedIdentifiersRejectBeforePayloadReadsAndPreservePrivacyPrecedence(concealed: Bool) throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let item = NSPasteboardItem()
+        let oversized = String(repeating: "x", count: HistoryLimits.standard.maximumTypeIdentifierUTF8Bytes + 1)
+        try #require(item.setData(Data([1]), forType: .init(oversized)))
+        try #require(item.setData(Data("sibling content".utf8), forType: .string))
+        let marker = "org.nspasteboard.ConcealedType"
+        if concealed { try #require(item.setData(Data([1]), forType: .init(marker))) }
+        try #require(pasteboard.writeObjects([item]))
+        var reads = 0
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadObserver = { _ in reads += 1 }
+        let outcome = try #require(adapter.captureOutcome())
+        if concealed {
+            guard case let .concealed(value) = outcome else {
+                Issue.record("A concealed gesture must retain its privacy outcome")
+                return
+            }
+            #expect(value.markerTypeIdentifier == marker)
+        } else {
+            guard case let .unsupportedMultiItem(value) = outcome else {
+                Issue.record("An oversized identifier must reject the complete gesture")
+                return
+            }
+            #expect(value.itemCount == 1)
+        }
+        #expect(reads == 0)
+    }
+
+    @Test func identifierAtTheByteLimitRetainsItsExactSpellingAndBytes() throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let identifier = String(repeating: "x", count: HistoryLimits.standard.maximumTypeIdentifierUTF8Bytes)
+        let bytes = Data([0x00, 0xFF, 0x61])
+        try #require(pasteboard.setData(bytes, forType: .init(identifier)))
+        let capture = try #require(PasteboardAdapter(pasteboard: pasteboard).capture())
+        #expect(capture.representations == [CapturedRepresentation(typeIdentifier: identifier, bytes: bytes)])
+    }
+
+    @Test(arguments: [false, true])
     func excessiveDeclaredFormatsOrItemsStopBeforePayloadReads(tooManyItems: Bool) throws {
         let pasteboard = makePasteboard()
         defer { pasteboard.releaseGlobally() }

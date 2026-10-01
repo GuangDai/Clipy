@@ -183,7 +183,9 @@ internal enum HCRBootstrap {
                 FROM history_change_records ORDER BY sequence LIMIT ?
                 """, bindings: [.integer(Int64(fetchLimit))])
             defer { statement.finalize() }
-            while try statement.step() {
+            while true {
+                try Task.checkCancellation()
+                guard try statement.step() else { break }
                 guard rows.count < limits.maxJournalRecordCount else {
                     throw HistoryFailure.persistence(.invariantViolation)
                 }
@@ -213,6 +215,7 @@ internal enum HCRBootstrap {
                 } catch let rejection as AffectedItemsBlobRejection {
                     throw rejection.historyFailure
                 }
+                try Task.checkCancellation()
                 let createdAt = Date(timeIntervalSinceReferenceDate: try statement.real(at: 4))
                 guard createdAt.timeIntervalSinceReferenceDate.isFinite else {
                     throw HistoryFailure.persistence(.corruptStoredValue)
@@ -227,6 +230,8 @@ internal enum HCRBootstrap {
                     sequence: sequence, affectedItemsByteCount: bytes, createdAt: createdAt
                 ))
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let failure as HistoryFailure {
             throw failure
         } catch {

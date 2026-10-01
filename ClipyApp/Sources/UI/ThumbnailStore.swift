@@ -496,13 +496,20 @@ final class ThumbnailStore {
     /// `reset()` because entries intentionally omit pin metadata.
     func purge(_ scope: HistorySurfacePurge.Scope) {
         switch scope {
-        case .all:
-            reset()
-        case .unpinned:
+        case .all, .unpinned:
             // This cache deliberately stores only exact references, not pin
-            // metadata. It is rebuildable derived state, so Clear Unpinned
-            // resets it owner-locally rather than guessing membership.
+            // metadata. Clear and destructive retention retire its derived
+            // state without guessing which exact references still survive.
+            // The retained presentation page can keep surviving pinned rows
+            // mounted with unchanged references. Their view tasks will not
+            // run again, so preserve actual thumbnail demand before reset.
+            // History's post-commit existence/version fence rejects any row
+            // whose disappearance has not yet reached this surface.
+            let displayedDemand = displayedItemCounts.keys.filter {
+                entries[$0] != nil || inFlight[$0] != nil
+            }
             reset()
+            for item in displayedDemand { prefetch(item) }
         case .item(let id):
             purgeGeneration += 1
             removeEntries { $0.id == id }

@@ -135,6 +135,8 @@ package enum LocalAutomationSocket {
         _ bytes: Data, to descriptor: Int32,
         deadline: ContinuousClock.Instant, bytesSent: inout Int
     ) async throws {
+        try Task.checkCancellation()
+        guard ContinuousClock.now < deadline else { throw Failure.timeout }
         var offset = 0
         while offset < bytes.count {
             try Task.checkCancellation()
@@ -157,5 +159,29 @@ package enum LocalAutomationSocket {
     package static func pause(until deadline: ContinuousClock.Instant) async throws {
         guard ContinuousClock.now < deadline else { throw Failure.timeout }
         try await Task.sleep(until: min(deadline, ContinuousClock.now.advanced(by: .milliseconds(5))), clock: .continuous)
+    }
+
+    /// The server's deadline also covers History work between socket reads
+    /// and writes. Cancellation joins the operation before its connection
+    /// slot or descriptor is released; a committed mutation remains committed.
+    package static func withDeadline<Result: Sendable>(
+        _ deadline: ContinuousClock.Instant,
+        operation: @escaping @Sendable () async throws -> Result
+    ) async throws -> Result {
+        try Task.checkCancellation()
+        guard ContinuousClock.now < deadline else { throw Failure.timeout }
+        return try await withThrowingTaskGroup(of: Result.self) { group in
+            defer { group.cancelAll() }
+            group.addTask {
+                try Task.checkCancellation()
+                return try await operation()
+            }
+            group.addTask {
+                try await Task.sleep(until: deadline, clock: .continuous)
+                throw Failure.timeout
+            }
+            guard let result = try await group.next() else { throw Failure.unavailable }
+            return result
+        }
     }
 }

@@ -72,6 +72,37 @@ struct HistorySearchQueryCompilerTests {
         #expect(try HistorySearchExpression.parse(text) == expected)
     }
 
+    @Test(arguments: ["", " \t\r\n\u{3000}"])
+    func emptyBlocksHaveUsableExpressionTextAloneAndBesideOtherConditions(_ whitespace: String) throws {
+        let block = "$" + whitespace + "$"
+        let sole = try HistorySearchQueryCompiler.compile(block)
+        let mixed = try HistorySearchQueryCompiler.compile(block + " $source:Safari OR source:Notes$")
+
+        #expect(sole.literalText.isEmpty)
+        #expect(sole.expressionText == "type:all")
+        #expect(sole.expression == (try HistorySearchExpression.parse("type:all")))
+        #expect(mixed.expressionText == "(type:all) AND (source:Safari OR source:Notes)")
+        #expect(mixed.expression == (try HistorySearchExpression.parse(
+            "type:all AND (source:Safari OR source:Notes)"
+        )))
+        #expect(mixed.expression?.applicationTerms == ["Safari", "Notes"])
+    }
+
+    @Test func soleBlockPreservesConditionAndApplicationNameUtf8Spelling() throws {
+        let firstApplication = "Cafe\u{301} $Five"
+        let secondApplication = "Café"
+        let condition = "\t(source:\"" + firstApplication + "\" OR source:\"" + secondApplication + "\")\n "
+        let result = try HistorySearchQueryCompiler.compile("笔记 $" + condition + "$ 收据")
+        let expressionText = try #require(result.expressionText)
+        let applications = try #require(result.expression?.applicationTerms)
+
+        #expect(result.literalText == "笔记 收据")
+        #expect(expressionText.utf8.elementsEqual(condition.utf8))
+        try #require(applications.count == 2)
+        #expect(applications[0].utf8.elementsEqual(firstApplication.utf8))
+        #expect(applications[1].utf8.elementsEqual(secondApplication.utf8))
+    }
+
     @Test func removingBlocksSeparatesWordsWithoutChangingInteriorWhitespace() throws {
         let result = try HistorySearchQueryCompiler.compile(
             "  first  word$source:Safari$second\tword $is:pinned$ "

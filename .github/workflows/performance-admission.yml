@@ -140,6 +140,19 @@ jobs:
           bash scripts/ci/run_performance_admission.sh
           "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" warm-open
 
+      - name: Measure short-literal full corpus scan
+        id: exact_scan
+        if: >-
+          always()
+          && steps.prepare_cleanliness.outcome == 'success'
+          && steps.exact_search_probe_gate.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 90
+        shell: bash
+        run: >-
+          bash scripts/ci/run_performance_admission.sh
+          "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" exact-scan
+
       - name: Summarize available scale evidence
         if: always()
         shell: bash
@@ -191,6 +204,7 @@ jobs:
             "${{ steps.exact_search_probe_gate.outcome }}"
           require_success browse-ties "${{ steps.browse_ties.outcome }}"
           require_success exact-search "${{ steps.exact_search.outcome }}"
+          require_success exact-scan "${{ steps.exact_scan.outcome }}"
           require_success warm-open "${{ steps.warm_open.outcome }}"
           bash scripts/ci/run_performance_admission.sh \
             "$LOG_DIR" "$RUNNER_TEMP/clipy-performance-admission" finalize

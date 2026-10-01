@@ -8,6 +8,7 @@ struct SQLiteScaleBrowseEvidence: Sendable {
     let count: Int
     let leadingRows: [HistoryRow]
     let oldestRow: HistoryRow?
+    let largeBodyRow: HistoryRow?
 }
 
 struct SQLiteScaleQuery: Codable, Sendable {
@@ -16,6 +17,7 @@ struct SQLiteScaleQuery: Codable, Sendable {
     let pageIndex: Int
     let requestedLimit: Int
     let expectedTotalMatches: Int
+    var expectedSnippetMatch: String? = nil
 }
 
 struct SQLiteScaleSearchCase: Sendable {
@@ -24,6 +26,7 @@ struct SQLiteScaleSearchCase: Sendable {
     let mode: SearchMode
     let expectedRows: [HistoryRow]
     let expectedTotalMatches: Int
+    var expectedSnippetMatch: String? = nil
 
     var modeName: String {
         switch mode {
@@ -37,6 +40,7 @@ struct SQLiteScaleSearchCase: Sendable {
 
 func sqliteScaleSearchCases(corpus: SQLiteScaleBrowseEvidence) -> [SQLiteScaleSearchCase] {
     let oldest = corpus.oldestRow.map { [$0] } ?? []
+    let largeBody = corpus.largeBodyRow.map { [$0] } ?? []
     return [
         SQLiteScaleSearchCase(name: "exact-no-hit", text: "ZZZZZZZZ", mode: .exact,
                               expectedRows: [], expectedTotalMatches: 0),
@@ -53,6 +57,26 @@ func sqliteScaleSearchCases(corpus: SQLiteScaleBrowseEvidence) -> [SQLiteScaleSe
                               expectedRows: oldest, expectedTotalMatches: oldest.count),
         SQLiteScaleSearchCase(name: "exact-dense", text: "perf-item-", mode: .exact,
                               expectedRows: corpus.leadingRows, expectedTotalMatches: corpus.count),
+        SQLiteScaleSearchCase(name: "exact-body-dense", text: "bodyhit", mode: .exact,
+                              expectedRows: corpus.leadingRows, expectedTotalMatches: corpus.count,
+                              expectedSnippetMatch: "bodyhit"),
+        SQLiteScaleSearchCase(name: "exact-body-rare", text: "rarebody", mode: .exact,
+                              expectedRows: oldest, expectedTotalMatches: oldest.count,
+                              expectedSnippetMatch: "rarebody"),
+        SQLiteScaleSearchCase(name: "expression-common-rare", text: "bodyhit AND rarebody", mode: .expression,
+                              expectedRows: oldest, expectedTotalMatches: oldest.count,
+                              expectedSnippetMatch: "bodyhit"),
+        SQLiteScaleSearchCase(name: "expression-rare-common", text: "rarebody AND bodyhit", mode: .expression,
+                              expectedRows: oldest, expectedTotalMatches: oldest.count,
+                              expectedSnippetMatch: "rarebody"),
+        SQLiteScaleSearchCase(name: "exact-body-rare-large", text: "largebodyhit", mode: .exact,
+                              expectedRows: largeBody, expectedTotalMatches: largeBody.count,
+                              expectedSnippetMatch: "largebodyhit"),
+        SQLiteScaleSearchCase(name: "expression-common-title-rare-large", text: "perf-item- AND largebodyhit", mode: .expression,
+                              expectedRows: largeBody, expectedTotalMatches: largeBody.count),
+        SQLiteScaleSearchCase(name: "expression-rare-large-common-title", text: "largebodyhit AND perf-item-", mode: .expression,
+                              expectedRows: largeBody, expectedTotalMatches: largeBody.count,
+                              expectedSnippetMatch: "largebodyhit"),
         SQLiteScaleSearchCase(name: "regexp-no-hit", text: "ZZZZZZZZ", mode: .regexp,
                               expectedRows: [], expectedTotalMatches: 0),
         SQLiteScaleSearchCase(name: "regexp-common-grams-no-intersection", text: "1234567", mode: .regexp,
@@ -87,7 +111,8 @@ func validateSQLiteScaleSearchPage(
     expectedPosition: ChangePosition,
     expectedTotalMatches: Int,
     pageIndex: Int,
-    limit: Int
+    limit: Int,
+    expectedSnippetMatch: String? = nil
 ) throws {
     let offset = pageIndex * limit
     let wanted = Array(expectedRows.dropFirst(offset).prefix(limit))
@@ -105,8 +130,22 @@ func validateSQLiteScaleSearchPage(
               actual.typeIdentifiers == expected.typeIdentifiers,
               actual.pinnedPosition == expected.pinnedPosition,
               let presentation = actual.search,
-              presentation.snippet == nil,
               !presentation.matchedRanges.isEmpty else {
+            throw SQLiteScaleError.unexpectedResult
+        }
+        if let expectedSnippetMatch {
+            guard let snippet = presentation.snippet else { throw SQLiteScaleError.unexpectedResult }
+            let text = snippet as NSString
+            for range in presentation.matchedRanges {
+                guard range.location >= 0, range.length > 0,
+                      range.location <= text.length,
+                      range.length <= text.length - range.location,
+                      text.substring(with: NSRange(location: range.location, length: range.length))
+                        .caseInsensitiveCompare(expectedSnippetMatch) == .orderedSame else {
+                    throw SQLiteScaleError.unexpectedResult
+                }
+            }
+        } else if presentation.snippet != nil {
             throw SQLiteScaleError.unexpectedResult
         }
     }
@@ -125,7 +164,8 @@ func exerciseSQLiteScaleSearches(
         for pageIndex in 0..<pageCount {
             let query = SQLiteScaleQuery(
                 text: fixture.text, mode: fixture.modeName, pageIndex: pageIndex,
-                requestedLimit: limit, expectedTotalMatches: fixture.expectedTotalMatches
+                requestedLimit: limit, expectedTotalMatches: fixture.expectedTotalMatches,
+                expectedSnippetMatch: fixture.expectedSnippetMatch
             )
             do {
                 let measured = try await measureSQLiteScale(
@@ -138,7 +178,8 @@ func exerciseSQLiteScaleSearches(
                     let result = try measured.result.get()
                     try validateSQLiteScaleSearchPage(
                         result, expectedRows: fixture.expectedRows, expectedPosition: position,
-                        expectedTotalMatches: fixture.expectedTotalMatches, pageIndex: pageIndex, limit: limit
+                        expectedTotalMatches: fixture.expectedTotalMatches, pageIndex: pageIndex, limit: limit,
+                        expectedSnippetMatch: fixture.expectedSnippetMatch
                     )
                     return (result.rows.count, 0)
                 } searchWork: { SQLiteScaleSearchWork($0.metrics) }
