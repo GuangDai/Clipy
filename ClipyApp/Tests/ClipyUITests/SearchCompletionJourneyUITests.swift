@@ -104,6 +104,22 @@ final class SearchCompletionJourneyUITests: XCTestCase {
             !popup.exists && panel.exists && search.value as? String == "$ty"
         }, "The first Escape must dismiss candidates before closing the panel.\n" + app.debugDescription)
 
+        // Let the unfinished query replace the history list and shrink the
+        // panel before clicking. Immediate keyboard acceptance misses a
+        // candidate list covered by the refreshed results surface.
+        try replaceSearch(with: "$ty", search: search, in: app)
+        try require(app.staticTexts["No Results"].waitForExistence(timeout: 10), app.debugDescription)
+        try require(typeCandidate.waitForExistence(timeout: 5), app.debugDescription)
+        try require(typeCandidate.isHittable, "Search refresh must leave the candidate clickable.\n" + app.debugDescription)
+        typeCandidate.click()
+        try require(waitUntil {
+            search.value as? String == "$type:$" && !popup.exists && panel.exists
+        }, "Clicking after search refresh must insert the condition.\n" + app.debugDescription)
+        app.typeText("te")
+        try require(textCandidate.waitForExistence(timeout: 5), app.debugDescription)
+        app.typeKey(.tab, modifierFlags: [])
+        try require(waitUntil { search.value as? String == "$type:text$" && !popup.exists }, app.debugDescription)
+
         // The subsequence is deliberately not a literal source-ID prefix.
         // That source appears after 55 other IDs in the metadata catalogue,
         // and its item is absent from the initial 50-row history page.
