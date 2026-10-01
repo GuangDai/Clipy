@@ -55,6 +55,7 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         // Start with the tall history window: the asynchronous search then
         // replaces it with an empty result and fits the window to that result.
         search.click()
+        app.typeKey("1", modifierFlags: .command)
         app.typeText("$type:")
         try require(app.staticTexts["No Results"].waitForExistence(timeout: 10), app.debugDescription)
         try require(waitUntil {
