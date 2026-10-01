@@ -23,7 +23,10 @@ struct MutationCancellationTests {
         case .countRetention:
             action = .setRetentionPolicy(maximumUnpinnedItems: 200)
         }
-        #expect(try await history.perform(action) == .unchanged)
+        guard case .unchanged = try await history.perform(action) else {
+            Issue.record("Expected an unchanged operation before cancellation")
+            return
+        }
         let before = try await GatewayHistoryTestSnapshot.read(from: history.authority)
         let cancelled = Task {
             withUnsafeCurrentTask { $0?.cancel() }
