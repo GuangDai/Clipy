@@ -263,14 +263,14 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     }
 
     private func followParentAfterNativeResize() {
-        guard isPresented, nativeSheetCount == 0, attachedSheet == nil, widthResize == nil,
+        guard isPresented, previewState.isOpen, nativeSheetCount == 0, attachedSheet == nil, widthResize == nil,
               let parent, parent.isVisible,
               frame.width <= 0 || frame.height != parent.frame.height else { return }
         frameFollowTask?.cancel()
         frameFollowTask = Task { @MainActor [weak self] in
             guard !Task.isCancelled, let self else { return }
             self.frameFollowTask = nil
-            guard self.isPresented, self.nativeSheetCount == 0, self.attachedSheet == nil,
+            guard self.isPresented, self.previewState.isOpen, self.nativeSheetCount == 0, self.attachedSheet == nil,
                   self.widthResize == nil, let parent = self.parent, parent.isVisible else { return }
             self.present(beside: parent)
         }
