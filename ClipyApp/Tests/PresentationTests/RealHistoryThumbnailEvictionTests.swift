@@ -338,7 +338,7 @@ struct RealHistoryThumbnailEvictionTests {
 
     private func complete(_ item: HistoryItemReference, in store: ThumbnailStore) async throws {
         store.prefetch(item)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
     }
 
     private func twoPixelPNG() throws -> Data {

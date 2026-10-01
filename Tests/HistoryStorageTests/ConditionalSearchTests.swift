@@ -162,6 +162,54 @@ struct ConditionalSearchTests {
                 #expect(located.metrics.rowsDecoded <= 12)
             }
         }
+        try await repeatedTextQueriesPreserveLiteralTermsAndPages(in: history)
+    }
+
+    private func repeatedTextQueriesPreserveLiteralTermsAndPages(in history: SQLiteHistory) async throws {
+        let denseKind = HistoryBrowseKind.search(
+            text: Array(repeating: "all", count: 128).joined(separator: " "), mode: .expression
+        )
+        let first = try await history.browse(.init(kind: denseKind, limit: 2))
+        #expect(first.rows.map(\.title) == ["all record 4104", "all record 4103"])
+        #expect(first.rows.allSatisfy {
+            $0.search?.snippet == nil && $0.search?.matchedRanges == [UTF16TextRange(location: 0, length: 3)]
+        })
+        let forward = try #require(first.next)
+        let second = try await history.browse(.init(kind: denseKind, limit: 2, cursor: forward))
+        #expect(second.rows.map(\.title) == ["all record 4102", "all record 4101"])
+        let backward = try #require(second.previous)
+        #expect(try await history.browse(.init(kind: denseKind, limit: 2, cursor: backward)).rows == first.rows)
+
+        let nfcBody = "all NFC\né"
+        let nfdBody = "all NFD\ne\u{301}"
+        let nfc = try await copy(nfcBody, source: nil, at: 10_001, in: history)
+        let nfd = try await copy(nfdBody, source: nil, at: 10_002, in: history)
+        let plain = try await copy("all plain\nno accent", source: nil, at: 10_003, in: history)
+        let union = "(" + HistorySearchExpression.quoted("é") + " OR "
+            + HistorySearchExpression.quoted("e\u{301}") + ")"
+        let repeated = Array(repeating: "all", count: 121).joined(separator: " ")
+        let kind = HistoryBrowseKind.search(text: union + " " + repeated, mode: .expression)
+        let mixedFirst = try await history.browse(.init(kind: kind, limit: 1))
+        #expect(mixedFirst.rows.map(\.item) == [nfd])
+        #expect(mixedFirst.rows.first?.search?.snippet.map { Data($0.utf8) } == Data(nfdBody.utf8))
+        #expect(mixedFirst.rows.first?.search?.matchedRanges == [UTF16TextRange(location: 8, length: 2)])
+        let mixedForward = try #require(mixedFirst.next)
+        let mixedSecond = try await history.browse(.init(kind: kind, limit: 1, cursor: mixedForward))
+        #expect(mixedSecond.rows.map(\.item) == [nfc])
+        #expect(mixedSecond.rows.first?.search?.snippet.map { Data($0.utf8) } == Data(nfcBody.utf8))
+        #expect(mixedSecond.rows.first?.search?.matchedRanges == [UTF16TextRange(location: 8, length: 1)])
+        #expect(mixedSecond.next == nil)
+        let mixedBackward = try #require(mixedSecond.previous)
+        #expect(try await history.browse(.init(kind: kind, limit: 1, cursor: mixedBackward)).rows == mixedFirst.rows)
+        let negative = try await history.browse(.init(
+            kind: .search(text: union + " " + repeated + " NOT " + HistorySearchExpression.quoted("e\u{301}"),
+                          mode: .expression), limit: 2
+        ))
+        #expect(negative.rows.map(\.item) == [nfc])
+        let complement = try await history.browse(.init(
+            kind: .search(text: "NOT " + union + " " + repeated, mode: .expression), limit: 1
+        ))
+        #expect(complement.rows.map(\.item) == [plain])
     }
 #endif
 

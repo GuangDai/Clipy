@@ -70,6 +70,10 @@
 
 [`HistoryLimits.standard`](../Sources/HistoryCore/Limits.swift) 允许每次捕获 / 修订最多 32 个表示形式；单表示 64 MiB，捕获总计 128 MiB，单次修订总计 64 MiB。每项最多保留 100 个修订、修订总计 256 MiB。存储标题最多 1,024 UTF-8 字节，搜索正文最多 256 KiB。关闭数量保留不解除这些单项资源边界。
 
+[`ThumbnailService`](../Sources/HistoryStorage/ThumbnailService.swift) 按项目 ID、内容版本和像素尺寸合并缩略图请求，读取及解码同时只运行一项，最多保留 32 个尚未真正退出的任务。同一精确键最多有 32 个尚未退出的调用者，所有键合计最多 1,024 个。取消立即撤销需求，但仍在原生解码或版本检查中等待的任务、调用者继续占用预算，直到实际退出。超限返回可重试的 `.temporarilyUnavailable(.thumbnailResources)`，不会记录成图片无法解码。
+
+每个浏览界面的 [`ThumbnailStore`](../ClipyApp/Sources/UI/ThumbnailStore.swift) 同时最多拥有 4 个尚未退出的读取 / 显示任务。正常排队、等待容量及等待行出现的地址共用一个预算，默认最多 500 个；这些地址不持有载荷。容量观察流每个界面只订阅一次，缓冲最新一条真实资源释放通知，只重发仍在显示的失败需求；冷请求在行出现后才恢复。关闭界面或清除会取消订阅和待处理地址。容量通知不改变 `ChangePosition`，不发 History 变更，也不保留已完成缩略图。
+
 [`HistoryAuthority+Backup.swift`](../Sources/HistoryStorage/HistoryAuthority+Backup.swift) 在唯一 writer 的串行区间复制一致 SQLite 快照，清除备份中已脱离项目的内容，并按每批 64 个 blob 引用复制仍保留内容。备份包含 `history.sqlite` 和 `history.sqlite-content/`，先完成并同步 `.incomplete` 兄弟目录，再排他重命名为用户选择的全新目录。
 
 备份不覆盖已有目标，也不能放入会被存储清理 / 临时生命周期删除的内容树内。发布前失败或取消只清理本次临时目录；最终目录已发布后同步失败会保留完整副本，同时不返回成功回执。界面可导出备份；这不构成自动恢复或旧存储迁移功能。

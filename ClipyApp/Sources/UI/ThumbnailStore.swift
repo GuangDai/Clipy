@@ -76,11 +76,24 @@ final class ThumbnailStore {
     /// monotonic request token. Removing a target releases that key
     /// immediately without letting a late old completion remove or fill a
     /// newer flight for the same exact reference (deep review Card 9B).
-    private struct Flight {
+    private struct Flight: Sendable {
         let token: Int
         let task: Task<Void, Never>
     }
     private var inFlight: [HistoryItemReference: Flight] = [:]
+    private static let maximumConcurrentRequests = 4
+    /// Tokens outlive exact-key invalidation until the actual Task exits.
+    /// Purging a non-cooperative render does not free a fifth native request.
+    private var liveRequestTokens: Set<Int> = []
+    private var pendingReferences: Set<HistoryItemReference> = []
+    private var capacityDeferredReferences: Set<HistoryItemReference> = []
+    /// A resource-rejected speculative request may precede its row's
+    /// appearance. Remember eligibility only; capacity events never fetch it.
+    private var capacityAppearanceReferences: Set<HistoryItemReference> = []
+    @ObservationIgnored private var pendingDrainTask: Task<Void, Never>?
+    @ObservationIgnored private var capacityObservationTask: Task<Void, Never>?
+    private var capacityObservationGeneration = 0
+    private var observedCapacityGeneration = 0
 
     /// Actual row appearances distinguish display demand from cold
     /// retained results. A move between Pinned and Recent can briefly show
@@ -90,6 +103,12 @@ final class ThumbnailStore {
     var isSurfaceActive = true {
         didSet {
             if !isSurfaceActive {
+                pendingReferences.removeAll()
+                capacityDeferredReferences.removeAll()
+                capacityAppearanceReferences.removeAll()
+                pendingDrainTask?.cancel()
+                pendingDrainTask = nil
+                stopCapacityObservation()
                 for (item, raster) in activeRasters {
                     retainColdPixels(raster.pixels, for: item)
                 }
@@ -104,6 +123,7 @@ final class ThumbnailStore {
         let count = previousCount + (displayed ? 1 : -1)
         displayedItemCounts[item] = count > 0 ? count : nil
         if displayed {
+            if capacityAppearanceReferences.contains(item) { prefetch(item) }
             if isSurfaceActive, entries[item]?.width != nil, activeRasters[item] == nil {
                 if let raster = readColdRaster(for: item) {
                     activeRasters[item] = raster
@@ -114,6 +134,9 @@ final class ThumbnailStore {
                 }
             }
         } else if count <= 0 {
+            pendingReferences.remove(item)
+            capacityDeferredReferences.remove(item)
+            capacityAppearanceReferences.remove(item)
             if previousCount > 0 {
                 // The row's .task only starts this independently owned work.
                 // Its last appearance must also retire it, so offscreen reads
@@ -132,7 +155,9 @@ final class ThumbnailStore {
         switch pressure {
         case .normal:
             isPrefetchSuspended = false
+            schedulePendingDrain()
         case .warning:
+            removePendingReferences { !isSurfaceActive || displayedItemCounts[$0] == nil }
             removeEntries { !isSurfaceActive || displayedItemCounts[$0] == nil }
             for item in inFlight.keys.filter({ !isSurfaceActive || displayedItemCounts[$0] == nil }) {
                 inFlight.removeValue(forKey: item)?.task.cancel()
@@ -198,9 +223,12 @@ final class ThumbnailStore {
 
     var coldDecodedBytes: Int { cachedDecodedBytes - activeDecodedBytes }
 
-    /// The number of fetches currently in flight — the quiescence signal
-    /// owner tests wait on before asserting retention state.
+    /// Current exact-key demand. Invalidated tasks are counted separately
+    /// until their real exit, even when this visible table is already empty.
     var inFlightCount: Int { inFlight.count }
+    var liveRequestCount: Int { liveRequestTokens.count }
+    var pendingRequestCount: Int { pendingReferences.count + capacityDeferredReferences.count }
+    var pendingAddressCount: Int { pendingRequestCount + capacityAppearanceReferences.count }
 
     // MARK: - Init
 
@@ -265,6 +293,12 @@ final class ThumbnailStore {
         configureColdCache()
     }
     #endif
+
+    isolated deinit {
+        capacityObservationTask?.cancel()
+        pendingDrainTask?.cancel()
+        for flight in inFlight.values { flight.task.cancel() }
+    }
 
     // MARK: - Public surface
 
@@ -341,13 +375,24 @@ final class ThumbnailStore {
             #endif
             return
         }
+        startCapacityObservation()
+        capacityDeferredReferences.remove(item)
+        capacityAppearanceReferences.remove(item)
+        guard liveRequestTokens.count < Self.maximumConcurrentRequests else {
+            enqueuePending(item)
+            return
+        }
+        pendingReferences.remove(item)
         nextRequestToken += 1
         let requestToken = nextRequestToken
+        let capacityGenerationAtStart = observedCapacityGeneration
+        liveRequestTokens.insert(requestToken)
         let history = self.history
         let pixels = self.pixels
         let renderer = self.renderer
 
         let task = Task { [weak self] in
+            defer { self?.retireRequest(requestToken) }
             #if DEBUG
             // Timing windows wrap ONLY the awaited segments; the sink's file
             // write happens after the windows close, so a slow append can
@@ -447,6 +492,20 @@ final class ThumbnailStore {
                 #endif
                 guard let self else { return }
                 let isStableMiss = (error as? HistoryFailure) == .thumbnailUnavailable
+                let isCapacityFailure = (error as? HistoryFailure) == .temporarilyUnavailable(.thumbnailResources)
+                if isCapacityFailure, self.inFlight[item]?.token == requestToken,
+                   self.isSurfaceActive, !self.isPrefetchSuspended {
+                    if self.displayedItemCounts[item] == nil {
+                        self.rememberCapacityRejectedAppearance(item)
+                    } else if self.observedCapacityGeneration != capacityGenerationAtStart {
+                        // A real release may have reached the listener before
+                        // this failed await returned. Preserve that event once;
+                        // waiting for a second release would strand this row.
+                        self.enqueuePending(item)
+                    } else {
+                        self.enqueuePending(item, waitingForCapacity: true)
+                    }
+                }
                 #if DEBUG
                 let boundary = isStableMiss
                     ? self.store(item: item, raster: nil, requestToken: requestToken)
@@ -482,6 +541,12 @@ final class ThumbnailStore {
     /// Cancelling owned tasks also releases queued display-raster sources.
     func reset() {
         purgeGeneration += 1
+        pendingReferences.removeAll()
+        capacityDeferredReferences.removeAll()
+        capacityAppearanceReferences.removeAll()
+        pendingDrainTask?.cancel()
+        pendingDrainTask = nil
+        stopCapacityObservation()
         entries.removeAll()
         activeRasters.removeAll()
         coldPixels.removeAllObjects()
@@ -507,17 +572,21 @@ final class ThumbnailStore {
             // whose disappearance has not yet reached this surface.
             let displayedDemand = displayedItemCounts.keys.filter {
                 entries[$0] != nil || inFlight[$0] != nil
+                    || pendingReferences.contains($0) || capacityDeferredReferences.contains($0)
+                    || capacityAppearanceReferences.contains($0)
             }
             reset()
             for item in displayedDemand { prefetch(item) }
         case .item(let id):
             purgeGeneration += 1
+            removePendingReferences { $0.id == id }
             removeEntries { $0.id == id }
             for item in inFlight.keys.filter({ $0.id == id }) {
                 inFlight.removeValue(forKey: item)?.task.cancel()
             }
         case .revision(let item, _):
             purgeGeneration += 1
+            removePendingReferences { $0 == item }
             removeEntries { $0 == item }
             inFlight.removeValue(forKey: item)?.task.cancel()
         }
@@ -545,6 +614,98 @@ final class ThumbnailStore {
     ]
 
     // MARK: - Retention bookkeeping (private, MainActor-only)
+
+    private func enqueuePending(_ item: HistoryItemReference, waitingForCapacity: Bool = false) {
+        guard makeRoomForPendingAddress(item) else { return }
+        pendingReferences.remove(item)
+        capacityDeferredReferences.remove(item)
+        capacityAppearanceReferences.remove(item)
+        if waitingForCapacity { capacityDeferredReferences.insert(item) }
+        else { pendingReferences.insert(item) }
+    }
+
+    private func rememberCapacityRejectedAppearance(_ item: HistoryItemReference) {
+        guard makeRoomForPendingAddress(item) else { return }
+        pendingReferences.remove(item)
+        capacityDeferredReferences.remove(item)
+        capacityAppearanceReferences.insert(item)
+    }
+
+    private func makeRoomForPendingAddress(_ item: HistoryItemReference) -> Bool {
+        guard maximumEntries > 0 else { return false }
+        let alreadyOwned = pendingReferences.contains(item) || capacityDeferredReferences.contains(item)
+            || capacityAppearanceReferences.contains(item)
+        if !alreadyOwned, pendingAddressCount >= maximumEntries {
+            // Real display demand can displace one speculative cold address;
+            // pending work still owns no payload and obeys the entry bound.
+            guard displayedItemCounts[item] != nil,
+                  let cold = pendingReferences.first(where: { displayedItemCounts[$0] == nil })
+                    ?? capacityAppearanceReferences.first(where: { displayedItemCounts[$0] == nil }) else { return false }
+            pendingReferences.remove(cold)
+            capacityAppearanceReferences.remove(cold)
+        }
+        return true
+    }
+
+    private func removePendingReferences(where matches: (HistoryItemReference) -> Bool) {
+        pendingReferences = Set(pendingReferences.filter { !matches($0) })
+        capacityDeferredReferences = Set(capacityDeferredReferences.filter { !matches($0) })
+        capacityAppearanceReferences = Set(capacityAppearanceReferences.filter { !matches($0) })
+    }
+
+    private func retireRequest(_ token: Int) {
+        guard liveRequestTokens.remove(token) != nil else { return }
+        schedulePendingDrain()
+    }
+
+    private func schedulePendingDrain() {
+        guard pendingDrainTask == nil, !pendingReferences.isEmpty,
+              isSurfaceActive, !isPrefetchSuspended,
+              liveRequestTokens.count < Self.maximumConcurrentRequests else { return }
+        // A cancelled old Task's completion can free actual capacity. Its
+        // cancellation must not become the caller cancellation of fresh demand.
+        pendingDrainTask = Task { [weak self] in
+            guard !Task.isCancelled, let self else { return }
+            self.pendingDrainTask = nil
+            while self.isSurfaceActive, !self.isPrefetchSuspended,
+                  self.liveRequestTokens.count < Self.maximumConcurrentRequests,
+                  let next = self.pendingReferences.first(where: { self.displayedItemCounts[$0] != nil })
+                    ?? self.pendingReferences.first {
+                self.pendingReferences.remove(next)
+                self.prefetch(next)
+            }
+        }
+    }
+
+    private func startCapacityObservation() {
+        guard capacityObservationTask == nil else { return }
+        capacityObservationGeneration += 1
+        let generation = capacityObservationGeneration
+        let history = history
+        capacityObservationTask = Task { [weak self] in
+            let changes = await history.thumbnailCapacityChanges()
+            for await _ in changes {
+                guard !Task.isCancelled else { break }
+                guard let self, self.capacityObservationGeneration == generation,
+                      self.isSurfaceActive, !self.isPrefetchSuspended else { break }
+                self.observedCapacityGeneration += 1
+                let currentDemand = self.capacityDeferredReferences.filter {
+                    self.displayedItemCounts[$0] != nil
+                }
+                self.capacityDeferredReferences.removeAll()
+                for item in currentDemand { self.enqueuePending(item) }
+                self.schedulePendingDrain()
+            }
+            guard let self, self.capacityObservationGeneration == generation else { return }
+            self.capacityObservationTask = nil
+        }
+    }
+
+    private func stopCapacityObservation() {
+        capacityObservationGeneration += 1
+        capacityObservationTask?.cancel()
+        capacityObservationTask = nil
+    }
 
     /// The decoded-byte cost of one decoded image: the backing bitmap's
     /// `bytesPerRow × height` — an honest allocation size (row padding

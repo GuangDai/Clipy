@@ -94,7 +94,7 @@ enum FailurePresentation {
     /// — retryable, so the message says so.
     private static func key(for reason: UnavailableReason) -> String {
         switch reason {
-        case .factProof:
+        case .factProof, .thumbnailResources:
             return "History is busy. Try again shortly."
         case .dedupIndexRebuild:
             return "History is reindexing. Try again shortly."

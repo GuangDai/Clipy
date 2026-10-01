@@ -98,7 +98,7 @@ struct ThumbnailMeasurementTests {
         store.prefetch(item)
 
         #expect(await pollUntil {
-            store.inFlightCount == 0 && store.cachedEntryCount == 1
+            store.liveRequestCount == 0 && store.pendingRequestCount == 0 && store.cachedEntryCount == 1
         })
         let records = try readRecords(at: fileURL)
         #expect(records.count == 2)
@@ -186,7 +186,7 @@ struct ThumbnailMeasurementTests {
             await history.completeRequest(for: item, with: .success(fixturePNGData))
         )
         #expect(await pollUntil {
-            store.inFlightCount == 0 && (try? readRecords(at: fileURL))?.count == 3
+            store.liveRequestCount == 0 && store.pendingRequestCount == 0 && (try? readRecords(at: fileURL))?.count == 3
         })
         records = try readRecords(at: fileURL)
         #expect(records.map(\.event) == [.started, .rejectedInFlight, .completed])
@@ -304,7 +304,7 @@ struct ThumbnailMeasurementTests {
         try #require(await pollUntil { store.imagePixelSize(for: first) != nil })
         store.prefetch(second)
         #expect(await pollUntil {
-            guard store.inFlightCount == 0 else { return false }
+            guard store.liveRequestCount == 0, store.pendingRequestCount == 0 else { return false }
             guard await history.requestCount(for: first) == 1 else { return false }
             return await history.requestCount(for: second) == 1
         })

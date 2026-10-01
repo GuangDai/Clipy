@@ -514,8 +514,10 @@ extension SearchWorker {
         for admitted: AdmittedSearchRequest, in database: SQLiteDatabase
     ) throws -> SearchCandidateSelection? {
         var probeResults: [Data: Bool] = [:]
+        var textSelections: [Data: SearchCandidateSelection] = [:]
         let conditionCandidates = try admitted.expressionRoot.map {
-            try PreparedSearchExpression.candidateExpression($0, in: database, probeResults: &probeResults)
+            try PreparedSearchExpression.candidateExpression($0, in: database, probeResults: &probeResults,
+                                                             textSelections: &textSelections)
         } ?? nil
         if conditionCandidates?.isSparse == true { return conditionCandidates }
         guard let expression = SQLiteSearchIndex.matchExpression(term: admitted.term, mode: admitted.mode) else {

@@ -23,7 +23,7 @@ struct RealHistoryThumbnailPurgeTests {
         store.setDisplayed(pinned, true)
         store.prefetch(pinned)
         store.prefetch(coldPinned)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         let original = try #require(store.raster(for: pinned))
         try #require(store.imagePixelSize(for: coldPinned) != nil)
 
@@ -72,7 +72,7 @@ struct RealHistoryThumbnailPurgeTests {
             // pinned reference occurs after the receipt-confirmed reset.
             await gate.resume()
             try #require(await pollUntil {
-                store.inFlightCount == 0 && store.debugDiscardedFetchCompletionCount > 0
+                store.liveRequestCount == 0 && store.pendingRequestCount == 0 && store.debugDiscardedFetchCompletionCount > 0
             })
             #expect(store.raster(for: pinned) == original)
             #expect(store.imagePixelSize(for: removed) == nil)

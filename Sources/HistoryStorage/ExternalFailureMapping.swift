@@ -71,7 +71,7 @@ internal func mapExternalHistoryFailure(
                 auditFailureKind: .temporarilyUnavailable,
                 auditDenialReason: nil
             )
-        case .dedupIndexRebuild:
+        case .dedupIndexRebuild, .thumbnailResources:
             return invariantMapping()
         case .insufficientDiskSpace:
             switch operation {

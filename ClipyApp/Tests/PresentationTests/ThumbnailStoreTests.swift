@@ -120,7 +120,7 @@ struct ThumbnailStoreTests {
 
         #expect(await history.completeRequest(for: other, with: .success(fixturePNGData)))
         #expect(await history.completeRequest(for: item, occurrence: 1, with: .success(fixturePNGData)))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.imagePixelSize(for: item) != nil)
         #expect(store.imagePixelSize(for: other) != nil)
         #expect(store.cachedEntryCount == 2)
@@ -196,7 +196,7 @@ struct ThumbnailStoreTests {
 
         // The revised reference fetches its own answer: nil, no image.
         store.prefetch(revised)
-        #expect(await pollUntil { store.inFlightCount == 0 })
+        #expect(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: revised) == 1)
         #expect(store.imagePixelSize(for: revised) == nil)
         // The original's decoded pixels are untouched.
@@ -231,7 +231,7 @@ struct ThumbnailStoreTests {
         let store = ThumbnailStore(history: history)
 
         store.prefetch(item)
-        #expect(await pollUntil { store.inFlightCount == 0 })
+        #expect(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: item) == 1)
 
         store.prefetch(item)
@@ -254,7 +254,7 @@ struct ThumbnailStoreTests {
         store.prefetch(original)
         #expect(store.inFlightCount == 1)
         #expect(!store.isUnavailable(for: original))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.cachedEntryCount == 1)
         #expect(store.cachedDecodedBytes == 0)
         #expect(store.isUnavailable(for: original))
@@ -291,7 +291,7 @@ struct ThumbnailStoreTests {
         let history = ThumbnailScriptHistory(failureByReference: [item: .thumbnailUnavailable])
         let store = ThumbnailStore(history: history)
         store.prefetch(item)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         try #require(store.cachedEntryCount == 1)
         #expect(store.isUnavailable(for: item))
 
@@ -309,7 +309,7 @@ struct ThumbnailStoreTests {
         #expect(!store.isUnavailable(for: item))
         store.prefetch(item)
         #expect(!store.isUnavailable(for: item))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: item) == 2)
         #expect(store.isUnavailable(for: item))
     }
@@ -322,16 +322,16 @@ struct ThumbnailStoreTests {
         ])
         let store = ThumbnailStore(history: history, maximumEntries: 1, maximumDecodedBytes: 64)
         store.prefetch(first)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.cachedEntryCount == 1)
         store.prefetch(second)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.cachedEntryCount == 1)
         #expect(store.cachedDecodedBytes == 0)
         #expect(!store.isUnavailable(for: first))
         #expect(store.isUnavailable(for: second))
         store.prefetch(first)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: first) == 2)
         #expect(await history.requestCount(for: second) == 1)
         #expect(store.isUnavailable(for: first))
@@ -346,12 +346,12 @@ struct ThumbnailStoreTests {
         store.prefetch(item)
         try #require(await pollUntil { await history.requestCount == 1 })
         #expect(await history.completeRequest(for: item, with: .cancelled))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.cachedEntryCount == 0)
         store.prefetch(item)
         try #require(await pollUntil { await history.requestCount == 2 })
         #expect(await history.completeRequest(for: item, occurrence: 1, with: .success(nil)))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
     }
 
     @Test func unavailableResultsAndPurgesStayWithinTheirOwningSurface() async throws {
@@ -361,7 +361,7 @@ struct ThumbnailStoreTests {
         let second = ThumbnailStore(history: history)
         first.prefetch(item)
         second.prefetch(item)
-        try #require(await pollUntil { first.inFlightCount == 0 && second.inFlightCount == 0 })
+        try #require(await pollUntil { first.liveRequestCount == 0 && first.pendingRequestCount == 0 && second.liveRequestCount == 0 && second.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: item) == 2)
         #expect(first.cachedEntryCount == 1)
         #expect(second.cachedEntryCount == 1)
@@ -373,7 +373,7 @@ struct ThumbnailStoreTests {
         #expect(second.inFlightCount == 0)
         #expect(await history.requestCount(for: item) == 2)
         first.prefetch(item)
-        try #require(await pollUntil { first.inFlightCount == 0 })
+        try #require(await pollUntil { first.liveRequestCount == 0 && first.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: item) == 3)
     }
 
@@ -551,7 +551,7 @@ struct ThumbnailStoreTests {
         try #require(timedOut)
         #expect(!store.isUnavailable(for: second))
         #expect(store.imagePixelSize(for: second) == nil)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
 
         store.prefetch(second)
         try #require(await pollUntil { store.imagePixelSize(for: second) != nil })
@@ -885,7 +885,7 @@ struct ThumbnailStoreTests {
             for item in items where await history.requestCount(for: item) != 1 {
                 return false
             }
-            return store.inFlightCount == 0
+            return store.liveRequestCount == 0 && store.pendingRequestCount == 0
         })
         #expect(store.cachedEntryCount <= 3)
     }
@@ -966,7 +966,7 @@ struct ThumbnailStoreTests {
 
         store.prefetch(item)
         let settled = await pollUntil {
-            guard store.inFlightCount == 0 else { return false }
+            guard store.liveRequestCount == 0, store.pendingRequestCount == 0 else { return false }
             return await history.requestCount(for: item) == 1
         }
         #expect(settled)
@@ -989,7 +989,7 @@ struct ThumbnailStoreTests {
 
         store.prefetch(item)
         let settled = await pollUntil {
-            guard store.inFlightCount == 0 else { return false }
+            guard store.liveRequestCount == 0, store.pendingRequestCount == 0 else { return false }
             return await history.requestCount(for: item) == 1
         }
         #expect(settled)
@@ -1034,7 +1034,7 @@ struct ThumbnailStoreTests {
             for item in items where await history.requestCount(for: item) != 1 {
                 return false
             }
-            return store.inFlightCount == 0
+            return store.liveRequestCount == 0 && store.pendingRequestCount == 0
         })
         // Every 1×1 BGRA8 hit costs exactly 4 decoded bytes; nothing crossed
         // either fixed bound, so both ledgers reflect the whole working set.

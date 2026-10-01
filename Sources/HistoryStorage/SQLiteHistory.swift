@@ -162,6 +162,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     internal static func open(
         configuration: HistoryConfiguration,
         limits: HistoryLimits = .standard,
+        thumbnailService: ThumbnailService = ThumbnailService(),
         makeCandidateID: @escaping @Sendable () -> HistoryItemID
     ) async throws -> SQLiteHistory {
         // Nil explicitly disables count retention; resource limits remain fixed.
@@ -238,7 +239,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
             ),
             revisionPreparation: revisionPreparation,
             searchWorker: searchWorker,
-            thumbnailService: ThumbnailService(),
+            thumbnailService: thumbnailService,
             externalGateway: externalGateway,
             appIntentsConnectionID: appIntentsConnectionID,
             storeLocation: storeLocation

@@ -92,14 +92,25 @@ package actor ThumbnailService {
     private var flights: [ThumbnailFlightKey: Flight] = [:]
     private var nextToken = 0
 
+    /// Admission includes retired creators until their native work actually
+    /// returns. The join table above alone cannot account for that ownership.
+    internal static let maximumInFlightCount = 32
+    private let maximumLiveCreators: Int
+    private static let maximumCallersPerFlight = 32
+    private var liveTokens: Set<Int> = []
+    private var liveCallerCount = 0
+    private var liveCallerCountsByKey: [ThumbnailFlightKey: Int] = [:]
+
+    private struct SourceWaiter {
+        let token: Int
+        let continuation: CheckedContinuation<Void, any Error>
+    }
+    private var activeSourceToken: Int?
+    private var sourceWaiters: [SourceWaiter] = []
+    private var capacityObservers: [UUID: AsyncStream<Void>.Continuation] = [:]
+
     /// The owned off-Authority decode worker (§9 step 6; §14.5).
     private let worker = ThumbnailWorker()
-
-    /// Only the active creator hydrates source bytes. Queued creators await
-    /// a completion-only task, retaining their source-loading closure and
-    /// reference rather than full image Data. The Void result never retains
-    /// the predecessor's encoded thumbnail payload.
-    private var completionTail: Task<Void, Never>?
 
     /// The roadmap-owned WS15 suspension handler; `nil` in production
     /// (test seam — see `ThumbnailServiceSuspensionPoint`).
@@ -107,7 +118,12 @@ package actor ThumbnailService {
         @Sendable (ThumbnailServiceSuspensionPoint) async -> Void
     )?
 
-    package init() {}
+    package init() { maximumLiveCreators = Self.maximumInFlightCount }
+
+    internal init(maximumInFlightCount: Int) {
+        precondition((1...Self.maximumInFlightCount).contains(maximumInFlightCount))
+        maximumLiveCreators = maximumInFlightCount
+    }
 
     // MARK: Roadmap-owned test seam (docs/storage.md step-5 note; WS15)
 
@@ -121,9 +137,36 @@ package actor ThumbnailService {
         suspensionHandler = handler
     }
 
-    /// Owner-test observation of admitted exact keys, including queued work.
-    /// It exposes no source bytes and does not change scheduling.
-    internal var inFlightCount: Int { flights.count }
+    /// Real creator ownership, including cancelled native work still running.
+    internal var inFlightCount: Int { liveTokens.count }
+    internal var queuedSourceCount: Int { sourceWaiters.count }
+    internal var capacityObserverCount: Int { capacityObservers.count }
+    internal var inFlightCallerCount: Int { liveCallerCount }
+
+    /// Derived worker availability only; this does not publish a History
+    /// mutation or retain image bytes. Register before the current-capacity
+    /// event so release cannot be missed between rejection and subscription.
+    internal func capacityChanges() -> AsyncStream<Void> {
+        let pair = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        guard !Task.isCancelled else { pair.continuation.finish(); return pair.stream }
+        let id = UUID()
+        pair.continuation.onTermination = { @Sendable [weak self] _ in
+            Task { await self?.removeCapacityObserver(id) }
+        }
+        capacityObservers[id] = pair.continuation
+        let canJoin = flights.keys.contains {
+            (liveCallerCountsByKey[$0] ?? 0) < Self.maximumCallersPerFlight
+        }
+        if (liveTokens.count < maximumLiveCreators || canJoin),
+           liveCallerCount < maximumLiveCreators * Self.maximumCallersPerFlight {
+            pair.continuation.yield(())
+        }
+        return pair.stream
+    }
+
+    private func removeCapacityObserver(_ id: UUID) {
+        capacityObservers.removeValue(forKey: id)
+    }
 
     /// Joins or creates the source-inclusive single-flight for one exact key.
     /// The creator installs the task before the first suspension; that task
@@ -156,11 +199,16 @@ package actor ThumbnailService {
         // sharing the creator's source/decode result. A failed join never
         // cancels or removes the creator-owned flight.
         if let task = flights[key]?.task, let token = flights[key]?.token {
+            try reserveCaller(key)
             flights[key]?.callers.insert(caller)
             return try await awaitFlight(task, token: token, key: key, caller: caller) {
                 try await validateJoin()
             }
         }
+        guard liveTokens.count < maximumLiveCreators else {
+            throw HistoryFailure.temporarilyUnavailable(.thumbnailResources)
+        }
+        try reserveCaller(key)
 
         // Snapshot actor-owned immutable dependencies, then install the task
         // without suspension. Its source phase runs the Authority's complete
@@ -168,11 +216,12 @@ package actor ThumbnailService {
         // one shared task.
         let worker = worker
         let handler = suspensionHandler
-        let predecessor = completionTail
         let token = caller
+        liveTokens.insert(token)
         let task = Task<ThumbnailPayload?, Error> {
             defer { finishFlight(key, token: token) }
-            await predecessor?.value
+            try await acquireSourceSlot(token)
+            defer { releaseSourceSlot(token) }
             // Queueing must not turn retired display demand into another
             // full source read. Last-caller cancellation cancels this shared
             // task; an exact-key survivor keeps it alive instead.
@@ -193,11 +242,6 @@ package actor ThumbnailService {
             )
         }
         flights[key] = Flight(token: token, task: task, callers: [caller])
-        completionTail = Task {
-            // Every terminal outcome advances the queue. The source task
-            // still carries its original result/error to its exact-key callers.
-            _ = try? await task.value
-        }
 
         return try await awaitFlight(task, token: token, key: key, caller: caller) {}
     }
@@ -207,7 +251,10 @@ package actor ThumbnailService {
         key: ThumbnailFlightKey, caller: Int,
         validate: @Sendable () async throws -> Void
     ) async throws -> ThumbnailPayload? {
-        defer { releaseCaller(key, token: token, caller: caller) }
+        defer {
+            releaseCaller(key, token: token, caller: caller)
+            finishCaller(key)
+        }
         return try await withTaskCancellationHandler {
             try await validate()
             try Task.checkCancellation()
@@ -224,14 +271,70 @@ package actor ThumbnailService {
               flights[key]?.callers.remove(caller) != nil else { return }
         if flights[key]?.callers.isEmpty == true {
             flights.removeValue(forKey: key)?.task.cancel()
-            // Keep completionTail until the cancelled task has drained.
-            // Dropping it here could hydrate a new source during old decode.
+            // A new caller cannot join this cancelled task. Its live token
+            // and source slot remain owned until the task's actual exit.
         }
     }
 
     private func finishFlight(_ key: ThumbnailFlightKey, token: Int) {
         if flights[key]?.token == token { flights.removeValue(forKey: key) }
-        if flights.isEmpty { completionTail = nil }
+        guard liveTokens.remove(token) != nil else { return }
+        publishReleasedCapacity()
+    }
+
+    private func reserveCaller(_ key: ThumbnailFlightKey) throws {
+        guard (liveCallerCountsByKey[key] ?? 0) < Self.maximumCallersPerFlight,
+              liveCallerCount < maximumLiveCreators * Self.maximumCallersPerFlight else {
+            throw HistoryFailure.temporarilyUnavailable(.thumbnailResources)
+        }
+        liveCallerCountsByKey[key, default: 0] += 1
+        liveCallerCount += 1
+    }
+
+    private func finishCaller(_ key: ThumbnailFlightKey) {
+        guard let previous = liveCallerCountsByKey[key] else { return }
+        liveCallerCountsByKey[key] = previous > 1 ? previous - 1 : nil
+        liveCallerCount -= 1
+        publishReleasedCapacity()
+    }
+
+    private func publishReleasedCapacity() {
+        for observer in capacityObservers.values { observer.yield(()) }
+    }
+
+    private func acquireSourceSlot(_ token: Int) async throws {
+        try Task.checkCancellation()
+        guard activeSourceToken != nil else {
+            activeSourceToken = token
+            return
+        }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                sourceWaiters.append(SourceWaiter(token: token, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelSourceWaiter(token) }
+        }
+    }
+
+    private func cancelSourceWaiter(_ token: Int) {
+        guard let index = sourceWaiters.firstIndex(where: { $0.token == token }) else { return }
+        sourceWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
+    }
+
+    private func releaseSourceSlot(_ token: Int) {
+        guard activeSourceToken == token else { return }
+        guard !sourceWaiters.isEmpty else {
+            activeSourceToken = nil
+            return
+        }
+        let next = sourceWaiters.removeFirst()
+        activeSourceToken = next.token
+        next.continuation.resume()
     }
 
     /// Package-only direct-source convenience used by the Part VI §9 runner

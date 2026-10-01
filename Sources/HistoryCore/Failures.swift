@@ -124,6 +124,9 @@ public enum UnavailableReason: Sendable, Equatable {
     /// match, or a search exceeded its SQLite snapshot lifetime (V2-09 §4).
     /// No partial or mixed-snapshot result is published; the query is retryable.
     case searchEngineDeadline
+    /// Thumbnail source/decode work or its exact-key consumers reached the
+    /// bounded concurrent admission limit. Retry after thumbnail capacity changes.
+    case thumbnailResources
 }
 
 /// Persistence-layer failures, mapped at the storage boundary.

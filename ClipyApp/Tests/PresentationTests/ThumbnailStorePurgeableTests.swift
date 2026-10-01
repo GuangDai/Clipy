@@ -57,7 +57,7 @@ struct ThumbnailStorePurgeableTests {
         // Surface closure alone must prevent late completion from pinning Data.
         store.isSurfaceActive = false
         #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.imagePixelSize(for: item) != nil)
         #expect(store.activeDecodedBytes == 0)
         #expect(store.coldDecodedBytes == 4)
@@ -82,7 +82,7 @@ struct ThumbnailStorePurgeableTests {
         store.setDisplayed(visible, true)
         store.prefetch(visible)
         store.prefetch(lost)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         let original = try #require(store.raster(for: visible))
         if removeCacheEntry { store.removeColdEntryForTesting(lost) }
         else { store.discardColdPixelsForTesting(lost) }
@@ -91,7 +91,7 @@ struct ThumbnailStorePurgeableTests {
         // completion must reclaim that reservation before capacity eviction.
         store.prefetch(visible)
         store.prefetch(newcomer)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.raster(for: visible) == original)
         #expect(store.imagePixelSize(for: newcomer) != nil)
         #expect(store.imagePixelSize(for: lost) == nil)
@@ -109,7 +109,7 @@ struct ThumbnailStorePurgeableTests {
         store.setDisplayed(visible, true)
         store.prefetch(visible)
         store.prefetch(cold)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.activeDecodedBytes == 4)
         #expect(store.coldDecodedBytes == 4)
         let raster = try #require(store.raster(for: visible))
@@ -142,7 +142,7 @@ struct ThumbnailStorePurgeableTests {
         store.prefetch(visible)
         try #require(await pollUntil { store.imagePixelSize(for: visible) != nil })
         store.prefetch(newcomer)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.imagePixelSize(for: visible) != nil)
         #expect(store.imagePixelSize(for: newcomer) == nil)
         #expect(store.activeDecodedBytes == 4)
@@ -189,7 +189,7 @@ struct ThumbnailStorePurgeableTests {
         store.respondToMemoryPressure(.warning)
         #expect(store.inFlightCount == 1)
         #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.activeDecodedBytes == 4)
         #expect(store.imagePixelSize(for: item) == PixelSize(width: 1, height: 1))
 

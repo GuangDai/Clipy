@@ -44,26 +44,36 @@ internal indirect enum PreparedSearchExpression {
         _ node: HistorySearchExpression.Node, in database: SQLiteDatabase
     ) throws -> SearchCandidateSelection? {
         var probeResults: [Data: Bool] = [:]
-        return try candidateExpression(node, in: database, probeResults: &probeResults)
+        var textSelections: [Data: SearchCandidateSelection] = [:]
+        return try candidateExpression(node, in: database, probeResults: &probeResults, textSelections: &textSelections)
     }
 
     static func candidateExpression(
-        _ node: HistorySearchExpression.Node, in database: SQLiteDatabase, probeResults: inout [Data: Bool]
+        _ node: HistorySearchExpression.Node, in database: SQLiteDatabase, probeResults: inout [Data: Bool],
+        textSelections: inout [Data: SearchCandidateSelection]
     ) throws -> SearchCandidateSelection? {
-        try candidateExpression(node, in: database, checkingSparsity: true, probeResults: &probeResults)
+        try candidateExpression(node, in: database, checkingSparsity: true, probeResults: &probeResults,
+                                textSelections: &textSelections)
     }
 
     private static func candidateExpression(
         _ node: HistorySearchExpression.Node, in database: SQLiteDatabase, checkingSparsity: Bool,
-        probeResults: inout [Data: Bool]
+        probeResults: inout [Data: Bool], textSelections: inout [Data: SearchCandidateSelection]
     ) throws -> SearchCandidateSelection? {
         switch node {
         case .text(let term):
+            let key = Data(term.utf8)
+            if let checked = textSelections[key] { return checked }
             guard let expression = SQLiteSearchIndex.matchExpression(term: term, mode: .exact) else { return nil }
-            let isSparse = checkingSparsity
-                ? try SQLiteSearchIndex.prefersSparseCandidates(expression: expression, in: database,
-                                                               probeResults: &probeResults) : false
-            return (expression, isSparse)
+            // An OR leaf can supply a necessary expression without its own
+            // posting probe. Do not cache that unchecked false as a proof;
+            // only completed sparse/dense selections are reusable.
+            guard checkingSparsity else { return (expression, false) }
+            let checked = (expression: expression, isSparse: try SQLiteSearchIndex.prefersSparseCandidates(
+                expression: expression, in: database, probeResults: &probeResults
+            ))
+            textSelections[key] = checked
+            return checked
         case .and(let lhs, let rhs):
             // Every hit must satisfy both operands. A sparse necessary
             // condition on either side therefore bounds candidate decoding,
@@ -71,9 +81,11 @@ internal indirect enum PreparedSearchExpression {
             // the matcher: its original left operand still owns presentation.
             // Keep one condition rather than expanding a long AND into a
             // deeply nested FTS intersection or reprobing each dense prefix.
-            let left = try candidateExpression(lhs, in: database, probeResults: &probeResults)
+            let left = try candidateExpression(lhs, in: database, probeResults: &probeResults,
+                                               textSelections: &textSelections)
             if left?.isSparse == true { return left }
-            let right = try candidateExpression(rhs, in: database, probeResults: &probeResults)
+            let right = try candidateExpression(rhs, in: database, probeResults: &probeResults,
+                                                textSelections: &textSelections)
             return right?.isSparse == true ? right : (left ?? right)
         case .or:
             var branches: [HistorySearchExpression.Node] = []
@@ -84,7 +96,8 @@ internal indirect enum PreparedSearchExpression {
                 // prefix, needs a posting proof. AND branches still select
                 // their own necessary sparse operand before joining it.
                 guard let candidate = try candidateExpression(branch, in: database, checkingSparsity: false,
-                                                              probeResults: &probeResults) else {
+                                                              probeResults: &probeResults,
+                                                              textSelections: &textSelections) else {
                     return nil
                 }
                 expressions.append(candidate.expression)

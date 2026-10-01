@@ -133,6 +133,13 @@ public protocol ClipboardHistory: Sendable {
         pixels: PixelSize
     ) async throws -> ThumbnailPayload?
 
+    /// Coalesced notifications that bounded thumbnail work has released
+    /// capacity. Registration emits current availability when possible;
+    /// callers retry only their still-visible resource-rejected demand.
+    /// Cancellation retires the subscription. This stream changes no History
+    /// position and carries no retained content or completed thumbnail cache.
+    func thumbnailCapacityChanges() async -> AsyncStream<Void>
+
     /// Current retained counts and logical content bytes from one coherent
     /// snapshot. Counts include pinned items; revision bytes include every
     /// retained revision. These are content totals, not physical disk usage.
@@ -174,4 +181,12 @@ public protocol ClipboardHistory: Sendable {
     /// docs/interface.md; audit: docs/reviews/
     /// 2026-08-20-clipy-maccy-audit/02-spec-implementation.md SPEC-IMPL-003.
     func retentionConfiguration() async throws -> HistoryRetentionConfiguration
+}
+
+public extension ClipboardHistory {
+    /// Unconstrained scripted previews have no worker-capacity transitions.
+    /// The production SQLite implementation owns the actual resource stream.
+    func thumbnailCapacityChanges() async -> AsyncStream<Void> {
+        AsyncStream { $0.finish() }
+    }
 }

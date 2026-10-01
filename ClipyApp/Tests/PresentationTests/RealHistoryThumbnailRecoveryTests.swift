@@ -27,7 +27,7 @@ struct RealHistoryThumbnailRecoveryTests {
         let store = ThumbnailStore(history: history)
         #expect(!store.isUnavailable(for: original))
         store.prefetch(original)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.isUnavailable(for: original))
         #expect(store.imagePixelSize(for: original) == nil)
         #expect(store.cachedEntryCount == 1)
@@ -71,7 +71,7 @@ struct RealHistoryThumbnailRecoveryTests {
         // A later stale request crosses the real Authority version fence and
         // must not become a new unavailable entry for the retired reference.
         store.prefetch(original)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(!store.isUnavailable(for: original))
         #expect(store.cachedEntryCount == 1)
         #expect(store.cachedDecodedBytes == decodedBytes)
