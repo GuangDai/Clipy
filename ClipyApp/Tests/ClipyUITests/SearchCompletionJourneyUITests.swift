@@ -52,19 +52,27 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         }, "The denied-access notice must occupy space above the editable search field.\n" + app.debugDescription)
         try require(!popup.exists, "An empty focused search must leave list navigation available.")
 
-        // Start with the tall history window: the asynchronous search then
-        // replaces it with an empty result and fits the window to that result.
+        // A bare opening dollar starts condition completion. Its literal
+        // search settles independently and shrinks the tall history window.
         search.click()
         app.typeKey("1", modifierFlags: .command)
-        app.typeText("$type:")
-        try require(app.staticTexts["No Results"].waitForExistence(timeout: 10), app.debugDescription)
+        app.typeText("$")
+        try require(waitUntil {
+            rows.count == 1 && rows.firstMatch.label.contains("$ retained")
+        }, app.debugDescription)
         try require(waitUntil {
             popup.exists && popup.frame.height > 40
                 && panel.frame.insetBy(dx: -1, dy: -1).contains(popup.frame)
         }, "The idle completion popup must remain visible inside the resized panel.\n" + app.debugDescription)
-        let initialTextCandidate = app.buttons["clipy.search.completion.type:text"]
-        try require(initialTextCandidate.isHittable, app.debugDescription)
-        initialTextCandidate.click()
+        // Arrow navigation scrolls the fourth field into view even in a
+        // short panel; confirming it must keep native editing alive.
+        app.typeKey(.downArrow, modifierFlags: [])
+        app.typeKey(.downArrow, modifierFlags: [])
+        app.typeKey(.downArrow, modifierFlags: [])
+        app.typeKey(.return, modifierFlags: [])
+        try require(waitUntil { search.value as? String == "$type:$" && !popup.exists }, app.debugDescription)
+        app.typeText("text")
+        app.typeKey(.tab, modifierFlags: [])
         try require(waitUntil {
             search.value as? String == "$type:text$" && !popup.exists && rows.count > 0
         }, app.debugDescription)
@@ -201,6 +209,9 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         }
         _ = try await history.perform(.capture(capture(
             "source:literal", source: nil, at: base.addingTimeInterval(100)
+        )))
+        _ = try await history.perform(.capture(capture(
+            "$ retained", source: nil, at: base.addingTimeInterval(101)
         )))
         let details = try await history.details(for: target.id)
         try require(details.occurrence.firstSource == oldSource)
