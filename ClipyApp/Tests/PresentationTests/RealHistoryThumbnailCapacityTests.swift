@@ -14,13 +14,13 @@ struct RealHistoryThumbnailCapacityTests {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture("released browsing surface", in: history)
         var store: ThumbnailStore? = ThumbnailStore(history: history)
-        weak var released = store
+        let released = ThumbnailStoreWeakReference(store)
         store?.setDisplayed(item, true)
         store?.prefetch(item)
         try #require(await pollUntil { store?.liveRequestCount == 0 })
         try #require(await pollUntil { await history.thumbnailService.capacityObserverCount == 1 })
         store = nil
-        try #require(await pollUntil { released == nil })
+        try #require(await pollUntil { released.value == nil })
         try #require(await pollUntil { await history.thumbnailService.capacityObserverCount == 0 })
         #expect(try await history.details(for: item.id).item == item)
     }
@@ -248,6 +248,13 @@ struct RealHistoryThumbnailCapacityTests {
         }
         return item
     }
+}
+
+@MainActor
+private final class ThumbnailStoreWeakReference {
+    weak var value: ThumbnailStore?
+
+    init(_ value: ThumbnailStore?) { self.value = value }
 }
 
 private actor ThumbnailCapacityNativeGate {
