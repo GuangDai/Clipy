@@ -239,14 +239,19 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         _ response: NSApplication.ModalResponse,
         handler: ((NSApplication.ModalResponse) -> Void)?
     ) {
-        defer {
-            nativeSheetCount -= 1
-            if isPresented { previewState.pointerExited(.preview) }
-        }
         handler?(response)
-        guard isPresented, previewState.isOpen,
-              let parent, parent.isVisible else { return }
-        present(beside: parent)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                self.nativeSheetCount -= 1
+                if self.isPresented { self.previewState.pointerExited(.preview) }
+            }
+            // Return from the actual completion before applying geometry;
+            // AppKit can finish its owner-frame restoration on that stack.
+            guard self.isPresented, self.previewState.isOpen,
+                  let parent = self.parent, parent.isVisible else { return }
+            self.present(beside: parent)
+        }
     }
 
     /// SwiftUI owns the drag gesture; AppKit supplies screen-space pointer
