@@ -46,6 +46,28 @@ struct HistorySearchFieldHostedTests {
     }
 
     @Test
+    func candidateHeightTracksNativeWindowResizeWithoutAnotherInputEvent() async throws {
+        let (panel, field) = makePanel()
+        defer { panel.close() }
+        let content = try #require(panel.contentView)
+        panel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.maxY - 420,
+                              width: panel.frame.width, height: 420), display: true)
+        field.frame.origin.y = content.bounds.maxY - field.frame.height - 12
+        field.autoresizingMask = [.minYMargin]
+        var available: CGFloat?
+        field.onAvailableHeightChange = { available = $0 }
+        field.update(text: "$", isFocused: true)
+        try #require(await pollUntil { available != nil })
+        let before = try #require(available)
+        let changedFrame = NSRect(x: panel.frame.minX, y: panel.frame.maxY - 220,
+                                  width: panel.frame.width, height: 220)
+        panel.setFrame(changedFrame, display: true)
+        let expected = max(0, field.convert(field.bounds, to: content).minY - content.bounds.minY - 8)
+        try #require(expected < before)
+        try #require(await pollUntil { available == expected })
+    }
+
+    @Test
     func longCompletionScrollsItsCaretAndNativeArrowsContinueEditingAfterRefresh() throws {
         let (panel, field) = makePanel()
         defer { panel.close() }

@@ -56,6 +56,8 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
     var onAvailableHeightChange: (CGFloat) -> Void = { _ in }
     private var wantsFocus = false
     private weak var observedEditor: NSTextView?
+    private weak var observedWindow: NSWindow?
+    private var availableHeightTask: Task<Void, Never>?
     private var textRevision = 0
     private var reportedRevision = -1
     private var reportedSelection = NSRange(location: NSNotFound, length: 0)
@@ -90,7 +92,7 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
 
     override func layout() {
         super.layout()
-        reportAvailableHeight()
+        scheduleAvailableHeightReport()
     }
 
     func update(text: String, isFocused: Bool) {
@@ -104,17 +106,32 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
         wantsFocus = isFocused
         applyFocus()
         reportInput()
-        reportAvailableHeight()
+        scheduleAvailableHeightReport()
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        if observedWindow !== window {
+            if let observedWindow {
+                NotificationCenter.default.removeObserver(self, name: NSWindow.didResizeNotification, object: observedWindow)
+            }
+            observedWindow = window
+            if let window {
+                NotificationCenter.default.addObserver(
+                    self, selector: #selector(windowResized(_:)),
+                    name: NSWindow.didResizeNotification, object: window
+                )
+            }
+        }
         applyFocus()
         if window == nil {
+            availableHeightTask?.cancel()
+            availableHeightTask = nil
             stopObservingEditor()
             onFocusChange(false)
+        } else {
+            scheduleAvailableHeightReport()
         }
-        reportAvailableHeight()
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -164,7 +181,7 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
         wantsFocus = true
         onFocusChange(true)
         reportInput()
-        reportAvailableHeight()
+        scheduleAvailableHeightReport()
     }
 
     func controlTextDidEndEditing(_ notification: Notification) {
@@ -203,6 +220,23 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
         reportedSelection = selection
         reportedComposition = isComposing
         onInputChange(HistorySearchCompletionInput(text: editor.string, selection: selection, isComposing: isComposing))
+    }
+
+    @objc private func windowResized(_ notification: Notification) {
+        scheduleAvailableHeightReport()
+    }
+
+    private func scheduleAvailableHeightReport() {
+        availableHeightTask?.cancel()
+        availableHeightTask = Task { [weak self] in
+            guard !Task.isCancelled, let self else { return }
+            self.availableHeightTask = nil
+            // The window resizes after SwiftUI has updated the query. Read
+            // native coordinates on the next actor turn after layout, even
+            // when only ancestors move and the field's own size is unchanged.
+            self.window?.contentView?.layoutSubtreeIfNeeded()
+            self.reportAvailableHeight()
+        }
     }
 
     private func reportAvailableHeight() {

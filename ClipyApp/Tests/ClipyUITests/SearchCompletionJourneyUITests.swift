@@ -37,6 +37,7 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         app.launch()
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        let window = app.dialogs.firstMatch
         let search = app.textFields["clipy.search.field"]
         let popup = app.descendants(matching: .any)["clipy.search.completions"]
         let rows = panel.buttons.matching(NSPredicate(
@@ -56,7 +57,10 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         // checks still pass when the native scroll view covers the candidates.
         search.click()
         app.typeText("$")
-        try require(waitUntil { rows.count > 1 && popup.exists }, app.debugDescription)
+        try require(waitUntil {
+            rows.count > 1 && popup.exists && window.exists
+                && window.frame.insetBy(dx: -1, dy: -1).contains(popup.frame)
+        }, "The candidates must fit the actual native window after results settle.\n" + app.debugDescription)
         let refreshedCandidates = XCTAttachment(screenshot: app.screenshot())
         refreshedCandidates.name = "completion-over-refreshed-results"
         refreshedCandidates.lifetime = .keepAlways
@@ -79,7 +83,7 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         }, app.debugDescription)
         try require(waitUntil {
             popup.exists && popup.frame.height > 40
-                && panel.frame.insetBy(dx: -1, dy: -1).contains(popup.frame)
+                && window.frame.insetBy(dx: -1, dy: -1).contains(popup.frame)
         }, "The idle completion popup must remain visible inside the resized panel.\n" + app.debugDescription)
         // Arrow navigation scrolls the fourth field into view even in a
         // short panel; confirming it must keep native editing alive.
@@ -153,7 +157,7 @@ final class SearchCompletionJourneyUITests: XCTestCase {
             search.value as? String == safariExpression && !popup.exists && rows.count == 1
         }, app.debugDescription)
         let clear = app.buttons["clipy.search.clear"]
-        try require(search.frame.maxX <= clear.frame.minX && panel.frame.contains(search.frame),
+        try require(search.frame.maxX <= clear.frame.minX && window.frame.contains(search.frame),
                     "Query length must not expand the native editor outside its search row.\n" + app.debugDescription)
         let completedSource = XCTAttachment(screenshot: app.screenshot())
         completedSource.name = "completed-safari-source-visible"
