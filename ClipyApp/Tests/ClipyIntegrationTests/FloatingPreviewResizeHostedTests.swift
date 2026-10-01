@@ -108,9 +108,11 @@ struct FloatingPreviewResizeHostedTests {
         preview.present(beside: main)
         #expect(preview.frame == modalOwnerFrame)
         preview.endSheet(alert.window)
-        try #require(await ComposedSupport.waitFor {
+        let followedParent = await ComposedSupport.waitFor {
             preview.attachedSheet == nil && preview.frame.height == main.frame.height
-        })
+        }
+        try #require(followedParent,
+                     "sheet=\(String(describing: preview.attachedSheet)) presented=\(preview.isPresented) open=\(owner.previewState.isOpen) visible=\(preview.isVisible) parentVisible=\(main.isVisible) preview=\(preview.frame) parent=\(main.frame)")
         #expect(preview.isPresented && preview.isVisible)
 
         // A purge/close must end an attached modal immediately. Its native

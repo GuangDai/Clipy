@@ -209,12 +209,15 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         }
     }
 
-    func windowDidEndSheet(_ notification: Notification) {
-        // Return from AppKit's sheet-end callback before following a parent
-        // frame changed while its owner was modal. Recheck the current intent;
-        // a close must win over this deferred fit.
-        Task { @MainActor [weak self] in
-            await Task.yield()
+    override func beginSheet(
+        _ sheetWindow: NSWindow,
+        completionHandler handler: ((NSApplication.ModalResponse) -> Void)? = nil
+    ) {
+        // The native completion owns the actual end of the modal session.
+        // A notification plus Task.yield cannot establish that attachment and
+        // ordering have finished. Let the caller's close/purge intent run first.
+        super.beginSheet(sheetWindow) { [weak self] response in
+            handler?(response)
             guard let self, self.isPresented, self.previewState.isOpen,
                   let parent = self.parent, parent.isVisible else { return }
             self.present(beside: parent)

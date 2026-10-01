@@ -37,7 +37,7 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         app.launch()
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
-        let window = app.dialogs.firstMatch
+        let window = app.dialogs.containing(.textField, identifier: "clipy.search.field").firstMatch
         let search = app.textFields["clipy.search.field"]
         let popup = app.descendants(matching: .any)["clipy.search.completions"]
         let rows = panel.buttons.matching(NSPredicate(
