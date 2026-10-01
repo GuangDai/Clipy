@@ -155,11 +155,12 @@ final class SearchCompletionJourneyUITests: XCTestCase {
         let safariExpression = "$source-id:\"com.apple.Safari\"$"
         try require(waitUntil {
             search.value as? String == safariExpression && !popup.exists && rows.count == 1
+                && search.isHittable
         }, app.debugDescription)
         let clear = app.buttons["clipy.search.clear"]
         try require(search.frame.maxX <= clear.frame.minX && window.frame.contains(search.frame),
                     "Query length must not expand the native editor outside its search row.\n" + app.debugDescription)
-        let completedSource = XCTAttachment(screenshot: app.screenshot())
+        let completedSource = XCTAttachment(screenshot: window.screenshot())
         completedSource.name = "completed-safari-source-visible"
         completedSource.lifetime = .keepAlways
         add(completedSource)

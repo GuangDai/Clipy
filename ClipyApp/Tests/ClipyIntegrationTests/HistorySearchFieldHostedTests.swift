@@ -57,14 +57,14 @@ struct HistorySearchFieldHostedTests {
         var available: CGFloat?
         field.onAvailableHeightChange = { available = $0 }
         field.update(text: "$", isFocused: true)
-        try #require(await pollUntil { available != nil })
+        try #require(await ComposedSupport.waitFor { available != nil })
         let before = try #require(available)
         let changedFrame = NSRect(x: panel.frame.minX, y: panel.frame.maxY - 220,
                                   width: panel.frame.width, height: 220)
         panel.setFrame(changedFrame, display: true)
         let expected = max(0, field.convert(field.bounds, to: content).minY - content.bounds.minY - 8)
         try #require(expected < before)
-        try #require(await pollUntil { available == expected })
+        try #require(await ComposedSupport.waitFor { available == expected })
     }
 
     @Test
