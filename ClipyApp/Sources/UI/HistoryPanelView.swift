@@ -1170,7 +1170,10 @@ struct HistoryPanelView: View {
         locale: Locale = .current,
         bundle: Bundle = AppLocalization.bundle
     ) -> String {
-        HistoryCountCopy.items(
+        if viewState.isLoadingFirstPage {
+            return HistorySearchCopy.text("Updating results…", bundle: bundle)
+        }
+        return HistoryCountCopy.items(
             count: viewState.displayedCount,
             hasNextPage: viewState.displayedCountIsLowerBound,
             locale: locale,

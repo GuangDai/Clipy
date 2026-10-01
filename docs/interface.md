@@ -47,9 +47,11 @@
 
 ## 查询、详情与修改
 
-[`HistoryViewState.swift`](../ClipyApp/Sources/UI/HistoryViewState.swift) 持有当前 query、filter、sort、观察任务和三页窗口。搜索输入在 20 ms 内合并，输入时立即退役旧行；显式 Clear / refresh 立即重启请求。所有异步读结果在应用前检查 request generation、取消和版本，较晚返回的旧请求不得覆盖新状态。替换查询加载期间保持窗口高度，收到权威结果后在下一轮 MainActor 调整内容高度，不额外等待固定计时器。
+[`HistoryViewState.swift`](../ClipyApp/Sources/UI/HistoryViewState.swift) 持有当前 query、filter、sort、观察任务和三页窗口。搜索输入在 20 ms 内合并，输入时立即取消旧查询并退役旧行的操作权限；显式 Clear / refresh 立即重启请求。等待新结果时保留上一窗口的显示内容，搜索栏显示小型加载指示，列表不切换成整块转圈的界面。保留内容不能复制、拖出或修改；删除、清理、修订回执也会移除相关保留行。首次加载、错误和关闭不保留旧内容。所有异步读结果在应用前检查 request generation、取消和版本，较晚返回的旧请求不得覆盖新状态。替换查询加载期间保持窗口高度，收到权威结果后在下一轮 MainActor 调整内容高度，不额外等待固定计时器。
 
 搜索框将 `$...$` 包住的条件与普通文字分开；外部文字仍使用当前 fuzzy、exact 或 regexp，来源条件匹配所有保留的复制来源，包括旧来源。补全以 field editor 的 UTF-16 caret / selection 定位当前字段和值，候选优先处理导航和确认，输入法 marked text 的组合优先级最高。来源候选从全部来源元数据分页取得，不只来自可见历史页；普通 `source:literal` 和成对金额 `$10$` / `$10.50$` 仍是文字。完整语法、限制和接口见 [search.md](search.md)。
+
+搜索栏整体位于结果列表上方，补全候选可覆盖列表并接收点击。原生输入框使用搜索栏提供的宽度，长查询在框内横向滚动；接受候选后显示插入位置，左右方向键继续编辑文字。搜索结果更新和窗口高度变化不重新创建输入框，也不重新申请焦点。
 
 详情按需读元数据，表示载荷在用户选择预览、导出或打开时单独读取。复制来源分页独立于主列表。编辑器通过 [`ReviseEditorDraft.swift`](../ClipyApp/Sources/UI/ReviseEditorDraft.swift) 生成完整修订决策，提交带用户编辑基于的 `ContentVersion`。冲突明确反馈，不覆盖并发新内容；无字节变化不创建空修订。详情告诉用户原始内容和旧修订仍然保留，直到保留策略或删除回收。
 

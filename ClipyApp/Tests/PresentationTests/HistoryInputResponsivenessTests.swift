@@ -89,6 +89,39 @@ struct HistoryInputResponsivenessTests {
         #expect(state.readingItemID == state.rows.first?.item.id)
     }
 
+    @Test func aCommittedRemovalAlsoRetiresTheWaitingDisplayAndCloseReleasesIt() async throws {
+        let base = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let first = try await capture("first retained", in: base, index: 0)
+        let second = try await capture("second retained", in: base, index: 1)
+        let history = InputObservationHistory(base: base)
+        let state = HistoryViewState(history: history)
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage && state.rows.count == 2 })
+        await history.holdNextObservation()
+        state.searchText = "retained"
+        // Hold the real observation before it reads SQLite; the mutation is
+        // committed through the production writer while these old rows show.
+        do {
+            try #require(await pollUntil { await history.hasHeldObservation })
+            #expect(Set(state.rowsForPresentation.map(\.item)) == Set([first, second]))
+            _ = try await state.removeAwaitingReceipt(second.id)
+            #expect(state.rowsForPresentation.map(\.item) == [first])
+            #expect(state.rows.isEmpty)
+            #expect(state.isLoadingFirstPage)
+            await history.releaseObservation()
+            try #require(await pollUntil { state.hasAuthoritativeFirstPage && state.rows.map(\.item) == [first] })
+            state.searchText = "next query"
+            #expect(state.rowsForPresentation.map(\.item) == [first])
+            state.deactivate()
+            #expect(state.rowsForPresentation.isEmpty)
+            #expect(state.rowRangeForPresentation == nil)
+        } catch {
+            await history.releaseObservation()
+            throw error
+        }
+    }
+
     private func capture(_ text: String, in history: SQLiteHistory, index: Int) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ClipboardCapture(
             representations: [.init(typeIdentifier: "public.utf8-plain-text", bytes: Data(text.utf8))],
@@ -112,12 +145,24 @@ struct HistoryInputResponsivenessTests {
 private actor InputObservationHistory: ClipboardHistory {
     let base: SQLiteHistory
     private(set) var requests: [HistoryObservationRequest] = []
+    private var shouldHoldObservation = false
+    private var heldObservation: CheckedContinuation<Void, Never>?
+    var hasHeldObservation: Bool { heldObservation != nil }
 
     init(base: SQLiteHistory) { self.base = base }
 
     func observe(_ request: HistoryObservationRequest) async -> AsyncThrowingStream<HistoryPage, Error> {
         requests.append(request)
+        if shouldHoldObservation {
+            shouldHoldObservation = false
+            await withCheckedContinuation { heldObservation = $0 }
+        }
         return await base.observe(request)
+    }
+    func holdNextObservation() { shouldHoldObservation = true }
+    func releaseObservation() {
+        heldObservation?.resume()
+        heldObservation = nil
     }
     func perform(_ action: HistoryAction) async throws -> HistoryReceipt { try await base.perform(action) }
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage { try await base.browse(request) }
