@@ -427,7 +427,7 @@ extension HistoryAuthority {
             let predicate = HistoryFilterSQL.predicate(filter)
             let cacheBefore = try measurement.map { _ in try database.cacheReadWork }
             let statement = try database.prepare(
-                "SELECT \(ScalarReadRow.columns) FROM history_items WHERE (\(whereSQL)) AND (\(predicate.sql)) ORDER BY \(orderSQL) LIMIT ?",
+                "SELECT \(ScalarReadRow.recentColumns) FROM history_items WHERE (\(whereSQL)) AND (\(predicate.sql)) ORDER BY \(orderSQL) LIMIT ?",
                 bindings: bindings + predicate.bindings + [.integer(Int64(limit))]
             )
             defer { statement.finalize() }
@@ -438,7 +438,11 @@ extension HistoryAuthority {
                 while true {
                     try Task.checkCancellation()
                     guard try statement.step() else { break }
-                    let row = try ScalarReadRow(statement, limits: limits)
+                    let types: Data?
+                    if try statement.isNull(at: 3) {
+                        types = try readRecentFallbackTypes(statement, measurement: measurement)
+                    } else { types = nil }
+                    let row = try ScalarReadRow(statement, limits: limits, effectiveTypesOverride: types)
                     decodedRows += 1
                     try sourceValidation?.validateFilter(row.id, filter: filter)
                     rows.append(row)
@@ -457,5 +461,33 @@ extension HistoryAuthority {
             try Task.checkCancellation()
             throw failure.historyFailure
         }
+    }
+
+    /// The primary SELECT is still inside its read snapshot. Validate the
+    /// canonical business ID before consulting another row; a NULL projected
+    /// value never authorizes accepting NULL/oversize/wrong-type stored bytes.
+    private func readRecentFallbackTypes(
+        _ primary: SQLiteStatement, measurement: RecentReadWorkCounter?
+    ) throws -> Data {
+        guard try primary.textByteCount(at: 0) == 36 else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
+        let name = try primary.text(at: 0)
+        _ = try HistoryItemRowHydration.uuid(name)
+        let statement = try database.prepare("""
+            SELECT effectiveTypeIdentifiersBlob FROM history_items
+            INDEXED BY sqlite_autoindex_history_items_1 WHERE id=?
+            """, bindings: [.text(name)])
+        defer { statement.finalize() }
+        let result = Result {
+            try Task.checkCancellation()
+            guard try statement.step(),
+                  try statement.blobByteCount(at: 0) <= EffectiveTypeIdentifiersBlobCodec.maximumBlobBytes(limits: limits) else {
+                throw HistoryFailure.persistence(.corruptStoredValue)
+            }
+            return try statement.blob(at: 0)
+        }
+        if let measurement { try measurement.recordStatement(rows: 0, statement: statement.readWork) }
+        return try result.get()
     }
 }

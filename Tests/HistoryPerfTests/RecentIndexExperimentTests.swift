@@ -8,6 +8,170 @@ import Testing
 /// an extra SQLite index; product schema and public interfaces stay intact.
 @Suite(.serialized)
 struct RecentIndexExperimentTests {
+    @Test func boundedExpressionPreservesRealCodecMetadataAndBoundaryPages() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(
+            persistence: .temporary, initialMaximumUnpinnedItems: nil
+        ))
+        let inlineTypes = try boundaryTypes(blobBytes: 1_024)
+        let fallbackTypes = try boundaryTypes(blobBytes: 1_025)
+        let largeTypes = largeMetadataTypes()
+        let largeBlobBytes = try EffectiveTypeIdentifiersBlobCodec.encode(largeTypes).count
+        try #require(largeBlobBytes > 1_025)
+        let types = [inlineTypes, fallbackTypes, largeTypes]
+        var references: [HistoryItemReference] = []
+        for (index, identifiers) in types.enumerated() {
+            references.append(try await insertMetadataCapture(history, types: identifiers, index: index))
+        }
+        let request = HistoryBrowseRequest(kind: .recent, limit: 3)
+        let original = try await history.browse(request)
+        for (index, reference) in references.enumerated() {
+            let blob = try await history.authority.recentIndexExperimentTypes(for: reference.id)
+            let expected = types[index].map { Data($0.utf8) }
+            #expect(try EffectiveTypeIdentifiersBlobCodec.decode(blob).map { Data($0.utf8) } == expected)
+            #expect(try await history.representationMetadata(for: reference).map { Data($0.typeIdentifier.utf8) } == expected)
+            let row = try #require(original.rows.first { $0.item == reference })
+            #expect(row.typeIdentifiers.map { Data($0.utf8) } == expected)
+            let projected = try await history.authority.recentIndexExperimentInlineTypes(for: reference.id)
+            if index == 0 {
+                #expect(blob.count == 1_024)
+                #expect(projected == blob)
+            } else {
+                #expect(blob.count == (index == 1 ? 1_025 : largeBlobBytes))
+                #expect(projected == nil)
+            }
+        }
+        let position = original.position
+        _ = try await history.authority.installRecentIndexExperiment()
+        #expect(try await history.browse(request) == original)
+        try await history.authority.verifyRecentIndexExperimentRows(original.rows)
+        let inline = await history.measureRecentPage(metadataRequest(at: 0))
+        let fallback = await history.measureRecentPage(metadataRequest(at: 1))
+        #expect(try inline.result.get().rows.map(\.item) == [references[0]])
+        #expect(try fallback.result.get().rows.map(\.item) == [references[1]])
+        // Both one-row requests use the same page shape. The additional
+        // statement is the required original-BLOB primary-key fallback.
+        #expect(fallback.metrics.statementCount == inline.metrics.statementCount + 1)
+        #expect(fallback.metrics.rowsDecoded == inline.metrics.rowsDecoded)
+        #expect(fallback.metrics.virtualMachineSteps > 0)
+        #expect(try await history.usage().position == position)
+        for sortOrder in HistorySortOrder.allCases {
+            let firstRequest = HistoryBrowseRequest(kind: .recent, limit: 2, sortOrder: sortOrder)
+            let first = try await history.browse(firstRequest)
+            let next = try #require(first.next)
+            let second = try await history.browse(.init(kind: .recent, limit: 2, cursor: next, sortOrder: sortOrder))
+            let previous = try #require(second.previous)
+            #expect(try await history.browse(.init(kind: .recent, limit: 2, cursor: previous, sortOrder: sortOrder)) == first)
+            let around = try await history.browse(.init(kind: .recent, limit: 2, sortOrder: sortOrder, startAround: references[1].id))
+            #expect(around.rows.first?.item == references[1])
+            try await history.authority.verifyRecentIndexExperimentRows(first.rows + second.rows + around.rows)
+        }
+        _ = try await history.perform(.placePinned(references[2].id, at: .last))
+        let pinned = try await history.browse(request)
+        #expect(pinned.rows.first?.item == references[2])
+        try await history.authority.verifyRecentIndexExperimentRows(pinned.rows)
+        let snapshot = try await history.authority.recentIndexExperimentSnapshot()
+        print("recent-bounded-index semantic sqlite=\(snapshot.sqliteVersion) inlineBytes=1024 fallbackBytes=1025 largeBytes=\(largeBlobBytes) queryPlan=\(snapshot.queryPlan)")
+    }
+
+    @Test func fallbackRejectsInvalidOriginalMetadataAndKeepsPartialWork() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(
+            persistence: .temporary, initialMaximumUnpinnedItems: nil
+        ))
+        let reference = try await insertMetadataCapture(history, types: boundaryTypes(blobBytes: 1_025), index: 0)
+        _ = try await history.authority.installRecentIndexExperiment()
+        let request = metadataRequest(at: 0)
+        let successful = await history.measureRecentPage(request)
+        let page = try successful.result.get()
+        let original = try await history.authority.recentIndexExperimentTypes(for: reference.id)
+        // The existing NOT NULL schema rejects a stored NULL, even though a
+        // NULL projected expression is a legitimate fallback sentinel.
+        await #expect(throws: SQLiteFailure.self) {
+            try await history.authority.replaceRecentIndexExperimentTypes(for: reference.id, value: .null)
+        }
+        #expect(try await history.browse(request) == page)
+        let invalidValues: [SQLiteValue] = [
+            .blob(Data([0])), .blob(Data(repeating: 0, count: 1_025)),
+            .text(String(repeating: "x", count: 1_025)),
+            .blob(Data(repeating: 0, count: EffectiveTypeIdentifiersBlobCodec.maximumBlobBytes() + 1)),
+        ]
+        for value in invalidValues {
+            try await history.authority.replaceRecentIndexExperimentTypes(for: reference.id, value: value)
+            let failed = await history.measureRecentPage(request)
+            #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) { try failed.result.get() }
+            await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) { try await history.browse(request) }
+            #expect(failed.metrics.virtualMachineSteps > 0)
+            let requiresFallback: Bool
+            if case .blob(let bytes) = value, bytes.count == 1 { requiresFallback = false }
+            else { requiresFallback = true }
+            #expect(failed.metrics.statementCount == successful.metrics.statementCount - (requiresFallback ? 0 : 1))
+            try await history.authority.replaceRecentIndexExperimentTypes(for: reference.id, value: .blob(original))
+            let restored = await history.measureRecentPage(request)
+            #expect(try restored.result.get() == page)
+            #expect(restored.metrics.statementCount == successful.metrics.statementCount)
+        }
+    }
+
+    @Test func fallbackRejectsNoncanonicalIDBeforePrimaryKeyRead() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(
+            persistence: .temporary, initialMaximumUnpinnedItems: nil
+        ))
+        let reference = try await insertMetadataCapture(history, types: boundaryTypes(blobBytes: 1_025), index: 0)
+        _ = try await history.authority.installRecentIndexExperiment()
+        let request = metadataRequest(at: 0)
+        let successful = await history.measureRecentPage(request)
+        _ = try successful.result.get()
+        // This is a valid UUID spelling with the wrong canonical case. It
+        // cannot be normalized and used to retrieve some other item's types.
+        try await history.authority.replaceRecentIndexExperimentID(reference.id, with: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        let failed = await history.measureRecentPage(request)
+        #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) { try failed.result.get() }
+        #expect(failed.metrics.virtualMachineSteps > 0)
+        #expect(failed.metrics.rowsDecoded == 0)
+        #expect(failed.metrics.statementCount == successful.metrics.statementCount - 1)
+    }
+
+    private func boundaryTypes(blobBytes: Int) throws -> [String] {
+        let first = "com.clipy.boundary.a." + String(repeating: "x", count: 512 - "com.clipy.boundary.a.".utf8.count)
+        let secondPrefix = "com.clipy.boundary.b."
+        let overhead = try EffectiveTypeIdentifiersBlobCodec.encode([first, secondPrefix]).count
+        let padding = blobBytes - overhead
+        try #require(padding >= 0 && secondPrefix.utf8.count + padding <= 512)
+        let identifiers = [first, secondPrefix + String(repeating: "x", count: padding)]
+        let blob = try EffectiveTypeIdentifiersBlobCodec.encode(identifiers)
+        try #require(blob.count == blobBytes)
+        try #require(try EffectiveTypeIdentifiersBlobCodec.decode(blob) == identifiers)
+        return identifiers
+    }
+
+    private func largeMetadataTypes() -> [String] {
+        (0..<HistoryLimits.standard.maximumRepresentationsPerCaptureOrRevision).map { index in
+            let prefix = "com.clipy.large.\(index).e\u{301}."
+            return prefix + String(repeating: "x", count: 512 - prefix.utf8.count)
+        }.sorted { $0.unicodeScalars.lexicographicallyPrecedes($1.unicodeScalars) }
+    }
+
+    private func insertMetadataCapture(_ history: SQLiteHistory, types: [String], index: Int) async throws -> HistoryItemReference {
+        let capture = ClipboardCapture(
+            representations: types.enumerated().map {
+                CapturedRepresentation(typeIdentifier: $0.element, bytes: Data("metadata-\(index)-\($0.offset)".utf8))
+            },
+            origin: .init(sourceApplication: nil, lineageHint: nil),
+            observedAt: Date(timeIntervalSinceReferenceDate: 600_000_000 + Double(index))
+        )
+        guard case .committed(let commit) = try await history.perform(.capture(capture)),
+              case .inserted(let reference) = commit.outcome else {
+            throw RecentIndexExperimentFailure.unexpectedMutation
+        }
+        return reference
+    }
+
+    private func metadataRequest(at index: Int) -> HistoryBrowseRequest {
+        HistoryBrowseRequest(kind: .recent, limit: 3, filter: .init(
+            copiedAfter: Date(timeIntervalSinceReferenceDate: 600_000_000 + Double(index)),
+            copiedBefore: Date(timeIntervalSinceReferenceDate: 600_000_001 + Double(index))
+        ))
+    }
+
     @Test(arguments: [10_000, 100_000])
     func measuresOnePrivateStoreBeforeAndAfterCoveringIndex(rows: Int) async throws {
         let history = try await SQLiteHistory.open(configuration: .init(
@@ -52,7 +216,8 @@ struct RecentIndexExperimentTests {
                 "One private temporary SQLiteHistory per case. N-1 rows use the mixed profile; the last row is a fixed 128-byte public capture followed by one coalescing update. This controlled exception is recorded, not counted as an unchanged mixed corpus.",
                 "Each selected page and whole traversal has one saved warmup (0), then five raw timed observations (1...5), in this same process, store and History position. Filesystem caches are uncontrolled; these are not cold-disk comparisons.",
                 "Read timing includes measurement calls and traversal bookkeeping. Per-page elapsedMilliseconds excludes subsequent fixture validation. All selected page results equal their saved public browse pages, including IDs, metadata and cursors. Full traversal checks exact fixture order/count; a separate streaming verification checks every returned scalar against a primary-key original-table point read.",
-                "Native VM/fullscan/sort counts describe the actual primary scalar SELECTs. Pager hit/miss differences include synchronous source validation, but are not physical I/O bytes. Position/transaction SQL and Swift cursor construction are excluded from native counters.",
+                "Native VM/fullscan/sort counts describe actual scalar SELECTs and required metadata fallback SELECTs, including partial failures. Pager hit/miss differences cover each primary SELECT interval once, including fallback and synchronous source validation, but are not physical I/O bytes. Position/transaction SQL and Swift cursor construction are excluded from native counters.",
+                "The type projection uses one shared CASE expression: original BLOBs of at most 1024 bytes are indexed verbatim; larger BLOBs project NULL and are fetched by canonical UUID primary key inside the same read transaction, with the original codec envelope checked before copying. This bounds index duplication without changing admitted metadata or type spelling. Invalid originals still fail. Other indexed title/source fields retain their existing 1024-byte bounds.",
                 "Index creation runs in the sole Authority transaction after all before reads and before all after reads. No History rows, position or codecs change there. Metadata-length and file/page measurements occur outside read timers.",
                 "Used-database growth includes any schema-page allocation and accounts for freelist reuse. dbstat index bytes are optional and include overflow pages when supported; an unavailable measurement is reported explicitly. Apparent/allocated whole-store file bytes include SQLite/WAL/SHM and blobs, not exclusive APFS ownership.",
                 "Mutation samples are single public capture/coalesce commits, not repetitions or percentile estimates. Both inserts use a fixed 128-byte value; their sequential fixture markers differ. The before pair completes the N-row fixture; the after pair adds row N+1 after all read comparisons. Changing store counts, warm state and timing noise limit causal write-cost conclusions.",
@@ -213,6 +378,7 @@ private struct RecentIndexMetadata: Codable, Sendable, Equatable {
     let rows: Int64
     let title: RecentIndexLengthStats
     let effectiveTypes: RecentIndexLengthStats
+    let indexedInlineTypes: RecentIndexLengthStats
     let lastSource: RecentIndexLengthStats
     let searchBody: RecentIndexLengthStats
 }
@@ -225,6 +391,7 @@ private struct RecentIndexStoreSnapshot: Codable, Sendable {
     let metadata: RecentIndexMetadata
     let disk: SQLiteScaleDisk
     let queryPlan: [String]
+    let inlineTypeByteLimit: Int
     let indexBytes: Int64?
     let indexSizeUnavailable: String?
 }
@@ -253,6 +420,40 @@ private func recentIndexMilliseconds(_ duration: Duration) -> Double {
 }
 
 private extension HistoryAuthority {
+    func recentIndexExperimentTypes(for id: HistoryItemID) throws -> Data {
+        let row = try database.prepare("SELECT effectiveTypeIdentifiersBlob FROM history_items WHERE id=?",
+                                       bindings: [.text(id.rawValue.uuidString)])
+        defer { row.finalize() }
+        guard try row.step() else { throw RecentIndexExperimentFailure.unexpectedPage }
+        return try row.blob(at: 0)
+    }
+
+    func recentIndexExperimentInlineTypes(for id: HistoryItemID) throws -> Data? {
+        let row = try database.prepare("SELECT \(ScalarReadRow.recentInlineTypesExpression) FROM history_items WHERE id=?",
+                                       bindings: [.text(id.rawValue.uuidString)])
+        defer { row.finalize() }
+        guard try row.step() else { throw RecentIndexExperimentFailure.unexpectedPage }
+        return try row.optionalBlob(at: 0)
+    }
+
+    func replaceRecentIndexExperimentTypes(for id: HistoryItemID, value: SQLiteValue) throws {
+        guard storeLocation.ownedDirectoryURL != storeLocation.rootURL else {
+            throw RecentIndexExperimentFailure.notDisposable
+        }
+        try database.execute("UPDATE history_items SET effectiveTypeIdentifiersBlob=? WHERE id=?",
+                             bindings: [value, .text(id.rawValue.uuidString)])
+    }
+
+    func replaceRecentIndexExperimentID(_ id: HistoryItemID, with name: String) throws {
+        guard storeLocation.ownedDirectoryURL != storeLocation.rootURL else {
+            throw RecentIndexExperimentFailure.notDisposable
+        }
+        try database.execute("PRAGMA foreign_keys=OFF")
+        defer { try? database.execute("PRAGMA foreign_keys=ON") }
+        try database.execute("UPDATE history_items SET id=? WHERE id=?",
+                             bindings: [.text(name), .text(id.rawValue.uuidString)])
+    }
+
     func installRecentIndexExperiment() throws -> Double {
         guard storeLocation.ownedDirectoryURL != storeLocation.rootURL else {
             throw RecentIndexExperimentFailure.notDisposable
@@ -262,7 +463,7 @@ private extension HistoryAuthority {
             try database.execute("""
                 CREATE INDEX clipy_recent_projection_experiment ON history_items(
                     lastCopiedAt DESC, id ASC,
-                    contentVersion, titleUTF8, effectiveTypeIdentifiersBlob,
+                    contentVersion, titleUTF8, \(ScalarReadRow.recentInlineTypesExpression),
                     copyCount, lastSource, pinOrdinal, sourceCount
                 ) WHERE pinOrdinal IS NULL
                 """)
@@ -325,9 +526,10 @@ private extension HistoryAuthority {
         versionRow.finalize()
         let metadata = try RecentIndexMetadata(rows: integer("SELECT count(*) FROM history_items"),
             title: lengths("titleUTF8"), effectiveTypes: lengths("effectiveTypeIdentifiersBlob"),
+            indexedInlineTypes: lengths(ScalarReadRow.recentInlineTypesExpression),
             lastSource: lengths("lastSource"), searchBody: lengths("searchBodyUTF8"))
         let plan = try database.prepare("""
-            EXPLAIN QUERY PLAN SELECT \(ScalarReadRow.columns) FROM history_items
+            EXPLAIN QUERY PLAN SELECT \(ScalarReadRow.recentColumns) FROM history_items
             WHERE (pinOrdinal IS NULL) AND (1) ORDER BY lastCopiedAt DESC,id ASC LIMIT 50
             """)
         var queryPlan: [String] = []
@@ -343,6 +545,7 @@ private extension HistoryAuthority {
         return try RecentIndexStoreSnapshot(sqliteVersion: version, pageSize: integer("PRAGMA page_size"),
             pageCount: integer("PRAGMA page_count"), freePageCount: integer("PRAGMA freelist_count"),
             metadata: metadata, disk: SQLiteScaleDisk.read(root: storeLocation.ownedDirectoryURL),
-            queryPlan: queryPlan, indexBytes: indexBytes, indexSizeUnavailable: unavailable)
+            queryPlan: queryPlan, inlineTypeByteLimit: ScalarReadRow.recentInlineTypesMaximumBytes,
+            indexBytes: indexBytes, indexSizeUnavailable: unavailable)
     }
 }
