@@ -215,9 +215,13 @@ enum HistorySearchCompletionEngine {
             if start > selection.location { break }
         }
 
-        guard explicit else { return nil }
+        // Typing the opening delimiter is itself a request for condition
+        // fields. Re-evaluating the same draft after search publication must
+        // not discard that request just because its field name is still empty.
+        let isOpeningDelimiter = selection.location == blockStart && selection.length == 0
+        guard explicit || isOpeningDelimiter else { return nil }
         return .init(kind: .term, prefix: "", replacementRange: selection,
-                     field: nil, explicit: true, openingText: "", closingText: closing == nil && NSMaxRange(selection) == blockEnd ? "$" : "")
+                     field: nil, explicit: explicit, openingText: "", closingText: closing == nil && NSMaxRange(selection) == blockEnd ? "$" : "")
     }
 
     static func candidates(

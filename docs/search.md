@@ -56,7 +56,7 @@ source-id:com.apple.TextEdit NOT draft
 
 [`HistorySearchCompletionEngine.swift`](../ClipyApp/Sources/UI/HistorySearchCompletionEngine.swift) 按搜索框实际 UTF-16 selection / caret 识别当前条件字段和值；普通外部文本不自动出现字段候选。候选包括字段、AND / OR / NOT、类型值、置顶值、日期和真实来源应用。匹配考虑忽略大小写前缀、有序子序列及短词的一次编辑 / 相邻交换；这是输入辅助，不调用正文搜索，也不是另一个完整表达式 parser。
 
-空查询、刚获得焦点或空条件词不自动抢列表方向键。显式入口为搜索框的 AppKit 标准完成命令 `complete:`（通常是 ⌥Esc），或搜索模式菜单的“插入条件 / 显示候选”；在块外插入成对 `$`，在块内列出当前可用字段。regexp 模式末尾的显式插入会按需增加分隔空格，补全与查询编译使用同一模式边界。Ctrl+Space 仅在应用实际收到该组合时兼容，系统可能先将它用于切换输入法。type 候选为 text / images / links / all，is 候选为 pinned，日期提供当日 UTC 模板。纯 quoted phrase 不自动给字段建议。接受候选替换 caret 所在整个 term；只有未闭合块的最后一个 term 补 `$`，在中间补全时保留后续条件，已有闭合符不重复。选区按完整字簇扩展，跨 term 的选区或落在半个字簇的 caret 拒绝补全，不切碎 Unicode 内容。
+空查询、刚获得焦点或条件之间的空白不自动抢列表方向键。输入开启条件块的 `$` 后立即显示字段候选；搜索结果发布和重复的原生输入通知保留候选及当前选择。显式入口为搜索框的 AppKit 标准完成命令 `complete:`（通常是 ⌥Esc），或搜索模式菜单的“插入条件 / 显示候选”；在块外插入成对 `$`，在块内列出当前可用字段。regexp 模式末尾的显式插入会按需增加分隔空格，补全与查询编译使用同一模式边界。Ctrl+Space 仅在应用实际收到该组合时兼容，系统可能先将它用于切换输入法。type 候选为 text / images / links / all，is 候选为 pinned，日期提供当日 UTC 模板。纯 quoted phrase 不自动给字段建议。接受候选替换 caret 所在整个 term；只有未闭合块的最后一个 term 补 `$`，在中间补全时保留后续条件，已有闭合符不重复。选区按完整字簇扩展，跨 term 的选区或落在半个字簇的 caret 拒绝补全，不切碎 Unicode 内容。
 
 [`HistorySearchCompletionState.swift`](../ClipyApp/Sources/UI/HistorySearchCompletionState.swift) 每个输入框最多显示八条候选，控制候选选择和 replacement range。输入法正在组合时不生成候选、不替换 marked text；输入法命令优先，补全候选其次，列表导航与复制最后。插入经实际 field editor 应用并由正常文字变化回调更新查询，不由候选 owner 越过输入框直接改 History 选择。关闭候选、焦点离开、输入或查询代次变化都会取消旧请求，旧来源结果不得重新打开已关闭候选。
 

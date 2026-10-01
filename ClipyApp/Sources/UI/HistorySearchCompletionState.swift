@@ -71,6 +71,12 @@ final class HistorySearchCompletionState {
     }
 
     func update(_ input: HistorySearchCompletionInput) {
+        // Native selection/text notifications can repeat the same input.
+        // Keep the current request (including explicit completion) and its
+        // keyboard selection until the editor actually changes. Focus regain,
+        // mode changes and newer History positions have their own refreshes.
+        if self.input == input, context != nil, isInputFocused,
+           !input.isComposing, !requestsOnFocus { return }
         self.input = input
         isComposing = input.isComposing
         guard isInputFocused, !input.isComposing else { dismiss(); return }

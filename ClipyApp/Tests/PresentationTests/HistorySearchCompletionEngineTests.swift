@@ -22,7 +22,7 @@ struct HistorySearchCompletionEngineTests {
         #expect(HistorySearchCompletionEngine.context(for: pattern, mode: .exact) != nil)
     }
     @Test func ordinaryTextAndEmptyFocusLeaveHistoryArrowNavigationAvailable() throws {
-        for draft in ["|", "source:Saf|", "普通🧪文字|", "$|", #"\$ty|"#, #"\\$ty|"#] {
+        for draft in ["|", "source:Saf|", "普通🧪文字|", "$ |", #"\$ty|"#, #"\\$ty|"#] {
             #expect(HistorySearchCompletionEngine.context(for: input(draft)) == nil)
         }
         let ordinary = input("普通| 🧪文字")
@@ -30,6 +30,18 @@ struct HistorySearchCompletionEngineTests {
         let choice = try #require(HistorySearchCompletionEngine.candidates(for: context).first { $0.id == "app:" })
         #expect(replacing(ordinary.text, with: choice) == "普通$app:$ 🧪文字")
         #expect(choice.selectionOffset == 5)
+    }
+
+    @Test func openingDollarOffersFieldsBeforeTheUserTypesAFieldName() throws {
+        for draft in ["$|", "$|$", "notes $|"] {
+            let current = input(draft)
+            let context = try #require(HistorySearchCompletionEngine.context(for: current))
+            let choice = try #require(HistorySearchCompletionEngine.candidates(for: context).first { $0.id == "type:" })
+            let completed = replacing(current.text, with: choice)
+            #expect(completed == (draft.hasPrefix("notes") ? "notes $type:$" : "$type:$"))
+        }
+        #expect(HistorySearchCompletionEngine.context(for: input("^report$|"), mode: .regexp) == nil)
+        #expect(HistorySearchCompletionEngine.context(for: input("^report$ $|"), mode: .regexp) != nil)
     }
 
     @Test func aMiddleCaretReplacesTheWholeTermAndPreservesBothSurroundingTexts() throws {

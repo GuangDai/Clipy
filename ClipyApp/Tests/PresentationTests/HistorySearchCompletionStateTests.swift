@@ -10,6 +10,30 @@ import Testing
 struct HistorySearchCompletionStateTests {
     enum Departure: CaseIterable, Equatable, Sendable { case focus, edit, close, composition }
 
+    @Test func repeatedEditorInputPreservesExplicitCandidatesAndKeyboardSelection() throws {
+        let state = HistorySearchCompletionState()
+        defer { state.close() }
+        state.setFocused(true)
+        let current = input("notes")
+        state.update(current)
+        _ = state.command(.request)
+        try #require(state.candidates.count > 1)
+        _ = state.command(.next)
+        let selected = state.candidates[state.selectedIndex]
+
+        // Selection and text notifications can report the same editor input.
+        // An unchanged report must not turn an explicit request into an
+        // automatic one, close its popup, or move selection back to the top.
+        state.update(current)
+        try #require(state.isPresented && state.candidates.indices.contains(state.selectedIndex))
+        #expect(state.candidates[state.selectedIndex] == selected)
+        guard case .insert(let insertion) = state.command(.accept) else {
+            Issue.record("The selected completion must remain insertable")
+            return
+        }
+        #expect(insertion.text == selected.insertion)
+    }
+
     @Test func sourcesBeyondTheFirstTwoPagesAndEarlierCopiesShareOneBoundedVocabularyRead() async throws {
         let base = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         var position: ChangePosition?
