@@ -34,6 +34,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
     private var resizedAnchor: (innerEdge: CGFloat, width: CGFloat, gap: CGFloat, placement: PreviewPlacement)?
     private var mouseDownScreenX: CGFloat?
     private var widthResize: (pointerX: CGFloat, frame: NSRect, placement: PreviewPlacement)?
+    private var nativeSheetCount = 0
 
     init(
         rootView: FloatingPreviewRootView,
@@ -93,7 +94,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
             // The SwiftUI alert binding can become false before AppKit has
             // detached its closing sheet. That native modal family still
             // owns this preview, even when its buttons lie outside our frame.
-            if self.attachedSheet != nil || self.frame.contains(pointer) {
+            if self.nativeSheetCount > 0 || self.attachedSheet != nil || self.frame.contains(pointer) {
                 surfaces.insert(.preview)
             }
             if let parent = self.parent {
@@ -216,9 +217,15 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
         // The native completion owns the actual end of the modal session.
         // A notification plus Task.yield cannot establish that attachment and
         // ordering have finished. Let the caller's close/purge intent run first.
+        nativeSheetCount += 1
         super.beginSheet(sheetWindow) { [weak self] response in
+            guard let self else { handler?(response); return }
+            defer {
+                self.nativeSheetCount -= 1
+                if self.isPresented { self.previewState.pointerExited(.preview) }
+            }
             handler?(response)
-            guard let self, self.isPresented, self.previewState.isOpen,
+            guard self.isPresented, self.previewState.isOpen,
                   let parent = self.parent, parent.isVisible else { return }
             self.present(beside: parent)
         }
