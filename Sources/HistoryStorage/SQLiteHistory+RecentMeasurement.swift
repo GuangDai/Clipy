@@ -3,8 +3,9 @@ import HistoryCore
 
 /// Native work from the same recent-page scalar SELECTs that produced the
 /// result. Counters include anchors, ties, lookahead and partially failed
-/// reads; no database-wide last-query state is retained by the facade. VM,
-/// full-scan and sort counts omit position reads, transaction statements,
+/// reads and required metadata fallback SELECTs; no database-wide last-query
+/// state is retained by the facade. VM, full-scan and sort counts omit
+/// position reads, transaction statements,
 /// separate source-validation queries and Swift page/cursor construction.
 package struct RecentReadWorkMetrics: Sendable {
     package let statementCount: Int
@@ -15,8 +16,9 @@ package struct RecentReadWorkMetrics: Sendable {
     package let fullScanSteps: Int
     package let sortOperations: Int
     /// Pager hit/miss differences cover each synchronous scalar SELECT's
-    /// prepare, stepping, decoding and source validation. Other requests
-    /// cannot interleave there. These are cache events, not physical bytes.
+    /// prepare, stepping, decoding, metadata fallback and source validation.
+    /// Other requests cannot interleave there. These are cache events, not
+    /// physical bytes.
     package let cacheHits: Int
     package let cacheMisses: Int
 }
@@ -70,15 +72,20 @@ internal final class RecentReadWorkCounter {
         rows: Int, statement: SQLiteStatementReadWork,
         cacheBefore: SQLiteCacheReadWork, cacheAfter: SQLiteCacheReadWork
     ) {
+        recordStatement(rows: rows, statement: statement)
+        // The outer primary SELECT interval includes metadata fallback and
+        // source validation. Fallback statements add VM work only below.
+        // Unsigned-width subtraction preserves cumulative-counter wrapping.
+        cacheHits += Int(cacheAfter.hits &- cacheBefore.hits)
+        cacheMisses += Int(cacheAfter.misses &- cacheBefore.misses)
+    }
+
+    internal func recordStatement(rows: Int, statement: SQLiteStatementReadWork) {
         statementCount += 1
         rowsDecoded += rows
         virtualMachineSteps += statement.virtualMachineSteps
         fullScanSteps += statement.fullScanSteps
         sortOperations += statement.sortOperations
-        // SQLite's cumulative cache counters are unsigned-width snapshots;
-        // modular subtraction also handles a wrap during this one statement.
-        cacheHits += Int(cacheAfter.hits &- cacheBefore.hits)
-        cacheMisses += Int(cacheAfter.misses &- cacheBefore.misses)
     }
 
     internal func snapshot() -> RecentReadWorkMetrics {

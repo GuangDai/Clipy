@@ -2,8 +2,9 @@ import Foundation
 import HistoryCore
 
 /// Current SQLite layout (V2-09 §§3–6). The Authority creates an empty store
-/// inside its startup transaction. Reopen recognizes these tables without
-/// rebuilding data or indexes; a different/partial schema is not repaired.
+/// inside its startup transaction. Reopen recognizes these tables and ensures
+/// rebuildable optimizer indexes without rewriting stored values. A different
+/// or partial schema is not repaired.
 internal enum SQLiteHistorySchema {
     internal static func create(in database: SQLiteDatabase) throws {
         let existing = try database.prepare("""
@@ -53,6 +54,7 @@ internal enum SQLiteHistorySchema {
             defer { detachedOwnership.finalize() }
             guard try detachedOwnership.step() else { throw HistoryFailure.persistence(.openStore) }
             try createSourceApplicationIndex(in: database)
+            try createRecentProjectionIndex(in: database)
             return
         }
 
@@ -67,6 +69,7 @@ internal enum SQLiteHistorySchema {
         // DDL and the business singleton/bootstrap rows supplied by its owners.
         for sql in statements { try database.execute(sql) }
         try createSourceApplicationIndex(in: database)
+        try createRecentProjectionIndex(in: database)
     }
 
     /// Rebuildable optimizer index for the global source vocabulary and exact
@@ -76,6 +79,20 @@ internal enum SQLiteHistorySchema {
         try database.execute("""
             CREATE INDEX IF NOT EXISTS copy_sources_application
             ON copy_sources(application, itemID) WHERE application IS NOT NULL
+            """)
+    }
+
+    /// Keep ordinary unpinned pages off table records containing large search
+    /// bodies. Title/source keep their existing bounds and the type expression
+    /// caps duplicated bytes. Larger valid type metadata uses a bounded
+    /// primary-key read in the page snapshot.
+    private static func createRecentProjectionIndex(in database: SQLiteDatabase) throws {
+        try database.execute("""
+            CREATE INDEX IF NOT EXISTS history_items_recent_projection ON history_items(
+                lastCopiedAt DESC, id ASC,
+                contentVersion, titleUTF8, \(ScalarReadRow.recentInlineTypesExpression),
+                copyCount, lastSource, pinOrdinal, sourceCount
+            ) WHERE pinOrdinal IS NULL
             """)
     }
 

@@ -18,7 +18,7 @@ internal struct ScalarReadRow {
     internal let sourceCount: Int
     internal let pinOrdinal: PinOrdinal?
 
-    /// Both lanes select precisely this layout. Keeping payload columns out
+    /// Raw scalar readers select this layout. Keeping payload columns out
     /// of the SELECT prevents their materialization, including lookahead rows.
     internal static let columns = """
         id, contentVersion, titleUTF8, effectiveTypeIdentifiersBlob,
@@ -26,7 +26,21 @@ internal struct ScalarReadRow {
         sourceCount
         """
 
-    internal init(_ statement: SQLiteStatement, limits: HistoryLimits) throws {
+    /// The optimizer index and recent SELECT share this exact expression.
+    /// This bounds duplicated bytes; larger valid type metadata still uses
+    /// the original codec envelope through the same-snapshot fallback.
+    internal static let recentInlineTypesMaximumBytes = HistoryLimits.standard.maximumStoredTitleUTF8Bytes
+    internal static let recentInlineTypesExpression = """
+        CASE WHEN length(effectiveTypeIdentifiersBlob) <= \(recentInlineTypesMaximumBytes)
+             THEN effectiveTypeIdentifiersBlob ELSE NULL END
+        """
+    internal static let recentColumns = """
+        id, contentVersion, titleUTF8, \(recentInlineTypesExpression),
+        lastCopiedAt, copyCount, lastSource, pinOrdinal, sourceCount
+        """
+
+    internal init(_ statement: SQLiteStatement, limits: HistoryLimits,
+                  effectiveTypesOverride: Data? = nil) throws {
         // V2-09 §4: bound every variable-size scalar before copying it out
         // of SQLite, just as the search batch reader does.
         guard try statement.textByteCount(at: 0) == 36,
@@ -37,9 +51,10 @@ internal struct ScalarReadRow {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
         let rawID = try statement.text(at: 0)
+        let typesByteCount = try effectiveTypesOverride?.count ?? statement.blobByteCount(at: 3)
         guard let uuid = UUID(uuidString: rawID), uuid.uuidString == rawID,
               try statement.blobByteCount(at: 2) <= limits.maximumStoredTitleUTF8Bytes,
-              try statement.blobByteCount(at: 3) <= EffectiveTypeIdentifiersBlobCodec.maximumBlobBytes(limits: limits) else {
+              typesByteCount <= EffectiveTypeIdentifiersBlobCodec.maximumBlobBytes(limits: limits) else {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
         id = HistoryItemID(rawValue: uuid)
@@ -64,7 +79,7 @@ internal struct ScalarReadRow {
             try RevisionStateBlobCodec.validateSourceObservation(source, limits: limits)
             return try statement.utf8Blob(at: 2, maximumByteCount: limits.maximumStoredTitleUTF8Bytes)
         }
-        effectiveTypeIdentifiersBlob = try statement.blob(at: 3)
+        effectiveTypeIdentifiersBlob = try effectiveTypesOverride ?? statement.blob(at: 3)
         lastCopiedAt = date
         copyCount = count
         lastSource = source
