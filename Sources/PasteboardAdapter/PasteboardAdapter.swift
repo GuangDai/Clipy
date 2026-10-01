@@ -160,8 +160,13 @@ public struct PasteboardAdapter {
     /// The observer may be stopped/restarted while a promised-data provider
     /// spins the main run loop. Its existing session identity decides whether
     /// another accessor is still wanted; abandoning a read publishes no bytes.
+    /// A stable empty item list reports its generation separately. Ownership
+    /// can be declared by clearContents before writeObjects adds its items,
+    /// without advancing that generation again.
     internal func captureOutcome(
-        observedAt: Date = Date(), shouldContinue: @MainActor () -> Bool
+        observedAt: Date = Date(),
+        shouldContinue: @MainActor () -> Bool,
+        didObserveEmptyPasteboard: @MainActor (Int) -> Void = { _ in }
     ) -> CaptureOutcome? {
         guard shouldContinue() else { return nil }
         let startChangeCount = pasteboard.changeCount
@@ -174,6 +179,8 @@ public struct PasteboardAdapter {
                     endChangeCount: endChangeCount
                 )
             }
+            guard shouldContinue() else { return nil }
+            didObserveEmptyPasteboard(startChangeCount)
             return nil
         }
         let limits = HistoryLimits.standard

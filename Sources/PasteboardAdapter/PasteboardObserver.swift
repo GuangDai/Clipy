@@ -17,7 +17,8 @@ import HistoryCore
 
 /// changeCount-polled observation (01 §5.1; roadmap 04). Main-actor
 /// confined; polls the pasteboard's `changeCount` on a main-`RunLoop`
-/// `Timer` and delivers one capture outcome per distinct change count. A
+/// `Timer` and freezes each nonempty ownership generation once. An empty
+/// generation remains eligible until its owner publishes declarations. A
 /// freeze whose start/end generations differ receives exactly one immediate
 /// retry before delivery (REVIEW Card 5B).
 @MainActor
@@ -26,6 +27,7 @@ public final class PasteboardObserver {
     private let pollInterval: TimeInterval
     private var timer: Timer?
     private var lastChangeCount: Int
+    private var awaitingDeclarationsChangeCount: Int?
     private var handler: (@MainActor (CaptureOutcome) -> Void)?
     private var accessBehaviorHandler:
         (@MainActor (PasteboardAccessBehavior) -> Void)?
@@ -40,6 +42,7 @@ public final class PasteboardObserver {
         self.adapter = adapter
         self.pollInterval = pollInterval
         self.lastChangeCount = adapter.pasteboard.changeCount
+        self.awaitingDeclarationsChangeCount = nil
         self.timer = nil
         self.handler = nil
         self.accessBehaviorHandler = nil
@@ -68,10 +71,10 @@ public final class PasteboardObserver {
     /// `captureCurrent == false` baselines the current generation without
     /// delivery; the app uses that privacy-preserving form when the user
     /// explicitly resumes after a pause, so values copied while paused stay
-    /// excluded. The handler runs on the main actor once per later distinct
-    /// `changeCount` whose outcome
-    /// is non-nil (a change that clears the pasteboard or yields nothing
-    /// retainable is recorded but not delivered; a PARTIAL freeze — a
+    /// excluded. The handler runs on the main actor for each non-nil freeze
+    /// outcome. An empty ownership generation is checked for later declarations
+    /// without accessing payloads; values with nothing retainable are not
+    /// delivered. A PARTIAL freeze — a
     /// declared representation's bytes unavailable — IS delivered, marked
     /// by `CaptureOutcome.declaredUnavailable`, for the handler owner to
     /// judge). Calling `start` again while running replaces the handler
@@ -95,6 +98,7 @@ public final class PasteboardObserver {
 
         let initialChangeCount = adapter.pasteboard.changeCount
         lastChangeCount = initialChangeCount
+        awaitingDeclarationsChangeCount = nil
 
         // The timer is added to the main run loop's common modes explicitly
         // rather than via `Timer.scheduledTimer` (which would silently bind
@@ -132,11 +136,14 @@ public final class PasteboardObserver {
     public func stop() {
         timer?.invalidate()
         timer = nil
+        awaitingDeclarationsChangeCount = nil
         handler = nil
         accessBehaviorHandler = nil
     }
 
-    /// One poll tick: delivers an outcome only when `changeCount` moved.
+    /// One poll tick: a changed ownership generation is frozen once. If that
+    /// generation was empty, inspect declarations until its owner publishes
+    /// items; writeObjects can add them without changing ownership again.
     private func poll() {
         guard let activeTimer = timer else { return }
         let accessBehavior = accessBehaviorProvider()
@@ -147,8 +154,18 @@ public final class PasteboardObserver {
         guard self.timer === activeTimer, accessBehavior == .allowed else { return }
 
         let changeCount = adapter.pasteboard.changeCount
-        guard changeCount != lastChangeCount else { return }
+        if changeCount == lastChangeCount {
+            guard awaitingDeclarationsChangeCount == changeCount else { return }
+            // An intentional permanent clear only incurs this metadata read.
+            // No payload accessor, extra timer, task, or queued capture exists.
+            let types = adapter.pasteboard.types
+            guard self.timer === activeTimer,
+                  lastChangeCount == changeCount,
+                  awaitingDeclarationsChangeCount == changeCount,
+                  types?.isEmpty == false else { return }
+        }
         lastChangeCount = changeCount
+        awaitingDeclarationsChangeCount = nil
         deliverCurrentOutcome()
     }
 
@@ -225,13 +242,24 @@ public final class PasteboardObserver {
                 && self.lastChangeCount == observedChangeCount
                 && accessBehavior == .allowed
         }
-        guard let firstOutcome = adapter.captureOutcome(shouldContinue: shouldContinue) else { return nil }
+        let didObserveEmptyPasteboard: @MainActor (Int) -> Void = { generation in
+            guard self.timer === activeTimer,
+                  self.lastChangeCount == observedChangeCount else { return }
+            self.awaitingDeclarationsChangeCount = generation
+        }
+        guard let firstOutcome = adapter.captureOutcome(
+            shouldContinue: shouldContinue,
+            didObserveEmptyPasteboard: didObserveEmptyPasteboard
+        ) else { return nil }
         guard shouldContinue() else { return nil }
         guard case .changedDuringRead = firstOutcome else {
             return firstOutcome
         }
 
-        guard let retryOutcome = adapter.captureOutcome(shouldContinue: shouldContinue) else {
+        guard let retryOutcome = adapter.captureOutcome(
+            shouldContinue: shouldContinue,
+            didObserveEmptyPasteboard: didObserveEmptyPasteboard
+        ) else {
             guard shouldContinue() else { return nil }
             return firstOutcome
         }

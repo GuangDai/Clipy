@@ -288,7 +288,7 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         for index in 0..<count {
             let png = try encodedPNG(index: index, totalCount: count)
             let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
+            let clearedChangeCount = pasteboard.clearContents()
             let item = NSPasteboardItem()
             XCTAssertTrue(
                 item.setData(png, forType: .png),
@@ -298,6 +298,8 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
                 pasteboard.writeObjects([item]),
                 diagnostic(app, context: "write pasteboard item \(index)")
             )
+            let writtenChangeCount = pasteboard.changeCount
+            print("CLIPY_THUMB_SEED index=\(index + 1) clearedChangeCount=\(clearedChangeCount) writtenChangeCount=\(writtenChangeCount)")
             var capturedIdentifier: String?
             XCTAssertTrue(
                 waitUntil(timeout: 20) {
@@ -319,7 +321,7 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
                 },
                 diagnostic(
                     app,
-                    context: "capture \(index + 1)/\(count) surfaced a new row"
+                    context: "capture \(index + 1)/\(count) surfaced a new row; clear=\(clearedChangeCount), written=\(writtenChangeCount), current=\(pasteboard.changeCount)"
                 )
             )
             // Reuse the exact row that acknowledged this capture. A second
