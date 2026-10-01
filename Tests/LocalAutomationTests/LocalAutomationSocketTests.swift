@@ -348,6 +348,8 @@ final class LocalAutomationSocketTests: XCTestCase {
         }
     }
 
+    #if DEBUG
+    // The deterministic accept-failure hook is compiled only in Debug.
     func testAcceptFailureRetiresTheDeadListenerBeforeRestart() async throws {
         try await withFixture { fixture in
             try await fixture.history.grantCapability(.browsePreview, to: fixture.connection)
@@ -373,6 +375,8 @@ final class LocalAutomationSocketTests: XCTestCase {
             })
         }
     }
+
+    #endif
 
     private struct Fixture: Sendable {
         let history: SQLiteHistory
