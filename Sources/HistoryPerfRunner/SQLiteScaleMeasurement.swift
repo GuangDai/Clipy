@@ -42,6 +42,10 @@ struct SQLiteScaleSample: Codable, Sendable {
     let failure: String?
     let query: SQLiteScaleQuery?
     let searchWork: SQLiteScaleSearchWork?
+    let recentWork: SQLiteScaleRecentWork?
+    /// Full-scroll native work and raw page timings, without row identities
+    /// or content. Nil for first-page, other phases and historical reports.
+    let recentPages: [SQLiteScaleRecentPageSample]?
     /// Search-page repetition only: 0 is the saved warmup, 1...5 are timed
     /// samples. Nil in older reports and in non-search phases.
     let sampleIndex: Int?
@@ -120,18 +124,24 @@ func measureSQLiteScale<T>(
     operation: () async throws -> T,
     facts: (T) throws -> (rows: Int, contentBytes: Int) = { _ in (0, 0) },
     searchWork: (T) -> SQLiteScaleSearchWork? = { _ in nil },
+    recentWork: (T) -> SQLiteScaleRecentWork? = { _ in nil },
+    recentPages: (T) -> [SQLiteScaleRecentPageSample]? = { _ in nil },
     fixtureRows: (T) -> Int? = { _ in nil }
 ) async throws -> T {
     let before = try SQLiteScaleMemory.read()
     let clock = ContinuousClock()
     let start = clock.now
     var work: SQLiteScaleSearchWork?
+    var recent: SQLiteScaleRecentWork?
+    var pages: [SQLiteScaleRecentPageSample]?
     var completedOperationMilliseconds: Double?
     do {
         let result = try await operation()
         let elapsed = durationToMs(start.duration(to: clock.now))
         completedOperationMilliseconds = elapsed
         work = searchWork(result)
+        recent = recentWork(result)
+        pages = recentPages(result)
         let after = try SQLiteScaleMemory.read()
         let resultFacts = try facts(result)
         samples.append(SQLiteScaleSample(
@@ -139,6 +149,7 @@ func measureSQLiteScale<T>(
             before: before, after: after,
             returnedRows: resultFacts.rows, processedFixtureRows: fixtureRows(result), returnedContentBytes: resultFacts.contentBytes,
             failure: nil, query: query, searchWork: work,
+            recentWork: recent, recentPages: pages,
             sampleIndex: sampleIndex, isWarmup: isWarmup
         ))
         let repetition = sampleIndex.map { " sampleIndex=\($0) isWarmup=\(isWarmup == true)" } ?? ""
@@ -153,6 +164,7 @@ func measureSQLiteScale<T>(
             before: before, after: try? SQLiteScaleMemory.read(),
             returnedRows: nil, processedFixtureRows: nil, returnedContentBytes: nil,
             failure: String(describing: error), query: query, searchWork: work,
+            recentWork: recent, recentPages: pages,
             sampleIndex: sampleIndex, isWarmup: isWarmup
         ))
         let repetition = sampleIndex.map { " sampleIndex=\($0) isWarmup=\(isWarmup == true)" } ?? ""

@@ -140,7 +140,7 @@ let package = Package(
             // dispatch-only `perf-tests` job runs its explicit filter only
             // after correctness is green.
             name: "HistoryPerfTests",
-            dependencies: [.target(name: "HistoryPerfRunner")]
+            dependencies: [.target(name: "HistoryPerfRunner"), .target(name: "HistoryStorage")]
         ),
         .testTarget(
             name: "PasteboardAdapterTests",

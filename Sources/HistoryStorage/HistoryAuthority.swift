@@ -108,18 +108,34 @@ internal actor HistoryAuthority {
         }
         try Task.checkCancellation()
         do {
-            return try database.writeTransaction(checkingCancellation: true) {
-                try SQLiteHistorySchema.create(in: database)
-                try Self.ensurePositionSingleton(
-                    in: database,
-                    initialMaximumUnpinnedItems: initialMaximumUnpinnedItems,
-                    limits: limits
-                )
-                try Self.ensureRetentionExpansionConfig(in: database)
-                let identity = try ensureGatewayBootstrap(in: database)
-                try HCRBootstrap.ensureReady(in: database, now: storageClock.now())
+#if DEBUG
+            let clock = ContinuousClock()
+            let started = clock.now
+            storageLifecycleDebugProbe.record(phase: .startupFetchBegin)
+#endif
+            let identity = try autoreleasepool {
+                let identity = try database.writeTransaction(checkingCancellation: true) {
+                    try SQLiteHistorySchema.create(in: database)
+                    try Self.ensurePositionSingleton(
+                        in: database,
+                        initialMaximumUnpinnedItems: initialMaximumUnpinnedItems,
+                        limits: limits
+                    )
+                    try Self.ensureRetentionExpansionConfig(in: database)
+                    let identity = try ensureGatewayBootstrap(in: database)
+                    try HCRBootstrap.ensureReady(in: database, now: storageClock.now())
+                    return identity
+                }
+#if DEBUG
+                storageLifecycleDebugProbe.record(phase: .startupFetchComplete,
+                                                  elapsed: started.duration(to: clock.now))
+#endif
                 return identity
             }
+#if DEBUG
+            storageLifecycleDebugProbe.record(phase: .startupAutoreleasePoolDrained)
+#endif
+            return identity
         } catch is CancellationError {
             throw CancellationError()
         } catch let failure as HistoryFailure {

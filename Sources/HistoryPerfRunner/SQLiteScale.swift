@@ -148,6 +148,7 @@ func runSQLiteScale(arguments: [String]) async -> Int {
                 "Mixed lengths do not imply diverse text entropy: bodies repeat seven text-shaped blocks. Fixed bodies use ASCII padding. These synthetic cases do not establish performance for arbitrary user text or worst-case index posting distributions.",
                 "Seed and traversal report processedFixtureRows separately; returnedRows is the count of returned browse/search DTO rows. searchWork records same-request Swift decode/evaluation work, including partial work on failure, and excludes SQLite posting-list/planner work.",
                 "Each search page records one saved warmup (sampleIndex 0, isWarmup true) followed by five timed repetitions (sampleIndex 1...5, isWarmup false) in this same process and store. elapsedMilliseconds is the raw request time; group timed records by phase for a median and exclude warmup. Every repetition independently validates identities, page boundaries and presentation. These are warm-cache observations after open/scroll and preceding queries, not cold-disk measurements; non-search phases remain single observations and omit repetition fields. Older report samples omit these optional fields.",
+                "first-page recentWork and full-scroll recentWork/recentPages come from the same production recent-page requests as the results, including partial failed work. full-scroll records each page's raw request latency and sums native counters; its whole-phase timer also includes fixture validation and traversal bookkeeping. VM/fullscan/sort count primary scalar SELECTs, including SQL-filter predicates, anchors/ties/lookahead. Position/transaction SQL, cursor encoding and separate source-validation SQL VM are excluded. Cache hits/misses are connection counter differences across each scalar SELECT prepare/step/decode/source-validation interval, not physical I/O bytes or OS page faults. No SQL complexity conclusion follows from one total traversal time.",
                 "Search cases cover absent terms, the oldest item, dense title/body hits, rare large-body tail snippets with UTF-16 match validation, both common/rare AND operand orders including a common title term, a structural regexp, and a fuzzy substitution typo. Dense matches measure two pages separately; one additional first-page expression repeats the common title term 128 times to expose redundant planner/posting probes. Query metadata records expected total matches; returnedRows records returned rows, not internal decoded/evaluated rows.",
                 "Canonical copy reads the original content after revision. Inactive revision payload copy and real OS pressure/app-cache recovery are not measured here.",
             ]
@@ -193,15 +194,21 @@ private func exerciseSQLiteScale(
     samples: inout [SQLiteScaleSample],
     projections: inout PerformanceProjectionLengths?
 ) async throws {
-    let page = try await measureSQLiteScale(phase: "first-page", samples: &samples) {
-        try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 50))
-    } facts: { ($0.rows.count, 0) }
+    let first = try await measureSQLiteScale(phase: "first-page", samples: &samples) {
+        await history.measureRecentPage(HistoryBrowseRequest(kind: .recent, limit: 50))
+    } facts: { (try $0.result.get().rows.count, 0) }
+    recentWork: { SQLiteScaleRecentWork($0.metrics) }
+    let page = try first.result.get()
     guard let selected = page.rows.first?.item else { throw SQLiteScaleError.unexpectedResult }
-    let traversed = try await measureSQLiteScale(phase: "full-scroll", samples: &samples) {
-        try await traverseSQLiteScale(
+    let scroll = try await measureSQLiteScale(phase: "full-scroll", samples: &samples) {
+        await measureSQLiteScaleRecentTraversal(
             history: history, expectedCount: options.retainedRows, largeBodyIndex: options.largeBodyIndex
         )
-    } fixtureRows: { $0.count }
+    } facts: { _ = try $0.result.get(); return (0, 0) }
+    recentWork: { $0.work }
+    recentPages: { $0.pages }
+    fixtureRows: { try? $0.result.get().count }
+    let traversed = try scroll.result.get()
     try await exerciseSQLiteScaleSearches(
         history: history, corpus: traversed, position: page.position, samples: &samples
     )
@@ -257,34 +264,8 @@ func traverseSQLiteScale(
     expectedCount: Int,
     largeBodyIndex: Int? = nil
 ) async throws -> SQLiteScaleBrowseEvidence {
-    var cursor: HistoryPageCursor?
-    var position: ChangePosition?
-    var count = 0
-    var leadingRows: [HistoryRow] = []
-    var oldestRow: HistoryRow?
-    var largeBodyRow: HistoryRow?
-    repeat {
-        let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 50, cursor: cursor))
-        if let position, page.position != position { throw SQLiteScaleError.unexpectedResult }
-        position = page.position
-        for row in page.rows {
-            let expectedIndex = expectedCount - count - 1
-            guard expectedIndex >= 0,
-                  row.lastCopiedAt == Date(timeIntervalSinceReferenceDate: 600_000_000 + Double(expectedIndex)),
-                  row.title.hasPrefix("perf-item-\(expectedIndex)-") else {
-                throw SQLiteScaleError.unexpectedResult
-            }
-            if leadingRows.count < 100 { leadingRows.append(row) }
-            if expectedIndex == largeBodyIndex { largeBodyRow = row }
-            oldestRow = row
-            count += 1
-        }
-        cursor = page.next
-    } while cursor != nil
-    guard count == expectedCount, largeBodyIndex == nil || largeBodyRow != nil else {
-        throw SQLiteScaleError.unexpectedResult
-    }
-    return SQLiteScaleBrowseEvidence(
-        count: count, leadingRows: leadingRows, oldestRow: oldestRow, largeBodyRow: largeBodyRow
+    let measured = await measureSQLiteScaleRecentTraversal(
+        history: history, expectedCount: expectedCount, largeBodyIndex: largeBodyIndex
     )
+    return try measured.result.get()
 }

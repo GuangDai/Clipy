@@ -47,7 +47,23 @@ struct StorageLifecycleDebugInstrumentationTests {
         #expect(page.rows.count == 10)
         #expect(page.next != nil)
 
+        // A second real SQLite connection takes the existing-store startup
+        // path that the fresh-process admission diagnostic measures.
+        let reopened = try HistoryAuthority(storeLocation: location)
+        await reopened.setStorageLifecycleDebugProbe(
+            StorageLifecycleDebugProbe(isEnabled: true) { event in
+                _ = continuation.yield(event)
+            }
+        )
+        try await reopened.performStartup(initialMaximumUnpinnedItems: 200)
+        let reopenedPage = try await reopened.recentPage(limit: 10, cursor: nil)
+        #expect(reopenedPage.rows == page.rows)
+        #expect(reopenedPage.position == page.position)
+
         await authority.setStorageLifecycleDebugProbe(
+            StorageLifecycleDebugProbe(isEnabled: false)
+        )
+        await reopened.setStorageLifecycleDebugProbe(
             StorageLifecycleDebugProbe(isEnabled: false)
         )
         continuation.finish()
@@ -58,6 +74,9 @@ struct StorageLifecycleDebugInstrumentationTests {
         }
         let phases = Set(captured.map(\.phase))
         let expectedPhases: Set<StorageLifecycleDebugPhase> = [
+            .startupFetchBegin,
+            .startupFetchComplete,
+            .startupAutoreleasePoolDrained,
             .captureFactLoadBegin,
             .captureFactLoadComplete,
             .captureTransactionBegin,
@@ -78,6 +97,17 @@ struct StorageLifecycleDebugInstrumentationTests {
                 && $0.elapsedMilliseconds >= 0
                 && $0.rows >= 0
         })
+
+        let startupBegins = captured.indices.filter { captured[$0].phase == .startupFetchBegin }
+        let startupCompletes = captured.indices.filter { captured[$0].phase == .startupFetchComplete }
+        let startupDrains = captured.indices.filter { captured[$0].phase == .startupAutoreleasePoolDrained }
+        try #require(startupBegins.count == 2)
+        try #require(startupCompletes.count == 2)
+        try #require(startupDrains.count == 2)
+        for index in startupBegins.indices {
+            #expect(startupBegins[index] < startupCompletes[index])
+            #expect(startupCompletes[index] < startupDrains[index])
+        }
 
         let captureTransactionCompleteIndex = try #require(captured.firstIndex {
             $0.phase == .captureTransactionComplete
@@ -112,6 +142,28 @@ struct StorageLifecycleDebugInstrumentationTests {
         #expect(!rendered.contains(privateSource))
         #expect(!rendered.contains(storeURL.path))
         #expect(privateItemIDs.allSatisfy { !rendered.contains($0) })
+    }
+
+    @Test func failedStartupDoesNotEmitSuccessfulCompletion() async throws {
+        let authority = try HistoryAuthority(storeLocation: HistoryStoreLocation(persistence: .temporary))
+        try await authority.performStartup(initialMaximumUnpinnedItems: 200)
+        try await authority.withTestDatabase { owner in
+            try owner.database.execute("UPDATE gateway_config SET configSchemaVersion=2")
+        }
+        let (events, continuation) = AsyncStream<StorageLifecycleDebugEvent>.makeStream()
+        await authority.setStorageLifecycleDebugProbe(StorageLifecycleDebugProbe(isEnabled: true) { event in
+            _ = continuation.yield(event)
+        })
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await authority.performStartup(initialMaximumUnpinnedItems: 200)
+        }
+        await authority.setStorageLifecycleDebugProbe(StorageLifecycleDebugProbe(isEnabled: false))
+        continuation.finish()
+        var phases: [StorageLifecycleDebugPhase] = []
+        for await event in events { phases.append(event.phase) }
+        #expect(phases.contains(.startupFetchBegin))
+        #expect(!phases.contains(.startupFetchComplete))
+        #expect(!phases.contains(.startupAutoreleasePoolDrained))
     }
 
     @Test func disabledLifecycleProbeEmitsNothing() async {

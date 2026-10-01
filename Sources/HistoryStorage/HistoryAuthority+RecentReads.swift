@@ -15,7 +15,8 @@ extension HistoryAuthority {
     /// already own a transaction; it never nests BEGIN inside that interval.
     internal func recentPage(limit: Int, cursor: HistoryPageCursor?, filter: HistoryFilter = .all,
                              sortOrder: HistorySortOrder = .automatic,
-                             startAround: HistoryItemID? = nil) async throws -> HistoryPage {
+                             startAround: HistoryItemID? = nil,
+                             measurement: RecentReadWorkCounter? = nil) async throws -> HistoryPage {
         await suspendIfRequested(.readEntry)
         guard limits.pageRowLimitRange.contains(limit) else {
             throw HistoryFailure.invalidInput(.invalidPageLimit)
@@ -30,7 +31,8 @@ extension HistoryAuthority {
             page = try autoreleasepool {
                 try database.readTransaction(checkingCancellation: true) {
                     try recentPageInLocalContext(limit: limit, cursor: cursor, filter: filter,
-                                                 sortOrder: sortOrder, startAround: startAround)
+                                                 sortOrder: sortOrder, startAround: startAround,
+                                                 measurement: measurement)
                 }
             }
         } catch let failure as SQLiteFailure {
@@ -47,7 +49,8 @@ extension HistoryAuthority {
     internal func recentPageInLocalContext(
         limit: Int, cursor continuation: HistoryPageCursor?, filter: HistoryFilter = .all,
         sortOrder: HistorySortOrder = .automatic, startAround: HistoryItemID? = nil,
-        sourceValidation inheritedSourceValidation: SQLiteExpressionSources? = nil
+        sourceValidation inheritedSourceValidation: SQLiteExpressionSources? = nil,
+        measurement: RecentReadWorkCounter? = nil
     ) throws -> HistoryPage {
         guard limits.pageRowLimitRange.contains(limit) else {
             throw HistoryFailure.invalidInput(.invalidPageLimit)
@@ -67,7 +70,7 @@ extension HistoryAuthority {
         defer { if inheritedSourceValidation == nil { sourceValidation?.finish() } }
         if let startAround {
             return try recentPageStartingAt(startAround, limit: limit, filter: filter,
-                                             sortOrder: sortOrder, position: currentPosition, sourceValidation: sourceValidation)
+                                             sortOrder: sortOrder, position: currentPosition, sourceValidation: sourceValidation, measurement: measurement)
         }
         let cursor: ResolvedPageCursor?
         do {
@@ -82,7 +85,7 @@ extension HistoryAuthority {
         }
         if sortOrder != .automatic {
             return try sortedRecentPage(limit: limit, cursor: cursor, filter: filter,
-                                        sortOrder: sortOrder, position: currentPosition, sourceValidation: sourceValidation)
+                                        sortOrder: sortOrder, position: currentPosition, sourceValidation: sourceValidation, measurement: measurement)
         }
         let anchor: (ordinal: Int?, date: Date, id: HistoryItemID)?
         if let cursor {
@@ -96,7 +99,7 @@ extension HistoryAuthority {
         if let cursor, cursor.direction == .backward, let anchor {
             return try recentPrecedingPage(
                 limit: limit, cursor: cursor, anchor: anchor, position: currentPosition, filter: filter,
-                sourceValidation: sourceValidation
+                sourceValidation: sourceValidation, measurement: measurement
             )
         }
 #if DEBUG
@@ -119,12 +122,12 @@ extension HistoryAuthority {
                 fetched = try fetchRecentScalars(
                     filter: filter,
                     whereSQL: "pinOrdinal IS NOT NULL AND pinOrdinal >= ?",
-                    orderSQL: "pinOrdinal ASC", bindings: [.integer(Int64(ordinal))], limit: limit + 2, sourceValidation: sourceValidation
+                    orderSQL: "pinOrdinal ASC", bindings: [.integer(Int64(ordinal))], limit: limit + 2, sourceValidation: sourceValidation, measurement: measurement
                 )
             } else {
                 fetched = try fetchRecentScalars(
                     filter: filter,
-                    whereSQL: "pinOrdinal IS NOT NULL", orderSQL: "pinOrdinal ASC", limit: limit + 1, sourceValidation: sourceValidation
+                    whereSQL: "pinOrdinal IS NOT NULL", orderSQL: "pinOrdinal ASC", limit: limit + 1, sourceValidation: sourceValidation, measurement: measurement
                 )
             }
 #if DEBUG
@@ -159,7 +162,7 @@ extension HistoryAuthority {
                     filter: filter,
                     whereSQL: "pinOrdinal IS NULL AND lastCopiedAt = ? AND id >= ?",
                     orderSQL: "id ASC",
-                    bindings: [.real(date), .text(anchor.id.rawValue.uuidString)], limit: capacity + 1, sourceValidation: sourceValidation
+                    bindings: [.real(date), .text(anchor.id.rawValue.uuidString)], limit: capacity + 1, sourceValidation: sourceValidation, measurement: measurement
                 )
                 guard tied.first?.matches(cursor.anchor) == true else {
                     throw HistoryFailure.snapshotExpired(current: currentPosition)
@@ -170,14 +173,14 @@ extension HistoryAuthority {
                         filter: filter,
                         whereSQL: "pinOrdinal IS NULL AND lastCopiedAt < ?",
                         orderSQL: "lastCopiedAt DESC, id ASC", bindings: [.real(date)],
-                        limit: capacity - unpinned.count, sourceValidation: sourceValidation
+                        limit: capacity - unpinned.count, sourceValidation: sourceValidation, measurement: measurement
                     )
                 }
                 fetchedCount = unpinned.count + 1
             } else {
                 unpinned = try fetchRecentScalars(
                     filter: filter,
-                    whereSQL: "pinOrdinal IS NULL", orderSQL: "lastCopiedAt DESC, id ASC", limit: capacity, sourceValidation: sourceValidation
+                    whereSQL: "pinOrdinal IS NULL", orderSQL: "lastCopiedAt DESC, id ASC", limit: capacity, sourceValidation: sourceValidation, measurement: measurement
                 )
                 fetchedCount = unpinned.count
             }
@@ -208,7 +211,7 @@ extension HistoryAuthority {
     private func recentPrecedingPage(
         limit: Int, cursor: ResolvedPageCursor,
         anchor: (ordinal: Int?, date: Date, id: HistoryItemID), position: ChangePosition, filter: HistoryFilter,
-        sourceValidation: SQLiteExpressionSources?
+        sourceValidation: SQLiteExpressionSources?, measurement: RecentReadWorkCounter?
     ) throws -> HistoryPage {
 #if DEBUG
         let clock = ContinuousClock()
@@ -217,7 +220,7 @@ extension HistoryAuthority {
 #endif
         let storedAnchor = try fetchRecentScalars(
             filter: filter,
-            whereSQL: "id = ?", orderSQL: "id", bindings: [.text(anchor.id.rawValue.uuidString)], limit: 1, sourceValidation: sourceValidation
+            whereSQL: "id = ?", orderSQL: "id", bindings: [.text(anchor.id.rawValue.uuidString)], limit: 1, sourceValidation: sourceValidation, measurement: measurement
         )
         guard storedAnchor.first?.matches(cursor.anchor) == true else {
             throw HistoryFailure.snapshotExpired(current: position)
@@ -232,14 +235,14 @@ extension HistoryAuthority {
             preceding = try fetchRecentScalars(
                 filter: filter,
                 whereSQL: "pinOrdinal IS NULL AND lastCopiedAt = ? AND id < ?",
-                orderSQL: "id DESC", bindings: [.real(date), .text(anchor.id.rawValue.uuidString)], limit: limit + 1, sourceValidation: sourceValidation
+                orderSQL: "id DESC", bindings: [.real(date), .text(anchor.id.rawValue.uuidString)], limit: limit + 1, sourceValidation: sourceValidation, measurement: measurement
             )
             if preceding.count <= limit {
                 preceding += try fetchRecentScalars(
                     filter: filter,
                     whereSQL: "pinOrdinal IS NULL AND lastCopiedAt > ?",
                     orderSQL: "lastCopiedAt ASC, id DESC", bindings: [.real(date)], limit: limit + 1 - preceding.count,
-                    sourceValidation: sourceValidation
+                    sourceValidation: sourceValidation, measurement: measurement
                 )
             }
 #if DEBUG
@@ -258,13 +261,13 @@ extension HistoryAuthority {
                 pinned = try fetchRecentScalars(
                     filter: filter,
                     whereSQL: "pinOrdinal IS NOT NULL AND pinOrdinal < ?",
-                    orderSQL: "pinOrdinal DESC", bindings: [.integer(Int64(ordinal))], limit: limit + 1, sourceValidation: sourceValidation
+                    orderSQL: "pinOrdinal DESC", bindings: [.integer(Int64(ordinal))], limit: limit + 1, sourceValidation: sourceValidation, measurement: measurement
                 )
             } else {
                 pinned = try fetchRecentScalars(
                     filter: filter,
                     whereSQL: "pinOrdinal IS NOT NULL", orderSQL: "pinOrdinal DESC", limit: limit + 1 - preceding.count,
-                    sourceValidation: sourceValidation
+                    sourceValidation: sourceValidation, measurement: measurement
                 )
             }
             preceding += pinned
@@ -320,7 +323,8 @@ extension HistoryAuthority {
     /// Every range reads only the still-needed page, anchor and lookahead rows.
     private func sortedRecentPage(
         limit: Int, cursor: ResolvedPageCursor?, filter: HistoryFilter,
-        sortOrder: HistorySortOrder, position: ChangePosition, sourceValidation: SQLiteExpressionSources?
+        sortOrder: HistorySortOrder, position: ChangePosition, sourceValidation: SQLiteExpressionSources?,
+        measurement: RecentReadWorkCounter?
     ) throws -> HistoryPage {
         let anchor: HistorySortSQL.Anchor?
         if let cursor {
@@ -335,7 +339,7 @@ extension HistoryAuthority {
         for range in HistorySortSQL.ranges(sortOrder: sortOrder, anchor: anchor, reversed: reversed) {
             guard fetched.count < capacity else { break }
             fetched += try fetchRecentScalars(filter: filter, whereSQL: range.condition, orderSQL: range.order,
-                                              bindings: range.bindings, limit: capacity - fetched.count, sourceValidation: sourceValidation)
+                                              bindings: range.bindings, limit: capacity - fetched.count, sourceValidation: sourceValidation, measurement: measurement)
         }
         if let cursor {
             guard fetched.first?.matches(cursor.anchor) == true else {
@@ -358,11 +362,12 @@ extension HistoryAuthority {
     /// come from these fresh facts; no saved cursor or absolute offset is used.
     private func recentPageStartingAt(
         _ id: HistoryItemID, limit: Int, filter: HistoryFilter,
-        sortOrder: HistorySortOrder, position: ChangePosition, sourceValidation: SQLiteExpressionSources?
+        sortOrder: HistorySortOrder, position: ChangePosition, sourceValidation: SQLiteExpressionSources?,
+        measurement: RecentReadWorkCounter?
     ) throws -> HistoryPage {
         let candidates = try fetchRecentScalars(
             filter: filter, whereSQL: "id = ?", orderSQL: "id",
-            bindings: [.text(id.rawValue.uuidString)], limit: 1, sourceValidation: sourceValidation
+            bindings: [.text(id.rawValue.uuidString)], limit: 1, sourceValidation: sourceValidation, measurement: measurement
         )
         guard let target = candidates.first else { throw HistoryFailure.notFound(id) }
         let targetRow = try target.toHistoryRow(limits: limits)
@@ -388,13 +393,13 @@ extension HistoryAuthority {
 
         let following = try recentPageInLocalContext(
             limit: limit, cursor: cursor(at: targetRow, direction: .forward, pageLimit: limit),
-            filter: filter, sortOrder: sortOrder, sourceValidation: sourceValidation
+            filter: filter, sortOrder: sortOrder, sourceValidation: sourceValidation, measurement: measurement
         )
         let predecessorLimit = limits.pageRowLimitRange.lowerBound
         let preceding = try recentPageInLocalContext(
             limit: predecessorLimit,
             cursor: cursor(at: targetRow, direction: .backward, pageLimit: predecessorLimit),
-            filter: filter, sortOrder: sortOrder, sourceValidation: sourceValidation
+            filter: filter, sortOrder: sortOrder, sourceValidation: sourceValidation, measurement: measurement
         )
         let rows = [targetRow] + following.rows.prefix(limit - 1)
         let previous: HistoryPageCursor?
@@ -413,13 +418,14 @@ extension HistoryAuthority {
     private func fetchRecentScalars(
         filter: HistoryFilter,
         whereSQL: String, orderSQL: String, bindings: [SQLiteValue] = [], limit: Int,
-        sourceValidation: SQLiteExpressionSources?
+        sourceValidation: SQLiteExpressionSources?, measurement: RecentReadWorkCounter?
     ) throws -> [ScalarReadRow] {
         do {
             // V2-09 §4: a superseded panel query must release this writer
             // actor on cancellation between rows, even for a bounded page.
             try Task.checkCancellation()
             let predicate = HistoryFilterSQL.predicate(filter)
+            let cacheBefore = try measurement.map { _ in try database.cacheReadWork }
             let statement = try database.prepare(
                 "SELECT \(ScalarReadRow.columns) FROM history_items WHERE (\(whereSQL)) AND (\(predicate.sql)) ORDER BY \(orderSQL) LIMIT ?",
                 bindings: bindings + predicate.bindings + [.integer(Int64(limit))]
@@ -427,14 +433,26 @@ extension HistoryAuthority {
             defer { statement.finalize() }
             var rows: [ScalarReadRow] = []
             rows.reserveCapacity(limit)
-            while true {
-                try Task.checkCancellation()
-                guard try statement.step() else { break }
-                let row = try ScalarReadRow(statement, limits: limits)
-                try sourceValidation?.validateFilter(row.id, filter: filter)
-                rows.append(row)
+            var decodedRows = 0
+            let result = Result {
+                while true {
+                    try Task.checkCancellation()
+                    guard try statement.step() else { break }
+                    let row = try ScalarReadRow(statement, limits: limits)
+                    decodedRows += 1
+                    try sourceValidation?.validateFilter(row.id, filter: filter)
+                    rows.append(row)
+                }
+                return rows
             }
-            return rows
+            // Sample before finalization, including an interrupted SELECT
+            // or a later projection/source-validation failure. Other requests
+            // cannot interleave with this synchronous cache interval.
+            if let measurement, let cacheBefore {
+                try measurement.record(rows: decodedRows, statement: statement.readWork,
+                                       cacheBefore: cacheBefore, cacheAfter: database.cacheReadWork)
+            }
+            return try result.get()
         } catch let failure as SQLiteFailure {
             try Task.checkCancellation()
             throw failure.historyFailure

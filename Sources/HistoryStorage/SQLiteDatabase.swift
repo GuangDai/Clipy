@@ -39,6 +39,17 @@ internal struct SQLiteFailure: Error, Equatable, Sendable {
     }
 }
 
+internal struct SQLiteCacheReadWork {
+    internal let hits: UInt32
+    internal let misses: UInt32
+}
+
+internal struct SQLiteStatementReadWork {
+    internal let virtualMachineSteps: Int
+    internal let fullScanSteps: Int
+    internal let sortOperations: Int
+}
+
 internal final class SQLiteDatabase {
     private var handle: OpaquePointer?
     private var readDeadline: SQLiteReadDeadline?
@@ -209,6 +220,20 @@ internal final class SQLiteDatabase {
 
     internal var changedRowCount: Int64 {
         get throws { sqlite3_changes64(try openHandle()) }
+    }
+
+    /// Sample existing pager counters without resetting connection state.
+    /// Callers take before/after snapshots in one uninterrupted actor interval.
+    internal var cacheReadWork: SQLiteCacheReadWork {
+        get throws {
+            let database = try openHandle()
+            var current: Int32 = 0
+            var highWater: Int32 = 0
+            try check(sqlite3_db_status(database, SQLITE_DBSTATUS_CACHE_HIT, &current, &highWater, 0))
+            let hits = UInt32(bitPattern: current)
+            try check(sqlite3_db_status(database, SQLITE_DBSTATUS_CACHE_MISS, &current, &highWater, 0))
+            return SQLiteCacheReadWork(hits: hits, misses: UInt32(bitPattern: current))
+        }
     }
 
     /// Each call executes one statement. Schema owners call this once per DDL
@@ -400,6 +425,19 @@ internal final class SQLiteStatement {
         handle = nil
         hasRow = false
         finished = true
+    }
+
+    /// Each recent SELECT is newly prepared, so these counters belong only
+    /// to that statement, including work before an interrupted/failed step.
+    internal var readWork: SQLiteStatementReadWork {
+        get throws {
+            let statement = try openHandle()
+            return SQLiteStatementReadWork(
+                virtualMachineSteps: Int(UInt32(bitPattern: sqlite3_stmt_status(statement, SQLITE_STMTSTATUS_VM_STEP, 0))),
+                fullScanSteps: Int(UInt32(bitPattern: sqlite3_stmt_status(statement, SQLITE_STMTSTATUS_FULLSCAN_STEP, 0))),
+                sortOperations: Int(UInt32(bitPattern: sqlite3_stmt_status(statement, SQLITE_STMTSTATUS_SORT, 0)))
+            )
+        }
     }
 
     internal func step() throws -> Bool {

@@ -264,6 +264,8 @@ struct SQLiteScaleTests {
         let decoded = try JSONDecoder().decode(SQLiteScaleSample.self, from: historical)
         #expect(decoded.sampleIndex == nil)
         #expect(decoded.isWarmup == nil)
+        #expect(decoded.recentWork == nil)
+        #expect(decoded.recentPages == nil)
         #expect(decoded.returnedRows == 1)
         #expect(decoded.searchWork?.rowsDecoded == 1)
     }
