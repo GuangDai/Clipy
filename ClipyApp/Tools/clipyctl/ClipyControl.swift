@@ -84,12 +84,22 @@ struct ClipyControl {
         } catch {
             return LocalAutomationClient.failure(.notEnrolled, request: request)
         }
-        if let client = try? await LocalAutomationClient.connect(
-            endpointURL: LocalAutomationPaths.endpointURL
-        ) {
+        do {
+            let client = try await LocalAutomationClient.connect(
+                endpointURL: LocalAutomationPaths.endpointURL
+            )
             return await client.request(request, credential: credential)
+        } catch let failure as LocalAutomationClientFailure {
+            switch failure {
+            case .notReady, .timeout: break
+            default: return LocalAutomationClient.failure(failure, request: request)
+            }
+        } catch {
+            return LocalAutomationClient.failure(.notReady, request: request)
         }
+        if Task.isCancelled { return LocalAutomationClient.failure(.cancelled, request: request) }
         guard await launchContainingApplication() else {
+            if Task.isCancelled { return LocalAutomationClient.failure(.cancelled, request: request) }
             return LocalAutomationClient.failure(.notReady, request: request)
         }
         // Store opening is asynchronous after LaunchServices reports the app
@@ -97,12 +107,27 @@ struct ClipyControl {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(10))
         while clock.now < deadline {
-            if let client = try? await LocalAutomationClient.connect(
-                endpointURL: LocalAutomationPaths.endpointURL, timeout: 1
-            ) {
+            if Task.isCancelled { return LocalAutomationClient.failure(.cancelled, request: request) }
+            let remaining = clock.now.duration(to: deadline).components
+            let timeout = min(1, Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18)
+            do {
+                let client = try await LocalAutomationClient.connect(
+                    endpointURL: LocalAutomationPaths.endpointURL, timeout: timeout
+                )
                 return await client.request(request, credential: credential)
+            } catch let failure as LocalAutomationClientFailure {
+                switch failure {
+                case .notReady, .timeout: break
+                default: return LocalAutomationClient.failure(failure, request: request)
+                }
+            } catch {
+                return LocalAutomationClient.failure(.notReady, request: request)
             }
-            do { try await Task.sleep(for: .milliseconds(100)) }
+            do {
+                try await Task.sleep(
+                    until: min(deadline, clock.now.advanced(by: .milliseconds(100))), clock: clock
+                )
+            }
             catch { return LocalAutomationClient.failure(.cancelled, request: request) }
         }
         return LocalAutomationClient.failure(.notReady, request: request)

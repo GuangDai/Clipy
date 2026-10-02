@@ -37,7 +37,7 @@ final class AppearanceJourneyUITests: XCTestCase {
     /// row. The Settings sample also grows with density, line count and
     /// font size; screenshots retain the actual appearance for review.
     @MainActor
-    func testRowDensitySwitchPersistsAcrossSummons() throws {
+    func testRowDensityPersistsAcrossSummonsAndFiltersRestoreTheCapturedRow() throws {
         let captured = "clipy-density-row-check"
         let app = try launchApp(capturing: captured)
         defer { app.terminate() }
@@ -74,6 +74,11 @@ final class AppearanceJourneyUITests: XCTestCase {
                            "Changing appearance must preserve row layout.")
         }
         chooseOption("Follow macOS", in: appearance, app: app, context: "restore system appearance")
+        let motion = app.popUpButtons["clipy.settings.appearance.motion-speed"]
+        assertExists(motion, timeout: 5, in: app, context: "ten-level animation speed")
+        chooseOption("1 — Slowest", in: motion, app: app, context: "slower motion")
+        XCTAssertTrue(waitUntil(timeout: 5) { motion.value as? String == "1 — Slowest" },
+                      diagnostic(app, context: "motion choice applies immediately"))
         chooseOption("Comfortable", in: density, app: app, context: "row density")
         XCTAssertTrue(waitUntil(timeout: 5) { sample.frame.height > compactHeight },
                       diagnostic(app, context: "density changes the visible sample spacing"))
@@ -108,6 +113,10 @@ final class AppearanceJourneyUITests: XCTestCase {
         assertExists(lines, timeout: 5, in: app, context: "persisted line count")
         XCTAssertEqual(font.value as? String, "17.5")
         XCTAssertEqual(lines.value as? String, "5")
+        XCTAssertEqual(motion.value as? String, "1 — Slowest")
+        chooseOption("10 — Fastest", in: motion, app: app, context: "restore fastest motion")
+        XCTAssertTrue(waitUntil(timeout: 5) { motion.value as? String == "10 — Fastest" },
+                      diagnostic(app, context: "motion returns to fastest"))
         setAutomaticLines(true, control: automaticLines, app: app)
         enterNumber("13", in: font, app: app)
 
@@ -133,7 +142,8 @@ final class AppearanceJourneyUITests: XCTestCase {
         let generalTab = app.buttons["clipy.settings.category.general"]
         assertExists(generalTab, timeout: 5, in: app, context: "General tab")
         generalTab.click()
-        app.typeKey("w", modifierFlags: .command)
+        closeSettingsAndSummonPanel(control: generalTab, panel: panel, app: app)
+        assertFilterRestoresCapturedRow(captured, in: app)
     }
 
     /// With the auto-open preference off, selecting a row and outwaiting the
@@ -243,11 +253,7 @@ final class AppearanceJourneyUITests: XCTestCase {
     /// Links narrows to zero rows and the search empty state, then All
     /// restores the captured row without dismissing the floating panel.
     @MainActor
-    func testFilterMenuNarrowsRows() throws {
-        let captured = "alpha-filter-check"
-        let app = try launchApp(capturing: captured)
-        defer { app.terminate() }
-
+    private func assertFilterRestoresCapturedRow(_ captured: String, in app: XCUIApplication) {
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         let rows = historyRows(in: app)
         assertRowCount(1, in: rows, app: app, context: "filter initial capture")
@@ -307,7 +313,7 @@ final class AppearanceJourneyUITests: XCTestCase {
         temporaryDirectory = directory
 
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store")
@@ -381,7 +387,7 @@ final class AppearanceJourneyUITests: XCTestCase {
         let labeledChoice = control.descendants(matching: .any).matching(
             NSPredicate(format: "label == %@", title)
         ).firstMatch
-        if labeledChoice.waitForExistence(timeout: 2) {
+        if labeledChoice.exists {
             labeledChoice.click()
             return
         }

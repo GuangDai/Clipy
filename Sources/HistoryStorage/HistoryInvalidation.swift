@@ -1,9 +1,9 @@
 /// HistoryInvalidation, HistoryInvalidationSubscription, and
 /// HistoryInvalidationPublisher — the process-local invalidation signal that
 /// wakes observers after a History Commit.
-/// Owning spec: docs/04-coherence.md §4 (internal invalidation, not a public
+/// Owning spec: docs/storage.md (internal invalidation, not a public
 /// ChangeFeed) and §5 (race-free observation; WS12 in
-/// docs/06-cross-cutting.md §8); mechanics: docs/05-authority-kernel.md
+/// docs/testing.md); mechanics: docs/storage.md
 /// §11 (post-commit order step 2) and §14.4 (observation registration).
 ///
 /// The publisher is a value type stored inside `HistoryAuthority`:
@@ -16,10 +16,10 @@
 import Foundation
 import HistoryCore
 
-// MARK: - The signal (docs/04-coherence.md §4)
+// MARK: - The signal (docs/storage.md)
 
 /// One process-local invalidation: a content-free wake-up signal carrying
-/// only the latest durable Change Position. docs/04-coherence.md §4
+/// only the latest durable Change Position. docs/storage.md
 ///
 /// Semantics (all §4):
 ///
@@ -46,10 +46,10 @@ internal struct HistoryInvalidation: Sendable, Hashable {
     }
 }
 
-// MARK: - Subscription token (docs/05-authority-kernel.md §14.4)
+// MARK: - Subscription token (docs/storage.md)
 
 /// Internal key of one registered invalidation continuation.
-/// docs/05-authority-kernel.md §14.4 ("continuations keyed by an internal
+/// docs/storage.md ("continuations keyed by an internal
 /// subscription token"). Opaque to its holder; compared only for identity.
 /// Minted by the publisher as a UUID, so no counter arithmetic is involved
 /// and tokens never collide across registrations within one process.
@@ -61,10 +61,10 @@ internal struct HistoryInvalidationSubscription: Sendable, Hashable {
     }
 }
 
-// MARK: - Publisher (docs/04-coherence.md §4–§5, docs/05 §11, §14.4)
+// MARK: - Publisher (docs/storage.md, docs/05 §11, §14.4)
 
 /// The process-local invalidation publisher stored inside
-/// `HistoryAuthority`. docs/04-coherence.md §4; docs/05-authority-kernel.md
+/// `HistoryAuthority`. docs/storage.md; docs/storage.md
 /// §14.4.
 ///
 /// `HistoryAuthority` calls `publish(_:)` synchronously once per successful
@@ -99,8 +99,8 @@ internal struct HistoryInvalidationPublisher: Sendable {
     internal init() {}
 
     /// Registers a new subscriber and returns its token and stream.
-    /// docs/04-coherence.md §5 step 1 (register before the first query);
-    /// docs/05-authority-kernel.md §14.4.
+    /// docs/storage.md step 1 (register before the first query);
+    /// docs/storage.md
     ///
     /// `onTermination` is invoked (off-actor, on the terminating task) when
     /// the returned stream is cancelled or otherwise terminates; the
@@ -123,8 +123,8 @@ internal struct HistoryInvalidationPublisher: Sendable {
     }
 
     /// Synchronously yields one invalidation to every registered
-    /// continuation. docs/05-authority-kernel.md §11 step 2;
-    /// docs/04-coherence.md §4.
+    /// continuation. docs/storage.md step 2;
+    /// docs/storage.md
     ///
     /// Yields never suspend and never fail: each stream keeps only its
     /// newest buffered value, so a subscriber that has not consumed yet

@@ -6,11 +6,15 @@ import SwiftUI
 /// resizable Settings window. The exact retention draft outlives category
 /// changes so navigating away never discards unsaved edits (V2-07 §6.3).
 struct ClipySettingsView: View {
+    @Environment(\.locale) private var locale
 
     /// The shared panel view state (step-9 design contract §3); settings
     /// mutations ride the same `ClipboardHistory` seam and its observation
     /// loop refreshes the panel after every commit.
     private let viewState: HistoryViewState
+    private let workspaceViewState: HistoryViewState?
+    private let workspaceCopyState: HistoryWorkspaceCopyState?
+    private let workspaceSourceIconProvider: SourceIconProvider
 
     /// Neutral immutable state plus narrow intents from the ClipyApp-owned
     /// ServiceManagement controller. The view does not own registration.
@@ -52,6 +56,9 @@ struct ClipySettingsView: View {
     ///     explicit enrollment, independent grants and revocation controls.
     init(
         viewState: HistoryViewState,
+        workspaceViewState: HistoryViewState? = nil,
+        workspaceCopyState: HistoryWorkspaceCopyState? = nil,
+        workspaceSourceIconProvider: SourceIconProvider = .none,
         launchAtLogin: LaunchAtLoginSettings? = nil,
         summonShortcut: SummonShortcutSettings? = nil,
         popupPosition: Binding<PopupPositionMode>? = nil,
@@ -60,6 +67,9 @@ struct ClipySettingsView: View {
         interactionDefaults: UserDefaults = .standard
     ) {
         self.viewState = viewState
+        self.workspaceViewState = workspaceViewState
+        self.workspaceCopyState = workspaceCopyState
+        self.workspaceSourceIconProvider = workspaceSourceIconProvider
         self.launchAtLogin = launchAtLogin
         self.summonShortcut = summonShortcut
         self.popupPosition = popupPosition
@@ -74,6 +84,7 @@ struct ClipySettingsView: View {
     private var category: SettingsCategory {
         let saved = SettingsCategory(rawValue: savedCategory) ?? .general
         if saved == .maintenance, storageLocation == nil { return .general }
+        if saved == .history, workspaceViewState == nil || workspaceCopyState == nil { return .general }
         return saved
     }
 
@@ -85,9 +96,11 @@ struct ClipySettingsView: View {
     }
 
     var body: some View {
+        let _ = locale
         NavigationSplitView {
             List(selection: selection) {
                 categoryRow(.general)
+                if workspaceViewState != nil, workspaceCopyState != nil { categoryRow(.history) }
                 categoryRow(.appearance)
                 categoryRow(.keyboard)
                 categoryRow(.retention)
@@ -103,10 +116,9 @@ struct ClipySettingsView: View {
             detail
                 .frame(minWidth: 320, maxWidth: .infinity, maxHeight: .infinity)
                 .navigationTitle(category.title)
-                .accessibilityIdentifier("clipy.settings.detail")
         }
         .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 560, minHeight: 420)
+        .frame(minWidth: category == .history ? 820 : 560, minHeight: 420)
         .task(id: retentionConfigurationRefreshGeneration) {
             await loadRetentionConfiguration()
         }
@@ -141,6 +153,11 @@ struct ClipySettingsView: View {
                 viewState: viewState,
                 launchAtLogin: launchAtLogin
             )
+        case .history:
+            if let workspaceViewState, let workspaceCopyState {
+                HistoryWorkspaceView(viewState: workspaceViewState, copyState: workspaceCopyState,
+                    sourceIconProvider: workspaceSourceIconProvider)
+            }
         case .appearance:
             AppearanceSettingsTab(popupPosition: popupPosition)
         case .keyboard:
@@ -179,29 +196,41 @@ struct ClipySettingsView: View {
         let request = retentionDraft.beginLoadRequest()
         hasLoadedRetentionConfiguration = false
         retentionConfigurationFailure = nil
+        let result: Result<HistoryRetentionConfiguration, any Error>
         do {
-            let configuration = try await viewState.retentionConfiguration()
-            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
+            result = .success(try await viewState.retentionConfiguration())
+        } catch {
+            result = .failure(error)
+        }
+        guard !Task.isCancelled else { return }
+        if retentionDraft.requiresReloadAfterApply(request) {
+            // A real Apply result arrived while this read was pending.
+            // Its snapshot may predate that write; replace this one read
+            // through the existing task instead of guessing its order.
+            retentionConfigurationRefreshGeneration += 1
+            return
+        }
+        guard retentionDraft.isCurrent(request) else { return }
+        switch result {
+        case .success(let configuration):
             retentionDraft.acceptLoaded(configuration, requestedAt: request)
             hasLoadedRetentionConfiguration = true
             retentionConfigurationFailure = nil
-        } catch let failure as HistoryFailure {
-            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
-            retentionConfigurationFailure = FailurePresentation.message(for: failure)
-        } catch {
-            guard !Task.isCancelled, retentionDraft.isCurrent(request) else { return }
-            retentionConfigurationFailure = RetentionSettingsCopy.readFailure
+        case .failure(let error):
+            retentionConfigurationFailure = (error as? HistoryFailure)
+                .map { FailurePresentation.message(for: $0) } ?? RetentionSettingsCopy.readFailure
         }
     }
 }
 
 
 private enum SettingsCategory: String, Hashable {
-    case general, appearance, keyboard, retention, automation, interaction, maintenance
+    case general, history, appearance, keyboard, retention, automation, interaction, maintenance
 
     var title: String {
         switch self {
         case .general: SettingsCopy.text("General")
+        case .history: SettingsCopy.text("History")
         case .appearance: SettingsCopy.text("Appearance")
         case .keyboard: KeyboardShortcutsCopy.text("Keyboard Shortcuts")
         case .retention: RetentionSettingsCopy.tabTitle
@@ -214,6 +243,7 @@ private enum SettingsCategory: String, Hashable {
     var symbol: String {
         switch self {
         case .general: "gearshape"
+        case .history: "list.bullet.rectangle"
         case .appearance: "paintpalette"
         case .keyboard: "keyboard"
         case .retention: "clock.arrow.circlepath"

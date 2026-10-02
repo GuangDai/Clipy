@@ -4,11 +4,11 @@ import Foundation
 /// A remaining cursor keeps the count a lower bound: older matching rows
 /// in the filtered query have not yet been traversed.
 internal enum HistoryCountCopy {
-    internal static var bundle: Bundle { .main }
+    internal static var bundle: Bundle { AppLocalization.bundle }
 
     internal static func items(
         count: Int, hasNextPage: Bool,
-        locale: Locale = .current, bundle: Bundle = .main
+        locale: Locale = .current, bundle: Bundle = AppLocalization.bundle
     ) -> String {
         text("items", singular: "item", plural: "items", count: count,
              hasNextPage: hasNextPage, locale: locale, bundle: bundle)
@@ -16,7 +16,7 @@ internal enum HistoryCountCopy {
 
     internal static func results(
         count: Int, hasNextPage: Bool,
-        locale: Locale = .current, bundle: Bundle = .main
+        locale: Locale = .current, bundle: Bundle = AppLocalization.bundle
     ) -> String {
         text("results", singular: "result", plural: "results", count: count,
              hasNextPage: hasNextPage, locale: locale, bundle: bundle)

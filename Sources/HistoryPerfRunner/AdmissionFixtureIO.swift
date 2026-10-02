@@ -11,14 +11,15 @@ func makeAdmissionFixture(
     samples: [Double],
     setupWallTimeMs: Double? = nil,
     validation: [String: String],
-    notes: [String]
+    notes: [String],
+    searchWork: [SQLiteScaleSearchWork]? = nil
 ) -> AdmissionFixture {
     precondition(samples.isEmpty == (setupWallTimeMs != nil))
     precondition(
         setupWallTimeMs.map { $0.isFinite && $0 > 0 } ?? true
     )
     return AdmissionFixture(
-        schemaVersion: 2,
+        schemaVersion: 3,
         mode: mode.rawValue,
         sampleUnit: sampleUnit,
         machine: admissionMachineMetadata(),
@@ -34,7 +35,8 @@ func makeAdmissionFixture(
         rawSamplesMs: samples,
         percentiles: admissionPercentilesIfSupported(samples),
         validation: validation,
-        notes: notes
+        notes: notes,
+        searchWork: searchWork
     )
 }
 

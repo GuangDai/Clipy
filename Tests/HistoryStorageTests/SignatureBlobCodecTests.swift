@@ -1,8 +1,8 @@
 /// Signature blob codec gates: encode→decode round trips of valid values
-/// (docs/06-cross-cutting.md §7.3), one rejection test per Part V §4 decode
+/// (docs/testing.md), one rejection test per Part V §4 decode
 /// check for the signature blob, and the §4 bidirectional
 /// fingerprint/signature coverage checks against the Canonical blob
-/// (docs/06-cross-cutting.md §7.4; owning spec docs/05-authority-kernel.md
+/// (docs/testing.md; owning spec docs/storage.md
 /// §4).
 import Foundation
 import HistoryCore
@@ -71,7 +71,7 @@ private func storedEntry(
 
 /// Small bounds so the §4 byte/count checks run without large fixtures.
 /// Production decode uses the fixed `HistoryLimits.standard` profile
-/// (docs/06-cross-cutting.md §2); the codec's `limits` parameter is the seam.
+/// (docs/testing.md); the codec's `limits` parameter is the seam.
 private func makeLimits(
     representations: Int = 2,
     typeIdentifierUTF8Bytes: Int = 16,
@@ -108,7 +108,7 @@ private func makeLimits(
     )!
 }
 
-// MARK: - Round trips (docs/06-cross-cutting.md §7.3)
+// MARK: - Round trips (docs/testing.md)
 
 @Test func roundTripPreservesSignatureEntries() throws {
     let entries = signatureEntries(for: try makeCanonical())
@@ -142,7 +142,7 @@ private func makeLimits(
     )
 }
 
-// MARK: - Corruption rejection (docs/06-cross-cutting.md §7.4, Part V §4)
+// MARK: - Corruption rejection (docs/testing.md, Part V §4)
 
 @Test func decodeRejectsMalformedBytes() {
     #expect(throws: CodecRejection.malformedBlob) {
@@ -364,7 +364,7 @@ private func makeLimits(
     }
 }
 
-// MARK: - Bidirectional coverage (docs/05-authority-kernel.md §4)
+// MARK: - Bidirectional coverage (docs/storage.md)
 
 @Test func coverageAcceptsMatchingCanonicalAndEntries() throws {
     let canonical = try makeCanonical()

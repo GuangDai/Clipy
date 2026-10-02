@@ -1,6 +1,6 @@
-/// WS20 — Concurrent revision and coalescing (docs/06-cross-cutting.md §8
+/// WS20 — Concurrent revision and coalescing (docs/testing.md
 /// WS20): the OCC-safe two-phase revision interleavings of
-/// docs/05-authority-kernel.md §6.2, driven deterministically by the
+/// docs/storage.md, driven deterministically by the
 /// `SuspensionGate` concurrency harness (Tests/HistoryStorageTests/
 /// ConcurrencyHarness/ConcurrencyHarness.swift) over the roadmap-owned
 /// Authority suspension seam (`AuthoritySuspensionPoint.revisionCommitEntry`).
@@ -25,7 +25,7 @@
 /// only for the FIRST arrival (`FirstParkLatch` below); the harness-driven
 /// interference passes through.
 ///
-/// Deferral (docs/roadmap/README.md §3 WS-clause phasing note): NONE. WS20
+/// Deferral (docs/testing.md WS-clause phasing note): NONE. WS20
 /// names no public-read or observation clause — both clauses are
 /// commit/storage-side and are closed here: (a) a Copy Coalescing commit
 /// between the two phases of a revision leaves the revision committable
@@ -72,7 +72,7 @@ private static func installRevisionEntryPark(
 
 /// A byte-changing `.replace` revision request for the single
 /// public.utf8-plain-text representation these scenarios use, OCC-tokened at
-/// `expected` (docs/03a-instruction-set.md §5: exactly one explicit decision
+/// `expected` (docs/architecture.md: exactly one explicit decision
 /// for every Canonical type).
 private static func replaceRequest(
     itemID: HistoryItemID,
@@ -91,7 +91,7 @@ private static func replaceRequest(
     )
 }
 
-/// WS20 (docs/06-cross-cutting.md §8): "Between the two phases of a revision,
+/// WS20 (docs/testing.md): "Between the two phases of a revision,
 /// perform a Copy Coalescing commit on the same item; assert the revision
 /// still commits (Content Version preserved) and occurrence is folded." The
 /// coalescing commit preserves the item's Content Version (02 §13; 05 §6.2:
@@ -234,7 +234,7 @@ private static func replaceRequest(
     #expect(position.rawValue == 3)
 }
 
-/// WS20 (docs/06-cross-cutting.md §8): "Perform instead a content-changing
+/// WS20 (docs/testing.md): "Perform instead a content-changing
 /// revision between the phases of a first revision; assert the first returns
 /// `.staleContent`." The interleaved second revision advances the item's
 /// Content Version (05 §6.2: "A content-changing revision advances Content

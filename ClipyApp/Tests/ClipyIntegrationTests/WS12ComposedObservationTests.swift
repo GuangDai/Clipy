@@ -1,5 +1,5 @@
 /// WS12Composed — Observation snapshot-replacement through the REAL observe
-/// loop (docs/06-cross-cutting.md §8 WS12; docs/04-coherence.md §5):
+/// loop (docs/testing.md WS12; docs/storage.md):
 /// several commits after activation coalesce into fresh REPLACEMENT pages
 /// so the view state always converges on the newest position — the composed
 /// form of the registration-race gate (its pause-between-registration-and-
@@ -7,7 +7,7 @@
 /// `Tests/HistoryStorageTests/WS12ObservationRaceTests.swift`).
 ///
 /// Also pins the composed debounce behavior (V2-07 §4 feel): a search edit
-/// restarts observation ONCE, 250 ms later, into the search query shape.
+/// coalesces edits before restarting observation into the search query shape.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -16,7 +16,7 @@ import Testing
 
 struct WS12ComposedObservationTests {
 
-    /// WS12 (docs/06-cross-cutting.md §8): a burst of later commits (three
+    /// WS12 (docs/testing.md): a burst of later commits (three
     /// inserts) coalesces for the observer — the view state, already
     /// activated, converges on the complete three-row page at the newest
     /// position; each incoming page REPLACES rows (04 §5), never appends,
@@ -63,9 +63,9 @@ struct WS12ComposedObservationTests {
         )
     }
 
-    /// WS12 composed debounce companion (docs/04-coherence.md §5; V2-07
+    /// WS12 composed debounce companion (docs/storage.md; V2-07
     /// §4): a search edit re-observes under the new query shape after the
-    /// 250 ms debounce — the loop restarts (kind `.search`) and its first
+    /// input-coalescing window — the loop restarts (kind `.search`) and its first
     /// replacement page contains the matching row, then a NEW commit while
     /// still searching reaches the same loop (one query shape, one stream).
     ///

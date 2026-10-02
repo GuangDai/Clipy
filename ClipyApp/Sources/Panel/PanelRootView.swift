@@ -2,8 +2,8 @@
 /// history panel once the store is open, the opening progress view before
 /// it, and the launch-failure pane after a failed open (the
 /// MenuBarExtra-era three-state content, moved into the AppKit panel).
-/// Owning spec: docs/01-architecture.md §2 (composition root), §6
-/// (main-actor UI); failure vocabulary docs/03b-instruction-set.md §10.
+/// Owning spec: docs/architecture.md (composition root), §6
+/// (main-actor UI); failure vocabulary docs/architecture.md
 import AppKit
 import HistoryCore
 import SwiftUI
@@ -13,7 +13,10 @@ import SwiftUI
 /// PresentationUI's `HistoryPanelView` with every AppKit callback wired
 /// back to the delegate (01 §8: PresentationUI never sees AppKit).
 struct PanelRootView: View {
+    @State private var readingPositionNoticeDismissed = false
+    @State private var topNoticeHeight: CGFloat = 0
     let appDelegate: AppDelegate
+    @Environment(\.locale) private var locale
 
     /// The public Settings-scene presentation action (audit S-5 /
     /// SPEC-IMPL-010, replacing `AppDelegate.openSettingsWindow`'s private
@@ -26,6 +29,64 @@ struct PanelRootView: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
+        let _ = locale
+        VStack(spacing: 0) {
+            if hasTopNotices {
+                VStack(spacing: 8) {
+                    if showsReadingPositionNotice { readingPositionNotice }
+                    if captureAccessNeedsAttention {
+                        captureAccessBanner(appDelegate.captureAccessState)
+                    }
+                    if let pasteFailure = appDelegate.pasteFailure {
+                        pasteFailureBanner(pasteFailure)
+                    }
+                    if let captureNotice = appDelegate.captureNotice {
+                        captureNoticeBanner(captureNotice)
+                    }
+                }
+                .padding(8)
+                // Measure only the notices' natural width-dependent height;
+                // fitting the window must not compress and remeasure them.
+                .fixedSize(horizontal: false, vertical: true)
+                .onGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.size.height
+                } action: { height in
+                    let height = height.isFinite ? max(0, height) : 0
+                    if topNoticeHeight != height { topNoticeHeight = height }
+                }
+            }
+            panelContent
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onChange(of: hasTopNotices, initial: true) { _, visible in
+            if !visible, topNoticeHeight != 0 { topNoticeHeight = 0 }
+        }
+        .environment(\.workflowExecutionQueue, appDelegate.composition?.workflowRunner.executionQueue)
+        .environment(\.searchHistoryStore, appDelegate.composition?.searchHistoryStore)
+        .environment(\.openSearchSavingSettings, {
+            NSApp.activate()
+            openSettings()
+        })
+        .environment(\.historyBrowsingPreferences, appDelegate.composition?.historyBrowsingPreferences)
+        // The panel window is transparent; only rounded content corners
+        // remain transparent after the notices take their own layout space.
+        .background { NativePanelBackground() }
+        .onChange(of: appDelegate.composition?.viewState.didLoseReadingPosition) { _, missing in
+            readingPositionNoticeDismissed = false
+            if missing == true {
+                appDelegate.composition?.historyBrowsingPreferences.clearReadingPosition(for: .panel)
+            }
+        }
+        .onAppear {
+            appDelegate.installSettingsOpenOperation {
+                NSApp.activate()
+                openSettings()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var panelContent: some View {
         Group {
             if let composition = appDelegate.composition,
                let surfaceState = appDelegate.panelSurfaceState {
@@ -58,6 +119,7 @@ struct PanelRootView: View {
                         // builds from this public provider.
                         sourceIconProvider:
                             SourceIconProviderFactory.makeProvider(),
+                        topNoticeHeight: topNoticeHeight,
                         // The analytic content-fit demand flows back to the
                         // AppKit owner, which coalesces and fits the
                         // window's height (`FloatingPanel.fitToContent`).
@@ -73,38 +135,36 @@ struct PanelRootView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .environment(\.workflowExecutionQueue, appDelegate.composition?.workflowRunner.executionQueue)
-        .overlay(alignment: .top) {
-            if appDelegate.pasteFailure != nil
-                || appDelegate.captureNotice != nil
-                || captureAccessNeedsAttention {
-                VStack(spacing: 8) {
-                    if captureAccessNeedsAttention {
-                        captureAccessBanner(appDelegate.captureAccessState)
-                    }
-                    if let pasteFailure = appDelegate.pasteFailure {
-                        pasteFailureBanner(pasteFailure)
-                    }
-                    if let captureNotice = appDelegate.captureNotice {
-                        captureNoticeBanner(captureNotice)
-                    }
-                }
-                .padding(8)
+    }
+
+    private var hasTopNotices: Bool {
+        appDelegate.pasteFailure != nil || appDelegate.captureNotice != nil
+            || captureAccessNeedsAttention || showsReadingPositionNotice
+    }
+
+    private var showsReadingPositionNotice: Bool {
+        appDelegate.composition?.viewState.didLoseReadingPosition == true && !readingPositionNoticeDismissed
+    }
+
+    private var readingPositionNotice: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Label(HistoryBrowsingCopy.text("Saved reading position is unavailable in these results. Showing the start of the list."),
+                systemImage: "info.circle")
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button {
+                readingPositionNoticeDismissed = true
+            } label: {
+                Image(systemName: "xmark")
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel(PanelActionsCopy.text("Dismiss"))
         }
-        // The panel window is transparent; the content carries the
-        // solid background; only the rounded corners remain transparent.
-        .background { NativePanelBackground() }
-        .onAppear {
-            // Republish the documented public OpenSettingsAction to the
-            // delegate so the pure-AppKit status-item menu can open the
-            // same Settings scene through the same action. Idempotent:
-            // every appearance installs an equivalent fresh capture.
-            appDelegate.installSettingsOpenOperation {
-                NSApp.activate()
-                openSettings()
-            }
-        }
+        .padding(10)
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        .shadow(radius: 4)
+        .accessibilityIdentifier("clipy.history.reading-position.notice")
     }
 
     private var captureAccessNeedsAttention: Bool {
@@ -183,7 +243,7 @@ struct PanelRootView: View {
     /// public typed failure. `.openStore` deliberately stays generic because
     /// SwiftData construction does not yet distinguish permission, ENOSPC,
     /// corruption, future schema, and other I/O failures reliably.
-    static func failureCategory(for error: any Error, bundle: Bundle = .main) -> String {
+    static func failureCategory(for error: any Error, bundle: Bundle = AppLocalization.bundle) -> String {
         guard let historyFailure = error as? HistoryFailure else {
             return error is ClipyCompositionError
                 ? AppRecoveryCopy.text("History Store Already Open", bundle: bundle)
@@ -211,7 +271,7 @@ struct PanelRootView: View {
     /// Maps the open failure to its user-facing message. `HistoryFailure`
     /// renders through PresentationUI's shared vocabulary so the pane and the
     /// in-panel banner never disagree (03b §10).
-    static func failureMessage(for error: any Error, bundle: Bundle = .main) -> String {
+    static func failureMessage(for error: any Error, bundle: Bundle = AppLocalization.bundle) -> String {
         if let historyFailure = error as? HistoryFailure {
             // DATA-7: a live owner in ANOTHER process holds the StoreRoot
             // lease — the finding's "in use by another instance" wording,
@@ -251,7 +311,7 @@ struct PanelRootView: View {
     }
 
     static func pasteFailureMessage(
-        _ failure: ClipyPasteFailure, bundle: Bundle = .main
+        _ failure: ClipyPasteFailure, bundle: Bundle = AppLocalization.bundle
     ) -> String {
         switch failure {
         case .busy:

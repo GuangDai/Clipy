@@ -9,6 +9,10 @@ import Foundation
 /// Closed phase vocabulary prevents user-controlled strings from reaching a
 /// lifecycle event accidentally.
 internal enum StorageLifecycleDebugPhase: String, Codable, Hashable, Sendable {
+    /// The startup transaction creates/recognizes the schema and validates
+    /// configuration, Gateway and bounded journal facts. It does not read
+    /// retained History payloads or build a full-store collection. These
+    /// events leave rows at zero because no inventory count is reported.
     case startupFetchBegin = "startup.fetch.begin"
     case startupFetchComplete = "startup.fetch.complete"
     case startupAutoreleasePoolDrained = "startup.autoreleasepool.drained"

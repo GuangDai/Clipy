@@ -24,6 +24,100 @@ struct SQLiteSearchSnapshotTests {
         }
     }
 
+    private actor SnapshotParkNames {
+        private var nextIndex = 0
+        private var completed: Set<Int> = []
+        func next() -> String {
+            defer { nextIndex += 1 }
+            return "search-snapshot-\(nextIndex)"
+        }
+        func didComplete(_ index: Int) { completed.insert(index) }
+        func hasCompleted(_ index: Int) -> Bool { completed.contains(index) }
+    }
+
+    @Test func concurrentSnapshotsRejectExcessReadsAndReleaseCapacityOnCancellation() async throws {
+        let fixture = try await makeFixture(["needle original"])
+        let worker = fixture.history.searchWorker
+        let request = HistoryBrowseRequest(kind: .search(text: "needle", mode: .exact), limit: 7)
+        let gate = SuspensionGate()
+        let names = SnapshotParkNames()
+        await worker.setSuspensionHandler { point in
+            if point == .evaluationEntry {
+                let name = await names.next()
+                await gate.parkUnlessCancelled(at: name)
+            }
+        }
+        var tasks: [Task<HistoryPage, any Error>] = []
+        do {
+            for index in 0..<SearchWorker.maximumConcurrentSnapshots {
+                let task = Task {
+                    do {
+                        let page = try await fixture.history.browse(request)
+                        await names.didComplete(index)
+                        return page
+                    } catch {
+                        await names.didComplete(index)
+                        throw error
+                    }
+                }
+                tasks.append(task)
+                let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+                while !(await gate.isParked("search-snapshot-\(index)")) {
+                    if await names.hasCompleted(index) {
+                        _ = try await task.value
+                        Issue.record("The search finished before establishing the expected parked snapshot")
+                        throw HistoryFailure.persistence(.invariantViolation)
+                    }
+                    guard ContinuousClock.now < deadline else {
+                        Issue.record("The live search did not reach its snapshot suspension")
+                        throw HistoryFailure.persistence(.invariantViolation)
+                    }
+                    await Task.yield()
+                }
+            }
+            await worker.setSuspensionHandler(nil)
+            // All four real transactions already read history_state. The
+            // overflow must fail before another reader or batch is admitted.
+            let overflow = await fixture.history.measureSearch(request)
+            #expect(throws: HistoryFailure.temporarilyUnavailable(.factProof)) {
+                _ = try overflow.result.get()
+            }
+            #expect(overflow.metrics.rowsDecoded == 0 && overflow.metrics.batchCount == 0)
+            await #expect(throws: HistoryFailure.invalidInput(.invalidPageLimit)) {
+                _ = try await fixture.history.browse(.init(kind: request.kind, limit: 0))
+            }
+            let alreadyCancelled = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                return try await fixture.history.browse(request)
+            }
+            await #expect(throws: CancellationError.self) { _ = try await alreadyCancelled.value }
+            _ = try await fixture.history.perform(.capture(WSSupport.textCapture(
+                "needle committed while readers are alive", observedAt: Date(timeIntervalSinceReferenceDate: 2_000)
+            )))
+            let first = try #require(tasks.first)
+            first.cancel()
+            await gate.resume("search-snapshot-0")
+            await #expect(throws: CancellationError.self) { _ = try await first.value }
+            // Three old readers remain parked. One cancelled request's
+            // cleanup must free capacity for a replacement at the new state.
+            let replacement = try await fixture.history.browse(request)
+            #expect(replacement.rows.count == 2)
+            #expect(replacement.position > fixture.recent.position)
+            for (index, task) in tasks.enumerated().dropFirst() {
+                task.cancel()
+                await gate.resume("search-snapshot-\(index)")
+                await #expect(throws: CancellationError.self) { _ = try await task.value }
+            }
+            #expect(try await Inspector(location: fixture.location).checkpointIsUnblocked())
+        } catch {
+            await worker.setSuspensionHandler(nil)
+            for task in tasks { task.cancel() }
+            await gate.resumeAll()
+            for task in tasks { _ = try? await task.value }
+            throw error
+        }
+    }
+
     @Test(arguments: [SearchMode.exact, .regexp, .fuzzy])
     func SQLBatchesAndContinuationsPreserveTheExistingMatcherResults(mode: SearchMode) async throws {
         let bodies = (0..<73).map { index in

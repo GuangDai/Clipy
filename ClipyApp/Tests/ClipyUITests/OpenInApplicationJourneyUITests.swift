@@ -5,6 +5,8 @@ import XCTest
 /// Exercises the real SwiftUI → AppKit context menu and asynchronous option
 /// preparation, then clicks through to the actual default app document window.
 final class OpenInApplicationJourneyUITests: XCTestCase {
+    @MainActor private var requestedOpen = false
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         continueAfterFailure = false
@@ -24,7 +26,7 @@ final class OpenInApplicationJourneyUITests: XCTestCase {
     private func verifyOpen(image: Bool) throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: root) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("Clipy open fixture " + UUID().uuidString + ".txt")
         try Data("open-in fixture".utf8).write(to: file)
         let item = NSPasteboardItem()
@@ -56,9 +58,13 @@ final class OpenInApplicationJourneyUITests: XCTestCase {
             XCTAssertEqual(documentWindows.count, 0,
                            "A pre-existing same-name document would make the open proof ambiguous.")
         }
-        var requestedOpen = false
-        defer {
-            if requestedOpen {
+        let pasteboard = NSPasteboard.general
+        addTeardownBlock { @MainActor () async in pasteboard.clearContents() }
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([item]))
+        requestedOpen = false
+        addTeardownBlock { @MainActor () async in
+            if self.requestedOpen {
                 if !handlerWasRunning, externalApp.state != .notRunning {
                     externalApp.terminate()
                 } else if let window = documentWindows.allElementsBoundByIndex.first {
@@ -66,19 +72,16 @@ final class OpenInApplicationJourneyUITests: XCTestCase {
                     if close.exists && close.isHittable { close.click() }
                 }
             }
+            self.requestedOpen = false
         }
-        let pasteboard = NSPasteboard.general
-        pasteboard.clearContents()
-        defer { pasteboard.clearContents() }
-        XCTAssertTrue(pasteboard.writeObjects([item]))
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
                                 "-clipy.appearance.previewAutoOpen", "NO"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = root.appendingPathComponent("history.store").path
+        addTeardownBlock { @MainActor () async in app.terminate() }
         app.launch()
-        defer { app.terminate() }
         let row = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "clipy.history.row."
         )).firstMatch

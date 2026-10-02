@@ -1,5 +1,5 @@
-/// Revision preparation capacity tests (docs/05-authority-kernel.md §6.2;
-/// docs/06-cross-cutting.md §2). Per-item limits reject the proposed append
+/// Revision preparation capacity tests (docs/storage.md;
+/// docs/testing.md). Per-item limits reject the proposed append
 /// before a candidate revision can reach Domain planning.
 import Foundation
 import HistoryCore

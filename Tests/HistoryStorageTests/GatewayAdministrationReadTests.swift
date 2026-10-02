@@ -199,6 +199,71 @@ struct GatewayAdministrationReadTests {
         #expect(try await Self.historyPosition(fixture) == 0)
     }
 
+    @Test("administration reads audit malformed grant chronology before rejecting the projection")
+    func malformedGrantChronologyIsNotPublished() async throws {
+        let fixture = try await Self.makeFixture()
+        let id = ExternalConnectionID(rawValue: Self.enrolledID)
+        try await fixture.authority.publishVerifiedLocalAutomationEnrollment(id, displayName: "Local automation")
+        try await fixture.authority.grantCapability(.organize, to: id)
+        try await fixture.authority.withTestDatabase { authority in
+            try authority.database.execute(
+                "UPDATE grants SET revokedAt = grantedAt - 1 WHERE connectionIDRaw = ?",
+                bindings: [.text(id.rawValue.uuidString)]
+            )
+        }
+        let before = try await Self.snapshot(fixture)
+        await #expect(throws: ExternalFailure.persistence(.invariantViolation)) {
+            _ = try await fixture.authority.connections()
+        }
+        await #expect(throws: ExternalFailure.persistence(.invariantViolation)) {
+            _ = try await fixture.authority.grants(for: id)
+        }
+        let after = try await Self.snapshot(fixture)
+        #expect(after.connections == before.connections)
+        #expect(after.grants == before.grants)
+        let failures = after.operations.suffix(2)
+        #expect(failures.map(\.operationKindRaw) == [
+            ExternalOperationKind.adminReadConnections.rawValue,
+            ExternalOperationKind.adminReadGrants.rawValue,
+        ])
+        #expect(failures.allSatisfy {
+            $0.outcomeRaw == ExternalOutcome.failed.rawValue
+                && $0.failureKindRaw == ExternalFailureKindRaw.persistence.rawValue
+                && $0.changePositionRaw == nil
+        })
+        #expect(try await Self.historyPosition(fixture) == 0)
+    }
+
+    @Test(arguments: ["abcdefab-cdef-abcd-efab-cdefabcdefab", "not-a-uuid"])
+    func invalidStoredConnectionIdentityIsNotPublishedOrSilentlyNormalized(rawID: String) async throws {
+        let fixture = try await Self.makeFixture()
+        let id = ExternalConnectionID(rawValue: try #require(UUID(
+            uuidString: "ABCDEFAB-CDEF-ABCD-EFAB-CDEFABCDEFAB"
+        )))
+        try await fixture.authority.publishVerifiedLocalAutomationEnrollment(id, displayName: "Local automation")
+        try await fixture.authority.withTestDatabase { authority in
+            // This connection has no grants, so the mutation preserves SQL
+            // constraints while damaging the typed identity's serialization.
+            try authority.database.execute("UPDATE connections SET id=? WHERE id=?",
+                                           bindings: [.text(rawID), .text(id.rawValue.uuidString)])
+        }
+        await #expect(throws: ExternalFailure.persistence(.corruptStoredValue)) {
+            _ = try await fixture.authority.connections()
+        }
+        await #expect(throws: ExternalFailure.persistence(.corruptStoredValue)) {
+            try await fixture.authority.revokeConnection(id)
+        }
+        #expect(try await Self.historyPosition(fixture) == 0)
+        let unchangedID = try await fixture.authority.withTestDatabase { authority in
+            let row = try authority.database.prepare("SELECT id FROM connections WHERE displayNameRaw=?",
+                                                     bindings: [.text("Local automation")])
+            defer { row.finalize() }
+            guard try row.step() else { throw HistoryFailure.persistence(.invariantViolation) }
+            return try row.text(at: 0)
+        }
+        #expect(unchangedID == rawID)
+    }
+
     @Test("audit since equal to head is empty; above head is an audited denial")
     func auditReadValidatesAgainstFrozenHead() async throws {
         let fixture = try await Self.makeFixture()

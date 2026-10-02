@@ -300,6 +300,84 @@ final class LocalAutomationSocketTests: XCTestCase {
         }
     }
 
+    func testCancelledStartDoesNotRecreateAStoppedEndpoint() async throws {
+        try await withFixture { fixture in
+            await fixture.service.stop()
+            let starting = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                do {
+                    try await fixture.service.start()
+                    XCTFail("a cancelled start must not create a listener")
+                } catch is CancellationError {
+                    // The caller cancelled before any socket was bound.
+                } catch {
+                    XCTFail("expected cancellation, got \(error)")
+                }
+            }
+            await starting.value
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.endpoint.path))
+        }
+    }
+
+    func testCancelledStopJoinsConnectionsAndAllowsACompleteRestart() async throws {
+        try await withFixture { fixture in
+            var clients: [LocalAutomationClient] = []
+            for _ in 0..<4 {
+                clients.append(try await LocalAutomationClient.connect(endpointURL: fixture.endpoint))
+            }
+            // Leave each request stream incomplete. Cleanup must close both
+            // accepted requests and any sockets still queued at the listener.
+            let stopping = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                await fixture.service.stop()
+            }
+            await stopping.value
+            XCTAssertFalse(FileManager.default.fileExists(atPath: fixture.endpoint.path))
+            for client in clients {
+                let output = await client.request(
+                    try Self.json(arguments: ["limit": 1]), credential: fixture.credential,
+                    timeout: 2
+                )
+                XCTAssertEqual(output.exitCode, 5)
+                XCTAssertEqual(output.stderr, Data("clipyctl: not_ready\n".utf8))
+            }
+            try await fixture.service.start()
+            let output = try await fixture.send(Self.json(arguments: ["limit": 1]))
+            XCTAssertEqual(output.exitCode, 3)
+            XCTAssertEqual(output.stderr, Data("clipyctl: not_granted\n".utf8))
+        }
+    }
+
+    #if DEBUG
+    // The deterministic accept-failure hook is compiled only in Debug.
+    func testAcceptFailureRetiresTheDeadListenerBeforeRestart() async throws {
+        try await withFixture { fixture in
+            try await fixture.history.grantCapability(.browsePreview, to: fixture.connection)
+            let failure = await fixture.service.injectNextAcceptFailureForTesting(EMFILE)
+            let queued = try await LocalAutomationClient.connect(endpointURL: fixture.endpoint)
+            var observed = failure.makeAsyncIterator()
+            guard case .some = await observed.next() else {
+                await queued.close()
+                XCTFail("the actual listener did not reach its injected accept failure")
+                return
+            }
+            // The error signal is sent within accept's non-suspending actor
+            // interval. start must join that failure's real cleanup, rather
+            // than returning because an already closed FD remains recorded.
+            try await fixture.service.start()
+            await queued.close()
+            let output = try await fixture.send(Self.json(arguments: ["limit": 3]))
+            let result = try Self.result(output)
+            let items = try XCTUnwrap(result["items"] as? [[String: Any]])
+            XCTAssertEqual(items.count, 3)
+            XCTAssertTrue(items.allSatisfy {
+                ($0["title"] as? String)?.hasPrefix("wire-secret-") == true
+            })
+        }
+    }
+
+    #endif
+
     private struct Fixture: Sendable {
         let history: SQLiteHistory
         let connection: ExternalConnectionID

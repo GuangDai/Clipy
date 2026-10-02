@@ -1,5 +1,5 @@
 /// CaptureCapacityAdmissionTests — stamped-plan capacity admission at the
-/// shared §9–§11 commit tail (docs/05-authority-kernel.md §16).
+/// shared §9–§11 commit tail (docs/storage.md).
 ///
 /// Capacity is an early refusal hint over new raw payload demand. Actual
 /// SQLite/filesystem failures still use their typed transaction mapping.

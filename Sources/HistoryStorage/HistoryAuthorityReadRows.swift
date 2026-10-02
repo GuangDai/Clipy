@@ -3,7 +3,7 @@ import Foundation
 import HistoryCore
 import HistoryDomain
 
-// MARK: - Scalar read row helper (docs/05-authority-kernel.md §14.1)
+// MARK: - Scalar read row helper (docs/storage.md)
 
 /// One bounded metadata projection from a SQLite row. Canonical content,
 /// revisions, inline representation bytes and blob files are not selected.
@@ -18,7 +18,7 @@ internal struct ScalarReadRow {
     internal let sourceCount: Int
     internal let pinOrdinal: PinOrdinal?
 
-    /// Both lanes select precisely this layout. Keeping payload columns out
+    /// Raw scalar readers select this layout. Keeping payload columns out
     /// of the SELECT prevents their materialization, including lookahead rows.
     internal static let columns = """
         id, contentVersion, titleUTF8, effectiveTypeIdentifiersBlob,
@@ -26,7 +26,21 @@ internal struct ScalarReadRow {
         sourceCount
         """
 
-    internal init(_ statement: SQLiteStatement, limits: HistoryLimits) throws {
+    /// The optimizer index and recent SELECT share this exact expression.
+    /// This bounds duplicated bytes; larger valid type metadata still uses
+    /// the original codec envelope through the same-snapshot fallback.
+    internal static let recentInlineTypesMaximumBytes = HistoryLimits.standard.maximumStoredTitleUTF8Bytes
+    internal static let recentInlineTypesExpression = """
+        CASE WHEN length(effectiveTypeIdentifiersBlob) <= \(recentInlineTypesMaximumBytes)
+             THEN effectiveTypeIdentifiersBlob ELSE NULL END
+        """
+    internal static let recentColumns = """
+        id, contentVersion, titleUTF8, \(recentInlineTypesExpression),
+        lastCopiedAt, copyCount, lastSource, pinOrdinal, sourceCount
+        """
+
+    internal init(_ statement: SQLiteStatement, limits: HistoryLimits,
+                  effectiveTypesOverride: Data? = nil) throws {
         // V2-09 §4: bound every variable-size scalar before copying it out
         // of SQLite, just as the search batch reader does.
         guard try statement.textByteCount(at: 0) == 36,
@@ -37,13 +51,13 @@ internal struct ScalarReadRow {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
         let rawID = try statement.text(at: 0)
+        let typesByteCount = try effectiveTypesOverride?.count ?? statement.blobByteCount(at: 3)
         guard let uuid = UUID(uuidString: rawID), uuid.uuidString == rawID,
               try statement.blobByteCount(at: 2) <= limits.maximumStoredTitleUTF8Bytes,
-              try statement.blobByteCount(at: 3) <= EffectiveTypeIdentifiersBlobCodec.maximumBlobBytes(limits: limits) else {
+              typesByteCount <= EffectiveTypeIdentifiersBlobCodec.maximumBlobBytes(limits: limits) else {
             throw HistoryFailure.persistence(.corruptStoredValue)
         }
         id = HistoryItemID(rawValue: uuid)
-        let titleUTF8 = try statement.blob(at: 2)
         let date = try Date(timeIntervalSinceReferenceDate: statement.real(at: 4))
         let count = try sqliteUInt64(statement.blob(at: 5))
         let source = try statement.optionalText(at: 6)
@@ -63,9 +77,9 @@ internal struct ScalarReadRow {
             try RevisionStateBlobCodec.validateFiniteLastCopiedAt(date)
             try RevisionStateBlobCodec.validateCopyCount(count)
             try RevisionStateBlobCodec.validateSourceObservation(source, limits: limits)
-            return try ContentProjector.decodeStoredTitle(titleUTF8, limits: limits)
+            return try statement.utf8Blob(at: 2, maximumByteCount: limits.maximumStoredTitleUTF8Bytes)
         }
-        effectiveTypeIdentifiersBlob = try statement.blob(at: 3)
+        effectiveTypeIdentifiersBlob = try effectiveTypesOverride ?? statement.blob(at: 3)
         lastCopiedAt = date
         copyCount = count
         lastSource = source
@@ -85,9 +99,15 @@ internal struct ScalarReadRow {
         )
     }
 
+    internal var metadataOrderAnchor: StoredOrderingAnchor {
+        .metadata(lastCopiedAt: lastCopiedAt, copyCount: copyCount, id: id)
+    }
+
     /// Whether this row matches the given continuation anchor (04 §6).
     internal func matches(_ anchor: StoredOrderingAnchor) -> Bool {
         switch anchor {
+        case .metadata(let date, let count, let anchoredID):
+            return id == anchoredID && lastCopiedAt == date && copyCount == count
         case .defaultOrder(let pinnedOrdinal, let anchoredLastCopiedAt, let anchoredID):
             return id == anchoredID
                 && lastCopiedAt == anchoredLastCopiedAt
@@ -123,7 +143,7 @@ internal struct ScalarReadRow {
 }
 
 internal extension DomainRejection {
-    /// The exhaustive docs/02-domain.md §6 → Part III mapping the storage
+    /// The exhaustive docs/architecture.md → Part III mapping the storage
     /// boundary applies to every planner throw.
     var historyFailure: HistoryFailure {
         switch self {

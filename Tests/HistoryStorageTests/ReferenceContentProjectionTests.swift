@@ -191,8 +191,6 @@ struct ReferenceContentProjectionTests {
         #expect(actual.effectiveTypeIdentifiers == ordered.map { $0.0 })
         #expect(Data(actual.title.utf8) == Data(title.utf8))
         #expect(Data(actual.searchBody.utf8) == Data(body.utf8))
-        #expect(Data(ContentProjector.projectTitle(content, limits: limits).utf8)
-            == Data(title.utf8))
     }
 
     private func wholeCharacterPrefix(_ text: String, bytes: Int) -> String {

@@ -5,6 +5,9 @@ import SwiftUI
 /// Sliders produce bounded whole milliseconds; there is no half-valid
 /// numeric draft for a concurrent Settings update to consume (V2-07 §6/§9).
 struct AdvancedInteractionSettingsView: View {
+    @Environment(\.locale) private var interfaceLocale
+    @Environment(\.historyBrowsingPreferences) private var browsingPreferences
+    @Environment(\.searchHistoryStore) private var searchHistoryStore
     private let defaults: UserDefaults
     @State private var settings: AdvancedInteractionSettings
 
@@ -14,6 +17,7 @@ struct AdvancedInteractionSettingsView: View {
     }
 
     var body: some View {
+        let _ = interfaceLocale
         Form {
             Section {
                 Toggle(AdvancedInteractionSettingsCopy.text("Remember search between opens"),
@@ -26,8 +30,16 @@ struct AdvancedInteractionSettingsView: View {
                 Text(AdvancedInteractionSettingsCopy.text("Browsing"))
             } footer: {
                 Text(AdvancedInteractionSettingsCopy.text(
-                    "Search is remembered only while Clipy is running. With pointer selection off, click a row or use the arrow keys."
+                    "The current search draft is remembered between panel opens only while Clipy is running. Saved searches below are managed separately. With pointer selection off, click a row or use the arrow keys."
                 ))
+            }
+
+            if let browsingPreferences {
+                HistoryBrowsingSettingsSection(preferences: browsingPreferences)
+            }
+
+            if let searchHistoryStore {
+                SearchHistorySettingsSection(store: searchHistoryStore)
             }
 
             Section {
@@ -54,6 +66,7 @@ struct AdvancedInteractionSettingsView: View {
                     let restored = AdvancedInteractionSettings()
                     restored.store(to: defaults)
                     settings = restored
+                    browsingPreferences?.restoreDefaults()
                 }
                 .accessibilityIdentifier("clipy.settings.interaction.restoreDefaults")
             }

@@ -64,12 +64,12 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         // Remove the previous journey's value before launching, so a late
         // startup text capture cannot acknowledge the first PNG below.
         let pasteboard = NSPasteboard.general
+        addTeardownBlock { @MainActor () async in pasteboard.clearContents() }
         pasteboard.clearContents()
         XCTAssertTrue((pasteboard.pasteboardItems ?? []).isEmpty)
-        defer { pasteboard.clearContents() }
 
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store")
@@ -80,8 +80,10 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         // path activate the per-surface DEBUG sink.
         app.launchEnvironment["CLIPY_UI_TEST_THUMB_MEASUREMENT_PATH"] =
             measurementURL.path
+        // Teardown survives XCTest's early-abort path. Registration order
+        // stops the app before clearing its pasteboard and removing the store.
+        addTeardownBlock { @MainActor () async in app.terminate() }
         app.launch()
-        defer { app.terminate() }
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(
@@ -111,8 +113,8 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         })
         XCTAssertEqual(expectedRefs.count, Self.itemCount)
 
-        // —— Scrolling: use the native History scrollbar for real endpoint
-        //    navigation, including after the second page extends the list.
+        // —— Scrolling: traverse the actual History viewport with wheel
+        //    events, including after the second page extends the list.
         XCTAssertTrue(
             scrollView.waitForExistence(timeout: 10),
             diagnostic(app, context: "history list scroll view")
@@ -286,7 +288,7 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
         for index in 0..<count {
             let png = try encodedPNG(index: index, totalCount: count)
             let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
+            let clearedChangeCount = pasteboard.clearContents()
             let item = NSPasteboardItem()
             XCTAssertTrue(
                 item.setData(png, forType: .png),
@@ -296,29 +298,30 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
                 pasteboard.writeObjects([item]),
                 diagnostic(app, context: "write pasteboard item \(index)")
             )
+            let writtenChangeCount = pasteboard.changeCount
+            print("CLIPY_THUMB_SEED index=\(index + 1) clearedChangeCount=\(clearedChangeCount) writtenChangeCount=\(writtenChangeCount)")
             var capturedIdentifier: String?
             XCTAssertTrue(
                 waitUntil(timeout: 20) {
                     let firstRow = rows.element(boundBy: 0)
                     guard firstRow.exists else { return false }
-                    guard self.historyViewportIsAtTop(
-                        scrollView, firstRow: firstRow
-                    ) else {
-                        // A prepend can move the viewport after an earlier
-                        // navigation. Re-establish the top inside this same
-                        // wait and read a fresh AX row on its next evaluation.
-                        _ = self.dragHistoryScrollbar(in: scrollView, towardEnd: false)
-                        return false
-                    }
                     let identifier = firstRow.identifier
-                    guard !identifier.isEmpty,
-                          !seenIdentifiers.contains(identifier) else { return false }
-                    capturedIdentifier = identifier
-                    return true
+                    let frame = firstRow.frame
+                    if !identifier.isEmpty, !seenIdentifiers.contains(identifier),
+                       !frame.isEmpty, scrollView.frame.contains(frame) {
+                        capturedIdentifier = identifier
+                        return true
+                    }
+                    // Every earlier capture already has a known identifier.
+                    // A new visible first row acknowledges this copy without
+                    // reading an overlay scroller that can disappear between
+                    // its `exists` and `value` snapshots.
+                    _ = self.scrollHistoryViewport(in: scrollView, towardEnd: false)
+                    return false
                 },
                 diagnostic(
                     app,
-                    context: "capture \(index + 1)/\(count) surfaced a new row"
+                    context: "capture \(index + 1)/\(count) surfaced a new row; clear=\(clearedChangeCount), written=\(writtenChangeCount), current=\(pasteboard.changeCount)"
                 )
             )
             // Reuse the exact row that acknowledged this capture. A second
@@ -380,44 +383,27 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
 
     // MARK: - Scrolling
 
-    @MainActor
-    private func historyViewportIsAtTop(
-        _ scrollView: XCUIElement, firstRow: XCUIElement
-    ) -> Bool {
-        let frame = firstRow.frame
-        guard !frame.isEmpty, scrollView.frame.contains(frame) else { return false }
-        let scrollbar = scrollView.scrollBars.firstMatch
-        guard scrollbar.exists else { return true }
-        let rawValue = scrollbar.value
-        let position = (rawValue as? NSNumber)?.doubleValue
-            ?? (rawValue as? String).flatMap(Double.init)
-        // A visible AX row can still be in the middle of a virtualized List.
-        // The native scroller establishes the actual start of the document.
-        return position.map { $0 <= 0.001 } ?? false
-    }
-
     /// One native navigation action, without an inner wait or capture retry.
     /// Callers own their existing overall completion deadline.
     @MainActor
-    private func dragHistoryScrollbar(
+    private func scrollHistoryViewport(
         in scrollView: XCUIElement, towardEnd: Bool
     ) -> Bool {
+        guard scrollView.exists else { return false }
+        let height = scrollView.frame.height
+        guard height > 0 else { return false }
+        // Overlapping viewports expose the pagination boundary as it enters
+        // view. A single giant delta can jump over lazily estimated rows.
+        let deltaY = towardEnd ? -height * 0.75 : height * 0.75
         scrollView.coordinate(
-            withNormalizedOffset: CGVector(dx: 0.98, dy: 0.5)
-        ).hover()
-        let scrollbar = scrollView.scrollBars.firstMatch
-        let thumb = scrollbar.descendants(matching: .valueIndicator).firstMatch
-        guard scrollbar.exists, thumb.exists else { return false }
-        thumb.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-            .click(forDuration: 0.1, thenDragTo: scrollbar.coordinate(
-                withNormalizedOffset: CGVector(dx: 0.5, dy: towardEnd ? 0.99 : 0.01)
-            ))
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        ).scroll(byDeltaX: 0, deltaY: deltaY)
         return true
     }
 
-    /// Drag the real scrollbar to each end. Wheel deltas plus lazy List row
-    /// estimates did not reliably reach the last row on the runner. Another
-    /// drag can be needed after pagination extends the content.
+    /// Visit overlapping viewports until the known endpoint row is fully
+    /// visible. The fixture's row count bounds navigation independently of
+    /// transient scrollbar visibility or lazy document-height estimates.
     @MainActor
     private func scroll(
         to row: XCUIElement,
@@ -429,17 +415,14 @@ final class ThumbnailScrollMeasurementJourneyUITests: XCTestCase {
             let frame = row.frame
             return !frame.isEmpty && scrollView.frame.contains(frame)
         }
-        // Rows can cover the entire container. Move to its scrollbar edge
-        // explicitly so XCTest does not search for an unoccluded blank
-        // region in the ScrollView before revealing the native scroller.
-        for _ in 0..<6 {
+        for _ in 0..<Self.itemCount {
             if endpointIsVisible() { return true }
-            guard dragHistoryScrollbar(in: scrollView, towardEnd: towardEnd) else {
-                XCTFail("The History scrollbar thumb is unavailable.")
+            guard scrollHistoryViewport(in: scrollView, towardEnd: towardEnd) else {
+                XCTFail("The History scroll viewport is unavailable.")
                 return false
             }
-            if waitUntil(timeout: 2, condition: endpointIsVisible) { return true }
         }
+        if waitUntil(timeout: 2, condition: endpointIsVisible) { return true }
         guard row.exists else { return false }
         let rowFrame = row.frame
         let viewport = scrollView.frame

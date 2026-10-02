@@ -4,10 +4,13 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 
+let sqliteScaleSearchTimedSampleCount = 5
+
 struct SQLiteScaleBrowseEvidence: Sendable {
     let count: Int
     let leadingRows: [HistoryRow]
     let oldestRow: HistoryRow?
+    let largeBodyRow: HistoryRow?
 }
 
 struct SQLiteScaleQuery: Codable, Sendable {
@@ -16,6 +19,7 @@ struct SQLiteScaleQuery: Codable, Sendable {
     let pageIndex: Int
     let requestedLimit: Int
     let expectedTotalMatches: Int
+    var expectedSnippetMatch: String? = nil
 }
 
 struct SQLiteScaleSearchCase: Sendable {
@@ -24,18 +28,22 @@ struct SQLiteScaleSearchCase: Sendable {
     let mode: SearchMode
     let expectedRows: [HistoryRow]
     let expectedTotalMatches: Int
+    var expectedSnippetMatch: String? = nil
+    var maximumMeasuredPages: Int = 2
 
     var modeName: String {
         switch mode {
         case .exact: "exact"
         case .fuzzy: "fuzzy"
         case .regexp: "regexp"
+        case .expression: "expression"
         }
     }
 }
 
 func sqliteScaleSearchCases(corpus: SQLiteScaleBrowseEvidence) -> [SQLiteScaleSearchCase] {
     let oldest = corpus.oldestRow.map { [$0] } ?? []
+    let largeBody = corpus.largeBodyRow.map { [$0] } ?? []
     return [
         SQLiteScaleSearchCase(name: "exact-no-hit", text: "ZZZZZZZZ", mode: .exact,
                               expectedRows: [], expectedTotalMatches: 0),
@@ -52,6 +60,29 @@ func sqliteScaleSearchCases(corpus: SQLiteScaleBrowseEvidence) -> [SQLiteScaleSe
                               expectedRows: oldest, expectedTotalMatches: oldest.count),
         SQLiteScaleSearchCase(name: "exact-dense", text: "perf-item-", mode: .exact,
                               expectedRows: corpus.leadingRows, expectedTotalMatches: corpus.count),
+        SQLiteScaleSearchCase(name: "exact-body-dense", text: "bodyhit", mode: .exact,
+                              expectedRows: corpus.leadingRows, expectedTotalMatches: corpus.count,
+                              expectedSnippetMatch: "bodyhit"),
+        SQLiteScaleSearchCase(name: "exact-body-rare", text: "rarebody", mode: .exact,
+                              expectedRows: oldest, expectedTotalMatches: oldest.count,
+                              expectedSnippetMatch: "rarebody"),
+        SQLiteScaleSearchCase(name: "expression-common-rare", text: "bodyhit AND rarebody", mode: .expression,
+                              expectedRows: oldest, expectedTotalMatches: oldest.count,
+                              expectedSnippetMatch: "bodyhit"),
+        SQLiteScaleSearchCase(name: "expression-rare-common", text: "rarebody AND bodyhit", mode: .expression,
+                              expectedRows: oldest, expectedTotalMatches: oldest.count,
+                              expectedSnippetMatch: "rarebody"),
+        SQLiteScaleSearchCase(name: "exact-body-rare-large", text: "largebodyhit", mode: .exact,
+                              expectedRows: largeBody, expectedTotalMatches: largeBody.count,
+                              expectedSnippetMatch: "largebodyhit"),
+        SQLiteScaleSearchCase(name: "expression-common-title-rare-large", text: "perf-item- AND largebodyhit", mode: .expression,
+                              expectedRows: largeBody, expectedTotalMatches: largeBody.count),
+        SQLiteScaleSearchCase(name: "expression-rare-large-common-title", text: "largebodyhit AND perf-item-", mode: .expression,
+                              expectedRows: largeBody, expectedTotalMatches: largeBody.count,
+                              expectedSnippetMatch: "largebodyhit"),
+        SQLiteScaleSearchCase(name: "expression-repeated-common", text: Array(repeating: "perf-item-", count: 128).joined(separator: " "), mode: .expression,
+                              expectedRows: corpus.leadingRows, expectedTotalMatches: corpus.count,
+                              maximumMeasuredPages: 1),
         SQLiteScaleSearchCase(name: "regexp-no-hit", text: "ZZZZZZZZ", mode: .regexp,
                               expectedRows: [], expectedTotalMatches: 0),
         SQLiteScaleSearchCase(name: "regexp-common-grams-no-intersection", text: "1234567", mode: .regexp,
@@ -86,7 +117,8 @@ func validateSQLiteScaleSearchPage(
     expectedPosition: ChangePosition,
     expectedTotalMatches: Int,
     pageIndex: Int,
-    limit: Int
+    limit: Int,
+    expectedSnippetMatch: String? = nil
 ) throws {
     let offset = pageIndex * limit
     let wanted = Array(expectedRows.dropFirst(offset).prefix(limit))
@@ -104,8 +136,22 @@ func validateSQLiteScaleSearchPage(
               actual.typeIdentifiers == expected.typeIdentifiers,
               actual.pinnedPosition == expected.pinnedPosition,
               let presentation = actual.search,
-              presentation.snippet == nil,
               !presentation.matchedRanges.isEmpty else {
+            throw SQLiteScaleError.unexpectedResult
+        }
+        if let expectedSnippetMatch {
+            guard let snippet = presentation.snippet else { throw SQLiteScaleError.unexpectedResult }
+            let text = snippet as NSString
+            for range in presentation.matchedRanges {
+                guard range.location >= 0, range.length > 0,
+                      range.location <= text.length,
+                      range.length <= text.length - range.location,
+                      text.substring(with: NSRange(location: range.location, length: range.length))
+                        .caseInsensitiveCompare(expectedSnippetMatch) == .orderedSame else {
+                    throw SQLiteScaleError.unexpectedResult
+                }
+            }
+        } else if presentation.snippet != nil {
             throw SQLiteScaleError.unexpectedResult
         }
     }
@@ -118,37 +164,63 @@ func exerciseSQLiteScaleSearches(
     samples: inout [SQLiteScaleSample]
 ) async throws {
     let limit = 50
+    var firstFailure: (any Error)?
     for fixture in sqliteScaleSearchCases(corpus: corpus) {
         var cursor: HistoryPageCursor?
-        let pageCount = fixture.expectedTotalMatches > limit ? 2 : 1
+        let pageCount = min(fixture.maximumMeasuredPages, fixture.expectedTotalMatches > limit ? 2 : 1)
         for pageIndex in 0..<pageCount {
+            let phase = "search-\(fixture.name)-page\(pageIndex + 1)"
             let query = SQLiteScaleQuery(
                 text: fixture.text, mode: fixture.modeName, pageIndex: pageIndex,
-                requestedLimit: limit, expectedTotalMatches: fixture.expectedTotalMatches
+                requestedLimit: limit, expectedTotalMatches: fixture.expectedTotalMatches,
+                expectedSnippetMatch: fixture.expectedSnippetMatch
             )
+            let initialSampleCount = samples.count
+            var attemptedSampleIndex = 0
             do {
-                let measured = try await measureSQLiteScale(
-                    phase: "search-\(fixture.name)-page\(pageIndex + 1)", samples: &samples, query: query
-                ) {
-                    await history.measureSearch(HistoryBrowseRequest(
-                        kind: .search(text: fixture.text, mode: fixture.mode), limit: limit, cursor: cursor
-                    ))
-                } facts: { measured in
-                    let result = try measured.result.get()
-                    try validateSQLiteScaleSearchPage(
-                        result, expectedRows: fixture.expectedRows, expectedPosition: position,
-                        expectedTotalMatches: fixture.expectedTotalMatches, pageIndex: pageIndex, limit: limit
-                    )
-                    return (result.rows.count, 0)
-                } searchWork: { SQLiteScaleSearchWork($0.metrics) }
-                cursor = try measured.result.get().next
+                // Reuse this page's input cursor throughout its repetitions;
+                // repeated requests must not advance to later result pages.
+                let request = HistoryBrowseRequest(
+                    kind: .search(text: fixture.text, mode: fixture.mode), limit: limit, cursor: cursor
+                )
+                for sampleIndex in 0...sqliteScaleSearchTimedSampleCount {
+                    attemptedSampleIndex = sampleIndex
+                    try Task.checkCancellation()
+                    let measured = try await measureSQLiteScale(
+                        phase: phase, samples: &samples, query: query,
+                        sampleIndex: sampleIndex, isWarmup: sampleIndex == 0
+                    ) {
+                        await history.measureSearch(request)
+                    } facts: { measured in
+                        let result = try measured.result.get()
+                        try validateSQLiteScaleSearchPage(
+                            result, expectedRows: fixture.expectedRows, expectedPosition: position,
+                            expectedTotalMatches: fixture.expectedTotalMatches, pageIndex: pageIndex, limit: limit,
+                            expectedSnippetMatch: fixture.expectedSnippetMatch
+                        )
+                        return (result.rows.count, 0)
+                    } searchWork: { SQLiteScaleSearchWork($0.metrics) }
+                    // The final successful repetition supplies the cursor
+                    // used by the next page. Every repetition was validated
+                    // independently against the original recent-row evidence.
+                    cursor = try measured.result.get().next
+                }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
                 // Do not use a nonexistent/failed cursor. The sample keeps the
-                // error and final exit is nonzero; independent cases continue.
+                // error; independent cases continue before the first failure
+                // is rethrown to populate the report failure and fail CI.
+                firstFailure = firstFailure ?? error
+                if samples.count == initialSampleCount || samples.last?.failure == nil {
+                    // A pre-operation resource read can fail before a sample
+                    // exists. Preserve that failure without inventing memory,
+                    // latency or row facts for an operation that never began.
+                    print("sqlite-scale phase=\(phase) sampleIndex=\(attemptedSampleIndex) didNotBegin=\(error)")
+                }
                 break
             }
         }
     }
+    if let firstFailure { throw firstFailure }
 }

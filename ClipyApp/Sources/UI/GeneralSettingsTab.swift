@@ -11,8 +11,11 @@ import SwiftUI
 /// `RetentionSettingsTab` as required by `V2-07` §6.3.
 struct GeneralSettingsTab: View {
 
+    @Environment(\.locale) private var interfaceLocale
     private let viewState: HistoryViewState
     private let launchAtLogin: LaunchAtLoginSettings?
+
+    @AppStorage(AppLanguageSettings.defaultsKey) private var language: AppLanguage = .system
 
     @State private var status: SettingStatus?
     @State private var isWorking = false
@@ -30,6 +33,20 @@ struct GeneralSettingsTab: View {
 
     var body: some View {
         Form {
+            Section(AppLanguageCopy.text("Language")) {
+                Picker(AppLanguageCopy.text("Interface language"), selection: $language) {
+                    ForEach(AppLanguage.allCases, id: \.self) { language in
+                        Text(language.title).tag(language)
+                    }
+                }
+                // A localized option title can remain cached by the native
+                // popup. Recreate this control when its display locale changes;
+                // AppStorage continues to own the selected language.
+                .id(interfaceLocale.identifier)
+                .accessibilityIdentifier("clipy.settings.language")
+                Text(AppLanguageCopy.text("Changes apply immediately. Your open drafts stay unchanged."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             if let launchAtLogin {
                 Section(SettingsCopy.text("Startup")) {
                     launchAtLoginControl(launchAtLogin)

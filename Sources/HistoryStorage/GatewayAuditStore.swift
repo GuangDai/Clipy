@@ -119,6 +119,7 @@ internal enum GatewayAuditStore {
                 lowerBound: lower,
                 upperBound: snapshotHead,
                 limit: limits.maxAuditReadBatchSize,
+                limits: limits,
                 in: context
             )
 
@@ -201,12 +202,14 @@ internal enum GatewayAuditStore {
                 config: config,
                 in: context
             )
+            var firstCommittedAt: Date?
             let validatedBytes = try validateInterval(
                 lowerBound: config.compactionFloor,
                 upperBound: config.nextAuditSequence,
                 config: config,
                 in: context,
-                limits: limits
+                limits: limits,
+                firstCommittedAt: &firstCommittedAt
             )
             guard validatedBytes == config.auditBytes else {
                 throw StoreRejection.invariantViolation
@@ -238,6 +241,14 @@ internal enum GatewayAuditStore {
             ).contribution
             let maximumBytes = try checkedUInt64(limits.maxAuditLogSize)
             let maximumAge = TimeInterval(limits.maxAuditAgeSeconds)
+            // The complete retained interval and marker arithmetic have
+            // already been proved. Its first validated timestamp is enough
+            // to reject a no-op without fetching another batch of full rows.
+            guard let firstCommittedAt else { throw StoreRejection.invariantViolation }
+            guard validatedBytes > maximumBytes
+                    || max(0, now.timeIntervalSince(firstCommittedAt)) > maximumAge else {
+                return false
+            }
 
             var newFloor = config.compactionFloor
             var discardedCount: UInt32 = 0
@@ -247,10 +258,11 @@ internal enum GatewayAuditStore {
             var shouldContinue = true
 
             while cursor < config.nextAuditSequence, shouldContinue {
-                let rows = try fetchRows(
+                let rows = try fetchCompactionRows(
                     lowerBound: cursor,
                     upperBound: config.nextAuditSequence,
                     limit: limits.maxAuditReadBatchSize,
+                    limits: limits,
                     in: context
                 )
                 guard !rows.isEmpty else {
@@ -275,7 +287,7 @@ internal enum GatewayAuditStore {
                     }
 
                     let contribution = try logicalContribution(
-                        payloadByteCount: row.payloadBlob.count,
+                        payloadByteCount: row.payloadByteCount,
                         limits: limits
                     )
                     discardedLogicalBytes = try checkedAdd(
@@ -284,7 +296,7 @@ internal enum GatewayAuditStore {
                     )
                     discardedPayloadBytes = try checkedAdd(
                         discardedPayloadBytes,
-                        try checkedUInt64(row.payloadBlob.count)
+                        try checkedUInt64(row.payloadByteCount)
                     )
                     discardedCount = try checkedIncrement(discardedCount)
                     newFloor = try checkedIncrement(row.auditSequence)
@@ -773,6 +785,22 @@ fileprivate extension GatewayAuditStore {
         in context: SQLiteDatabase,
         limits: ExternalLimits
     ) throws -> UInt64 {
+        var firstCommittedAt: Date?
+        return try validateInterval(
+            lowerBound: lowerBound, upperBound: upperBound, config: config,
+            in: context, limits: limits, firstCommittedAt: &firstCommittedAt
+        )
+    }
+
+    static func validateInterval(
+        lowerBound: UInt64,
+        upperBound: UInt64,
+        config: GatewayConfigRow,
+        in context: SQLiteDatabase,
+        limits: ExternalLimits,
+        firstCommittedAt: inout Date?
+    ) throws -> UInt64 {
+        firstCommittedAt = nil
         var cursor = lowerBound
         var total: UInt64 = 0
         while cursor < upperBound {
@@ -780,6 +808,7 @@ fileprivate extension GatewayAuditStore {
                 lowerBound: cursor,
                 upperBound: upperBound,
                 limit: limits.maxAuditReadBatchSize,
+                limits: limits,
                 in: context
             )
             guard !rows.isEmpty else {
@@ -790,6 +819,7 @@ fileprivate extension GatewayAuditStore {
                     throw StoreRejection.invariantViolation
                 }
                 try decodePayload(row, config: config, limits: limits)
+                if cursor == lowerBound { firstCommittedAt = row.committedAt }
                 total = try checkedAdd(
                     total,
                     try logicalContribution(
@@ -803,6 +833,53 @@ fileprivate extension GatewayAuditStore {
         return total
     }
 
+    struct CompactionRow {
+        let auditSequence: UInt64
+        let committedAt: Date
+        let payloadByteCount: Int
+    }
+
+    /// Called only after full retained-row validation, within the same writer
+    /// transaction. Prefix accounting needs no second payload copy, UUID parse
+    /// or raw-enum projection from those already validated immutable rows.
+    static func fetchCompactionRows(
+        lowerBound: UInt64,
+        upperBound: UInt64,
+        limit: Int,
+        limits: ExternalLimits,
+        in context: SQLiteDatabase
+    ) throws -> [CompactionRow] {
+        guard limit > 0 else { throw StoreRejection.invariantViolation }
+        do {
+            let statement = try context.prepare("""
+                SELECT auditSequence, committedAt, length(payloadBlob)
+                FROM operation_records
+                WHERE auditSequence >= ? AND auditSequence < ?
+                ORDER BY auditSequence LIMIT ?
+                """, bindings: [.blob(sqliteUInt64(lowerBound)), .blob(sqliteUInt64(upperBound)), .integer(Int64(limit))])
+            defer { statement.finalize() }
+            var rows: [CompactionRow] = []
+            while try statement.step() {
+                guard try statement.blobByteCount(at: 0) == 8,
+                      let byteCount = Int(exactly: try statement.integer(at: 2)),
+                      (0...limits.maximumAuditPayloadBlobBytes).contains(byteCount) else {
+                    throw StoreRejection.corruptStoredValue
+                }
+                let committedAt = Date(timeIntervalSinceReferenceDate: try statement.real(at: 1))
+                guard committedAt.timeIntervalSinceReferenceDate.isFinite else { throw StoreRejection.corruptStoredValue }
+                rows.append(CompactionRow(auditSequence: try sqliteUInt64(statement.blob(at: 0)),
+                                          committedAt: committedAt, payloadByteCount: byteCount))
+            }
+            return rows
+        } catch let rejection as StoreRejection {
+            throw rejection
+        } catch is HistoryFailure {
+            throw StoreRejection.corruptStoredValue
+        } catch {
+            throw StoreRejection.persistenceRead
+        }
+    }
+
     static func accountRawInterval(
         lowerBound: UInt64,
         upperBound: UInt64,
@@ -812,25 +889,47 @@ fileprivate extension GatewayAuditStore {
         var cursor = lowerBound
         var total: UInt64 = 0
         while cursor < upperBound {
-            let rows = try fetchRows(
-                lowerBound: cursor,
-                upperBound: upperBound,
-                limit: limits.maxAuditReadBatchSize,
-                in: context
-            )
-            guard !rows.isEmpty else { break }
-            for row in rows {
-                guard row.auditSequence == cursor else {
-                    throw StoreRejection.invariantViolation
-                }
-                total = try checkedAdd(
-                    total,
-                    try logicalContribution(
-                        payloadByteCount: row.payloadBlob.count,
-                        limits: limits
+            // Recovery accounts malformed prefix payloads without copying
+            // them into Swift. Only their BLOB storage class and byte length
+            // matter here; ordinary retained rows use the complete decoder.
+            do {
+                let statement = try context.prepare("""
+                    SELECT auditSequence, typeof(payloadBlob), length(payloadBlob)
+                    FROM operation_records
+                    WHERE auditSequence >= ? AND auditSequence < ?
+                    ORDER BY auditSequence LIMIT ?
+                    """, bindings: [
+                        .blob(sqliteUInt64(cursor)), .blob(sqliteUInt64(upperBound)),
+                        .integer(Int64(limits.maxAuditReadBatchSize))
+                    ])
+                defer { statement.finalize() }
+                let batchStart = cursor
+                while try statement.step() {
+                    guard try statement.blobByteCount(at: 0) == 8 else {
+                        throw StoreRejection.corruptStoredValue
+                    }
+                    let sequence = try sqliteUInt64(statement.blob(at: 0))
+                    guard sequence == cursor else {
+                        throw StoreRejection.invariantViolation
+                    }
+                    guard try statement.text(at: 1) == "blob",
+                          let byteCount = Int(exactly: try statement.integer(at: 2)),
+                          byteCount >= 0 else {
+                        throw StoreRejection.corruptStoredValue
+                    }
+                    total = try checkedAdd(
+                        total,
+                        try logicalContribution(payloadByteCount: byteCount, limits: limits)
                     )
-                )
-                cursor = try checkedIncrement(row.auditSequence)
+                    cursor = try checkedIncrement(sequence)
+                }
+                guard cursor != batchStart else { break }
+            } catch let rejection as StoreRejection {
+                throw rejection
+            } catch is HistoryFailure {
+                throw StoreRejection.corruptStoredValue
+            } catch {
+                throw StoreRejection.persistenceRead
             }
         }
         guard cursor == upperBound else {
@@ -891,6 +990,7 @@ fileprivate extension GatewayAuditStore {
         lowerBound: UInt64,
         upperBound: UInt64,
         limit: Int,
+        limits: ExternalLimits,
         in context: SQLiteDatabase
     ) throws -> [OperationRecordRow] {
         guard limit > 0 else { throw StoreRejection.invariantViolation }
@@ -914,7 +1014,7 @@ fileprivate extension GatewayAuditStore {
             defer { statement.finalize() }
             var rows: [OperationRecordRow] = []
             while try statement.step() {
-                rows.append(try decodeRow(statement))
+                rows.append(try decodeRow(statement, limits: limits))
             }
             return rows
         } catch let rejection as StoreRejection {
@@ -928,7 +1028,19 @@ fileprivate extension GatewayAuditStore {
         }
     }
 
-    static func decodeRow(_ statement: SQLiteStatement) throws -> OperationRecordRow {
+    static func decodeRow(
+        _ statement: SQLiteStatement,
+        limits: ExternalLimits
+    ) throws -> OperationRecordRow {
+        // Inspect SQLite's length before making an owned Data copy. A corrupt
+        // value must not bypass the codec's existing 16 KiB decode envelope.
+        guard try statement.blobByteCount(at: 7) <= limits.maximumAuditPayloadBlobBytes else {
+            throw StoreRejection.corruptStoredValue
+        }
+        guard try statement.blobByteCount(at: 0) == 8,
+              try statement.isNull(at: 10) || statement.blobByteCount(at: 10) == 8 else {
+            throw StoreRejection.corruptStoredValue
+        }
         let connectionID: UUID?
         if let raw = try statement.optionalText(at: 1) {
             guard let decoded = UUID(uuidString: raw) else {

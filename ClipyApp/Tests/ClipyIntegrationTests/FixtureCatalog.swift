@@ -3,15 +3,14 @@
 /// `scripts/generate_fixtures.py`, hosted on the `fixtures-v1` GitHub
 /// release, fetched by `scripts/fetch_fixtures.sh`).
 ///
-/// Suites gate themselves with `.enabled(if: FixtureCatalog.available)` so a
-/// fresh clone's `swift test` stays green; CI always fetches the tree (the
-/// fetch step fails the job on any download or checksum error, so a silent
-/// skip on CI is impossible).
+/// Suites use `.enabled(if: FixtureCatalog.available)` when the tree is
+/// absent. CI fetches it and explicitly passes its path to the hosted test
+/// process through the ClipyApp test scheme.
 ///
 /// This file is intentionally duplicated across test targets — SwiftPM test
 /// targets cannot share code without a new library target, and the loader is
-/// deliberately tiny (06 §8 test-independence spirit). Keep the copies
-/// byte-identical: Tests/HistoryStorageTests, Tests/PasteboardAdapterTests,
+/// deliberately tiny. Its other owners are
+/// Tests/HistoryStorageTests, Tests/PasteboardAdapterTests,
 /// Tests/ContentPreviewTests, ClipyApp/Tests/ClipyIntegrationTests.
 import Foundation
 

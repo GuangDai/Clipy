@@ -4,8 +4,8 @@
 /// ⌘P (pin toggle), ⌘I (details) all dispatch through
 /// `HistoryRowView.performAccessibilityAction` into the identical
 /// `HistoryViewState` wiring `HistoryListView.rowContent` installs
-/// (docs/v2/V2-07-ux.md §9; docs/01-architecture.md §5.6 paste hand-off;
-/// docs/03b-instruction-set.md §12 mutating caller examples).
+/// (docs/interface.md; docs/architecture.md paste hand-off;
+/// docs/architecture.md mutating caller examples).
 ///
 /// Three layers, mirroring the suite conventions of
 /// `HistoryViewStateTests`: (1) ROUTER tests hand the row direct recorders

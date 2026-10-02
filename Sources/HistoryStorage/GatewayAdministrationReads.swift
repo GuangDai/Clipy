@@ -1,5 +1,5 @@
-/// X.4 audited Gateway administration reads and healthy-store rebase.
-/// Owning spec: `V2-05` §4.3/§4.4/§5.4–§5.6 and roadmap X.4/GW3.
+/// Audited Gateway administration reads and healthy-store rebase.
+/// Owning documentation: docs/automation.md.
 ///
 /// Every read first constructs an immutable DTO array or typed failure. The
 /// Authority then crosses the mandatory audit transaction before publishing

@@ -1,5 +1,5 @@
 /// Pure connection-kind admission policy for PLAY-PY-GW0.
-/// Owning spec: docs/v2/V2-05-external-gateway.md §0.2.
+/// Owning spec: docs/automation.md
 import HistoryCore
 
 /// Classifies the closed `(connection kind, capability, operation)` matrix

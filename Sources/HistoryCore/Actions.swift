@@ -1,5 +1,5 @@
 /// Actions.swift — the closed History Action set and revision input values.
-/// Owning spec: docs/03a-instruction-set.md §5 (Part III — Caller Interface A).
+/// Owning spec: docs/architecture.md (Part III — Caller Interface A).
 /// Foundation-only; value semantics; complete for v1 — adding an action is an
 /// owned source change across Core, Domain, Storage, and tests (03a §1). The
 /// V2-02 `setRetentionPolicies` case below is the first such addition:
@@ -9,7 +9,7 @@ import Foundation
 /// The complete, closed set of mutations a caller can request via
 /// `ClipboardHistory.perform(_:)`.
 ///
-/// Owning spec: docs/03a-instruction-set.md §5.
+/// Owning spec: docs/architecture.md
 ///
 /// The set is deliberately closed for v1: no generic command protocol, no
 /// default cases — every required switch stays compiler-visible.
@@ -50,7 +50,7 @@ public enum HistoryAction: Sendable {
 
 /// A pinned-order placement for `HistoryAction.placePinned`.
 ///
-/// Owning spec: docs/03a-instruction-set.md §5.
+/// Owning spec: docs/architecture.md
 public enum PinnedPlacement: Sendable, Hashable {
     /// Front of the pinned lane.
     case first
@@ -65,7 +65,7 @@ public enum PinnedPlacement: Sendable, Hashable {
 
 /// Which retained items `HistoryAction.clear` removes.
 ///
-/// Owning spec: docs/03a-instruction-set.md §5.
+/// Owning spec: docs/architecture.md
 public enum ClearScope: Sendable, Hashable {
     /// All unpinned items; pinned items are retained.
     case unpinned
@@ -76,7 +76,7 @@ public enum ClearScope: Sendable, Hashable {
 
 /// A revision request: one item, one expected base version, one intent.
 ///
-/// Owning spec: docs/03a-instruction-set.md §5.
+/// Owning spec: docs/architecture.md
 ///
 /// `expected` is the optimistic-concurrency token: the Content Version the
 /// caller based its edit on. Callers do not mint the new Revision ID or
@@ -99,7 +99,7 @@ public struct RevisionRequest: Sendable {
 
 /// What a revision does: author a new draft, or revert to an existing state.
 ///
-/// Owning spec: docs/03a-instruction-set.md §5.
+/// Owning spec: docs/architecture.md
 public enum RevisionIntent: Sendable {
     /// Authors a new revision from explicit per-type decisions.
     case replace(RevisionDraft)
@@ -110,7 +110,7 @@ public enum RevisionIntent: Sendable {
 
 /// The state a `.revert` intent targets.
 ///
-/// Owning spec: docs/03a-instruction-set.md §5.
+/// Owning spec: docs/architecture.md
 public enum RevisionTarget: Sendable, Hashable {
     /// The item's Canonical Content.
     case canonical
@@ -122,7 +122,7 @@ public enum RevisionTarget: Sendable, Hashable {
 /// A replace draft: one explicit decision for every Canonical type and no
 /// decision for a foreign type.
 ///
-/// Owning spec: docs/03a-instruction-set.md §5.
+/// Owning spec: docs/architecture.md
 ///
 /// The proposed Effective Content must remain non-empty — a draft that hides
 /// every Canonical type is rejected as `invalidInput(.incoherentRevisionDraft)`.
@@ -136,7 +136,7 @@ public struct RevisionDraft: Sendable, Hashable {
 
 /// One per-representation-type decision inside a `RevisionDraft`.
 ///
-/// Owning spec: docs/03a-instruction-set.md §5.
+/// Owning spec: docs/architecture.md
 public struct RevisionDecision: Sendable, Hashable {
     /// Zero-based position of the original system pasteboard item.
     public let pasteboardItemIndex: Int
@@ -157,7 +157,7 @@ public struct RevisionDecision: Sendable, Hashable {
 /// How one Canonical representation type flows into the proposed Effective
 /// Content (resolution performed by `RevisionPreparationActor`, Part V §6.2).
 ///
-/// Owning spec: docs/03a-instruction-set.md §5.
+/// Owning spec: docs/architecture.md
 public enum RevisionDecisionAction: Sendable, Hashable {
     /// Carries the Canonical representation's bytes into Effective unchanged.
     case inheritCanonical

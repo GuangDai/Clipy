@@ -1,5 +1,5 @@
 /// Direct pure-planner proofs for capture invariants D1, D3, D7, D9–D11,
-/// D13–D14, D16, and D18–D19 (docs/02-domain.md §9, §12, §14).
+/// D13–D14, D16, and D18–D19 (docs/architecture.md, §12, §14).
 import Foundation
 import HistoryCore
 import Testing
@@ -58,8 +58,8 @@ internal func captureItem(
     revisions: [ContentRevision] = [],
     activeRevisionID: RevisionID? = nil,
     pinOrdinal: PinOrdinal? = nil
-) -> HistoryItemState {
-    HistoryItemState(
+) -> PlannerItemFixture {
+    PlannerItemFixture(
         id: id,
         contentVersion: .initial,
         canonical: canonical,
@@ -76,7 +76,7 @@ internal func captureItem(
     )
 }
 
-internal func captureSummary(_ item: HistoryItemState) -> RetainedItemSummary {
+internal func captureSummary(_ item: PlannerItemFixture) -> RetainedItemSummary {
     RetainedItemSummary(
         id: item.id,
         lastCopiedAt: item.occurrence.lastCopiedAt,
@@ -104,9 +104,9 @@ internal func preparedCapture(
 
 internal func captureFacts(
     incoming: CanonicalContent,
-    hintedItem: HistoryItemState? = nil,
-    candidates: [HistoryItemState],
-    retained: [HistoryItemState]? = nil,
+    hintedItem: PlannerItemFixture? = nil,
+    candidates: [PlannerItemFixture],
+    retained: [PlannerItemFixture]? = nil,
     additionalSummaries: [RetainedItemSummary] = [],
     candidateID: HistoryItemID = capturePlannerID(250),
     maximumUnpinnedItems: Int? = 100
@@ -115,7 +115,7 @@ internal func captureFacts(
     if let hintedItem {
         confirmedMatch = confirmLineageCapture(
             incoming: incoming,
-            effective: try effectiveContent(of: hintedItem),
+            effective: try hintedItem.currentContent(),
             id: hintedItem.id,
             occurrence: hintedItem.occurrence,
             pinOrdinal: hintedItem.pinOrdinal
@@ -136,6 +136,7 @@ internal func captureFacts(
         confirmedMatch = best?.value
     }
     let retainedItems = retained ?? candidates
+    let retainedByID = Dictionary(uniqueKeysWithValues: retainedItems.map { ($0.id, $0) })
     let summaries = retainedItems.map(captureSummary) + additionalSummaries
     let unpinned = summaries.filter { $0.pinOrdinal == nil }.sorted {
         if $0.lastCopiedAt != $1.lastCopiedAt { return $0.lastCopiedAt < $1.lastCopiedAt }
@@ -154,11 +155,11 @@ internal func captureFacts(
             excludedItemID: primaryID, itemCount: victims.count,
             canonicalBytes: victims.reduce(0) { total, victim in
                 // Summary-only fixtures represent one-byte Canonical items.
-                total + (retainedItems.first { $0.id == victim.id }?.canonical.representations
+                total + (retainedByID[victim.id]?.canonical.representations
                     .reduce(0) { $0 + $1.content.bytes.count } ?? 1)
             },
             revisionBytes: victims.reduce(0) { total, victim in
-                total + (retainedItems.first { $0.id == victim.id }?.revisions.reduce(0) {
+                total + (retainedByID[victim.id]?.revisions.reduce(0) {
                     $0 + $1.content.representations.reduce(0) { $0 + $1.bytes.count }
                 } ?? 0)
             }
@@ -177,7 +178,7 @@ internal func captureFacts(
 
 internal func capturePlan(
     incoming: CanonicalContent,
-    candidates: [HistoryItemState],
+    candidates: [PlannerItemFixture],
     observedAt: TimeInterval = 500
 ) throws -> MutationPlan {
     let result = try planCapture(
@@ -193,7 +194,7 @@ internal func capturePlan(
 
 internal func coalescedWinner(
     incoming: CanonicalContent,
-    candidates: [HistoryItemState]
+    candidates: [PlannerItemFixture]
 ) throws -> HistoryItemID {
     let plan = try capturePlan(incoming: incoming, candidates: candidates)
     guard case .coalesced(let winnerID) = plan.outcome else {
@@ -514,30 +515,6 @@ internal func coalescedWinner(
     #expect(winnerID == confirmed.id)
     #expect(mutatedID == confirmed.id)
     #expect(mutatedID != hinted.id)
-}
-
-@Test func effectiveContentRejectsMissingActiveRevisionBeforeHintConfirmation() throws {
-    let canonical = try captureCanonical([
-        ("public.utf8-plain-text", "text", 1),
-    ])
-    let revision = ContentRevision(
-        id: capturePlannerRevisionID(1),
-        createdAt: Date(timeIntervalSinceReferenceDate: 50),
-        content: EffectiveContent(
-            representations: canonical.representations.map(\.content)
-        )
-    )
-    let corruptHint = captureItem(
-        id: capturePlannerID(1),
-        canonical: canonical,
-        lastCopiedAt: 100,
-        revisions: [revision],
-        activeRevisionID: nil
-    )
-
-    #expect(throws: DomainRejection.corruptLineage) {
-        try effectiveContent(of: corruptHint)
-    }
 }
 
 @Test func exactCanonicalCandidateBeatsNewerSuperset() throws {

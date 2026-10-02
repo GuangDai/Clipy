@@ -1,5 +1,5 @@
 /// Direct pure-planner proofs for pin/remove/clear/revision invariants D2–D4,
-/// D12, D15–D16, and D18 (docs/02-domain.md §10–§11, §14).
+/// D12, D15–D16, and D18 (docs/architecture.md, §14).
 import Foundation
 import HistoryCore
 import Testing
@@ -43,8 +43,8 @@ internal func pinRevisionState(
     contentVersion: ContentVersion = .initial,
     revisions: [ContentRevision] = [],
     activeRevisionID: RevisionID? = nil
-) -> HistoryItemState {
-    HistoryItemState(
+) -> PlannerItemFixture {
+    PlannerItemFixture(
         id: id,
         contentVersion: contentVersion,
         canonical: canonical,
@@ -130,48 +130,6 @@ internal func pinRevisionState(
     }
 }
 
-@Test func validPinnedPlacementEmitsOnlyTheChangedContiguousOrdinals() throws {
-    let first = pinRevisionItemID(1)
-    let target = pinRevisionItemID(2)
-    let anchor = pinRevisionItemID(3)
-    let facts = PinFacts(
-        targetExists: true, targetOrdinal: nil, anchorOrdinal: PinOrdinal(rawValue: 1), pinnedCount: 2
-    )
-    let result = try planPinnedPlacement(
-        itemID: target,
-        placement: .before(anchor),
-        facts: facts
-    )
-
-    guard case .commit(let plan) = result,
-          case .placedPinned(let placedID) = plan.outcome,
-          plan.mutations.count == 1,
-          case .relocatePin(let relocation) = plan.mutations[0]
-    else {
-        Issue.record("A valid before-anchor placement did not emit the complete pin shift")
-        return
-    }
-    #expect(placedID == target)
-    #expect(relocation.itemID == target)
-    #expect(relocation.previousOrdinal == nil)
-    #expect(relocation.destinationOrdinal?.rawValue == 1)
-    #expect(relocation.pinnedCountBefore == 2)
-    #expect(relocation.shift?.range == 1...1)
-    #expect(relocation.shift?.delta == 1)
-
-    switch try planPinnedPlacement(
-        itemID: first,
-        placement: .first,
-        facts: PinFacts(targetExists: true, targetOrdinal: PinOrdinal(rawValue: 0),
-            anchorOrdinal: nil, pinnedCount: 2)
-    ) {
-    case .unchanged:
-        break
-    case .commit:
-        Issue.record("A placement reproducing the existing order was not a no-op")
-    }
-}
-
 @Test func validReorderMovesAnAlreadyPinnedTargetToLast() throws {
     let target = pinRevisionItemID(1)
     let result = try planPinnedPlacement(
@@ -217,57 +175,32 @@ internal func pinRevisionState(
     }
 }
 
-@Test func unpinningAPinnedItemClearsItAndCompactsEveryLaterOrdinal() throws {
+@Test func unpinningClearsTheTargetAndShiftsOnlyFollowingOrdinals() throws {
     let target = pinRevisionItemID(2)
-    let result = try planUnpin(
-        itemID: target,
-        facts: PinFacts(
-            targetExists: true, targetOrdinal: PinOrdinal(rawValue: 1),
-            anchorOrdinal: nil, pinnedCount: 3
+    let cases: [(ordinal: Int, count: Int, shift: ClosedRange<Int>?)] = [
+        (1, 3, 2...2), (0, 1, nil),
+    ]
+    for sample in cases {
+        let result = try planUnpin(
+            itemID: target,
+            facts: PinFacts(targetExists: true, targetOrdinal: PinOrdinal(rawValue: sample.ordinal),
+                anchorOrdinal: nil, pinnedCount: sample.count)
         )
-    )
-
-    guard case .commit(let plan) = result,
-          case .unpinned(let unpinnedID) = plan.outcome,
-          plan.mutations.count == 1,
-          case .relocatePin(let relocation) = plan.mutations[0]
-    else {
-        Issue.record("Unpinning a pinned target did not clear and compact in one plan")
-        return
+        guard case .commit(let plan) = result,
+              case .unpinned(let unpinnedID) = plan.outcome,
+              plan.mutations.count == 1,
+              case .relocatePin(let relocation) = plan.mutations[0] else {
+            Issue.record("Unpinning must clear the target and compact only its suffix")
+            continue
+        }
+        #expect(unpinnedID == target)
+        #expect(relocation.itemID == target)
+        #expect(relocation.previousOrdinal?.rawValue == sample.ordinal)
+        #expect(relocation.destinationOrdinal == nil)
+        #expect(relocation.pinnedCountBefore == sample.count)
+        #expect(relocation.shift?.range == sample.shift)
+        #expect(relocation.shift?.delta == sample.shift.map { _ in -1 })
     }
-    #expect(unpinnedID == target)
-    #expect(relocation.itemID == target)
-    #expect(relocation.previousOrdinal?.rawValue == 1)
-    #expect(relocation.destinationOrdinal == nil)
-    #expect(relocation.pinnedCountBefore == 3)
-    #expect(relocation.shift?.range == 2...2)
-    #expect(relocation.shift?.delta == -1)
-}
-
-@Test func unpinningTheOnlyPinnedItemNeedsExactlyOneNilAssignment() throws {
-    let target = pinRevisionItemID(1)
-    let result = try planUnpin(
-        itemID: target,
-        facts: PinFacts(
-            targetExists: true, targetOrdinal: PinOrdinal(rawValue: 0),
-            anchorOrdinal: nil, pinnedCount: 1
-        )
-    )
-
-    guard case .commit(let plan) = result,
-          case .unpinned(let unpinnedID) = plan.outcome,
-          plan.mutations.count == 1,
-          case .relocatePin(let relocation) = plan.mutations[0]
-    else {
-        Issue.record("Unpinning the only pinned item emitted an unnecessary shift")
-        return
-    }
-    #expect(unpinnedID == target)
-    #expect(relocation.itemID == target)
-    #expect(relocation.previousOrdinal?.rawValue == 0)
-    #expect(relocation.destinationOrdinal == nil)
-    #expect(relocation.pinnedCountBefore == 1)
-    #expect(relocation.shift == nil)
 }
 
 @Test func unpinAndRemoveRejectMissingTargetsWithNotFound() {
@@ -292,75 +225,39 @@ internal func pinRevisionState(
     }
 }
 
-@Test func removingMiddlePinnedItemCompactsLaterOrdinalInTheSamePlan() throws {
+@Test func removingAPinnedItemClearsItsPinAndCompactsOnlyFollowingOrdinals() throws {
     let target = pinRevisionItemID(2)
-    let result = try planRemove(
-        itemID: target,
-        facts: RemoveFacts(
-            item: RetainedItemSummary(
-                id: target,
-                lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
-                pinOrdinal: PinOrdinal(rawValue: 1)
-            ),
-            pinnedCount: 3
+    let cases: [(ordinal: Int, count: Int, shift: ClosedRange<Int>?)] = [
+        (1, 3, 2...2), (0, 1, nil), (1, 2, nil),
+    ]
+    for sample in cases {
+        let result = try planRemove(
+            itemID: target,
+            facts: RemoveFacts(
+                item: RetainedItemSummary(id: target,
+                    lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
+                    pinOrdinal: PinOrdinal(rawValue: sample.ordinal)),
+                pinnedCount: sample.count
+            )
         )
-    )
-
-    guard case .commit(let plan) = result,
-          plan.mutations.count == 2,
-          case .relocatePin(let relocation) = plan.mutations[0],
-          case .retire(let retiredID, let reason) = plan.mutations[1]
-    else {
-        Issue.record("Middle removal did not compact then retire in one plan")
-        return
-    }
-    #expect(relocation.itemID == target)
-    #expect(relocation.previousOrdinal?.rawValue == 1)
-    #expect(relocation.destinationOrdinal == nil)
-    #expect(relocation.pinnedCountBefore == 3)
-    #expect(relocation.shift?.range == 2...2)
-    #expect(relocation.shift?.delta == -1)
-    #expect(retiredID == target)
-    if case .userRemoval = reason {
-        // Expected semantic reason.
-    } else {
-        Issue.record("The removed target carried the wrong retirement reason")
-    }
-}
-
-@Test(arguments: [1, 2])
-func removingLastPinnedItemClearsItsPinWithoutShiftingAnotherItem(pinnedCount: Int) throws {
-    let target = pinRevisionItemID(2)
-    let result = try planRemove(
-        itemID: target,
-        facts: RemoveFacts(
-            item: RetainedItemSummary(
-                id: target,
-                lastCopiedAt: Date(timeIntervalSinceReferenceDate: 100),
-                pinOrdinal: PinOrdinal(rawValue: pinnedCount - 1)
-            ),
-            pinnedCount: pinnedCount
-        )
-    )
-
-    guard case .commit(let plan) = result,
-          plan.mutations.count == 2,
-          case .relocatePin(let relocation) = plan.mutations[0],
-          case .retire(let retiredID, let reason) = plan.mutations[1]
-    else {
-        Issue.record("Last pinned removal emitted an unnecessary pin shift")
-        return
-    }
-    #expect(relocation.itemID == target)
-    #expect(relocation.previousOrdinal?.rawValue == pinnedCount - 1)
-    #expect(relocation.destinationOrdinal == nil)
-    #expect(relocation.pinnedCountBefore == pinnedCount)
-    #expect(relocation.shift == nil)
-    #expect(retiredID == target)
-    if case .userRemoval = reason {
-        // Expected semantic reason.
-    } else {
-        Issue.record("The removed target carried the wrong retirement reason")
+        guard case .commit(let plan) = result,
+              plan.mutations.count == 2,
+              case .relocatePin(let relocation) = plan.mutations[0],
+              case .retire(let retiredID, let reason) = plan.mutations[1] else {
+            Issue.record("Pinned removal must compact only its suffix and retire in the same plan")
+            continue
+        }
+        #expect(relocation.itemID == target)
+        #expect(relocation.previousOrdinal?.rawValue == sample.ordinal)
+        #expect(relocation.destinationOrdinal == nil)
+        #expect(relocation.pinnedCountBefore == sample.count)
+        #expect(relocation.shift?.range == sample.shift)
+        #expect(relocation.shift?.delta == sample.shift.map { _ in -1 })
+        #expect(retiredID == target)
+        guard case .userRemoval = reason else {
+            Issue.record("The removed target carried the wrong retirement reason")
+            continue
+        }
     }
 }
 
@@ -371,6 +268,7 @@ func removingLastPinnedItemClearsItsPinWithoutShiftingAnotherItem(pinnedCount: I
         (1, 4, 5, 3, 2...3, -1),
         (4, 1, 5, 1, 1...3, 1),
         (nil, 0, 3, 0, 0...2, 1),
+        (nil, 1, 2, 1, 1...1, 1),
         (nil, 2, 3, 2, 2...2, 1),
     ]
     for sample in cases {
@@ -378,11 +276,14 @@ func removingLastPinnedItemClearsItsPinWithoutShiftingAnotherItem(pinnedCount: I
             targetExists: true, targetOrdinal: sample.old.map(PinOrdinal.init(rawValue:)),
             anchorOrdinal: PinOrdinal(rawValue: sample.anchor), pinnedCount: sample.count
         ))
-        guard case .commit(let plan) = result, plan.mutations.count == 1,
+        guard case .commit(let plan) = result,
+              case .placedPinned(let placedID) = plan.outcome,
+              plan.mutations.count == 1,
               case .relocatePin(let relocation) = plan.mutations[0] else {
             Issue.record("Before placement must emit one complete interval relocation")
             continue
         }
+        #expect(placedID == target)
         #expect(relocation.itemID == target)
         #expect(relocation.previousOrdinal?.rawValue == sample.old)
         #expect(relocation.destinationOrdinal?.rawValue == sample.destination)

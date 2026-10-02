@@ -1,5 +1,5 @@
 /// MatchHighlighting.swift — search-match highlighting for row titles and
-/// snippets (docs/03b-instruction-set.md §8; roadmap 05).
+/// snippets (docs/architecture.md; roadmap 05).
 ///
 /// Matched ranges are UTF-16 offsets relative to the string they annotate:
 /// the row title when `search.snippet == nil`, else the snippet excerpt. The
@@ -10,9 +10,8 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
-/// Builds a highlighted `AttributedString` — bold plus the accent foreground
-/// color over each matched range, plain elsewhere (docs/
-/// 03b-instruction-set.md §8).
+/// Builds a highlighted `AttributedString`, preserving exact scalar boundaries
+/// within graphemes (docs/search.md).
 enum MatchHighlighting {
 
     /// - Parameters:
@@ -25,30 +24,35 @@ enum MatchHighlighting {
         ranges: [UTF16TextRange],
         foreground: Color = .accentColor
     ) -> AttributedString {
-        // UTF-16 offsets → String index ranges. Range.init?(NSRange, in:)
-        // returns nil for anything not fully inside `text`, but it CLAMPS a
-        // bound that lands between the two units of a surrogate pair into the
-        // surrounding Character instead of failing — so surrogate-splitting
-        // bounds are rejected explicitly before the conversion (03b §8:
-        // dropped, never clamped).
-        let matched = ranges
-            .compactMap { utf16Range -> Range<String.Index>? in
-                // A negative length can convert two valid offsets into a
-                // reversed Swift range; reject it before Foundation bridging.
-                guard utf16Range.location >= 0, utf16Range.length > 0 else { return nil }
-                let (end, overflowed) = utf16Range.location
-                    .addingReportingOverflow(utf16Range.length)
-                guard !overflowed,
-                      !splitsSurrogatePair(of: text, atOffset: utf16Range.location),
-                      !splitsSurrogatePair(of: text, atOffset: end)
-                else { return nil }
-                return Range(
-                    NSRange(
-                        location: utf16Range.location,
-                        length: utf16Range.length
-                    ),
-                    in: text
-                )
+        let bounds: [(start: Int, end: Int)] = ranges.compactMap { range in
+            guard range.location >= 0, range.length > 0 else { return nil }
+            let (end, overflow) = range.location.addingReportingOverflow(range.length)
+            guard !overflow else { return nil }
+            return (range.location, end)
+        }
+        let endpoints = Set(bounds.flatMap { [$0.start, $0.end] })
+        guard let finalOffset = endpoints.max() else { return AttributedString(text) }
+
+        // Resolve all requested UTF-16 boundaries in one scalar walk. Seeking
+        // separately from the string's start for every range repeats O(n)
+        // work; this costs O(n + r log r) and retains only O(r) requested
+        // indices. Surrogate interiors and out-of-string offsets never enter
+        // the map, so those ranges are dropped without clamping.
+        let scalars = text.unicodeScalars
+        var scalarIndex = scalars.startIndex
+        var offset = 0
+        var indices: [Int: String.Index] = [:]
+        indices.reserveCapacity(endpoints.count)
+        if endpoints.contains(0) { indices[0] = scalarIndex }
+        while scalarIndex < scalars.endIndex, offset < finalOffset {
+            offset += scalars[scalarIndex].value > 0xFFFF ? 2 : 1
+            scalarIndex = scalars.index(after: scalarIndex)
+            if endpoints.contains(offset) { indices[offset] = scalarIndex }
+        }
+        let matched = bounds
+            .compactMap { bound -> Range<String.Index>? in
+                guard let start = indices[bound.start], let end = indices[bound.end] else { return nil }
+                return start..<end
             }
             .sorted { $0.lowerBound < $1.lowerBound }
 
@@ -77,15 +81,4 @@ enum MatchHighlighting {
         return result
     }
 
-    /// Whether `offset` lands strictly between the two units of a surrogate
-    /// pair — i.e. the UTF-16 unit immediately before it is a lead surrogate.
-    /// Such an offset is not a scalar boundary; `Range(NSRange, in:)` clamps
-    /// it into the surrounding Character instead of returning nil, so callers
-    /// must reject it themselves. Out-of-string offsets are left for the
-    /// NSRange conversion to reject, as before.
-    private static func splitsSurrogatePair(of text: String, atOffset offset: Int) -> Bool {
-        guard offset > 0, offset <= text.utf16.count else { return false }
-        let before = text.utf16.index(text.utf16.startIndex, offsetBy: offset - 1)
-        return UTF16.isLeadSurrogate(text.utf16[before])
-    }
 }

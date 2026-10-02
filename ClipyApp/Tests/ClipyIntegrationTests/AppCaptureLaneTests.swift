@@ -14,6 +14,68 @@ import Testing
 
 struct AppCaptureLaneTests {
 
+    @Test @MainActor
+    func aCaptureSubmittedByTheCompletionHealthCallbackKeepsTheLaneSerialized() async throws {
+        let base = try await ComposedSupport.openMemoryHistory()
+        let history = FirstCaptureSuspendingHistory(base: base)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history, adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        defer { composition.stop() }
+        let healthProbe = CaptureHealthProbe()
+        var injectOnNextHealth = false
+        var injected = false
+        composition.onCaptureHealthChanged = { health in
+            healthProbe.receive(health)
+            guard injectOnNextHealth else { return }
+            injectOnNextHealth = false
+            injected = true
+            composition.submitCaptureForTesting(Self.capture("C", at: 3))
+            #expect(composition.captureHealth.activeCommitCount == 1)
+            #expect(composition.captureHealth.pendingCaptureCount == 1)
+        }
+
+        composition.submitCaptureForTesting(Self.capture("A", at: 1))
+        await history.waitUntilFirstCaptureIsSuspended()
+        composition.submitCaptureForTesting(Self.capture("B", at: 2))
+        injectOnNextHealth = true
+        await history.resumeFirstCapture()
+        await healthProbe.waitForIdle(failedCaptureCount: 0, lastFailure: nil)
+
+        #expect(injected)
+        let page = try await base.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
+        #expect(page.rows.map(\.title) == ["C", "B", "A"])
+        #expect(await history.captureAttemptCount == 3)
+        #expect(composition.captureHealth.replacedCaptureCount == 0)
+    }
+
+    @Test @MainActor
+    func stoppingBeforeTheCaptureTaskStartsDoesNotCallHistory() async throws {
+        let base = try await ComposedSupport.openMemoryHistory()
+        let history = FirstCaptureSuspendingHistory(base: base, suspendsFirstCapture: false)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+
+        composition.submitCaptureForTesting(Self.capture("cancelled before execution", at: 1))
+        let task = try #require(composition.activeCaptureForTesting)
+        // No suspension between admission and stop: the MainActor task has
+        // been allocated, but has not reached the History boundary.
+        composition.stop()
+        await task.value
+
+        #expect(await history.captureAttemptCount == 0)
+        #expect(try await base.browse(HistoryBrowseRequest(kind: .recent, limit: 10)).rows.isEmpty)
+        #expect(composition.captureHealth.activeCommitCount == 0)
+    }
+
     /// Card 6 discriminator: with A active, B occupies the one pending slot,
     /// and C replaces B. After dismissing that episode, D replaces C and must
     /// surface again. Resuming the real History commit therefore retains
@@ -702,6 +764,10 @@ private actor FirstCaptureLowDiskFailingHistory: ClipboardHistory {
         try await base.browse(request)
     }
 
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await base.sourceApplications(request)
+    }
+
     func observe(
         _ request: HistoryObservationRequest
     ) async -> AsyncThrowingStream<HistoryPage, Error> {
@@ -814,15 +880,19 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
     }
 
     private let base: SQLiteHistory
+    private let suspendsFirstCapture: Bool
     private var captureCount = 0
     private var didCompleteSecondCapture = false
     private var firstCaptureContinuation: CheckedContinuation<Void, Never>?
     private var firstCaptureWaiters: [CheckedContinuation<Void, Never>] = []
     private var secondCaptureWaiters: [CheckedContinuation<Void, Never>] = []
 
-    init(base: SQLiteHistory) {
+    init(base: SQLiteHistory, suspendsFirstCapture: Bool = true) {
         self.base = base
+        self.suspendsFirstCapture = suspendsFirstCapture
     }
+
+    var captureAttemptCount: Int { captureCount }
 
     func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
         guard case .capture = action else {
@@ -831,7 +901,7 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
 
         captureCount += 1
         let captureOrdinal = captureCount
-        guard captureOrdinal == 1 else {
+        guard captureOrdinal == 1, suspendsFirstCapture else {
             let receipt = try await base.perform(action)
             if captureOrdinal == 2 {
                 didCompleteSecondCapture = true
@@ -881,6 +951,10 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
         try await base.browse(request)
+    }
+
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await base.sourceApplications(request)
     }
 
     func observe(

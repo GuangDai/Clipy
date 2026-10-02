@@ -134,6 +134,13 @@ struct ExternalFailureMappingTests {
                 ]
             ),
             MatrixRow(
+                source: .invalidInput(.conflictingPageAnchors),
+                expected: [
+                    .invariant, .invariant, .invariant, .invariant,
+                    .invariant, .invariant, .invariant,
+                ]
+            ),
+            MatrixRow(
                 source: .invalidInput(.invalidPixelSize),
                 expected: [
                     .invariant, .invariant, .invariant, .invariant,

@@ -96,10 +96,11 @@ extension HistoryAuthority {
         _ stamped: StampedCommitPlan,
         expectedPreviousPosition: ChangePosition,
         in database: SQLiteDatabase,
-        captureObservation: (application: String?, copiedAt: Date)? = nil
+        captureObservation: (application: String?, copiedAt: Date)? = nil,
+        initialCopySources: [(itemID: HistoryItemID, application: String?, copiedAt: Date)] = []
     ) throws -> HistoryReceipt {
         try executeCommitTransaction(stamped, expectedPreviousPosition: expectedPreviousPosition, in: database,
-                                     captureObservation: captureObservation)
+                                     captureObservation: captureObservation, initialCopySources: initialCopySources)
         return publishCommittedHistory(HistoryCommit(
             position: stamped.position, outcome: stamped.receiptOutcome,
             hasDestructiveRetentionEffects: stamped.hasDestructiveRetentionEffects

@@ -91,23 +91,25 @@ struct FloatingPanelMarkedTextEventTests {
     /// boolean supplied straight to the decision helper. It proves direct
     /// responder delivery and deliberately does not claim a physical CJK
     /// input source, InputMethodKit process, or WindowServer key sequence.
-    @Test("marked Escape and Return bypass window-level product actions")
+    @Test("marked keys and active search candidates precede panel actions")
     func markedKeysAreDeliveredDirectlyToTheTextResponder() throws {
         let appDelegate = AppDelegate()
         var submissionCount = 0
+        let responder = RecordingMarkedTextView(
+            frame: NSRect(x: 0, y: 0, width: 100, height: 30)
+        )
+        responder.isCompletionActive = true
         let panel = FloatingPanel(
             rootView: PanelRootView(appDelegate: appDelegate),
             previewState: appDelegate.previewState,
             isSelectionSubmissionEnabled: { true },
+            isSearchCompletionActive: { responder.isCompletionActive },
             onSubmitSelection: { submissionCount += 1 },
             onClosed: {}
         )
         defer { panel.close() }
         panel.open(at: .center, statusItemButtonScreenFrame: nil)
 
-        let responder = RecordingMarkedTextView(
-            frame: NSRect(x: 0, y: 0, width: 100, height: 30)
-        )
         panel.contentView?.addSubview(responder)
         try #require(panel.makeFirstResponder(responder))
         responder.setMarkedText(
@@ -134,6 +136,26 @@ struct FloatingPanelMarkedTextEventTests {
             UInt16(kVK_Escape), UInt16(kVK_Return),
         ])
         #expect(submissionCount == 0)
+
+        responder.unmarkText()
+        try #require(!responder.hasMarkedText())
+        appDelegate.previewState.isInformationPresented = true
+        NSApp.sendEvent(returnKey)
+        NSApp.sendEvent(escape)
+        #expect(responder.receivedKeyCodes == [
+            UInt16(kVK_Escape), UInt16(kVK_Return),
+            UInt16(kVK_Return), UInt16(kVK_Escape),
+        ])
+        #expect(submissionCount == 0)
+        #expect(appDelegate.previewState.isInformationPresented)
+        #expect(panel.isPresented)
+
+        responder.isCompletionActive = false
+        NSApp.sendEvent(returnKey)
+        #expect(submissionCount == 1)
+        NSApp.sendEvent(escape)
+        #expect(!appDelegate.previewState.isInformationPresented)
+        #expect(panel.isPresented)
     }
 
     private func keyDown(
@@ -158,6 +180,7 @@ struct FloatingPanelMarkedTextEventTests {
 
 @MainActor
 private final class RecordingMarkedTextView: NSTextView {
+    var isCompletionActive = false
     private(set) var receivedKeyCodes: [UInt16] = []
 
     override func keyDown(with event: NSEvent) {
@@ -315,6 +338,29 @@ struct PopupPositionGeometryTests {
 
 struct GlobalHotKeyTests {
 
+    @Test @MainActor
+    func droppingARegisteredHotKeyReleasesItsCarbonChord() {
+        var hotKey: GlobalHotKey? = GlobalHotKey(
+            keyCode: UInt32(kVK_F17),
+            modifiers: UInt32(controlKey | optionKey | cmdKey),
+            id: 101,
+            action: {}
+        )
+        #expect(hotKey?.register() == true)
+        let replacement = GlobalHotKey(
+            keyCode: UInt32(kVK_F17),
+            modifiers: UInt32(controlKey | optionKey | cmdKey),
+            id: 102,
+            action: {}
+        )
+        defer { replacement.unregister() }
+        #expect(!replacement.register(), "a live owner reserves this exact chord")
+        let wasReleased = { [weak hotKey] in hotKey == nil }
+        hotKey = nil
+        #expect(wasReleased())
+        #expect(replacement.register(), "the destroyed owner leaves neither a hotkey nor a handler")
+    }
+
     /// Carbon registration works on the headless runner (no accessibility
     /// grant needed — that is why the Carbon API was chosen), re-registration
     /// is an idempotent no-op, and `fire()` runs the action (the tail of the
@@ -331,7 +377,7 @@ struct GlobalHotKeyTests {
         hotKey.unregister()  // idempotent teardown
     }
 
-    /// S-6 (docs/reviews/2026-08-20-clipy-maccy-audit/01-standards.md): the
+    /// S-6 (docs/testing.md): the
     /// Carbon handler no longer assumes main-thread delivery — it checks
     /// `Thread.isMainThread` and block-hops through `DispatchQueue.main.sync`
     /// otherwise. The C callback is file-private and only Carbon can invoke

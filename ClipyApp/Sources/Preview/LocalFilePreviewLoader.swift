@@ -1,3 +1,4 @@
+import ContentPreview
 import Darwin
 import Foundation
 import HistoryCore
@@ -17,6 +18,18 @@ enum LocalFilePreviewDebugInstrumentation {
 actor LocalFilePreviewLoader {
     static let maximumBytes = 64 * 1_048_576
     private static let chunkBytes = 64 * 1_024
+    private static let maximumQueuedReads = 32
+
+    private struct ReadWaiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, any Error>
+    }
+    private var isReading = false
+    private var readWaiters: [ReadWaiter] = []
+
+    #if DEBUG
+    var debugQueuedReadCount: Int { readWaiters.count }
+    #endif
 
     /// This checks the copied address and supported suffix only, with no
     /// destination lookup or I/O. The confirmed load uses the same rules.
@@ -31,6 +44,13 @@ actor LocalFilePreviewLoader {
         let path = url.path(percentEncoded: false)
         let type = try Self.typeIdentifier(forExtension: url.pathExtension)
 
+        // Chunk reads deliberately yield for cancellation. Actor reentrancy
+        // must not turn that into many simultaneously accumulated 64 MiB
+        // files. Waiting calls retain only their already bounded address.
+        try await acquireReadSlot()
+        defer { releaseReadSlot() }
+        try Task.checkCancellation()
+
         // lstat reads metadata, not file contents. Dataless placeholders and
         // symlinks are not regular local-file input for this explicit action;
         // in particular, never open a cloud placeholder to materialize it.
@@ -39,6 +59,7 @@ actor LocalFilePreviewLoader {
             throw Self.failure(for: errno)
         }
         try Self.checkFile(initialStatus)
+        try Self.checkPreviewSize(initialStatus, typeIdentifier: type)
         let isLocalVolume: Bool?
         do {
             isLocalVolume = try url.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal
@@ -59,6 +80,7 @@ actor LocalFilePreviewLoader {
             throw Self.failure(for: errno)
         }
         try Self.checkFile(openedStatus)
+        try Self.checkPreviewSize(openedStatus, typeIdentifier: type)
 
         var bytes = Data()
         bytes.reserveCapacity(Int(openedStatus.st_size))
@@ -79,6 +101,10 @@ actor LocalFilePreviewLoader {
             guard chunk.count <= Self.maximumBytes - bytes.count else {
                 throw FilePreviewFailure.tooLarge
             }
+            // A writer can grow a file after both metadata checks. Enforce
+            // the selected renderer's smaller limit on every chunk before
+            // appending, so rich text never accumulates up to the image cap.
+            try Self.checkPreviewByteCount(bytes.count + chunk.count, typeIdentifier: type)
             bytes.append(chunk)
 #if DEBUG
             if let didReadChunk = LocalFilePreviewDebugInstrumentation.didReadChunk {
@@ -111,6 +137,45 @@ actor LocalFilePreviewLoader {
         return HistoryRepresentation(typeIdentifier: finalType, bytes: bytes)
     }
 
+    private func acquireReadSlot() async throws {
+        try Task.checkCancellation()
+        guard isReading else {
+            isReading = true
+            return
+        }
+        guard readWaiters.count < Self.maximumQueuedReads else {
+            throw FilePreviewFailure.unavailable
+        }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                readWaiters.append(ReadWaiter(id: id, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelReadWaiter(id) }
+        }
+    }
+
+    private func cancelReadWaiter(_ id: UUID) {
+        guard let index = readWaiters.firstIndex(where: { $0.id == id }) else { return }
+        readWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
+    }
+
+    private func releaseReadSlot() {
+        guard !readWaiters.isEmpty else {
+            isReading = false
+            return
+        }
+        // Handoff keeps the slot occupied. A cancellation racing this resume
+        // is checked by load before metadata lookup or opening the next file;
+        // its defer then passes ownership to the next remaining caller.
+        readWaiters.removeFirst().continuation.resume()
+    }
+
     private nonisolated static func localFileURL(_ address: String) throws -> URL {
         guard address.utf8.count <= 16 * 1_024,
               let url = URL(string: address, encodingInvalidCharacters: false),
@@ -131,6 +196,21 @@ actor LocalFilePreviewLoader {
         guard status.st_mode & S_IFMT == S_IFREG else { throw FilePreviewFailure.unsupported }
         guard status.st_flags & UInt32(SF_DATALESS) == 0 else { throw FilePreviewFailure.unavailable }
         guard status.st_size >= 0, status.st_size <= Int64(maximumBytes) else {
+            throw FilePreviewFailure.tooLarge
+        }
+    }
+
+    private static func checkPreviewSize(_ status: stat, typeIdentifier: String) throws {
+        try checkPreviewByteCount(Int(status.st_size), typeIdentifier: typeIdentifier)
+    }
+
+    private static func checkPreviewByteCount(_ byteCount: Int, typeIdentifier: String) throws {
+        // Metadata already proves whether the selected renderer will reject
+        // the file. Reuse its format limit before allocating or reading bytes.
+        let source = ContentPreview.prepareHistoryPane([
+            PreviewRepresentationMetadata(typeIdentifier: typeIdentifier, byteCount: byteCount)
+        ]).first
+        if source?.preflightFailure == .failed(.resourceLimit) {
             throw FilePreviewFailure.tooLarge
         }
     }

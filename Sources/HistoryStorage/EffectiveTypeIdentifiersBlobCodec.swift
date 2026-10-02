@@ -2,28 +2,28 @@
 /// versioned wire value and codec for
 /// `HistoryItemRow.effectiveTypeIdentifiersBlob`, the durable projection of
 /// the current Effective Content's type identifiers.
-/// Owning spec: docs/05-authority-kernel.md §3.1 (projection fields), §4
+/// Owning spec: docs/storage.md (projection fields), §4
 /// (versioned storage codecs), §15 (projection rules: "effective type
-/// identifiers: sorted unique list"); gates: docs/06-cross-cutting.md §7.3
+/// identifiers: sorted unique list"); gates: docs/testing.md
 /// (codec round trip) and §7.4 (corruption rejection).
 import Foundation
 import HistoryCore
 
-// MARK: - Wire value (docs/05-authority-kernel.md §4)
+// MARK: - Wire value (docs/storage.md)
 
 /// Versioned wire value of the effective type identifiers blob: a sorted,
-/// unique, non-empty list at format version 1 (docs/05-authority-kernel.md
+/// unique, non-empty list at format version 1 (docs/storage.md
 /// §4).
 internal struct EffectiveTypeIdentifiersBlobV1: Codable, Sendable {
     internal let formatVersion: UInt16
     internal let typeIdentifiers: [String]
 }
 
-// MARK: - Codec (docs/05-authority-kernel.md §4)
+// MARK: - Codec (docs/storage.md)
 
 /// Encodes the validated effective-type-identifiers projection to its
 /// durable blob and decodes the blob back with the full §4 check set,
-/// failing closed with `CodecRejection`. docs/05-authority-kernel.md §4
+/// failing closed with `CodecRejection`. docs/storage.md
 internal enum EffectiveTypeIdentifiersBlobCodec {
     /// The only blob version this codec reads or writes (§4: "known blob
     /// version (exactly 1 for each V1 blob)").
@@ -57,7 +57,7 @@ internal enum EffectiveTypeIdentifiersBlobCodec {
     /// - every identifier is non-empty and within the Part VI UTF-8 bound;
     /// - identifiers are unique and strictly increasing in the stable
     ///   Unicode scalar order of a normalized content set
-    ///   (docs/02-domain.md §2.1).
+    ///   (docs/architecture.md).
     ///
     /// `limits` is the fixed `HistoryLimits.standard` profile in production
     /// (Part VI §2); focused tests inject smaller bounds.
@@ -113,7 +113,7 @@ internal enum EffectiveTypeIdentifiersBlobCodec {
     /// format. Production callers use `encode(_:)`, which builds the wire
     /// value from the validated projection; this entry point exists so tests
     /// can craft decodable-but-invalid blobs through the exact production
-    /// serializer (docs/06-cross-cutting.md §7.4).
+    /// serializer (docs/testing.md).
     internal static func encodeWire(_ wire: EffectiveTypeIdentifiersBlobV1) throws -> Data {
         do {
             return try CodecWireFormat.makeEncoder().encode(wire)

@@ -18,8 +18,10 @@ internal enum PreviewHTMLRenderer {
         do {
             var parser = Parser(source, maximumOutputBytes: maximumOutputBytes, textConfiguration: textConfiguration)
             return .content(.text(try parser.render()))
-        } catch {
+        } catch is CancellationError {
             return .failed(.cancelled)
+        } catch {
+            return .failed(.malformedRepresentation)
         }
     }
 
@@ -30,14 +32,7 @@ internal enum PreviewHTMLRenderer {
             // Consume exactly one encoding signature, then decode code units
             // in that fixed byte order. A second FEFF/FFFE is content, not a
             // fresh signature for Foundation to consume or use to swap bytes.
-            var units: [UInt16] = []
-            units.reserveCapacity((bytes.count - 2) / 2)
-            var iterator = bytes.dropFirst(2).makeIterator()
-            while let first = iterator.next(), let second = iterator.next() {
-                units.append(littleEndian
-                    ? UInt16(first) | UInt16(second) << 8
-                    : UInt16(first) << 8 | UInt16(second))
-            }
+            let units = PreviewUTF16CodeUnits(bytes: bytes.dropFirst(2), littleEndian: littleEndian)
             return String(validating: units, as: UTF16.self)
         }
         let payload = bytes.starts(with: [0xEF, 0xBB, 0xBF]) ? bytes.dropFirst(3) : bytes[...]
@@ -141,10 +136,11 @@ internal enum PreviewHTMLRenderer {
                 }
             }
             try Task.checkCancellation()
-            return PreviewText(
+            return try PreviewText(
                 text: output,
                 wasTruncated: truncated,
-                configuration: textConfiguration
+                configuration: textConfiguration,
+                checkCancellation: { try Task.checkCancellation() }
             )
         }
 
@@ -333,10 +329,15 @@ internal enum PreviewHTMLRenderer {
                 return
             }
             if tag.name == "head" {
-                headDepth = tag.closing ? max(0, headDepth - 1) : headDepth + 1
+                // Template contents cannot open or close the surrounding
+                // document's head. Their raw-text elements still need the
+                // token-boundary handling above while all text is suppressed.
+                if templateDepth == 0 {
+                    headDepth = tag.closing ? max(0, headDepth - 1) : headDepth + 1
+                }
                 return
             }
-            if tag.name == "body", !tag.closing { headDepth = 0 }
+            if tag.name == "body", !tag.closing, templateDepth == 0 { headDepth = 0 }
             if tag.name == "template" {
                 templateDepth = tag.closing ? max(0, templateDepth - 1) : templateDepth + 1
                 return

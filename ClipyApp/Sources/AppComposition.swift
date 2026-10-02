@@ -2,10 +2,10 @@
 /// that constructs the production `SQLiteHistory`, the pasteboard
 /// adapter and observer, and the panel view state, and the ONLY coordinator
 /// of the History → pasteboard hand-off.
-/// Owning spec: docs/01-architecture.md §2 (ClipyApp composition-root row),
+/// Owning spec: docs/architecture.md (ClipyApp composition-root row),
 /// §5.6 (paste orchestration), §8 (no second writer, no service locator);
-/// caller example docs/03b-instruction-set.md §12; store startup
-/// docs/05-authority-kernel.md §2/§13; roadmap docs/roadmap/06-clipyapp.md
+/// caller example docs/architecture.md; store startup
+/// docs/storage.md; roadmap docs/architecture.md
 /// (step 9b).
 import AppKit
 import Foundation
@@ -14,7 +14,7 @@ import HistoryStorage
 import LocalAutomation
 import PasteboardAdapter
 
-// MARK: - Composition error (docs/roadmap/06-clipyapp.md acceptance)
+// MARK: - Composition error (docs/architecture.md acceptance)
 
 /// The one failure vocabulary ClipyApp owns itself. Everything
 /// storage-related stays `HistoryFailure` (03b §10); this error exists only
@@ -131,7 +131,7 @@ struct WorkspaceActivityState: Sendable, Equatable {
     }
 }
 
-// MARK: - AppComposition (docs/01-architecture.md §2, §5.6, §8)
+// MARK: - AppComposition (docs/architecture.md, §5.6, §8)
 
 /// The assembled application object: the opened store, the pasteboard
 /// adapter and its observer, and the panel's view state, wired together
@@ -167,6 +167,13 @@ final class AppComposition {
 
     /// The panel's state holder over HistoryCore DTOs (01 §6).
     let viewState: HistoryViewState
+
+    /// Settings browses the same authority with its own query and bounded
+    /// page window, so opening a workspace never changes the floating panel.
+    let historyWorkspaceViewState: HistoryViewState
+    let historyWorkspaceCopyState = HistoryWorkspaceCopyState()
+    let searchHistoryStore = SearchHistoryStore(defaults: .standard)
+    let historyBrowsingPreferences = HistoryBrowsingPreferences(defaults: .standard)
 
     /// App-local synchronous consumer for the one real panel surface. The
     /// ingress and user-receipt announcement paths both await/apply here
@@ -221,6 +228,8 @@ final class AppComposition {
     /// task can reach its first `await`, so a second UI gesture is rejected as
     /// `.busy` instead of entering FIFO/latest-wins machinery (CLIP-5).
     private var pasteTask: Task<Void, Never>?
+    private enum PasteSource { case panel, workspace }
+    private var pasteSource: PasteSource?
     private let filePreviewLoader = LocalFilePreviewLoader()
 
 #if DEBUG
@@ -367,6 +376,7 @@ final class AppComposition {
         )
         let viewState = HistoryViewState(history: history)
         self.viewState = viewState
+        historyWorkspaceViewState = HistoryViewState(history: history)
         let panelSurfacePurgeRelay = PanelSurfacePurgeRelay(
             viewState: viewState
         )
@@ -388,6 +398,10 @@ final class AppComposition {
         lastPublishedCaptureAccessState = captureAccessReducer.state
         self.captureByteLimit = captureByteLimit
         self.capturePauseDuration = capturePauseDuration
+    }
+
+    isolated deinit {
+        stop()
     }
 
     /// Opens the persistent store (creating the store's parent directory
@@ -582,6 +596,12 @@ final class AppComposition {
         viewState.onPaste = { [weak self] item in
             self?.requestPaste(item)
         }
+        historyWorkspaceViewState.onPaste = { [weak self] item in
+            self?.requestPaste(item, source: .workspace)
+        }
+        historyWorkspaceCopyState.cancel = { [weak self] in
+            self?.cancelWorkspaceCopy()
+        }
         viewState.onExportRepresentation = { representation in
             guard let window = NSApp.keyWindow else { return .failure(.unavailable) }
             return await RepresentationExporter.saveAs(representation, for: window)
@@ -589,6 +609,16 @@ final class AppComposition {
         let filePreviewLoader = self.filePreviewLoader
         viewState.filePreviewSettings = FilePreviewSettings { address in
             try await filePreviewLoader.load(address)
+        }
+        historyWorkspaceViewState.filePreviewSettings = viewState.filePreviewSettings
+        historyWorkspaceViewState.onExportRepresentation = viewState.onExportRepresentation
+        viewState.onCommittedSurfacePurge = { [weak self] purge, position in
+            self?.historyWorkspaceViewState.acceptPeerSurfacePurge(purge, position: position)
+        }
+        historyWorkspaceViewState.onCommittedSurfacePurge = { [weak self] purge, position in
+            guard let self else { return }
+            let received = viewState.acceptPeerSurfacePurge(purge, position: position)
+            panelSurfacePurgeRelay.apply(received)
         }
         viewState.onCommittedUserRemoval = { [weak self] purge in
             self?.panelSurfacePurgeRelay.apply(purge)
@@ -645,13 +675,19 @@ final class AppComposition {
         viewState.filePreviewSettings = nil
         viewState.onExportRepresentation = { _ in .failure(.unavailable) }
         viewState.onCommittedUserRemoval = { _ in }
+        viewState.onCommittedSurfacePurge = { _, _ in }
+        historyWorkspaceViewState.deactivate()
+        historyWorkspaceViewState.onPaste = { _ in }
+        historyWorkspaceViewState.filePreviewSettings = nil
+        historyWorkspaceViewState.onExportRepresentation = { _ in .failure(.unavailable) }
+        historyWorkspaceViewState.onCommittedSurfacePurge = { _, _ in }
         pendingCapture = nil
         drainsPreInactivityPendingCapture = false
         captureTask?.cancel()
         captureTask = nil
         activeCaptureBytes = 0
         publishCaptureHealthIfChanged()
-        cancelPendingPaste()
+        cancelAllPendingPastes()
     }
 
     func stopLocalAutomation() async {
@@ -664,14 +700,29 @@ final class AppComposition {
     /// post-read cancellation check precedes the synchronous MainActor write;
     /// cancellation never attempts to undo an already completed write.
     func cancelPendingPaste() {
+        guard pasteSource == .panel else { return }
+        cancelAllPendingPastes()
+    }
+
+    private func cancelWorkspaceCopy() {
+        if pasteSource == .workspace { cancelAllPendingPastes() }
+        historyWorkspaceCopyState.status = nil
+    }
+
+    private func cancelAllPendingPastes() {
         pasteTask?.cancel()
         pasteTask = nil
+        pasteSource = nil
+        historyWorkspaceCopyState.isCopying = false
     }
 
 #if DEBUG
     /// Lets hosted tests join the exact cancelled task after its deliberately
     /// non-cooperative History read returns, without scheduler-turn guesses.
     var pendingPasteForTesting: Task<Void, Never>? { pasteTask }
+
+    /// Joins a capture cancelled before the owned task starts executing.
+    var activeCaptureForTesting: Task<Void, Never>? { captureTask }
 #endif
 
     /// Card 14C: apply the AppDelegate-owned power/login-session facts without
@@ -699,8 +750,6 @@ final class AppComposition {
         guard isStarted, captureAccessState == .allowed else { return }
         capturePauseTask?.cancel()
         captureAccessReducer.pause()
-        publishCaptureAccessStateIfChanged()
-        reconcileCaptureObservation()
 
         let duration = capturePauseDuration
         capturePauseTask = Task { @MainActor [weak self] in
@@ -726,6 +775,11 @@ final class AppComposition {
             self.capturePauseTask = nil
             self.resumeCapture()
         }
+        // A state observer may synchronously Resume or stop the composition.
+        // Install ownership first so that callback cancels this deadline,
+        // and cannot leave a newly allocated sleep behind after returning.
+        reconcileCaptureObservation()
+        publishCaptureAccessStateIfChanged()
     }
 
     /// Manual and timed Resume share one privacy-preserving path. Re-reading
@@ -836,7 +890,9 @@ final class AppComposition {
     /// active operation and one replaceable pending capture; no observation
     /// creates an independent task (REVIEW Card 6).
     private func admitCapture(_ capture: ClipboardCapture, runAutomaticWorkflows: Bool = true) {
-        guard isStarted, acceptsCaptures else { return }
+        guard isStarted, acceptsCaptures,
+              captureAccessState.permitsBackgroundPolling,
+              workspaceActivity.permitsProductActivity else { return }
         // The Settings ▸ Privacy ignore list is re-read on EVERY admission
         // (a cheap immutable-struct load; no cached copy can go stale, so a
         // Settings edit applies to the very next copy). An ignored source
@@ -894,6 +950,7 @@ final class AppComposition {
         _ capture: ClipboardCapture,
         history: any ClipboardHistory
     ) async -> CaptureExecutionOutcome {
+        guard !Task.isCancelled else { return .cancelled }
         do {
             let receipt = try await history.perform(.capture(capture))
             return .completed(receipt)
@@ -916,8 +973,9 @@ final class AppComposition {
         capture: ClipboardCapture?,
         failureCountAtAdmission: Int
     ) {
-        captureTask = nil
-        activeCaptureBytes = 0
+        // Keep the finishing task's slot reserved through synchronous receipt
+        // and health callbacks. A reentrant observation then replaces the
+        // pending value instead of starting a second task before this drain.
         switch outcome {
         case .completed(let receipt):
             viewState.acceptCaptureReceipt(receipt)
@@ -950,12 +1008,17 @@ final class AppComposition {
         else {
             pendingCapture = nil
             drainsPreInactivityPendingCapture = false
+            captureTask = nil
+            activeCaptureBytes = 0
             publishCaptureHealthIfChanged()
             return
         }
         pendingCapture = nil
         drainsPreInactivityPendingCapture = false
-        publishCaptureHealthIfChanged()
+        captureTask = nil
+        activeCaptureBytes = 0
+        // Reserve the next task before publishing its health. There is no
+        // callback-visible empty slot between these two owned operations.
         startCapture(next)
     }
 
@@ -1100,14 +1163,20 @@ final class AppComposition {
     /// refreshes the rows. Auto-paste (Command-V) and plain-text paste
     /// remain out of scope (05-recommended-target-design.md product
     /// decisions).
-    private func requestPaste(_ item: HistoryItemReference) {
+    private func requestPaste(_ item: HistoryItemReference, source: PasteSource = .panel) {
+        guard isStarted else { return }
         // Exclusive first-accepted policy (REVIEW CLIP-5/Card 7): the first
         // request reserves the slot before any suspension. There is no
         // pending request because a later pasteboard overwrite is not a
         // reversible operation and repeated UI activation should be busy.
         guard pasteTask == nil else {
-            onPasteFailed?(.busy)
+            reportPasteFailure(.busy, source: source)
             return
+        }
+        pasteSource = source
+        if source == .workspace {
+            historyWorkspaceCopyState.isCopying = true
+            historyWorkspaceCopyState.status = nil
         }
 
         let history = self.history
@@ -1129,14 +1198,28 @@ final class AppComposition {
             // Release admission before publishing either hook so a user's
             // explicit retry from failure UI is immediately admissible.
             pasteTask = nil
+            pasteSource = nil
+            if source == .workspace { historyWorkspaceCopyState.isCopying = false }
             switch outcome {
             case .completed:
-                onPasteCompleted?()
+                if source == .workspace {
+                    historyWorkspaceCopyState.status = .success(SettingsCopy.text("Copied to Clipboard"))
+                } else {
+                    onPasteCompleted?()
+                }
             case .failed(let failure):
-                onPasteFailed?(failure)
+                reportPasteFailure(failure, source: source)
             case .cancelled:
                 break
             }
+        }
+    }
+
+    private func reportPasteFailure(_ failure: ClipyPasteFailure, source: PasteSource) {
+        if source == .workspace {
+            historyWorkspaceCopyState.status = .failure(PanelRootView.pasteFailureMessage(failure))
+        } else {
+            onPasteFailed?(failure)
         }
     }
 
@@ -1156,6 +1239,7 @@ final class AppComposition {
         adapter: PasteboardAdapter,
         pasteWriteFailureForTesting: PasteboardWriteFailure?
     ) async -> PasteExecutionOutcome {
+        guard !Task.isCancelled else { return .cancelled }
         let payload: PastePayload
         do {
             payload = try await history.pastePayload(for: item.id)

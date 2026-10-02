@@ -1,6 +1,6 @@
 #if DEBUG
 /// Opt-in, Debug-only search-path instrumentation for diagnosing the
-/// hard-bound workload in docs/06-cross-cutting.md §9. The probe records only
+/// hard-bound workload in docs/testing.md The probe records only
 /// timings and aggregate sizes: clipboard text, search terms, source
 /// applications, and store paths never enter an event.
 import Foundation

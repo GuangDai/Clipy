@@ -1,7 +1,7 @@
 /// AppIntentDependencyRegistration.swift — the sole framework-owned
 /// dependency registration point for Clipy's App Intents surface.
-/// Owning spec: docs/v2/V2-05-external-gateway.md §6.5–§6.6 and
-/// docs/v2/V2-roadmap.md X.7 (`PLAY-PY-B0I`, `X-COMPILE-2/3/4`).
+/// Owning spec: docs/automation.md and
+/// docs/testing.md X.7 (`PLAY-PY-B0I`, `X-COMPILE-2/3/4`).
 import AppIntents
 import HistoryCore
 
@@ -43,8 +43,16 @@ enum AppIntentDependencyRegistration {
     ) -> Provider {
         {
             do {
-                return try await provider()
+                try Task.checkCancellation()
+                let ingress = try await provider()
+                // Awaiting the shared store-open task does not cancel it.
+                // A retired invocation must still stop before using its result.
+                try Task.checkCancellation()
+                return ingress
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
+                try Task.checkCancellation()
                 throw ExternalFailure.temporarilyUnavailable(.storeLocked)
             }
         }

@@ -1,15 +1,15 @@
 /// PasteboardMarkers — the fixed pasteboard concealment/private-marker set
-/// recognized at the capture seam. Owning spec: docs/05-authority-kernel.md
-/// §6.1 (capture preparation step 3) and docs/02-domain.md §2.1 (normalized
-/// representation set); roadmap: docs/roadmap/04-pasteboardadapter.md.
+/// recognized at the capture seam. Owning spec: docs/storage.md
+/// §6.1 (capture preparation step 3) and docs/architecture.md (normalized
+/// representation set); roadmap: docs/testing.md.
 ///
 /// A marker is a property of the pasteboard item, not a payload
 /// representation: when any one of these types is present, the whole
 /// capture is concealed (`ClipboardCapture.isConcealed`) and HistoryStorage
 /// rejects the entire observation as `.invalidInput(.excludedFromHistory)`
-/// before fingerprinting (docs/05-authority-kernel.md §6.1 step 1). The
+/// before fingerprinting (docs/storage.md step 1). The
 /// adapter never strips a marker and submits its sibling plaintext as an
-/// ordinary capture (docs/roadmap/04-pasteboardadapter.md deliverable 1).
+/// ordinary capture (docs/testing.md deliverable 1).
 ///
 /// The set mirrors `IngestPreparationActor.standardTransientTypeIdentifiers`
 /// exactly (defense in depth: storage re-checks the same six strings).
@@ -29,7 +29,7 @@ import Foundation
 /// - `com.agilebits.onepassword` / `com.typeit4me.clipping` — reported
 ///   application conventions for private clipboard content.
 enum PasteboardMarkers {
-    /// The whole-capture exclusion set (docs/05-authority-kernel.md §6.1).
+    /// The whole-capture exclusion set (docs/storage.md).
     ///
     /// Deliberately a set of raw strings, not `NSPasteboard.PasteboardType`,
     /// so the check is testable against pure type-identifier lists.
@@ -45,7 +45,7 @@ enum PasteboardMarkers {
     /// Whether a pasteboard item carrying exactly `types` must be excluded
     /// from History as concealed/private/transient content. Any single
     /// marker excludes the whole item (whole-capture semantics,
-    /// docs/05-authority-kernel.md §6.1 step 3).
+    /// docs/storage.md step 3).
     static func marksConcealed(_ types: [String]) -> Bool {
         types.contains { concealedTypeIdentifiers.contains($0) }
     }

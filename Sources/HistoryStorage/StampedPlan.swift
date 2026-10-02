@@ -107,20 +107,14 @@ internal struct StampedCommitPlan: Sendable {
         )
     }
 
-    /// Only user pin mutations/removal/clear can change the pinned lane (D12).
+    /// Domain's pinned removal includes a relocation before its delete.
+    /// Scope clear either preserves the lane or leaves it empty (D12).
     internal var requiresFinalPinOrderValidation: Bool {
         mutations.contains { mutation in
             switch mutation {
             case .relocatePin:
                 return true
-            case .delete(_, let reason):
-                switch reason {
-                case .userRemoval, .clear:
-                    return true
-                case .retention:
-                    return false
-                }
-            case .create, .updateOccurrence, .appendRevision, .setRetentionPolicy:
+            case .delete, .create, .updateOccurrence, .appendRevision, .setRetentionPolicy:
                 return false
             case .pruneRevisions, .setRetentionPolicies, .bulkClear, .retirePrefix:
                 return false

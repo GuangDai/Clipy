@@ -1,0 +1,12 @@
+"Floating panel opens at" = "浮窗打开位置";
+"Settings History opens at" = "设置中的历史页打开位置";
+"Start of list (current sort order)" = "列表开头（按当前排序）";
+"Last read position" = "上次阅读位置";
+"Forget saved reading positions" = "清除保存的阅读位置";
+"Opening position" = "打开位置";
+"Last read saves only the record’s identifier, separately for each surface. It does not save clipboard content or search text. If that record is no longer available in the current results, browsing returns to the start with a notice." = "浮窗与历史页分别保存上次阅读记录的标识，不保存剪贴板正文或搜索文字。如果该记录不在当前结果中，会返回列表开头并显示提示。";
+"Remember History workspace layout" = "记住历史页布局";
+"Reset History workspace layout" = "重置历史页布局";
+"History workspace" = "历史页布局";
+"Remembers the list and preview widths, sort order, and row density. Turning this off keeps the current layout until the workspace closes and removes its saved layout." = "保存列表与预览的宽度、排序和行密度。关闭后会删除已保存的布局，当前布局保持到离开历史页为止。";
+"Saved reading position is unavailable in these results. Showing the start of the list." = "上次阅读的记录不在当前结果中，已返回列表开头。";

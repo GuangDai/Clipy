@@ -1,5 +1,5 @@
 /// Fixed admission and resource bounds for the external-gateway substrate.
-/// Owning spec: docs/v2/V2-05-external-gateway.md §4.5.
+/// Owning spec: docs/automation.md
 import Foundation
 
 /// The immutable limits used by gateway schema validation and bootstrap.

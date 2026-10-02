@@ -1,26 +1,9 @@
-/// StoreRootLeaseTests — the DATA-7a cross-process single-writer lease proof
-/// (REVIEW docs/reviews/2026-08-22-clipy-maccy-deep-review/01-findings.md
-/// DATA-7; 04-tdd-remediation-playbook.md PLAY-DISK-0B;
-/// 11-ai-todo-map-2026-08-23.md §4.5).
-///
-/// A live probe child owns the store through the public facade (holding the
-/// StoreRoot lease); a second process's open of the SAME root must fail with
-/// the typed `.persistence(.storeAlreadyOpen)` before any database connection
-/// exists; after the owner's CLEAN exit — stdin EOF, ordinary process
-/// termination — a fresh child reacquires. The record lock is released by
-/// the kernel on any process exit, so no stale-lease reclamation exists to
-/// test. The same-process member pins the per-process record-lock semantics
-/// the in-process restart tests rely on (WS14/WS21 composed restart, HCR
-/// owner-release): a second acquisition inside one process is permitted, and
-/// the same-process no-second-writer rule stays at the app composition
-/// root's `ClipyCompositionError.storeAlreadyOpen` guard.
-///
-/// The Package.swift test-target dependency guarantees the probe is already
-/// built; the test launches the same `.build/debug` product convention used
-/// by the sibling restart children, without nesting another SwiftPM process
-/// inside `swift test`. The store directory is created upfront (repo CI
-/// rule).
+/// docs/storage.md: a retained public external entry still owns the sole
+/// writer after SQLiteHistory is released. Another process must be rejected
+/// until that writer is released; the original process stays alive throughout.
+/// SwiftPM builds the existing restart probe before this suite runs.
 import Foundation
+import HistoryCore
 import Testing
 @testable import HistoryStorage
 
@@ -30,36 +13,35 @@ struct StoreRootLeaseTests {
         case childFailed
     }
 
-    /// fcntl record locks are per-PROCESS: a second acquisition inside this
-    /// same process succeeds. This pins the deliberate allowance the
-    /// in-process sequential-reopen tests exercise; cross-process denial is
-    /// the child proof below.
-    @Test("a second acquisition in the same process is permitted")
-    func sameProcessReacquisitionIsPermitted() throws {
-        let storeRoot = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "clipy-store-lease-process-\(UUID().uuidString)",
-                isDirectory: true
-            )
-        try FileManager.default.createDirectory(
-            at: storeRoot,
-            withIntermediateDirectories: false
-        )
-        defer { try? FileManager.default.removeItem(at: storeRoot) }
-        let storeURL = storeRoot.appendingPathComponent("history.sqlite")
+    enum OwnerKind: CaseIterable, Sendable, Equatable {
+        case history, appIntentsFacade, localAutomationIngress
+    }
 
-        let first = try StoreRootLease.acquire(storeURL: storeURL)
-        let second = try StoreRootLease.acquire(storeURL: storeURL)
-        withExtendedLifetime((first, second)) {
-            #expect(FileManager.default.fileExists(
-                atPath: storeURL.deletingLastPathComponent()
-                    .appendingPathComponent("history.sqlite.lease").path
-            ))
+    private enum RetainedOwner: Sendable {
+        case history(SQLiteHistory)
+        case appIntents(ExternalHistoryFacade)
+        case localAutomation(LocalAutomationIngress)
+
+        func readAfterFacadeRelease(clientDirectory: URL) async throws {
+            switch self {
+            case .history(let history):
+                #expect(try await history.connections().count == 1)
+            case .appIntents(let facade):
+                guard case .page(let page) = try await facade.read(.recent(limit: 1)) else {
+                    throw FixtureError.childFailed
+                }
+                #expect(page.rows.isEmpty)
+            case .localAutomation(let ingress):
+                let state = try await ingress.state(clientDirectory: clientDirectory)
+                #expect(state.connection == nil)
+            }
+            // Each public read above commits its real Gateway audit, proving
+            // that the retained entry still reaches a writable Authority.
         }
     }
 
-    @Test("second process lease is denied until the owner's clean exit")
-    func secondProcessLeaseDeniedUntilOwnerExits() throws {
+    @Test("second process cannot open until the retained writer is released", arguments: OwnerKind.allCases)
+    func secondProcessLeaseFollowsTheRetainedWriter(kind: OwnerKind) async throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -78,63 +60,44 @@ struct StoreRootLeaseTests {
         defer { try? FileManager.default.removeItem(at: storeRoot) }
         let storeURL = storeRoot.appendingPathComponent("history.sqlite")
 
-        // Owner child: opens through the public facade, reports the held
-        // lease with the READY marker, then parks until stdin EOF.
-        let owner = Process()
-        owner.executableURL = probeURL
-        owner.arguments = ["leaseHold", storeURL.path]
-        let ownerOutput = Pipe()
-        let ownerInput = Pipe()
-        owner.standardInput = ownerInput
-        owner.standardOutput = ownerOutput
-        // Framework diagnostics can contain the store path. They are neither
-        // evidence nor useful parent output, so keep the tracer channel
-        // fixed and content-free.
-        owner.standardError = FileHandle.nullDevice
-        try owner.run()
-
-        // Deterministic handshake — the marker, never a sleep, fences the
-        // owner's acquired lease before the second process attempts its own.
-        let readyMarker = Data("LEASEHOLD_READY\n".utf8)
-        var transcript = Data()
-        while transcript.range(of: readyMarker) == nil {
-            let chunk = ownerOutput.fileHandleForReading.availableData
-            guard !chunk.isEmpty else {
-                owner.terminate()
-                throw FixtureError.childFailed
-            }
-            transcript.append(chunk)
+        // The helper returns only the selected owner. For the external cases
+        // SQLiteHistory has already left scope, not merely lost a weak view.
+        // Join startup maintenance before dropping the fixture's facade so
+        // no background task hides release of the selected writer owner.
+        var owner: RetainedOwner? = try await Self.makeOwner(kind, storeURL: storeURL)
+        try withExtendedLifetime(owner) {
+            try Self.runChild(
+                phase: "openRejectLeasedStore",
+                storeURL: storeURL,
+                probeURL: probeURL,
+                expectedOutput: "OPENREJECTLEASEDSTORE_OK\n"
+            )
         }
+        try await owner?.readAfterFacadeRelease(clientDirectory: storeRoot.appendingPathComponent("client"))
+        owner = nil
 
-        // The second process's open of the SAME StoreRoot fails with the
-        // typed lease denial; the probe child asserts the exact
-        // `HistoryFailure` through the production public open path.
-        try Self.runChild(
-            phase: "openRejectLeasedStore",
-            storeURL: storeURL,
-            probeURL: probeURL,
-            expectedOutput: "OPENREJECTLEASEDSTORE_OK\n"
-        )
-
-        // Clean owner exit (stdin EOF → ordinary process termination)
-        // releases the lease; the owner's store stays a healthy empty store.
-        try ownerInput.fileHandleForWriting.close()
-        let tail = try ownerOutput.fileHandleForReading.readToEnd() ?? Data()
-        transcript.append(tail)
-        owner.waitUntilExit()
-        guard owner.terminationReason == .exit,
-              owner.terminationStatus == EXIT_SUCCESS,
-              transcript == Data("LEASEHOLD_READY\nLEASEHOLD_OK\n".utf8) else {
-            throw FixtureError.childFailed
-        }
-
-        // A fresh child reacquires the released StoreRoot.
+        // This process remains alive. Reacquisition therefore proves actual
+        // writer release, rather than the kernel's unconditional exit cleanup.
         try Self.runChild(
             phase: "leaseHold",
             storeURL: storeURL,
             probeURL: probeURL,
             expectedOutput: "LEASEHOLD_READY\nLEASEHOLD_OK\n"
         )
+    }
+
+    private static func makeOwner(_ kind: OwnerKind, storeURL: URL) async throws -> RetainedOwner {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .persistent(storeURL: storeURL)))
+        if kind == .appIntentsFacade {
+            let connection = try #require(try await history.connections().first { $0.enrollKind == .appIntents })
+            try await history.grantCapability(.browse, to: connection.id)
+        }
+        await history.authority.waitForBlobCleanup()
+        switch kind {
+        case .history: return .history(history)
+        case .appIntentsFacade: return .appIntents(history.makeAppIntentsHistoryFacade())
+        case .localAutomationIngress: return .localAutomation(history.localAutomationIngress())
+        }
     }
 
     private static func runChild(

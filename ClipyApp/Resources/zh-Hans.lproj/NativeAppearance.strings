@@ -3,3 +3,8 @@
 "Light" = "浅色";
 "Dark" = "深色";
 "Uses the macOS accent color and contrast settings." = "使用 macOS 的强调色和对比度设置。";
+"Animation speed" = "动画速度";
+"%d — Slowest" = "%d — 最慢";
+"%d — Fastest" = "%d — 最快";
+"Level %d" = "第 %d 档";
+"Animation changes apply immediately and respect Reduce Motion in macOS." = "动画速度立即生效，并遵循 macOS 的减少动态效果设置。";

@@ -322,6 +322,44 @@ struct LocalAutomationIngressTests {
     }
 
 #if DEBUG
+    @Test("Search retries one concurrent write and bounds repeated invalidation", arguments: [1, 100])
+    func writesBetweenSearchCaptureAndReadHaveBoundedRetries(invalidations: Int) async throws {
+        let fixture = try await makeFixture()
+        let credential = fixture.credentials[0]
+        let race = IngressSearchSnapshotRace()
+        let execute: @Sendable () async throws -> LocalAutomationResult = {
+            try await ExternalReadPublicationDebugInstrumentation.$beforeSearchSnapshotRead.withValue({
+                let attempt = await race.next()
+                if attempt <= invalidations {
+                    _ = try await fixture.history.perform(.capture(WSSupport.textCapture(
+                        "sentinel concurrent \(attempt)",
+                        observedAt: Date(timeIntervalSinceReferenceDate: 960_000_000 + Double(attempt))
+                    )))
+                }
+            }) {
+                try await fixture.ingress.execute(
+                    .search(text: "sentinel", mode: .exact, limit: 10, cursor: nil),
+                    presenting: credential.exactBytes
+                )
+            }
+        }
+        if invalidations == 1 {
+            guard case .page(let page) = try await execute() else {
+                Issue.record("Expected the retried search page")
+                return
+            }
+            #expect(page.rows.count == 2)
+        } else {
+            await #expect(throws: ExternalFailure.temporarilyUnavailable(.storeLocked)) {
+                _ = try await execute()
+            }
+            #expect(await race.attempts < invalidations, "A busy writer cannot hold the external request forever")
+        }
+        let audit = try await fixture.history.auditLog(since: 1)
+        let searches = audit.filter { $0.operationKind == .readSearch }
+        #expect(searches.map(\.outcome) == [invalidations == 1 ? .succeeded : .failed])
+    }
+
     @Test func revocationDuringSearchPreventsItsResultPublication() async throws {
         let fixture = try await makeFixture()
         let credential = fixture.credentials[0]
@@ -411,6 +449,11 @@ struct LocalAutomationIngressTests {
 private actor IngressRemovalRecorder {
     private(set) var count = 0
     func record(_ itemID: HistoryItemID) { count += 1 }
+}
+
+private actor IngressSearchSnapshotRace {
+    private(set) var attempts = 0
+    func next() -> Int { attempts += 1; return attempts }
 }
 
 private struct IngressMemoryCredentialOperations: CredentialStoreExternalOperations {

@@ -105,7 +105,7 @@ extension WS14RestartReconstructionTests {
 
     // WS14 (ii): occurrence fields — A's coalesce fold (count 2, first/last
     // times and sources) and B/C's initial occurrences survive the restart
-    // exactly (docs/05-authority-kernel.md §3.1, §9 occurrence folding).
+    // exactly (docs/storage.md, §9 occurrence folding).
     #expect(
         rowA.copyCount == 2,
         "WS14 (occurrences): A's repeat copy folded pre-restart"
@@ -212,7 +212,7 @@ extension WS14RestartReconstructionTests {
 
     // WS14 (ii): pin order — the [C, A, B] lane established pre-restart
     // (C→0, A→1, B→2) survives the restart, unique and exactly
-    // `0 ..< pinnedCount` (D12; docs/02-domain.md §10).
+    // `0 ..< pinnedCount` (D12; docs/architecture.md).
     #expect(
         rowA.pinOrdinal == 1,
         "WS14 (pin order): A sits in the middle of the [C, A, B] lane"
@@ -237,8 +237,8 @@ extension WS14RestartReconstructionTests {
 
     // WS14 (iii): A's persisted content rows retain the FULL append-only list in mint
     // order — revisions are immutable and append-only in v1
-    // (docs/02-domain.md §2.5 rule 5) — with the second revision active.
-    // Canonical Content is untouched by the revisions (docs/02-domain.md D2).
+    // (docs/architecture.md rule 5) — with the second revision active.
+    // Canonical Content is untouched by the revisions (docs/architecture.md D2).
     let canonicalA = try WSSupport.fetchCanonical(itemID: rowA.id, in: container)
     #expect(
         canonicalA.representations.map(\.content.typeIdentifier) == [plainText],
@@ -246,12 +246,12 @@ extension WS14RestartReconstructionTests {
     )
     #expect(
         canonicalA.representations.map(\.content.bytes) == [Data(textA.utf8)],
-        "WS14 (lineage): revisions never rewrite Canonical Content (docs/02-domain.md D2)"
+        "WS14 (lineage): revisions never rewrite Canonical Content (docs/architecture.md D2)"
     )
     let lineageA = try WSSupport.fetchLineage(itemID: rowA.id, in: container)
     #expect(
         lineageA.revisions.count == 2,
-        "WS14 (lineage): the full append-only revision list survives the restart (docs/02-domain.md §2.5)"
+        "WS14 (lineage): the full append-only revision list survives the restart (docs/architecture.md)"
     )
     let storedOne = try #require(
         lineageA.revisions.first,
@@ -263,11 +263,11 @@ extension WS14RestartReconstructionTests {
     )
     #expect(
         storedOne.id != storedTwo.id,
-        "WS14 (lineage): revision IDs are unique within the item (docs/02-domain.md §2.5 rule 2)"
+        "WS14 (lineage): revision IDs are unique within the item (docs/architecture.md rule 2)"
     )
     #expect(
         storedOne.createdAt <= storedTwo.createdAt,
-        "WS14 (lineage): the revision list is ordered by append order (docs/02-domain.md §2.5 rule 1)"
+        "WS14 (lineage): the revision list is ordered by append order (docs/architecture.md rule 1)"
     )
     #expect(
         lineageA.activeRevisionID == storedTwo.id,
@@ -286,7 +286,7 @@ extension WS14RestartReconstructionTests {
         "WS14 (lineage): the second revision's type identifiers"
     )
 
-    // WS14 (iii): Effective Content derivation (docs/02-domain.md §2.6) —
+    // WS14 (iii): Effective Content derivation (docs/architecture.md) —
     // with an active revision, Effective Content is that revision's complete
     // content snapshot; the active revision alone contains every byte
     // required to rebuild current Effective Content after restart (§4).
@@ -296,12 +296,12 @@ extension WS14RestartReconstructionTests {
     )
     #expect(
         activeRevision.content.representations.map(\.bytes) == [Data(replacementTwo.utf8)],
-        "WS14 (effective content): the active revision's bytes are the current Effective Content (docs/02-domain.md §2.6)"
+        "WS14 (effective content): the active revision's bytes are the current Effective Content (docs/architecture.md)"
     )
 
     // WS14 (iii): B and C are Canonical-state items (D3) — empty revision
     // list, nil active ID — so their Effective Content is the Canonical
-    // content with fingerprints stripped (docs/02-domain.md §2.6).
+    // content with fingerprints stripped (docs/architecture.md).
     let canonicalB = try WSSupport.fetchCanonical(itemID: rowB.id, in: container)
     let lineageB = try WSSupport.fetchLineage(itemID: rowB.id, in: container)
     #expect(
@@ -314,7 +314,7 @@ extension WS14RestartReconstructionTests {
     )
     #expect(
         canonicalB.representations.map(\.content.bytes) == [Data(textB.utf8)],
-        "WS14 (effective content): B's Effective Content is its Canonical bytes (docs/02-domain.md §2.6)"
+        "WS14 (effective content): B's Effective Content is its Canonical bytes (docs/architecture.md)"
     )
     let canonicalC = try WSSupport.fetchCanonical(itemID: rowC.id, in: container)
     let lineageC = try WSSupport.fetchLineage(itemID: rowC.id, in: container)
@@ -328,7 +328,7 @@ extension WS14RestartReconstructionTests {
     )
     #expect(
         canonicalC.representations.map(\.content.bytes) == [Data(textC.utf8)],
-        "WS14 (effective content): C's Effective Content is its Canonical bytes (docs/02-domain.md §2.6)"
+        "WS14 (effective content): C's Effective Content is its Canonical bytes (docs/architecture.md)"
     )
 
     // WS14 (iv): persistent Canonical postings remain usable. A post-restart
@@ -354,12 +354,12 @@ extension WS14RestartReconstructionTests {
     )
     #expect(
         probeReference.contentVersion == secondRevision.contentVersion,
-        "WS14 (rebuilt index): coalescing preserves the winner's current Content Version (docs/02-domain.md §13)"
+        "WS14 (rebuilt index): coalescing preserves the winner's current Content Version (docs/architecture.md)"
     )
 
     // WS14 (iv), durable side: still exactly three rows; A's occurrence fold
     // advanced (count 3, new last time/source, first observation untouched),
-    // Content Version preserved (docs/02-domain.md D2), and the singleton
+    // Content Version preserved (docs/architecture.md D2), and the singleton
     // moved exactly once.
     let verification = try WSSupport.makeDatabase(storeURL: storeURL)
     let verifiedRows = try WSSupport.fetchRows(verification)

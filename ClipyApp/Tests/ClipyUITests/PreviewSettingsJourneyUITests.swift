@@ -19,7 +19,7 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         let source = "Prefix with a complete tail"
         XCTAssertTrue(pasteboard.setString(source, forType: .string))
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
@@ -37,7 +37,9 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
         let gap = app.textFields["clipy.settings.preview.panel-gap"]
         set("0", in: gap, app: app)
         let complete = revealCompleteToggle(in: app)
-        if (complete.value as? String) == "1" { complete.click() }
+        if try XCTUnwrap(toggleValue(complete), "The complete-text control must expose its current state") {
+            complete.click()
+        }
         let count = app.textFields["clipy.settings.preview.character-count"]
         set("6", in: count, app: app)
         let screenshot = XCTAttachment(screenshot: settings.screenshot())
@@ -79,6 +81,99 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
     }
 
     @MainActor
+    func testCustomWidthAndSlowOuterEdgeDragPersistWithoutClosingThePreview() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        defer { pasteboard.clearContents() }
+        XCTAssertTrue(pasteboard.setString("Preview width remains adjustable.", forType: .string))
+        let app = XCUIApplication()
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
+            "-clipy.appearance.previewAutoOpen", "YES"]
+        app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
+        app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
+        app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.sqlite").path
+        app.launch()
+        defer { app.terminate() }
+        let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        let preview = app.descendants(matching: .any)["clipy.panel.floatingPreview"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 20))
+
+        var settings = openAppearance(in: app)
+        let custom = app.switches["clipy.settings.preview.custom-width"]
+        reveal(custom, in: app)
+        let customIsOn = try XCTUnwrap(toggleValue(custom), "The custom-width control must expose its current state")
+        if !customIsOn {
+            custom.click()
+        }
+        let width = app.textFields["clipy.settings.preview.panel-width"]
+        set("100", in: width, app: app)
+        let widthError = app.descendants(matching: .any)["clipy.settings.preview.width-error"]
+        XCTAssertTrue(widthError.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(value(width), "100", "The rejected width remains editable instead of silently reverting.")
+        set("420", in: width, app: app)
+        XCTAssertTrue(waitUntil { !widthError.exists })
+        settings.buttons["_XCUI:CloseWindow"].click()
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        HistoryJourneyControls.selectFirst(in: app)
+        XCTAssertTrue(waitUntil { preview.exists && abs(preview.frame.width - 420) <= 3 }, app.debugDescription)
+
+        let handle = app.descendants(matching: .any)["clipy.preview.resize-width"]
+        XCTAssertTrue(handle.waitForExistence(timeout: 5), app.debugDescription)
+        let browsingFrame = panel.frame
+        let initialWidth = preview.frame.width
+        let isLeading = preview.frame.midX < panel.frame.midX
+        let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        // Holding longer than the exit grace proves resizing keeps its
+        // interaction alive even while the window edge moves under the mouse.
+        start.press(forDuration: 0.4, thenDragTo: start.withOffset(CGVector(
+            dx: isLeading ? 64 : -64, dy: 0
+        )), withVelocity: .slow, thenHoldForDuration: 0.8)
+        XCTAssertTrue(waitUntil {
+            preview.exists && abs(preview.frame.width - (initialWidth - 64)) <= 6
+                && abs(panel.frame.width - browsingFrame.width) <= 2
+                && abs(panel.frame.minX - browsingFrame.minX) <= 2
+        }, "Resizing must preserve both the preview and browsing window.\n\(app.debugDescription)")
+        let resizedWidth = preview.frame.width
+
+        settings = openAppearance(in: app)
+        reveal(width, in: app)
+        XCTAssertTrue(waitUntil {
+            guard let saved = Double(self.value(width)) else { return false }
+            return abs(saved - resizedWidth) <= 2
+        }, "Dragging must update the same width preference shown in Settings")
+        reveal(custom, in: app)
+        custom.click()
+        XCTAssertFalse(width.exists)
+        settings.buttons["_XCUI:CloseWindow"].click()
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        HistoryJourneyControls.selectFirst(in: app)
+        XCTAssertTrue(waitUntil { preview.exists && abs(preview.frame.width - 340) <= 3 }, app.debugDescription)
+
+        settings = openAppearance(in: app)
+        reveal(custom, in: app)
+        custom.click()
+        XCTAssertTrue(waitUntil {
+            guard width.exists, let saved = Double(self.value(width)) else { return false }
+            return abs(saved - resizedWidth) <= 2
+        }, "The default-width option must preserve the last custom choice")
+        let reset = app.buttons["clipy.settings.preview.reset"]
+        reveal(reset, in: app)
+        reset.click()
+        XCTAssertTrue(waitUntil { !width.exists && self.toggleValue(custom) == false }, app.debugDescription)
+        settings.buttons["_XCUI:CloseWindow"].click()
+    }
+
+    @MainActor
+    private func reveal(_ control: XCUIElement, in app: XCUIApplication) {
+        XCTAssertTrue(control.waitForExistence(timeout: 5))
+        SettingsJourneyControls.scroll(control,
+            into: app.scrollViews.containing(.any, identifier: control.identifier).firstMatch, app: app)
+    }
+
+    @MainActor
     private func revealCompleteToggle(in app: XCUIApplication) -> XCUIElement {
         let toggle = app.switches["clipy.settings.preview.complete-text"]
         SettingsJourneyControls.reveal(toggle,
@@ -111,6 +206,26 @@ final class PreviewSettingsJourneyUITests: XCTestCase {
     @MainActor
     private func value(_ element: XCUIElement) -> String {
         (element.value as? String) ?? element.label
+    }
+
+    @MainActor
+    private func toggleValue(_ element: XCUIElement) -> Bool? {
+        // XCUIElement.value preserves the control's AX representation. Native
+        // switches can return NSNumber even when text fields return String.
+        let raw = element.value
+        if let text = raw as? String {
+            switch text {
+            case "0": return false
+            case "1": return true
+            default: return nil
+            }
+        }
+        guard let number = raw as? NSNumber else { return nil }
+        switch number.doubleValue {
+        case 0: return false
+        case 1: return true
+        default: return nil
+        }
     }
 
     @MainActor

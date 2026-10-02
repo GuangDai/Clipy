@@ -35,6 +35,7 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         let survivor = "clipy-ui-details-survivor"
         let target = "clipy-ui-details-target"
         let pasteboard = NSPasteboard.general
+        addTeardownBlock { @MainActor () async in pasteboard.clearContents() }
         let survivorItem = NSPasteboardItem()
         XCTAssertTrue(survivorItem.setString(survivor, forType: .string))
         let beforeSurvivorWrite = pasteboard.changeCount
@@ -52,9 +53,9 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         temporaryDirectory = directory
 
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
                                 "-clipy.appearance.previewAutoOpen", "YES"]
-        defer { app.terminate() }
+        addTeardownBlock { @MainActor () async in app.terminate() }
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store")

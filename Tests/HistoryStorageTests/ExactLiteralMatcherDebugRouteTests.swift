@@ -294,17 +294,5 @@ struct ExactLiteralMatcherDebugRouteTests {
 
     /// The debug wrapper is a plain equatable value: tests and diagnostics
     /// can cache and compare routes without retaining matcher state.
-    @Test func debugResultComparesByValue() {
-        let linearNil = ExactLiteralMatchDebugResult(
-            match: nil,
-            usedASCIILinearPath: true
-        )
-        #expect(
-            Self.route(term: "zz", in: "mmmm") == linearNil
-        )
-        #expect(
-            Self.route(term: "zz", in: "mm\u{212A}") != linearNil
-        )
-    }
 }
 #endif

@@ -1,8 +1,8 @@
 /// Effective type identifiers blob codec gates: encode→decode round trips of
-/// valid values (docs/06-cross-cutting.md §7.3) and one rejection test per
+/// valid values (docs/testing.md) and one rejection test per
 /// Part V §4 decode check — the blob must decode to a valid versioned
-/// sorted-unique non-empty list (docs/06-cross-cutting.md §7.4; owning spec
-/// docs/05-authority-kernel.md §4).
+/// sorted-unique non-empty list (docs/testing.md; owning spec
+/// docs/storage.md).
 import Foundation
 import HistoryCore
 import Testing
@@ -19,7 +19,7 @@ private let sortedIdentifiers = [
 
 /// Small bounds so the §4 byte/count checks run without large fixtures.
 /// Production decode uses the fixed `HistoryLimits.standard` profile
-/// (docs/06-cross-cutting.md §2); the codec's `limits` parameter is the seam.
+/// (docs/testing.md); the codec's `limits` parameter is the seam.
 private func makeLimits(
     representations: Int = 2,
     typeIdentifierUTF8Bytes: Int = 16
@@ -52,7 +52,7 @@ private func makeLimits(
     )!
 }
 
-// MARK: - Round trips (docs/06-cross-cutting.md §7.3)
+// MARK: - Round trips (docs/testing.md)
 
 @Test func roundTripPreservesSortedUniqueList() throws {
     let blob = try EffectiveTypeIdentifiersBlobCodec.encode(sortedIdentifiers)
@@ -70,7 +70,7 @@ private func makeLimits(
 }
 
 @Test func roundTripPreservesNonASCIIIdentifiers() throws {
-    // Stable Unicode scalar order (docs/02-domain.md §2.1): 'c' (U+0063)
+    // Stable Unicode scalar order (docs/architecture.md): 'c' (U+0063)
     // precedes '日' (U+65E5).
     let identifiers = ["com.example.custom", "com.example.日本語"]
     let blob = try EffectiveTypeIdentifiersBlobCodec.encode(identifiers)
@@ -84,7 +84,7 @@ private func makeLimits(
     )
 }
 
-// MARK: - Corruption rejection (docs/06-cross-cutting.md §7.4, Part V §4)
+// MARK: - Corruption rejection (docs/testing.md, Part V §4)
 
 @Test func decodeRejectsMalformedBytes() {
     #expect(throws: CodecRejection.malformedBlob) {

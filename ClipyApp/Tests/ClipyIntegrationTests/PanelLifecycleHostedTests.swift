@@ -21,6 +21,70 @@ import Testing
 @MainActor
 struct PanelLifecycleHostedTests {
 
+    @Test("termination retires the panel session and rejects later summon")
+    func terminationCannotReopenSensitivePanelState() throws {
+        let installed = installedOwner()
+        let owner = installed.appDelegate
+        defer { owner.closePanel(); installed.composition.stop() }
+        owner.openPanelForTesting()
+        let panel = try #require(owner.panelForTesting)
+        let surface = try #require(owner.panelSurfaceState)
+        #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        owner.applicationWillTerminate(Notification(
+            name: NSApplication.willTerminateNotification, object: NSApp
+        ))
+        #expect(!panel.isPresented)
+        #expect(!surface.isSessionActive)
+        #expect(!installed.composition.isCaptureObservationActiveForTesting)
+        owner.openPanelForTesting()
+        #expect(!panel.isPresented)
+        #expect(surface.sessionGeneration == 1)
+    }
+
+    @Test(arguments: [false, true])
+    func terminationReleasesPreparedHostingRootsAndTheirOwner(windowsWerePresented: Bool) async throws {
+        let composition: AppComposition
+        var owner: AppDelegate?
+        do {
+            let installed = installedOwner()
+            composition = installed.composition
+            owner = installed.appDelegate
+        }
+        defer { composition.stop() }
+        owner?.preparePanelWindowsForTesting()
+        let main = try #require(owner?.panelForTesting)
+        let preview = try #require(owner?.floatingPreviewPanelForTesting)
+        try #require(main.contentView != nil && preview.contentView != nil)
+        if windowsWerePresented {
+            owner?.openPanelForTesting()
+            preview.present(beside: main)
+            try #require(main.isPresented && preview.isPresented)
+        }
+
+        owner?.applicationWillTerminate(Notification(
+            name: NSApplication.willTerminateNotification, object: NSApp
+        ))
+        #expect(!main.isPresented && !preview.isPresented)
+        #expect(main.contentView == nil && preview.contentView == nil)
+        #expect(owner?.panelForTesting == nil && owner?.floatingPreviewPanelForTesting == nil)
+        let wasReleased = { [weak owner] in owner == nil }
+        owner = nil
+        #expect(await ComposedSupport.waitFor { wasReleased() })
+    }
+
+    @Test
+    func releasingAnOwnerCancelsItsMemoryPressureSourceWithoutTermination() throws {
+        var owner: AppDelegate? = AppDelegate()
+        owner?.installMemoryPressureObservation()
+        let source = try #require(owner?.memoryPressureSource)
+        try #require(!source.isCancelled)
+        let wasReleased = { [weak owner] in owner == nil }
+        owner = nil
+        #expect(wasReleased())
+        #expect(source.isCancelled)
+    }
+
     @Test("Details retires a key floating preview and restores main-panel focus")
     func detailsPushRetiresKeyPreviewWithoutEndingSession() async throws {
         let source = try await ComposedSupport.openMemoryHistory()
@@ -59,6 +123,152 @@ struct PanelLifecycleHostedTests {
         #expect(surface.isSessionActive)
         #expect(surface.sessionGeneration == generation)
         #expect(surface.detailsPath == [item])
+    }
+
+    @Test(arguments: [false, true])
+    func screenChangeRetiresPreviewAndOneToggleReopensTheSameItem(previewWasKey: Bool) async throws {
+        let installed = try await installedPreviewOwner()
+        let owner = installed.appDelegate
+        let composition = installed.composition
+        let item = installed.item
+        defer { owner.closePanel(); composition.stop() }
+        owner.openPanelForTesting()
+        let panel = try #require(owner.panelForTesting)
+        let surface = try #require(owner.panelSurfaceState)
+        try #require(await ComposedSupport.waitFor {
+            composition.viewState.displayedRows.contains { $0.item == item }
+        })
+        owner.previewState.isAutoOpenPreferenceEnabled = true
+        surface.selection = item.id
+        owner.previewState.handleSelectionChange(item)
+        owner.previewState.togglePreview(for: item)
+        let preview = try #require(owner.floatingPreviewPanelForTesting)
+        try #require(preview.isPresented && preview.isVisible)
+        if previewWasKey {
+            preview.makeKey()
+            try #require(preview.isKeyWindow)
+        }
+        let generation = surface.sessionGeneration
+        let wasAutoOpenEnabled = owner.previewState.isAutoOpenEnabled
+        let preparation = owner.previewState.onPreparationTargetChanged
+        var preparedDuringScreenChange = false
+        owner.previewState.onPreparationTargetChanged = { target in
+            if target != nil { preparedDuringScreenChange = true }
+            preparation?(target)
+        }
+        defer { owner.previewState.onPreparationTargetChanged = preparation }
+
+        panel.windowDidChangeScreen(Notification(name: NSWindow.didChangeScreenNotification, object: panel))
+
+        #expect(!owner.previewState.isOpen)
+        #expect(owner.previewState.previewedItem == nil)
+        #expect(!preview.isPresented && !preview.isVisible)
+        #expect(panel.childWindows?.contains(preview) != true)
+        #expect(owner.floatingPreviewLoader == nil)
+        #expect(!preparedDuringScreenChange)
+        #expect(owner.previewState.isAutoOpenEnabled == wasAutoOpenEnabled)
+        #expect(panel.isPresented && surface.isSessionActive)
+        #expect(surface.sessionGeneration == generation)
+        #expect(surface.selection == item.id)
+        if previewWasKey { #expect(panel.isKeyWindow) }
+
+        owner.previewState.togglePreview(for: item)
+        #expect(owner.previewState.isOpen && owner.previewState.previewedItem == item)
+        #expect(preview.isPresented && preview.isVisible)
+    }
+
+    @Test
+    func screenChangeCancelsQueuedDwellAndKeepsTheBrowsingSessionArmed() async throws {
+        let installed = try await installedPreviewOwner()
+        let owner = installed.appDelegate
+        let composition = installed.composition
+        let item = installed.item
+        defer { owner.closePanel(); composition.stop() }
+        owner.openPanelForTesting()
+        let panel = try #require(owner.panelForTesting)
+        let surface = try #require(owner.panelSurfaceState)
+        try #require(await ComposedSupport.waitFor {
+            composition.viewState.displayedRows.contains { $0.item == item }
+        })
+        owner.previewState.isAutoOpenPreferenceEnabled = true
+        let generation = surface.sessionGeneration
+        let selection = surface.selection
+        var settings = AdvancedInteractionSettings()
+        settings.previewDelayMilliseconds = 0
+        owner.previewState.applyInteractionSettings(settings)
+        let preparation = owner.previewState.onPreparationTargetChanged
+        var preparedTarget: HistoryItemReference?
+        owner.previewState.onPreparationTargetChanged = { target in
+            preparedTarget = target
+            preparation?(target)
+        }
+        defer { owner.previewState.onPreparationTargetChanged = preparation }
+        owner.previewState.handleSelectionChange(item)
+        try #require(preparedTarget == item)
+
+        panel.windowDidChangeScreen(Notification(name: NSWindow.didChangeScreenNotification, object: panel))
+        #expect(preparedTarget == nil)
+        await Task.yield()
+        await Task.yield()
+        try #require(!owner.previewState.isOpen)
+        #expect(owner.previewState.previewedItem == nil)
+        #expect(owner.floatingPreviewPanelForTesting?.isPresented != true)
+        #expect(panel.isPresented && surface.isSessionActive)
+        #expect(surface.sessionGeneration == generation)
+        #expect(surface.selection == selection)
+        try #require(owner.previewState.isAutoOpenEnabled)
+
+        owner.previewState.pointerMoved(over: .mainPanel)
+        try #require(await ComposedSupport.waitFor {
+            owner.previewState.isOpen && owner.floatingPreviewPanelForTesting?.isPresented == true
+        })
+        #expect(owner.previewState.previewedItem == item)
+        #expect(surface.sessionGeneration == generation)
+        #expect(surface.selection == selection)
+    }
+
+    @Test
+    func screenChangeKeepsManualPreviewDismissalSuppressed() async throws {
+        let installed = try await installedPreviewOwner()
+        let owner = installed.appDelegate
+        let composition = installed.composition
+        let item = installed.item
+        defer { owner.closePanel(); composition.stop() }
+        owner.openPanelForTesting()
+        let panel = try #require(owner.panelForTesting)
+        let surface = try #require(owner.panelSurfaceState)
+        try #require(await ComposedSupport.waitFor {
+            composition.viewState.displayedRows.contains { $0.item == item }
+        })
+        owner.previewState.isAutoOpenPreferenceEnabled = true
+        let generation = surface.sessionGeneration
+        let selection = surface.selection
+        owner.previewState.handleSelectionChange(item)
+        owner.previewState.togglePreview(for: item)
+        try #require(owner.previewState.dismissPreview())
+        let preparation = owner.previewState.onPreparationTargetChanged
+        var preparedAfterManualDismissal = false
+        owner.previewState.onPreparationTargetChanged = { target in
+            if target != nil { preparedAfterManualDismissal = true }
+            preparation?(target)
+        }
+        defer { owner.previewState.onPreparationTargetChanged = preparation }
+
+        panel.windowDidChangeScreen(Notification(name: NSWindow.didChangeScreenNotification, object: panel))
+        owner.previewState.pointerMoved(over: .mainPanel)
+        #expect(!preparedAfterManualDismissal)
+        await Task.yield()
+        await Task.yield()
+        #expect(!owner.previewState.isOpen)
+        #expect(owner.floatingPreviewPanelForTesting?.isPresented != true)
+        #expect(owner.previewState.isAutoOpenEnabled)
+        #expect(panel.isPresented && surface.isSessionActive)
+        #expect(surface.sessionGeneration == generation)
+        #expect(surface.selection == selection)
+
+        owner.previewState.togglePreview(for: item)
+        #expect(owner.previewState.isOpen && owner.previewState.previewedItem == item)
+        #expect(owner.floatingPreviewPanelForTesting?.isPresented == true)
     }
 
     /// One settled Escape closes browsing even with a nonempty query.
@@ -634,6 +844,29 @@ struct PanelLifecycleHostedTests {
         #expect(surface.sessionGeneration == sessionGeneration)
     }
 
+    private func installedPreviewOwner() async throws -> (
+        appDelegate: AppDelegate,
+        composition: AppComposition,
+        item: HistoryItemReference
+    ) {
+        let history = try await ComposedSupport.openMemoryHistory()
+        _ = try await history.perform(.capture(ComposedSupport.textCapture(
+            "cross-screen-preview", observedAt: Date(), source: nil
+        )))
+        let page = try await history.browse(.init(kind: .recent, limit: 1))
+        let item = try #require(page.rows.first).item
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: ComposedSupport.makePasteboard()),
+            observerPollInterval: 60,
+            initialCaptureAccessBehavior: .allowed,
+            captureAccessBehaviorProvider: { .allowed }
+        )
+        let owner = AppDelegate()
+        owner.installCompositionForTesting(composition)
+        return (owner, composition, item)
+    }
+
     private func installedOwner() -> (
         appDelegate: AppDelegate,
         composition: AppComposition,
@@ -770,6 +1003,10 @@ actor LifecycleObservationHistory: ClipboardHistory {
     }
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
+        throw CancellationError()
+    }
+
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
         throw CancellationError()
     }
 

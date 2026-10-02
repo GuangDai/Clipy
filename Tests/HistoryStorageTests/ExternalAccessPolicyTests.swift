@@ -1,5 +1,5 @@
 /// PLAY-PY-GW0 pure connection-kind allow matrix.
-/// Owning spec: docs/v2/V2-05-external-gateway.md §0.2.
+/// Owning spec: docs/automation.md
 /// The raw-value ceiling below also guards the 47-4 adjudication that no
 /// external retention operation spelling exists (V2-05 §2.2/§3.2; V2-02 §9).
 import Testing

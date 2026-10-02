@@ -2,8 +2,9 @@ import Foundation
 import HistoryCore
 
 /// Current SQLite layout (V2-09 §§3–6). The Authority creates an empty store
-/// inside its startup transaction. Reopen recognizes these tables without
-/// rebuilding data or indexes; a different/partial schema is not repaired.
+/// inside its startup transaction. Reopen recognizes these tables and ensures
+/// rebuildable optimizer indexes without rewriting stored values. A different
+/// or partial schema is not repaired.
 internal enum SQLiteHistorySchema {
     internal static func create(in database: SQLiteDatabase) throws {
         let existing = try database.prepare("""
@@ -52,6 +53,8 @@ internal enum SQLiteHistorySchema {
                 """)
             defer { detachedOwnership.finalize() }
             guard try detachedOwnership.step() else { throw HistoryFailure.persistence(.openStore) }
+            try createSourceApplicationIndex(in: database)
+            try createRecentProjectionIndex(in: database)
             return
         }
 
@@ -65,6 +68,32 @@ internal enum SQLiteHistorySchema {
         // No nested transaction: startup's one write transaction includes the
         // DDL and the business singleton/bootstrap rows supplied by its owners.
         for sql in statements { try database.execute(sql) }
+        try createSourceApplicationIndex(in: database)
+        try createRecentProjectionIndex(in: database)
+    }
+
+    /// Rebuildable optimizer index for the global source vocabulary and exact
+    /// per-item source matching. Existing stores gain it directly, with no
+    /// data transformation or compatibility/migration state (V2-09 §4).
+    private static func createSourceApplicationIndex(in database: SQLiteDatabase) throws {
+        try database.execute("""
+            CREATE INDEX IF NOT EXISTS copy_sources_application
+            ON copy_sources(application, itemID) WHERE application IS NOT NULL
+            """)
+    }
+
+    /// Keep ordinary unpinned pages off table records containing large search
+    /// bodies. Title/source keep their existing bounds and the type expression
+    /// caps duplicated bytes. Larger valid type metadata uses a bounded
+    /// primary-key read in the page snapshot.
+    private static func createRecentProjectionIndex(in database: SQLiteDatabase) throws {
+        try database.execute("""
+            CREATE INDEX IF NOT EXISTS history_items_recent_projection ON history_items(
+                lastCopiedAt DESC, id ASC,
+                contentVersion, titleUTF8, \(ScalarReadRow.recentInlineTypesExpression),
+                copyCount, lastSource, pinOrdinal, sourceCount
+            ) WHERE pinOrdinal IS NULL
+            """)
     }
 
     private static let statements = [
@@ -243,6 +272,18 @@ internal enum SQLiteHistorySchema {
         """
         CREATE INDEX history_items_retention_order ON history_items(lastCopiedAt ASC, id ASC)
             WHERE pinOrdinal IS NULL
+        """,
+        // Explicit library sorts include pinned items in the selected order.
+        // Keyset continuations also work for existing stores without these
+        // optional indexes; opening never rewrites an existing layout.
+        """
+        CREATE INDEX history_items_all_recent_order ON history_items(lastCopiedAt DESC, id ASC)
+        """,
+        """
+        CREATE INDEX history_items_all_oldest_order ON history_items(lastCopiedAt ASC, id ASC)
+        """,
+        """
+        CREATE INDEX history_items_copy_count_order ON history_items(copyCount DESC, lastCopiedAt DESC, id ASC)
         """,
         // Prune and cascading item deletion check this incoming content FK
         // for every removed revision. Without an index each check scans all

@@ -4,7 +4,7 @@
 import Foundation
 
 internal enum PreviewCopy {
-    static var bundle: Bundle { .main }
+    static var bundle: Bundle { AppLocalization.bundle }
 
     static func fileFailure(_ failure: FilePreviewFailure) -> String {
         let message: String
@@ -19,23 +19,23 @@ internal enum PreviewCopy {
         return text(message)
     }
 
-    static func text(_ english: String, bundle: Bundle = .main) -> String {
+    static func text(_ english: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(forKey: english, value: english, table: "Preview")
     }
 
     /// The reference preview shows copied address/path data. This describes
     /// that preview's behavior, not a guarantee about other apps or processes.
-    static func referenceDisclosure(bundle: Bundle = .main) -> String {
+    static func referenceDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         text("Only the reference is shown. Its destination has not been opened.", bundle: bundle)
     }
 
-    static func multiImageDisclosure(bundle: Bundle = .main) -> String {
+    static func multiImageDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         text("Showing one image from a multi-image item. Copying the item keeps its complete content.", bundle: bundle)
     }
 
     static func copyCount(
         _ count: UInt64,
-        bundle: Bundle = .main,
+        bundle: Bundle = AppLocalization.bundle,
         locale: Locale = .current
     ) -> String {
         String(
@@ -47,7 +47,7 @@ internal enum PreviewCopy {
     static func imageDimensions(
         width: Int,
         height: Int,
-        bundle: Bundle = .main,
+        bundle: Bundle = AppLocalization.bundle,
         locale: Locale = .current
     ) -> String {
         String(

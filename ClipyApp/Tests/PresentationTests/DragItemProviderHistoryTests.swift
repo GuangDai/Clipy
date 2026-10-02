@@ -57,7 +57,7 @@ struct DragItemProviderHistoryTests {
         }
     }
 
-    @Test func oneFrozenDragKeepsAllFormatsAfterRevisionAndRemoval() async throws {
+    @Test func oneFrozenDragKeepsAllFormatsAfterPanelCloseRevisionAndRemoval() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let original = try await capture(history, representations: [
             .init(typeIdentifier: "public.utf8-plain-text", bytes: Data("first\0".utf8)),
@@ -69,6 +69,7 @@ struct DragItemProviderHistoryTests {
         try #require(await pollUntil { state.rows.first?.item == original })
         let payload = try #require(try await state.dragPayload(for: original))
         let writers = try HistoryListDraggingView.pasteboardItems(for: payload)
+        state.deactivate()
         _ = try await history.perform(.revise(.init(
             itemID: original.id, expected: original.contentVersion,
             intent: .replace(.init(decisions: [

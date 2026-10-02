@@ -78,7 +78,7 @@ struct HistoryUsageView: View {
 /// Presentation-only copy shared by these three Settings sections.
 /// Product actions and permission/backup decisions stay with their owners.
 enum AutomationMaintenancePresentation {
-    static let bundle = Bundle.main
+    static var bundle: Bundle { AppLocalization.bundle }
 
     static func text(_ key: String, bundle: Bundle? = nil) -> String {
         (bundle ?? Self.bundle).localizedString(

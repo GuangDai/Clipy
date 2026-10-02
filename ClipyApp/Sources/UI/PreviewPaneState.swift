@@ -75,16 +75,37 @@ final class PreviewPaneState {
 
     /// Shared with the panel's Escape action so the topmost information
     /// popover closes before the preview, search, Quick Look, or the panel.
-    var isInformationPresented = false
+    var isInformationPresented = false {
+        didSet {
+            guard isInformationPresented != oldValue else { return }
+            if isInformationPresented { cancelPendingPointerExit() }
+            else { recheckPointerAfterModal() }
+        }
+    }
+    /// A file-read confirmation belongs to the visible preview. Leaving its
+    /// two native windows for the attached alert must not hide that owner.
+    var isFileConfirmationPresented = false {
+        didSet {
+            guard isFileConfirmationPresented != oldValue else { return }
+            if isFileConfirmationPresented { cancelPendingPointerExit() }
+            else { recheckPointerAfterModal() }
+        }
+    }
 
     /// The item whose content the preview pane renders; `nil` while
     /// closed. Reference-exact (item ID + Content Version) like every other
     /// panel surface (04 §9 fence convention).
     private(set) var previewedItem: HistoryItemReference?
 
-    /// The screen/user size ceiling for a content-fitted preview; never a
-    /// minimum and independent of the number of rows in the browsing list.
+    /// The preview's actual viewport height, following the main panel's
+    /// displayed frame. Content never reduces the floating pane's height.
     var availablePreviewHeight: CGFloat = PanelGeometry.height
+
+    /// Actual fitted window dimensions drive the SwiftUI resize affordance;
+    /// the saved preference can be wider than the current screen permits.
+    var displayedPreviewWidth: CGFloat = PanelGeometry.floatingPreviewWidth
+    var isPreviewOnLeadingSide = false
+    private(set) var isResizingPreview = false
 
     /// The AppDelegate-owned wiring to the floating preview window. Set
     /// once by the composition shell; every state transition that changes
@@ -95,9 +116,8 @@ final class PreviewPaneState {
     var onPreparationTargetChanged: ((HistoryItemReference?) -> Void)?
 
     /// The dwell delay before a selection change auto-opens the preview
-    /// (Maccy's `previewDelay` default: 200 ms). The property is
-    /// package (GOV-3): only this module schedules the dwell; the public
-    /// `init(autoOpenDelay:)` parameter remains the seam.
+    /// (Maccy's `previewDelay` default: 200 ms). Only this module schedules
+    /// the dwell; `init(autoOpenDelay:)` supplies its timing.
     private(set) var autoOpenDelay: Duration
 
     /// The grace between the pointer leaving BOTH surfaces and the
@@ -108,7 +128,7 @@ final class PreviewPaneState {
 
     /// Whether dwell auto-open is armed. The panel's key status drives this
     /// (`panelBecameKey`/`panelResignedKey`) so a background panel never
-    /// opens a preview. Package (GOV-3): arming is driven only by the
+    /// opens a preview. Arming is driven only by the
     /// in-module panel lifecycle methods.
     private(set) var isAutoOpenEnabled = true
 
@@ -116,6 +136,7 @@ final class PreviewPaneState {
     /// eligibility is independent of AppKit key status: hiding a key side
     /// pane returns focus to the main window and can synchronously re-arm it.
     private(set) var isBrowsingHistory = true
+    private var isRetiringScreenPreview = false
 
     func setBrowsingHistory(_ isBrowsing: Bool) {
         guard isBrowsingHistory != isBrowsing else { return }
@@ -124,6 +145,7 @@ final class PreviewPaneState {
         cancelPendingAutoOpen()
         cancelPendingPointerExit()
         isInformationPresented = false
+        isFileConfirmationPresented = false
         if isOpen { closePreview() }
     }
 
@@ -135,7 +157,7 @@ final class PreviewPaneState {
     /// flight never fires; manual dismissal and its suppression are
     /// unaffected. Re-enabling restores auto-open on the NEXT selection
     /// change (it never opens the pane by itself).
-    /// Package (GOV-3): `HistoryPanelView` pushes the preference from the
+    /// `HistoryPanelView` pushes the preference from the
     /// injected appearance snapshot inside this module.
     var isAutoOpenPreferenceEnabled = true {
         didSet {
@@ -185,6 +207,11 @@ final class PreviewPaneState {
     /// pointer crosses from the list to a control such as Retry (Card 9D).
     /// AppKit stays at the window boundary; this state receives surfaces only.
     var pointerSurfacesContainingPointer: (() -> Set<PreviewPointerSurface>)?
+
+    /// The empty gap between the two native windows is a valid route to the
+    /// preview. It has no tracking view of its own, so the exit task rechecks
+    /// actual screen geometry until the pointer enters a window or leaves it.
+    var pointerIsBetweenSurfaces: (() -> Bool)?
 
     /// The pending pointer-exit grace task; cancelled by any re-entry.
     private var pointerExitTask: Task<Void, Never>?
@@ -365,13 +392,14 @@ final class PreviewPaneState {
     /// The panel closed: hide the pane and keep automatic opening disarmed
     /// until AppKit reports that the panel became key again. Selection
     /// changes published while the panel is hidden therefore cannot leak
-    /// into the next visible session (review Card 9E). Package (GOV-3): the
+    /// into the next visible session (review Card 9E). The
     /// panel-close path that resets this state is this module's
     /// `HistoryPanelView`; `panelBecameKey`/`panelResignedKey` above remain
     /// the ClipyApp panel seam.
     func panelClosed() {
         cancelPendingAutoOpen()
         cancelPendingPointerExit()
+        isFileConfirmationPresented = false
         pointerPresence = []
         isPointerInteractionActive = false
         currentSelectionReference = nil
@@ -379,6 +407,23 @@ final class PreviewPaneState {
         previewedItem = nil
         isAutoOpenSuppressed = false
         isAutoOpenEnabled = false
+    }
+
+    /// A screen change retires the old preview and its pending dwell while
+    /// keeping this browsing session's selection and manual-close choice.
+    func screenChanged() {
+        guard !isRetiringScreenPreview else { return }
+        isRetiringScreenPreview = true
+        defer { isRetiringScreenPreview = false }
+        cancelPendingAutoOpen()
+        cancelPendingPointerExit()
+        // Retiring a key preview synchronously returns focus to the main
+        // panel. Keep that callback armed without re-dwelling this selection
+        // while its old screen presentation is still being retired.
+        if isOpen { closePreview() }
+        isInformationPresented = false
+        isFileConfirmationPresented = false
+        pointerPresence = []
     }
 
     // MARK: - Pointer lifecycle (both windows)
@@ -432,25 +477,69 @@ final class PreviewPaneState {
         guard isPointerInteractionActive else { return }
         guard pointerPresence.isEmpty else { return }
         cancelPendingAutoOpen()
-        guard isOpen, !isInformationPresented else { return }
+        guard isOpen, !isInformationPresented, !isFileConfirmationPresented, !isResizingPreview else { return }
         schedulePointerExit()
     }
 
-    private func schedulePointerExit() {
+    /// Modal interaction can consume the real exit while the pane is
+    /// protected. Resume from native containment rather than inventing
+    /// another exit for a surface whose presence was already removed.
+    func recheckPointerAfterModal() {
+        guard isOpen, isPointerInteractionActive,
+              !isInformationPresented, !isFileConfirmationPresented, !isResizingPreview,
+              let pointerSurfacesContainingPointer else { return }
+        pointerPresence = pointerSurfacesContainingPointer()
+        if pointerPresence.isEmpty {
+            cancelPendingAutoOpen()
+            schedulePointerExit()
+        } else {
+            cancelPendingPointerExit()
+        }
+    }
+
+    /// A resize may move the frame away from its pointer between native
+    /// tracking events. Keep the current item alive until mouse-up, then
+    /// restore the ordinary exit policy from the actual window containment.
+    func beginPreviewResize() {
+        guard isOpen else { return }
+        isResizingPreview = true
+        pointerMoved(over: .preview)
         cancelPendingPointerExit()
-        let grace = pointerExitGrace
+        cancelPendingAutoOpen()
+    }
+
+    func endPreviewResize() {
+        guard isResizingPreview else { return }
+        isResizingPreview = false
+        if let pointerSurfacesContainingPointer {
+            pointerPresence = pointerSurfacesContainingPointer()
+        }
+        guard isOpen, isPointerInteractionActive, pointerPresence.isEmpty,
+              !isInformationPresented, !isFileConfirmationPresented else { return }
+        schedulePointerExit()
+    }
+
+    private func schedulePointerExit(recheckingGap: Bool = false) {
+        cancelPendingPointerExit()
+        // A zero hide preference must not turn an untracked gap into a
+        // busy loop. The initial exit still honors that preference exactly.
+        let grace = recheckingGap ? max(pointerExitGrace, .milliseconds(50)) : pointerExitGrace
         // Same MainActor/weak-self discipline as the dwell task.
         pointerExitTask = Task { [weak self] in
             if grace > .zero {
                 try? await Task.sleep(for: grace)
             }
             guard !Task.isCancelled, let self, self.pointerPresence.isEmpty,
-                  !self.isInformationPresented
+                  !self.isInformationPresented, !self.isFileConfirmationPresented, !self.isResizingPreview
             else { return }
             self.pointerExitTask = nil
             if let nativePresence = self.pointerSurfacesContainingPointer?(),
                !nativePresence.isEmpty {
                 self.pointerPresence = nativePresence
+                return
+            }
+            if self.pointerIsBetweenSurfaces?() == true {
+                self.schedulePointerExit(recheckingGap: true)
                 return
             }
             // Lightweight hide: no manual-close suppression — pointer
@@ -522,7 +611,7 @@ final class PreviewPaneState {
     /// just applied by the caller); a pending dwell — including one
     /// retained for memory-pressure recovery — is left untouched.
     private func armAndDwellCurrentSelection() {
-        guard !isOpen,
+        guard !isRetiringScreenPreview, !isOpen,
               pendingAutoOpenItem == nil,
               let currentSelectionReference,
               isAutoOpenPreferenceEnabled,
@@ -532,7 +621,7 @@ final class PreviewPaneState {
     }
 
     private func scheduleAutoOpen(for item: HistoryItemReference) {
-        guard isBrowsingHistory else { return }
+        guard isBrowsingHistory, !isRetiringScreenPreview else { return }
         // Selection observation can arrive after the native exit event. Keep
         // its current target for re-entry, without starting new work outside
         // the list or retargeting while preview controls are under the pointer.
@@ -570,6 +659,9 @@ final class PreviewPaneState {
 
     private func closePreview() {
         isOpen = false
+        cancelPendingPointerExit()
+        isFileConfirmationPresented = false
+        isResizingPreview = false
         previewedItem = nil
         onFloatingPreviewTransition?(.hide)
     }

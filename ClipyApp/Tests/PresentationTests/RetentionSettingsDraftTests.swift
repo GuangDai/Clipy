@@ -8,6 +8,70 @@ import Testing
 
 @Suite("Retention settings draft")
 struct RetentionSettingsDraftTests {
+    @Test(arguments: [true, false])
+    func reopeningReadRacingACompletedApplyRequiresOneFreshConfiguration(appliesCount: Bool) throws {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        load(HistoryRetentionConfiguration(
+            maximumUnpinnedItems: 200,
+            policies: HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil)
+        ), into: &draft)
+        let reopeningRead: RetentionSettingsDraft.LoadRequest
+        let refreshedConfiguration: HistoryRetentionConfiguration
+        if appliesCount {
+            draft.setMaximumUnpinnedText("500")
+            let submission = try #require(draft.countSubmission())
+            reopeningRead = draft.beginLoadRequest()
+            let acceptedApply = draft.acceptApplied(submission, successMessage: "count saved")
+            #expect(acceptedApply)
+            let acceptedRead = draft.acceptLoaded(HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 200,
+                policies: HistoryRetentionPolicies(age: AgeRetention(maxAge: 90_001), storage: nil, revisions: nil)
+            ), requestedAt: reopeningRead)
+            #expect(!acceptedRead)
+            #expect(draft.maximumUnpinnedText == "500")
+            #expect(draft.countSubmission()?.maximumUnpinnedItems == 500)
+            #expect(!draft.hasCountChanges)
+            #expect(draft.acceptedCountSuccessMessage == "count saved")
+            refreshedConfiguration = HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 500,
+                policies: HistoryRetentionPolicies(age: AgeRetention(maxAge: 90_001), storage: nil, revisions: nil)
+            )
+        } else {
+            draft.setAgeEnabled(true)
+            draft.setAgeDaysText("4")
+            let submission = try #require(draft.submission())
+            reopeningRead = draft.beginLoadRequest()
+            let acceptedApply = draft.acceptApplied(submission, successMessage: "policies saved")
+            #expect(acceptedApply)
+            let acceptedRead = draft.acceptLoaded(HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 37,
+                policies: HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil)
+            ), requestedAt: reopeningRead)
+            #expect(!acceptedRead)
+            #expect(draft.ageEnabled)
+            #expect(draft.ageDaysText == "4")
+            #expect(try #require(draft.submission()).policies == submission.policies)
+            #expect(!draft.hasPolicyChanges)
+            #expect(draft.acceptedSuccessMessage == "policies saved")
+            refreshedConfiguration = HistoryRetentionConfiguration(
+                maximumUnpinnedItems: 37, policies: submission.policies
+            )
+        }
+        #expect(!draft.isCurrent(reopeningRead))
+        #expect(draft.requiresReloadAfterApply(reopeningRead))
+        let refresh = draft.beginLoadRequest()
+        #expect(!draft.requiresReloadAfterApply(reopeningRead), "The retired request must not schedule another read")
+        // Unsaved text remains protected when the one fresh read arrives.
+        draft.setRevisionCountText("unsaved draft")
+        _ = draft.acceptLoaded(refreshedConfiguration, requestedAt: refresh)
+        #expect(draft.isCurrent(refresh))
+        #expect(!draft.requiresReloadAfterApply(refresh))
+        #expect(draft.configuredRetentionConfiguration == refreshedConfiguration)
+        #expect(!draft.hasCountChanges)
+        #expect(!draft.hasPolicyChanges)
+        #expect(draft.revisionCountText == "unsaved draft")
+    }
+
     @Test("an earlier settings load cannot overwrite a newer load without intervening edits")
     func newerLoadOwnsTheExactBaseline() throws {
         var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))

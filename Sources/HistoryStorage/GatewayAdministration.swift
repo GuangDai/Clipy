@@ -1,5 +1,5 @@
-/// X.4 connection/grant current-state ownership.
-/// Owning spec: `V2-05` §4.1/§4.2/§4.5 and roadmap X.4/GW3.
+/// Connection/grant current-state validation and administration writes.
+/// Owning documentation: docs/automation.md.
 ///
 /// This owner validates/projects current state and implements the four
 /// Authority-internal admin mutations. Every admitted attempt delegates its
@@ -98,8 +98,10 @@ internal enum GatewayAdministration {
         var grantRows: [GrantRow] = []
         do {
             let connections = try context.prepare("SELECT \(ConnectionRow.columns) FROM connections LIMIT ?", bindings: [.integer(Int64(connectionFetchLimit.partialValue))])
+            defer { connections.finalize() }
             while try connections.step() { connectionRows.append(try ConnectionRow(statement: connections)) }
             let grants = try context.prepare("SELECT \(GrantRow.columns) FROM grants LIMIT ?", bindings: [.integer(Int64(grantFetchLimit.partialValue))])
+            defer { grants.finalize() }
             while try grants.step() { grantRows.append(try GrantRow(statement: grants)) }
         } catch let failure as HistoryFailure {
             throw failure
@@ -112,12 +114,11 @@ internal enum GatewayAdministration {
             throw HistoryFailure.persistence(.invariantViolation)
         }
 
-        var connectionFacts: [(
-            id: UUID,
-            kind: ConnectionEnrollKind,
-            status: ConnectionStatus
-        )] = []
-        connectionFacts.reserveCapacity(connectionRows.count)
+        // These operation-local indexes replace scans of all previously
+        // validated rows. Validation is O(connections + grants); the public
+        // deterministic projections below still require their final sort.
+        var connectionIndexByID: [UUID: Int] = [:]
+        connectionIndexByID.reserveCapacity(connectionRows.count)
         var connectionDTOs: [ConnectionDTO] = []
         connectionDTOs.reserveCapacity(connectionRows.count)
 
@@ -135,7 +136,7 @@ internal enum GatewayAdministration {
             }
             guard row.displayNameRaw.utf8.count
                     <= limits.maximumDisplayNameUTF8Bytes,
-                  !connectionFacts.contains(where: { $0.id == row.id }),
+                  connectionIndexByID[row.id] == nil,
                   Self.isLifecycleCoherent(
                     status: status,
                     enrolledAt: row.enrolledAt,
@@ -144,11 +145,7 @@ internal enum GatewayAdministration {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
 
-            connectionFacts.append((
-                id: row.id,
-                kind: enrollKind,
-                status: status
-            ))
+            connectionIndexByID[row.id] = connectionDTOs.count
             connectionDTOs.append(ConnectionDTO(
                 id: ExternalConnectionID(rawValue: row.id),
                 displayName: row.displayNameRaw,
@@ -159,21 +156,15 @@ internal enum GatewayAdministration {
             ))
         }
 
-        guard connectionFacts.contains(where: {
-                $0.id == appIntentsConnectionID && $0.kind == .appIntents
-              }),
-              connectionRows.first(where: {
-                $0.id == appIntentsConnectionID
-              })?.displayNameRaw
+        guard let appIntentsIndex = connectionIndexByID[appIntentsConnectionID],
+              connectionDTOs[appIntentsIndex].enrollKind == .appIntents,
+              connectionDTOs[appIntentsIndex].displayName
                 == HistoryAuthority.gatewayConnectionDisplayName else {
             throw HistoryFailure.persistence(.invariantViolation)
         }
 
-        var grantPairs: [(
-            connectionID: UUID,
-            capability: ExternalCapability
-        )] = []
-        grantPairs.reserveCapacity(grantRows.count)
+        var grantedCapabilitiesByConnection: [UUID: Set<ExternalCapability>] = [:]
+        grantedCapabilitiesByConnection.reserveCapacity(connectionRows.count)
         var grantDTOs: [GrantDTO] = []
         grantDTOs.reserveCapacity(grantRows.count)
 
@@ -188,35 +179,27 @@ internal enum GatewayAdministration {
                     ?? true else {
                 throw HistoryFailure.persistence(.corruptStoredValue)
             }
-            guard let connection = connectionFacts.first(where: {
-                $0.id == row.connectionIDRaw
-            }) else {
+            guard let connectionIndex = connectionIndexByID[row.connectionIDRaw] else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
+            let connection = connectionDTOs[connectionIndex]
 
             let expectedKey = canonicalGrantKey(
                 connectionID: row.connectionIDRaw,
                 capability: capability
             )
-            let existingPair = grantPairs.contains(where: {
-                $0.connectionID == row.connectionIDRaw
-                    && $0.capability == capability
-            })
-            let priorCount = grantPairs.lazy.filter {
-                $0.connectionID == row.connectionIDRaw
-            }.count
             guard row.grantKey == expectedKey,
-                  !existingPair,
-                  priorCount < limits.maximumGrantRowsPerConnection,
-                  isGrantable(capability, to: connection.kind),
+                  grantedCapabilitiesByConnection[row.connectionIDRaw]?.contains(capability) != true,
+                  (grantedCapabilitiesByConnection[row.connectionIDRaw]?.count ?? 0)
+                    < limits.maximumGrantRowsPerConnection,
+                  isGrantable(capability, to: connection.enrollKind),
+                  row.grantedAt >= connection.enrolledAt,
+                  row.revokedAt.map({ $0 >= row.grantedAt }) ?? true,
                   connection.status == .active || row.revokedAt != nil else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
 
-            grantPairs.append((
-                connectionID: row.connectionIDRaw,
-                capability: capability
-            ))
+            grantedCapabilitiesByConnection[row.connectionIDRaw, default: []].insert(capability)
             grantDTOs.append(GrantDTO(
                 connectionID: ExternalConnectionID(
                     rawValue: row.connectionIDRaw
@@ -526,11 +509,17 @@ extension HistoryAuthority {
             payload: payload,
             in: context
         ) { committedAt in
+            // A wall-clock correction cannot place revocation before an
+            // already published enrollment or live grant. Audit timestamps
+            // still record the clock samples taken for this operation.
+            let revokedAt = liveGrantRows.reduce(max(committedAt, connection.enrolledAt)) {
+                max($0, $1.grantedAt)
+            }
             try context.execute("UPDATE connections SET statusRaw = ?, revokedAt = ? WHERE id = ?", bindings: [
-                .integer(Int64(ConnectionStatus.revoked.rawValue)), .real(committedAt.timeIntervalSinceReferenceDate), .text(id.rawValue.uuidString)
+                .integer(Int64(ConnectionStatus.revoked.rawValue)), .real(revokedAt.timeIntervalSinceReferenceDate), .text(id.rawValue.uuidString)
             ])
             try context.execute("UPDATE grants SET revokedAt = ? WHERE connectionIDRaw = ? AND revokedAt IS NULL", bindings: [
-                .real(committedAt.timeIntervalSinceReferenceDate), .text(id.rawValue.uuidString)
+                .real(revokedAt.timeIntervalSinceReferenceDate), .text(id.rawValue.uuidString)
             ])
         }
     }
@@ -655,9 +644,12 @@ extension HistoryAuthority {
                 payload: payload,
                 in: context
             ) { committedAt in
+                let grantedAt = max(
+                    committedAt, max(connection.enrolledAt, grantRow.revokedAt ?? grantRow.grantedAt)
+                )
                 let updated = GatewayAdministration.regrantCurrentRow(
                     grantRow,
-                    at: committedAt
+                    at: grantedAt
                 )
                 try context.execute("UPDATE grants SET grantedAt = ?, revokedAt = NULL WHERE grantKey = ?", bindings: [
                     .real(updated.grantedAt.timeIntervalSinceReferenceDate), .text(updated.grantKey)
@@ -701,7 +693,7 @@ extension HistoryAuthority {
                 payload: payload,
                 in: context
             ) { committedAt in
-                grantRow.grantedAt = committedAt
+                grantRow.grantedAt = max(committedAt, connection.enrolledAt)
                 try context.execute("INSERT INTO grants (\(GrantRow.columns)) VALUES (?, ?, ?, ?, ?, ?)", bindings: [
                     .text(grantRow.grantKey), .text(grantRow.connectionIDRaw.uuidString), .integer(Int64(grantRow.capabilityRaw)),
                     .real(grantRow.grantedAt.timeIntervalSinceReferenceDate), .null, .integer(Int64(grantRow.configSchemaVersion))
@@ -796,8 +788,9 @@ extension HistoryAuthority {
             payload: payload,
             in: context
         ) { committedAt in
+            let revokedAt = max(committedAt, grantRow.grantedAt)
             try context.execute("UPDATE grants SET revokedAt = ? WHERE grantKey = ?", bindings: [
-                .real(committedAt.timeIntervalSinceReferenceDate), .text(grantRow.grantKey)
+                .real(revokedAt.timeIntervalSinceReferenceDate), .text(grantRow.grantKey)
             ])
         }
     }

@@ -3,9 +3,9 @@
 import Foundation
 
 internal enum SettingsCopy {
-    static var bundle: Bundle { .main }
+    static var bundle: Bundle { AppLocalization.bundle }
 
-    static func text(_ english: String, bundle: Bundle = .main) -> String {
+    static func text(_ english: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(
             forKey: english, value: english,
             table: "GeneralAppearanceSettings"
@@ -13,19 +13,19 @@ internal enum SettingsCopy {
     }
 
     static func removeIgnoredApp(
-        _ bundleID: String, bundle: Bundle = .main
+        _ bundleID: String, bundle: Bundle = AppLocalization.bundle
     ) -> String {
         String(format: text("Remove %@", bundle: bundle), bundleID)
     }
 
     static func shortcutUnavailable(
-        _ chord: String, bundle: Bundle = .main
+        _ chord: String, bundle: Bundle = AppLocalization.bundle
     ) -> String {
         String(format: text("%@ is unavailable.", bundle: bundle), chord)
     }
 
     static func retainedShortcut(
-        _ chord: String, bundle: Bundle = .main
+        _ chord: String, bundle: Bundle = AppLocalization.bundle
     ) -> String {
         String(
             format: text("The current %@ shortcut still works.", bundle: bundle),

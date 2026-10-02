@@ -202,6 +202,11 @@ struct SearchWorkerBoundedResultsTests {
             evaluation = try await worker.evaluateRegexp(term: "alpha", in: corpus, directive: directive)
         case .fuzzy:
             evaluation = try await worker.evaluateFuzzy(term: "alpha", in: corpus, directive: directive)
+        case .expression:
+            evaluation = try await worker.evaluateExpression(
+                PreparedSearchExpression(try HistorySearchExpression.parse("alpha").root),
+                in: corpus, directive: directive
+            )
         }
         let retained = evaluation.rows
         #expect(retained.count <= 5)

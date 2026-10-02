@@ -1,8 +1,8 @@
 /// WS3Composed — Rich-to-plain containment through the composed app stack
-/// (docs/06-cross-cutting.md §8 WS3; docs/roadmap/06-clipyapp.md
+/// (docs/testing.md WS3; docs/architecture.md
 /// "Acceptance"): copying rich content (plain + html) and later copying the
 /// same text as PLAIN-ONLY coalesces into the richer Canonical item via the
-/// containment lane (docs/02-domain.md §9.3 lane 2) — the composed form of
+/// containment lane (docs/architecture.md lane 2) — the composed form of
 /// the everyday "copied from a rich app, re-copied from a plain one" path.
 ///
 /// The gate's forced-fingerprint collision clause (equal xxh3 fingerprints,
@@ -19,7 +19,7 @@ import Testing
 
 struct WS3ComposedContainmentTests {
 
-    /// WS3 (docs/06-cross-cutting.md §8): insert rich+plain content, then
+    /// WS3 (docs/testing.md): insert rich+plain content, then
     /// submit matching plain-only content through a real adapter freeze.
     /// The plain-only copy coalesces into the richer Canonical item — same
     /// ID, Content Version preserved, Canonical Content still two
@@ -36,7 +36,7 @@ struct WS3ComposedContainmentTests {
         let pasteboard = ComposedSupport.makePasteboard()
         let adapter = PasteboardAdapter(pasteboard: pasteboard)
 
-        // Rich copy: plain + html siblings (docs/03a-instruction-set.md §4).
+        // Rich copy: plain + html siblings (docs/architecture.md).
         ComposedSupport.setPasteboardContents(text, html: html, on: pasteboard)
         let richCapture = try #require(adapter.capture(observedAt: richObservedAt))
         #expect(richCapture.representations.count == 2)
@@ -48,7 +48,7 @@ struct WS3ComposedContainmentTests {
 
         // Plain-only copy of the SAME text — a subset of the rich item's
         // Canonical types with byte-equal plain bytes (containment,
-        // docs/02-domain.md §9.3 lane 2).
+        // docs/architecture.md lane 2).
         ComposedSupport.setPasteboardContents(text, on: pasteboard)
         let plainCapture = try #require(adapter.capture(observedAt: plainObservedAt))
         #expect(plainCapture.representations.count == 1)

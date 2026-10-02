@@ -1,5 +1,5 @@
 /// Closed External Gateway classification values.
-/// Owning spec: docs/v2/V2-05-external-gateway.md §0.2/§3.2/§3.3.
+/// Owning spec: docs/automation.md
 /// Foundation-only; these values carry no credential, transport, registry, or
 /// History lookup behavior.
 import Foundation

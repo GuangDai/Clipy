@@ -3,15 +3,16 @@
 import Foundation
 
 internal enum HistoryListCopy {
-    static var bundle: Bundle { .main }
+    static var bundle: Bundle { AppLocalization.bundle }
 
-    static func text(_ english: String, bundle: Bundle = .main) -> String {
+    static func text(_ english: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(forKey: english, value: english, table: "HistoryList")
     }
 
     /// Query text is an argument, never part of the localization key or
     /// format string; percent signs and quotes remain literal user content.
-    static func searchMiss(_ query: String, bundle: Bundle = .main) -> String {
+    static func searchMiss(_ query: String, bundle: Bundle = AppLocalization.bundle) -> String {
         String(format: text("No items match “%@”.", bundle: bundle), query)
     }
+
 }

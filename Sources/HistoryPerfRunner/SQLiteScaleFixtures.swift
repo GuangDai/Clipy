@@ -27,13 +27,34 @@ struct SQLiteScaleFixtureProfile: Sendable {
         return range.lowerBound + (range.upperBound - range.lowerBound) * sample / 2_047
     }
 
-    func capture(at index: Int) -> ClipboardCapture {
-        guard kind == .mixed else {
-            return deterministicTextCapture(index: index, bodyBytes: fixedBodyBytes)
+    /// Select once from the length-only profile, without materializing rows.
+    /// The mixed 10k/100k corpora select a multi-MiB raw value whose durable
+    /// search body reaches the production 256 KiB projection bound.
+    func largestBodyIndex(in count: Int) -> Int {
+        precondition(count > 0)
+        var selected = 0
+        var largest = byteCount(at: selected)
+        for index in 1..<count {
+            let length = byteCount(at: index)
+            if length > largest {
+                selected = index
+                largest = length
+            }
         }
+        return selected
+    }
+
+    func capture(at index: Int, includeLargeBodyHit: Bool = false) -> ClipboardCapture {
         let length = byteCount(at: index)
-        let prefix = Data("perf-item-\(index)-\n".utf8)
-        let block = Self.textBlocks[index % Self.textBlocks.count]
+        // Keep search markers off the first line so a positive body search
+        // must build a real excerpt instead of matching the stored title.
+        // The oldest item adds one rare term; both AND operand orders can
+        // therefore measure the same identities over an identical corpus.
+        let prefix = Data(("perf-item-\(index)-\nbodyhit\n" + (index == 0 ? "rarebody\n" : "")).utf8)
+        let block = kind == .mixed
+            ? Self.textBlocks[index % Self.textBlocks.count]
+            : Data(repeating: 0x61, count: 8_192)
+        precondition(prefix.count <= length)
         var bytes = Data()
         bytes.reserveCapacity(length)
         bytes.append(prefix)
@@ -48,6 +69,20 @@ struct SQLiteScaleFixtureProfile: Sendable {
         }
         bytes.append(block.prefix(tailLength))
         bytes.append(Data(repeating: 0x20, count: length - bytes.count))
+        if includeLargeBodyHit {
+            let marker = Data("\nlargebodyhit\n".utf8)
+            var end = min(length, HistoryLimits.standard.maximumStoredSearchBodyUTF8Bytes)
+            while end < bytes.count, bytes[end] & 0xC0 == 0x80 { end -= 1 }
+            var start = end - marker.count
+            while bytes[start] & 0xC0 == 0x80 { start -= 1 }
+            precondition(start >= prefix.count)
+            // Both boundaries are scalar boundaries. Replace in place so raw
+            // length statistics stay identical and the marker remains inside
+            // the durable prefix even for a many-MiB original representation.
+            var replacement = marker
+            replacement.append(Data(repeating: 0x20, count: end - start - marker.count))
+            bytes.replaceSubrange(start..<end, with: replacement)
+        }
         return ClipboardCapture(
             representations: [CapturedRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: bytes)],
             origin: CopyOriginObservation(sourceApplication: "perf-runner", lineageHint: nil),

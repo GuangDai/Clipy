@@ -71,6 +71,7 @@ enum SummonShortcutRecordingDecision: Equatable {
 /// candidate closes the sheet and lets Settings render either the new active
 /// chord or the controller's visible unavailable/retained-current state.
 struct SummonShortcutRecorderView: View {
+    @Environment(\.locale) private var interfaceLocale
     @Environment(\.dismiss) private var dismiss
     @State private var rejectedInput = false
     @State private var conflictingAction: PanelShortcutAction?
@@ -87,6 +88,7 @@ struct SummonShortcutRecorderView: View {
     }
 
     var body: some View {
+        let _ = interfaceLocale
         VStack(alignment: .leading, spacing: 12) {
             Text(ShortcutRecorderCopy.text("Change Summon Shortcut"))
                 .font(.headline)

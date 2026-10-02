@@ -2,7 +2,7 @@
 /// and the production observer entry/poll paths without waiting for a Timer:
 /// process startup imports the already-current complete generation, while an
 /// explicitly baseline-only restart excludes the stopped interval and admits
-/// only a later generation (docs/01-architecture.md §5.1).
+/// only a later generation (docs/architecture.md).
 import AppKit
 import Foundation
 import HistoryCore

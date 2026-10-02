@@ -1,6 +1,6 @@
 /// WS5Composed — Capture-path rejection through the composed app stack
-/// (docs/06-cross-cutting.md §8 WS5; docs/05-authority-kernel.md §6.1;
-/// docs/01-architecture.md §5.1 capture loop): the composed essence of the
+/// (docs/testing.md WS5; docs/storage.md;
+/// docs/architecture.md capture loop): the composed essence of the
 /// "candidate proof unavailable" gate. A concealed pasteboard marker
 /// freezes into `isConcealed == true`, storage rejects the WHOLE capture
 /// with `.invalidInput(.excludedFromHistory)` before fingerprinting
@@ -22,7 +22,7 @@ import Testing
 
 struct WS5ComposedCaptureRejectionTests {
 
-    /// WS5 essence (docs/06-cross-cutting.md §8; 05 §6.1): a pasteboard
+    /// WS5 essence (docs/testing.md; 05 §6.1): a pasteboard
     /// carrying one of the six concealment markers plus sibling plaintext
     /// freezes concealed, is rejected with
     /// `.invalidInput(.excludedFromHistory)`, and produces no row and no

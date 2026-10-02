@@ -58,6 +58,10 @@ final class HistoryExternalOpener {
         let groups = Dictionary(grouping: metadata, by: \.pasteboardItemIndex)
         var result: [HistoryOpenOption] = []
         var firstFailure: HistoryOpenFailure?
+        // One gesture can contain many images of the same encoding. Resolve
+        // each format once, including a missing default application. This
+        // request-local value cannot outlive a later system-default change.
+        var imageApplications: [String: URL?] = [:]
         for index in groups.keys.sorted().prefix(32) {
             try Task.checkCancellation()
             do {
@@ -68,12 +72,17 @@ final class HistoryExternalOpener {
                     ?? representations.first { $0.typeIdentifier == ClipboardFormatIdentifier.url.rawValue }
                 var file: URL?
                 if let reference {
-                    guard reference.byteCount <= 16 * 1_024 else { throw HistoryOpenFailure.unavailable }
-                    let request = HistoryRepresentationRequest(item: item, basis: .effective,
-                        typeIdentifier: reference.typeIdentifier, pasteboardItemIndex: index)
-                    let representation = try await history.representation(request)
-                    try Task.checkCancellation()
-                    file = Self.localFileURL(representation.bytes)
+                    if reference.byteCount <= 16 * 1_024 {
+                        let request = HistoryRepresentationRequest(item: item, basis: .effective,
+                            typeIdentifier: reference.typeIdentifier, pasteboardItemIndex: index)
+                        let representation = try await history.representation(request)
+                        try Task.checkCancellation()
+                        file = Self.localFileURL(representation.bytes)
+                    }
+                    // An oversized ordinary URL has no admitted local-file
+                    // meaning, just like a web URL. It must not hide a usable
+                    // image. A declared file reference still wins over its icon
+                    // and reports its malformed/oversized address explicitly.
                     if file == nil && reference.typeIdentifier == ClipboardFormatIdentifier.fileURL.rawValue {
                         throw HistoryOpenFailure.unavailable
                     }
@@ -101,7 +110,14 @@ final class HistoryExternalOpener {
                             if imageFailure == nil { imageFailure = .temporaryLimit }
                             continue
                         }
-                        guard let resolved = applicationFor(nil, image.typeIdentifier) else {
+                        let resolved: URL?
+                        if let cached = imageApplications[image.typeIdentifier] {
+                            resolved = cached
+                        } else {
+                            resolved = applicationFor(nil, image.typeIdentifier)
+                            imageApplications.updateValue(resolved, forKey: image.typeIdentifier)
+                        }
+                        guard let resolved else {
                             if imageFailure == nil { imageFailure = .noApplication }
                             continue
                         }

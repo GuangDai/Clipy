@@ -7,12 +7,14 @@ package extension ClipyCLIContract {
         guard bytes.count <= maximumRequestBytes else {
             return .failure(.init(code: .requestTooLarge, requestID: nil))
         }
-        guard !bytes.starts(with: [0xEF, 0xBB, 0xBF]),
-              String(data: bytes, encoding: .utf8) != nil else {
+        guard !bytes.starts(with: [0xEF, 0xBB, 0xBF]) else {
             return .failure(.init(code: .invalidJSON, requestID: nil))
         }
         let value: BoundedJSONValue
         do {
+            // The parser checks strict UTF-8 in every string and admits only
+            // ASCII JSON syntax elsewhere. A whole-input String would repeat
+            // that validation and retain another request-sized allocation.
             value = try BoundedJSONParser.parse(bytes)
         } catch {
             return .failure(.init(code: .invalidJSON, requestID: nil))

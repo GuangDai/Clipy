@@ -4,6 +4,12 @@ import HistoryCore
 import HistoryStorage
 import LocalAutomation
 
+#if DEBUG
+enum LocalAutomationControllerDebugInstrumentation {
+    @TaskLocal static var beforeServiceReconciliation: (@Sendable () async -> Void)?
+}
+#endif
+
 /// The app owns one enrolled ingress and one listener after opening History.
 /// Settings and startup share these instances; a disabled connection creates
 /// no socket. Clipboard reads and mutations remain owned by HistoryStorage.
@@ -13,6 +19,14 @@ final class LocalAutomationController {
     private let service: LocalAutomationService
     private let clientDirectory: URL
     private var isStopped = false
+    private var pendingEnrollmentChanges = 0
+    private var enrollmentChangeWaiter: CheckedContinuation<Void, Never>?
+    private var needsServiceUpdate = false
+    private var latestEnrollment: LocalAutomationEnrollmentState?
+    private var serviceUpdate: Task<Void, any Error>?
+#if DEBUG
+    private(set) var pendingServiceUpdatesForTesting = 0
+#endif
 
     init(
         ingress: LocalAutomationIngress,
@@ -30,7 +44,9 @@ final class LocalAutomationController {
 
     func stop() async {
         isStopped = true
-        await service.stop()
+        enrollmentChangeWaiter?.resume()
+        enrollmentChangeWaiter = nil
+        _ = try? await reconcileListener()
     }
 
     var settings: LocalAutomationSettings {
@@ -75,14 +91,10 @@ final class LocalAutomationController {
 
     private func load() async throws -> LocalAutomationSettingsState {
         try checkRunning()
-        let state = try await ingress.state(clientDirectory: clientDirectory)
-        try checkRunning()
-        if state.connection != nil {
-            try await service.start()
-            // Shutdown can interleave while the actor starts its listener.
-            if isStopped { await service.stop(); throw CancellationError() }
-        }
-        return presentation(state)
+#if DEBUG
+        await LocalAutomationControllerDebugInstrumentation.beforeServiceReconciliation?()
+#endif
+        return presentation(try await reconcileListener())
     }
 
     private func enable() async throws -> LocalAutomationSettingsState {
@@ -92,30 +104,107 @@ final class LocalAutomationController {
             withIntermediateDirectories: true,
             attributes: [.posixPermissions: 0o700]
         )
-        let state = try await ingress.enable(clientDirectory: clientDirectory)
-        try checkRunning()
-        try await service.start()
-        if isStopped { await service.stop(); throw CancellationError() }
-        return presentation(state)
+        try await performEnrollmentChange {
+            try await ingress.enable(clientDirectory: clientDirectory)
+        }
+#if DEBUG
+        await LocalAutomationControllerDebugInstrumentation.beforeServiceReconciliation?()
+#endif
+        return presentation(try await reconcileListener())
     }
 
     private func revoke() async throws -> LocalAutomationSettingsState {
         try checkRunning()
         // Revocation becomes authoritative before closing the listener, so
         // an already-connected request cannot retain the old grants.
-        let state = try await ingress.revoke(clientDirectory: clientDirectory)
-        await service.stop()
-        return presentation(state)
+        try await performEnrollmentChange {
+            try await ingress.revoke(clientDirectory: clientDirectory)
+        }
+#if DEBUG
+        await LocalAutomationControllerDebugInstrumentation.beforeServiceReconciliation?()
+#endif
+        return presentation(try await reconcileListener())
+    }
+
+    /// The socket follows current custody and durable enrollment, independently
+    /// of which mutation's continuation reaches the MainActor first. One task
+    /// joins each start/stop, then proves the latest state before publication.
+    private func reconcileListener() async throws -> LocalAutomationEnrollmentState {
+#if DEBUG
+        pendingServiceUpdatesForTesting += 1
+        defer { pendingServiceUpdatesForTesting -= 1 }
+#endif
+        needsServiceUpdate = true
+        while true {
+            let update: Task<Void, any Error>
+            if let serviceUpdate { update = serviceUpdate }
+            else {
+                update = Task { [self] in
+                    defer { serviceUpdate = nil }
+                    while true {
+                        if isStopped { await service.stop(); return }
+                        await waitForEnrollmentChanges()
+                        if isStopped { continue }
+                        needsServiceUpdate = false
+                        let before = try await ingress.stateWhenAvailable(clientDirectory: clientDirectory)
+                        if isStopped { continue }
+                        if before.connection != nil { try await service.start() }
+                        else { await service.stop() }
+                        await waitForEnrollmentChanges()
+                        if isStopped { continue }
+                        let current = try await ingress.stateWhenAvailable(clientDirectory: clientDirectory)
+                        guard !isStopped, pendingEnrollmentChanges == 0,
+                              !needsServiceUpdate, before.connection == current.connection else { continue }
+                        latestEnrollment = current
+                        return
+                    }
+                }
+                serviceUpdate = update
+            }
+            do { try await update.value }
+            catch {
+                if !isStopped, pendingEnrollmentChanges > 0 || needsServiceUpdate { continue }
+                throw error
+            }
+            try checkRunning()
+            // A newer task or mutation may have begun while this caller was
+            // awaiting the previous task. Publish only the latest proved value.
+            if pendingEnrollmentChanges == 0, !needsServiceUpdate, let latestEnrollment {
+                return latestEnrollment
+            }
+        }
+    }
+
+    private func performEnrollmentChange(
+        _ operation: @MainActor () async throws -> LocalAutomationEnrollmentState
+    ) async throws {
+        pendingEnrollmentChanges += 1
+        needsServiceUpdate = true
+        latestEnrollment = nil
+        defer {
+            pendingEnrollmentChanges -= 1
+            if pendingEnrollmentChanges == 0 {
+                enrollmentChangeWaiter?.resume()
+                enrollmentChangeWaiter = nil
+            }
+        }
+        _ = try await operation()
+    }
+
+    private func waitForEnrollmentChanges() async {
+        while pendingEnrollmentChanges > 0 && !isStopped {
+            await withCheckedContinuation { enrollmentChangeWaiter = $0 }
+        }
     }
 
     private func setCapability(
         _ capability: ExternalCapability, enabled: Bool
     ) async throws -> LocalAutomationSettingsState {
         try checkRunning()
-        let state = try await ingress.setCapability(
-            capability, enabled: enabled, clientDirectory: clientDirectory
-        )
-        return presentation(state)
+        try await performEnrollmentChange {
+            try await ingress.setCapability(capability, enabled: enabled, clientDirectory: clientDirectory)
+        }
+        return presentation(try await reconcileListener())
     }
 
     private func checkRunning() throws {

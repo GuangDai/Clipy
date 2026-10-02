@@ -1,11 +1,11 @@
 /// HistoryPersistence / HistoryConfiguration — the public configuration
 /// values for opening a `SQLiteHistory`.
-/// Owning spec: docs/05-authority-kernel.md §2 (Part V — public concrete
-/// adapter); bounds validated against docs/06-cross-cutting.md §2 (Part VI)
+/// Owning spec: docs/storage.md (Part V — public concrete
+/// adapter); bounds validated against docs/testing.md (Part VI)
 /// at `SQLiteHistory.open` time.
 import Foundation
 
-/// The durability medium of a History store (docs/05-authority-kernel.md §2).
+/// The durability medium of a History store (docs/storage.md).
 ///
 /// Both modes use the same SQLite/blob implementation and transaction path.
 /// Disposable stores use a private temporary directory, allowing independent
@@ -19,7 +19,7 @@ public enum HistoryPersistence: Sendable, Hashable {
 }
 
 /// Configuration for `SQLiteHistory.open(configuration:)`
-/// (docs/05-authority-kernel.md §2).
+/// (docs/storage.md).
 ///
 /// `initialMaximumUnpinnedItems` is the initial retention value for a *new*
 /// store: it is written to the durable singleton when `open` creates one. An
@@ -33,11 +33,11 @@ public struct HistoryConfiguration: Sendable, Hashable {
     public let persistence: HistoryPersistence
 
     /// The retention value a newly created store starts with; ignored by an
-    /// existing store (docs/05-authority-kernel.md §2). Nil disables count
+    /// existing store (docs/storage.md). Nil disables count
     /// retention; a supplied count must be positive. The default remains 200.
     public let initialMaximumUnpinnedItems: Int?
 
-    /// Creates a configuration (docs/05-authority-kernel.md §2).
+    /// Creates a configuration (docs/storage.md).
     ///
     /// Validation is deferred to `SQLiteHistory.open(configuration:)`,
     /// which throws the typed failure — this initializer only stores values.

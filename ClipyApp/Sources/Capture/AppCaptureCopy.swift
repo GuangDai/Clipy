@@ -3,11 +3,11 @@
 import Foundation
 
 enum AppCaptureCopy {
-    static func text(_ english: String, bundle: Bundle = .main) -> String {
+    static func text(_ english: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(forKey: english, value: english, table: "AppCapture")
     }
 
-    static func accessMessage(_ state: CaptureAccessState, bundle: Bundle = .main) -> String {
+    static func accessMessage(_ state: CaptureAccessState, bundle: Bundle = AppLocalization.bundle) -> String {
         let message: String
         switch state {
         case .systemDefault:
@@ -26,15 +26,15 @@ enum AppCaptureCopy {
         return text(message, bundle: bundle)
     }
 
-    static func recoveryTitle(_ recovery: CaptureAccessRecovery, bundle: Bundle = .main) -> String {
+    static func recoveryTitle(_ recovery: CaptureAccessRecovery, bundle: Bundle = AppLocalization.bundle) -> String {
         text(recovery == .resume ? "Resume" : "Try Again", bundle: bundle)
     }
 
-    static func recoveryLabel(_ recovery: CaptureAccessRecovery, bundle: Bundle = .main) -> String {
+    static func recoveryLabel(_ recovery: CaptureAccessRecovery, bundle: Bundle = AppLocalization.bundle) -> String {
         text(recovery == .resume ? "Resume clipboard capture" : "Retry clipboard access", bundle: bundle)
     }
 
-    static func statusLabel(isPaused: Bool, bundle: Bundle = .main) -> String {
+    static func statusLabel(isPaused: Bool, bundle: Bundle = AppLocalization.bundle) -> String {
         isPaused ? text("Clipy, clipboard monitoring paused", bundle: bundle) : "Clipy"
     }
 }

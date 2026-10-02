@@ -1,5 +1,5 @@
 /// WS17Composed — Search modes through the composed panel surface
-/// (docs/06-cross-cutting.md §8 WS17; docs/03b-instruction-set.md §8):
+/// (docs/testing.md WS17; docs/architecture.md):
 /// the frozen search behavior driven by the REAL `HistoryViewState` —
 /// `searchText` + `searchMode` restart observation into the
 /// `.search(text:mode:)` query shape (03a §7), and the observed rows carry

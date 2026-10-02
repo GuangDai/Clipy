@@ -1,4 +1,4 @@
-/// Capture privacy regression tests (docs/05-authority-kernel.md §6.1;
+/// Capture privacy regression tests (docs/storage.md;
 /// V1-Verified/03d `concealed-type-leak-flat-schema`). Concealment is a
 /// pasteboard-item property, not an independently retainable representation:
 /// either the explicit HistoryCore observation flag or any known sibling

@@ -22,7 +22,16 @@ struct AppIntentHistoryIngress: ExternalHistory, Sendable {
     func perform(
         _ request: ExternalRequest
     ) async throws -> ExternalResponse {
-        let response = try await facade.perform(request)
+        try Task.checkCancellation()
+        let response: ExternalResponse
+        do {
+            response = try await facade.perform(request)
+        } catch {
+            // Gateway records cancellation with its typed audit vocabulary.
+            // Preserve the invocation's cancellation at the App Intents edge.
+            try Task.checkCancellation()
+            throw error
+        }
         switch request {
         case .pin, .unpin:
             break
@@ -40,6 +49,14 @@ struct AppIntentHistoryIngress: ExternalHistory, Sendable {
     func read(
         _ request: ExternalRead
     ) async throws -> ExternalReadResult {
-        try await facade.read(request)
+        try Task.checkCancellation()
+        do {
+            let result = try await facade.read(request)
+            try Task.checkCancellation()
+            return result
+        } catch {
+            try Task.checkCancellation()
+            throw error
+        }
     }
 }

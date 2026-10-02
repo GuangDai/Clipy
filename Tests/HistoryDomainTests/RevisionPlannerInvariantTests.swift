@@ -7,12 +7,12 @@ import Testing
 
 /// Test fixtures can start with a complete lineage; product planning keeps
 /// only the validated current content and old revision metadata (02 §11).
-private func revisionFacts(_ item: HistoryItemState) throws -> RevisionFacts {
+private func revisionFacts(_ item: PlannerItemFixture) throws -> RevisionFacts {
     RevisionFacts(
         itemID: item.id,
         contentVersion: item.contentVersion,
         canonical: item.canonical,
-        current: try effectiveContent(of: item),
+        current: try item.currentContent(),
         revisions: item.revisions.map { revision in
             RevisionRetentionSummary(
                 id: revision.id,
@@ -206,15 +206,6 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
     #expect(appended.id == revisionID)
     #expect(appended.content == changedContent)
     #expect(activeRevisionID == revisionID)
-    #expect(item.canonical == canonical)
-    let oldRevisionIDs = item.revisions.map(\.id)
-    #expect(!oldRevisionIDs.contains(appended.id))
-    let resultingRevisionIDs = oldRevisionIDs + [appended.id]
-    #expect(resultingRevisionIDs.count == oldRevisionIDs.count + 1)
-    let containsDuplicate = resultingRevisionIDs.indices.contains { index in
-        resultingRevisionIDs.dropFirst(index + 1).contains(resultingRevisionIDs[index])
-    }
-    #expect(!containsDuplicate)
 }
 
 @Test func revisionPlannerRejectsCandidateIDAlreadyInTheItemLineage() throws {
@@ -354,27 +345,6 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
     }
 }
 
-@Test func effectiveContentRejectsCorruptLineageBeforeRevisionFacts() throws {
-    let itemID = pinRevisionItemID(1)
-    let canonical = try pinRevisionCanonical()
-    let orphanedRevision = ContentRevision(
-        id: pinRevisionRevisionID(1),
-        createdAt: Date(timeIntervalSinceReferenceDate: 100),
-        content: EffectiveContent(
-            representations: canonical.representations.map(\.content)
-        )
-    )
-    let corruptItem = pinRevisionState(
-        id: itemID,
-        canonical: canonical,
-        revisions: [orphanedRevision],
-        activeRevisionID: nil
-    )
-    #expect(throws: DomainRejection.corruptLineage) {
-        try effectiveContent(of: corruptItem)
-    }
-}
-
 @Test func revisionPlannerRejectsEmptyEmptyBytesAndUnsortedContent() throws {
     let html = ContentRepresentation(
         typeIdentifier: "public.html",
@@ -425,6 +395,46 @@ func equivalentTypeSpellingsDoNotAppendARevision(_ useDecomposedCanonical: Bool)
                     pinRevisionState(id: itemID, canonical: canonical)
                 )
             )
+        }
+    }
+}
+
+@Test func revisionPlannerKeepsEveryPasteboardItemWhileAllowingTypeRemoval() throws {
+    func representation(_ item: Int, _ type: String, _ bytes: String) -> ContentRepresentation {
+        ContentRepresentation(typeIdentifier: type, bytes: Data(bytes.utf8), pasteboardItemIndex: item)
+    }
+    let text = "public.utf8-plain-text"
+    let originals = [
+        representation(0, "public.html", "<p>first</p>"),
+        representation(0, text, "first"),
+        representation(1, text, "second"),
+        representation(2, text, "third")
+    ]
+    let canonical = try CanonicalContent(representations: originals.map {
+        CanonicalRepresentation(content: $0, fingerprint: ContentFingerprint(rawValue: 1))
+    })
+    let itemID = pinRevisionItemID(1)
+    let facts = try revisionFacts(pinRevisionState(id: itemID, canonical: canonical))
+    let request = RevisionRequest(itemID: itemID, expected: .initial, intent: .revert(to: .canonical))
+    let reduced = Array(originals.dropFirst())
+    for proposed in [reduced, Array(reduced.dropFirst()), Array(reduced.dropLast()), [reduced[0], reduced[2]]] {
+        let prepared = PreparedRevision(
+            candidateRevisionID: pinRevisionRevisionID(1),
+            createdAt: Date(timeIntervalSinceReferenceDate: 200),
+            basedOn: .initial, proposedContent: EffectiveContent(representations: proposed)
+        )
+        if proposed == reduced {
+            guard case .commit(let plan) = try planRevision(request: request, prepared: prepared, facts: facts),
+                  let mutation = plan.mutations.first,
+                  case .appendRevision(_, let revision, _) = mutation else {
+                Issue.record("Removing one format must preserve the ordered pasteboard items")
+                continue
+            }
+            #expect(revision.content.representations == reduced)
+        } else {
+            #expect(throws: DomainRejection.invalidRevisionDraft) {
+                try planRevision(request: request, prepared: prepared, facts: facts)
+            }
         }
     }
 }

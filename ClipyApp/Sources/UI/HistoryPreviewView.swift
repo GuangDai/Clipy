@@ -34,6 +34,7 @@ struct HistoryPreviewView: View {
 
     private let sourceIcons: SourceIconStore?
     private var maximumHeight: CGFloat? = nil
+    private var fillsAvailableHeight = false
     @State private var contentWidth: CGFloat = PanelGeometry.floatingPreviewWidth
     @State private var metadataHeight: CGFloat = 0
     @State private var fileHeaderHeight: CGFloat = 0
@@ -41,6 +42,7 @@ struct HistoryPreviewView: View {
     @State private var textNoticeHeight: CGFloat = 0
     @State private var loader: PreviewContentLoader
     @State private var retryGeneration = 0
+    @State private var retryItem: HistoryItemReference?
     @State private var fileConfirmationPresented = false
     @State private var pinRequest: PinRequest?
     @State private var pinFailure: (item: HistoryItemReference, message: String)?
@@ -74,12 +76,14 @@ struct HistoryPreviewView: View {
         previewState: PreviewPaneState,
         sourceIcons: SourceIconStore? = nil,
         maximumHeight: CGFloat? = nil,
+        fillsAvailableHeight: Bool = false,
         preparedLoader: PreviewContentLoader? = nil
     ) {
         self.viewState = viewState
         self.previewState = previewState
         self.sourceIcons = sourceIcons
         self.maximumHeight = maximumHeight
+        self.fillsAvailableHeight = fillsAvailableHeight
         selectionSource = .paneState
         _loader = State(
             initialValue: preparedLoader ?? PreviewContentLoader(
@@ -159,7 +163,9 @@ struct HistoryPreviewView: View {
         maximumHeight.map { max(0, $0 - metadataHeight - fileHeaderHeight) }
     }
 
-    private var flexibleHeight: CGFloat? { maximumHeight == nil ? .infinity : nil }
+    private var flexibleHeight: CGFloat? {
+        fillsAvailableHeight || maximumHeight == nil ? .infinity : nil
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -242,7 +248,7 @@ struct HistoryPreviewView: View {
             await loader.loadForDisplay(item: item,
                 textConfiguration: PreviewTextSettings.configuration(
                     maximumCharacters: maximumTextCharacters, isLengthLimited: isTextLengthLimited),
-                isRetry: retryGeneration > 0)
+                isRetry: item != nil && retryItem == item)
         }
         .task(id: pinRequest) {
             guard let request = pinRequest, !Task.isCancelled else { return }
@@ -253,7 +259,8 @@ struct HistoryPreviewView: View {
                 previewState.isInformationPresented = false
                 self.informationItem = nil
             }
-            fileConfirmationPresented = false
+            setFileConfirmationPresented(false)
+            retryItem = nil
             pinRequest = nil
             pinFailure = nil
             if loader.requestedItem != target { loader.clear() }
@@ -283,26 +290,28 @@ struct HistoryPreviewView: View {
                 informationItem = nil
             }
             loader.purgePreview(purge.scope, isPinned: observedRow?.pinnedPosition != nil)
-            if loader.fileLoadConfirmation == nil { fileConfirmationPresented = false }
+            if loader.fileLoadConfirmation == nil { setFileConfirmationPresented(false) }
         }
         // While the main panel has keyboard focus, it republishes ⌘R
         // through the pane state, applied exactly like the Retry button.
         .onChange(of: previewState.previewRetryRequestGeneration) { _, _ in
-            if loader.phase == .failed, loader.canRetryFailure {
-                retryGeneration += 1
-            }
+            requestRetry()
         }
         .onDisappear {
             if informationItem != nil {
                 previewState.isInformationPresented = false
                 informationItem = nil
             }
-            fileConfirmationPresented = false
+            setFileConfirmationPresented(false)
+            retryItem = nil
             pinRequest = nil
             pinFailure = nil
             loader.clear()
         }
-        .alert(PreviewCopy.text("Load File Contents?"), isPresented: $fileConfirmationPresented) {
+        .alert(PreviewCopy.text("Load File Contents?"), isPresented: Binding(
+            get: { fileConfirmationPresented },
+            set: { presented in setFileConfirmationPresented(presented) }
+        )) {
             Button(PreviewCopy.text("Load File")) {
                 guard loader.requestedItem == targetItem else { return }
                 loader.confirmFilePreview()
@@ -318,6 +327,11 @@ struct HistoryPreviewView: View {
         .background { copyShortcut }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("clipy.preview.root")
+    }
+
+    private func setFileConfirmationPresented(_ presented: Bool) {
+        fileConfirmationPresented = presented
+        previewState.isFileConfirmationPresented = presented
     }
 
     /// Return is the same reserved copy command as the history list. Keeping
@@ -398,7 +412,8 @@ struct HistoryPreviewView: View {
             case .content(.text(_, let wasTruncated)):
                 VStack(spacing: 0) {
                     PreviewTextBody(segments: loader.textSegments, groups: loader.textSegmentGroups,
-                        maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) })
+                        maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) },
+                        fillsAvailableHeight: fillsAvailableHeight)
                     .id(targetItem)
                     // The body scrolls independently; the disclosure stays
                     // visible and never becomes part of selectable content.
@@ -425,7 +440,7 @@ struct HistoryPreviewView: View {
                     reference: reference,
                     requestFileLoad: loader.canLoadFilePreview ? {
                         loader.requestFilePreview()
-                        fileConfirmationPresented = loader.fileLoadConfirmation != nil
+                        setFileConfirmationPresented(loader.fileLoadConfirmation != nil)
                     } : nil,
                     maximumHeight: bodyMaximumHeight
                 )
@@ -474,9 +489,7 @@ struct HistoryPreviewView: View {
                 .accessibilityIdentifier("clipy.preview.failed")
             if loader.canRetryFailure {
                 Button(PreviewCopy.text("Retry")) {
-                    if loader.phase == .failed, loader.canRetryFailure {
-                        retryGeneration += 1
-                    }
+                    requestRetry()
                 }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .retryPreview))
                 .accessibilityIdentifier("clipy.preview.retry")
@@ -485,6 +498,15 @@ struct HistoryPreviewView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
+    }
+
+    private func requestRetry() {
+        guard let targetItem, loader.requestedItem == targetItem,
+              loader.phase == .failed, loader.canRetryFailure else { return }
+        // Retry belongs to this exact target. A retry on A must not cancel
+        // B's already-running dwell preparation when selection changes.
+        retryItem = targetItem
+        retryGeneration += 1
     }
 
     // MARK: - Metadata bar
@@ -611,8 +633,24 @@ struct HistoryPreviewView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         if informationItem == row.item,
                            let currentRow = observedRow, currentRow.item == row.item {
-                            PreviewMetadataView(history: viewState.history, row: currentRow, sourceIcons: sourceIcons)
-                                .id(currentRow.item)
+                            HStack(alignment: .top, spacing: 12) {
+                                PreviewMetadataView(history: viewState.history, row: currentRow, sourceIcons: sourceIcons)
+                                    .id(currentRow.item)
+                                Button {
+                                    guard informationItem == row.item else { return }
+                                    previewState.isInformationPresented = false
+                                    informationItem = nil
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .frame(width: 24, height: 24)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(AppMotionPressStyle())
+                                .keyboardShortcut(.cancelAction)
+                                .accessibilityLabel(PreviewCopy.text("Close"))
+                                .help(PreviewCopy.text("Close"))
+                                .accessibilityIdentifier("clipy.preview.information.close")
+                            }
                         }
                     }
                     .font(.callout)

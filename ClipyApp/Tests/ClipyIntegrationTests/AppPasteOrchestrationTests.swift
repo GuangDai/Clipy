@@ -1,6 +1,6 @@
 /// AppPasteOrchestrationTests — the paste-orchestration guarantee in
-/// composed form (docs/01-architecture.md §5.6; docs/03b-instruction-set.md
-/// §9/§12; docs/04-coherence.md §8; roadmap 06-clipyapp.md "Acceptance"):
+/// composed form (docs/architecture.md; docs/architecture.md
+/// §9/§12; docs/storage.md; roadmap 06-clipyapp.md "Acceptance"):
 /// a paste selection traveling the app's real wiring —
 /// `viewState.onPaste` → the composition's owned copy lane →
 /// `pastePayload(for:)` → `adapter.write` — lands the item's current
@@ -33,6 +33,57 @@ import Testing
 @testable import ClipyApp
 
 struct AppPasteOrchestrationTests {
+
+    @Test(arguments: [false, true]) @MainActor
+    func aRetainedPasteCallbackCannotStartCopyAfterStop(workspace: Bool) async throws {
+        try ComposedSupport.requireUsablePasteboard()
+        let history = try await ComposedSupport.openMemoryHistory()
+        let receipt = try await history.perform(.capture(
+            ComposedSupport.textCapture("stale callback", observedAt: Date(timeIntervalSinceReferenceDate: 1))
+        ))
+        let item = try #require(ComposedSupport.insertedReference(from: receipt, "stale callback arrange"))
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history, adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        let staleCallback = workspace
+            ? composition.historyWorkspaceViewState.onPaste
+            : composition.viewState.onPaste
+        let generation = pasteboard.changeCount
+        composition.stop()
+        staleCallback(item)
+        #expect(composition.pendingPasteForTesting == nil)
+        if let task = composition.pendingPasteForTesting { await task.value }
+        #expect(pasteboard.changeCount == generation)
+        #expect(!composition.historyWorkspaceCopyState.isCopying)
+    }
+
+    @Test @MainActor
+    func stoppingBeforeTheCopyTaskStartsDoesNotResolveThePayload() async throws {
+        try ComposedSupport.requireUsablePasteboard()
+        let base = try await ComposedSupport.openMemoryHistory()
+        let receipt = try await base.perform(.capture(
+            ComposedSupport.textCapture("cancelled before execution", observedAt: Date(timeIntervalSinceReferenceDate: 1))
+        ))
+        let item = try #require(ComposedSupport.insertedReference(from: receipt, "cancel arrange"))
+        let history = PausingPastePayloadHistory(base: base, pausesFirstPayload: false)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history, adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        let generation = pasteboard.changeCount
+        composition.viewState.requestPaste(item)
+        let task = try #require(composition.pendingPasteForTesting)
+        composition.stop()
+        await task.value
+
+        #expect(await history.pastePayloadAttemptCount == 0)
+        #expect(pasteboard.changeCount == generation)
+    }
 
     /// 01 §5.6 (paste flow) + 03b §9 + 04 §8: a paste request through the
     /// view state's hand-off writes the item's current Effective Content
@@ -581,13 +632,16 @@ private actor PausingPastePayloadHistory: ClipboardHistory {
     }
 
     private let base: SQLiteHistory
+    private let pausesFirstPayload: Bool
     private var didPause = false
     private var pauseContinuation: CheckedContinuation<Void, Never>?
     private var observerContinuations: [CheckedContinuation<Void, Never>] = []
     private(set) var resolvedPastePayloadItem: HistoryItemReference?
+    private(set) var pastePayloadAttemptCount = 0
 
-    init(base: SQLiteHistory) {
+    init(base: SQLiteHistory, pausesFirstPayload: Bool = true) {
         self.base = base
+        self.pausesFirstPayload = pausesFirstPayload
     }
 
     func waitUntilPastePayloadIsPaused() async {
@@ -608,6 +662,10 @@ private actor PausingPastePayloadHistory: ClipboardHistory {
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
         try await base.browse(request)
+    }
+
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await base.sourceApplications(request)
     }
 
     func observe(
@@ -637,13 +695,14 @@ private actor PausingPastePayloadHistory: ClipboardHistory {
     }
 
     func pastePayload(for id: HistoryItemID) async throws -> PastePayload {
+        pastePayloadAttemptCount += 1
         // Resolve through the real store first, then hold the immutable result
         // at the system-boundary return. Cancellation during the park is
         // deliberately non-cooperative, which proves AppComposition's
         // post-await fence rather than relying on storage cancellation.
         let payload = try await base.pastePayload(for: id)
         resolvedPastePayloadItem = payload.item
-        if !didPause {
+        if !didPause, pausesFirstPayload {
             didPause = true
             let observers = observerContinuations
             observerContinuations.removeAll()

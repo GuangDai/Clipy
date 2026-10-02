@@ -1,12 +1,12 @@
 /// FailurePresentation.swift — typed-failure → user-facing message mapping
-/// (docs/03b-instruction-set.md §10; roadmap 05). Used by the panel failure
+/// (docs/architecture.md; roadmap 05). Used by the panel failure
 /// banner and the settings surfaces. Localized recovery copy; no raw payloads,
 /// paths, or type identifiers leak into the strings.
 import Foundation
 import HistoryCore
 
 /// Produces one-line user-facing messages for the typed `HistoryFailure`
-/// vocabulary (docs/03b-instruction-set.md §10). The switch is complete over
+/// vocabulary (docs/architecture.md). The switch is complete over
 /// every case — a new failure case is an owned source change that must be
 /// answered here.
 enum FailurePresentation {
@@ -47,7 +47,7 @@ enum FailurePresentation {
 
     // MARK: - Nested-vocabulary messages (private)
 
-    /// Caller-input validation rejections (docs/03b-instruction-set.md §10).
+    /// Caller-input validation rejections (docs/architecture.md).
     private static func key(for reason: InvalidInputReason) -> String {
         switch reason {
         case .emptyCapture, .excludedFromHistory:
@@ -64,7 +64,7 @@ enum FailurePresentation {
             return "Hiding every representation is not allowed"
         case .invalidRegularExpression:
             return "Invalid regular expression"
-        case .invalidPageLimit, .invalidPixelSize:
+        case .invalidPageLimit, .invalidPixelSize, .conflictingPageAnchors:
             return "That request isn't valid"
         case .invalidRetentionPolicy:
             return "Pinned items exceed this budget. Unpin items or raise the budget."
@@ -73,9 +73,9 @@ enum FailurePresentation {
         }
     }
 
-    /// Capacity rejections (docs/03b-instruction-set.md §10). The R2
+    /// Capacity rejections (docs/architecture.md). The R2
     /// storage-budget case carries the settings-surface wording
-    /// (docs/v2/V2-07-ux.md §5).
+    /// (docs/interface.md).
     private static func key(for kind: CapacityKind) -> String {
         switch kind {
         case .storageBytes:
@@ -90,11 +90,11 @@ enum FailurePresentation {
         }
     }
 
-    /// Temporary-unavailability rejections (docs/03b-instruction-set.md §10)
+    /// Temporary-unavailability rejections (docs/architecture.md)
     /// — retryable, so the message says so.
     private static func key(for reason: UnavailableReason) -> String {
         switch reason {
-        case .factProof:
+        case .factProof, .thumbnailResources:
             return "History is busy. Try again shortly."
         case .dedupIndexRebuild:
             return "History is reindexing. Try again shortly."

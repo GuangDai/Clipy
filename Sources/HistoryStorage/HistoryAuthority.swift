@@ -59,6 +59,8 @@ internal actor HistoryAuthority {
     internal var injectedTransactionFailure: InjectedTransactionFailure?
     internal var blobCleanupTask: Task<Void, Never>?
     internal var blobCleanupNeedsAnotherPass = false
+    internal var blobCleanupScansOrphans = false
+    internal var blobCleanupNextPassScansOrphans = false
     internal var contentCleanupAfterID = ""
     internal var contentCleanupFinished = false
 
@@ -84,6 +86,7 @@ internal actor HistoryAuthority {
 
     internal init(
         storeLocation: HistoryStoreLocation,
+        storeRootLease: StoreRootLease? = nil,
         limits: HistoryLimits = .standard,
         storageClock: any StorageClock = SystemStorageClock(),
         gatewayConnectionIDSource: @escaping @Sendable () -> UUID = { UUID() },
@@ -94,7 +97,7 @@ internal actor HistoryAuthority {
         self.storageClock = storageClock
         self.gatewayConnectionIDSource = gatewayConnectionIDSource
         self.volumeAvailableCapacityReader = volumeAvailableCapacityReader
-        database = try SQLiteDatabase(storeLocation: storeLocation)
+        database = try SQLiteDatabase(storeLocation: storeLocation, storeRootLease: storeRootLease)
         blobStore = try ImmutableBlobStore(root: storeLocation.rootURL)
     }
 
@@ -103,27 +106,52 @@ internal actor HistoryAuthority {
         guard initialMaximumUnpinnedItems.map(limits.userMaximumUnpinnedRange.contains) ?? true else {
             throw HistoryFailure.invalidInput(.invalidRetentionPolicy)
         }
+        try Task.checkCancellation()
         do {
-            return try database.writeTransaction {
-                try SQLiteHistorySchema.create(in: database)
-                try Self.ensurePositionSingleton(
-                    in: database,
-                    initialMaximumUnpinnedItems: initialMaximumUnpinnedItems,
-                    limits: limits
-                )
-                try Self.ensureRetentionExpansionConfig(in: database)
-                let identity = try ensureGatewayBootstrap(in: database)
-                try HCRBootstrap.ensureReady(in: database, now: storageClock.now())
+#if DEBUG
+            let clock = ContinuousClock()
+            let started = clock.now
+            storageLifecycleDebugProbe.record(phase: .startupFetchBegin)
+#endif
+            let identity = try autoreleasepool {
+                let identity = try database.writeTransaction(checkingCancellation: true) {
+                    try SQLiteHistorySchema.create(in: database)
+                    try Self.ensurePositionSingleton(
+                        in: database,
+                        initialMaximumUnpinnedItems: initialMaximumUnpinnedItems,
+                        limits: limits
+                    )
+                    try Self.ensureRetentionExpansionConfig(in: database)
+                    let identity = try ensureGatewayBootstrap(in: database)
+                    try HCRBootstrap.ensureReady(in: database, now: storageClock.now())
+                    return identity
+                }
+#if DEBUG
+                storageLifecycleDebugProbe.record(phase: .startupFetchComplete,
+                                                  elapsed: started.duration(to: clock.now))
+#endif
                 return identity
             }
+#if DEBUG
+            storageLifecycleDebugProbe.record(phase: .startupAutoreleasePoolDrained)
+#endif
+            return identity
+        } catch is CancellationError {
+            throw CancellationError()
         } catch let failure as HistoryFailure {
+            // Startup readers translate their own SQL failures. A cancelled
+            // native query may therefore already be wrapped as openStore;
+            // keep cancellation after the transaction has rolled back.
+            try Task.checkCancellation()
             throw failure
         } catch let failure as SQLiteFailure {
+            try Task.checkCancellation()
             if case .temporarilyUnavailable = failure.historyFailure {
                 throw failure.historyFailure
             }
             throw HistoryFailure.persistence(.openStore)
         } catch {
+            try Task.checkCancellation()
             throw HistoryFailure.persistence(.openStore)
         }
     }

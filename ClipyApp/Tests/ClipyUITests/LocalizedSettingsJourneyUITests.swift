@@ -29,7 +29,7 @@ final class LocalizedSettingsJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         // Apple's documented language arguments select the packaged zh-Hans
         // localization for both the app bundle and the SwiftPM modules.
-        app.launchArguments += ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
+        app.launchArguments += ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", "-clipy.language", "system"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory

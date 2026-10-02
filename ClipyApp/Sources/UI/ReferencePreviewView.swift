@@ -6,11 +6,13 @@ import Foundation
 import SwiftUI
 
 struct ReferencePreviewView: View {
+    @Environment(\.locale) private var locale
     let reference: PreviewReference
     var requestFileLoad: (() -> Void)? = nil
     var maximumHeight: CGFloat? = nil
 
     var body: some View {
+        let _ = locale
         let title = PreviewCopy.text(reference.kind == .file ? "File Reference" : "URL Reference")
         ContentFittingScrollView(maximumHeight: maximumHeight) {
             VStack(alignment: .leading, spacing: 10) {

@@ -7,12 +7,12 @@ import Testing
 @testable import HistoryStorage
 
 extension WSReadClauseClosureBTests {
-// MARK: - WS14 (docs/06-cross-cutting.md §8, step-7 read clause)
+// MARK: - WS14 (docs/testing.md, step-7 read clause)
 
-/// WS14 (docs/06-cross-cutting.md §8): after insert, coalesce, and a revision,
+/// WS14 (docs/testing.md): after insert, coalesce, and a revision,
 /// reopen the store and assert `browse(.recent)` + `details` results equal the
 /// pre-restart public results — the reads are reconstructed purely from durable
-/// state (docs/05-authority-kernel.md §13).
+/// state (docs/storage.md).
 @Test func browseAndDetailsAfterRestartEqualPreRestartResults() async throws {
     let storeURL = WSSupport.tempStoreURL("ws14-read-clause")
     defer { WSSupport.removeStore(storeURL) }
@@ -66,11 +66,11 @@ extension WSReadClauseClosureBTests {
     }
 
     // RESTART: reopen the facade over the same on-disk store
-    // (docs/05-authority-kernel.md §13 startup reruns).
+    // (docs/storage.md startup reruns).
     let restartedHistory = try await WSSupport.openHistory(storeURL: storeURL)
 
     // WS14: post-restart `browse(.recent)` equals the pre-restart result
-    // (docs/06-cross-cutting.md §8 WS14). HistoryPage is Equatable; all fields
+    // (docs/testing.md WS14). HistoryPage is Equatable; all fields
     // (position, rows, next) are derived from the same durable state.
     let postRestartPage = try await restartedHistory.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
     #expect(
@@ -99,11 +99,11 @@ extension WSReadClauseClosureBTests {
     }
 }
 
-// MARK: - WS16 (docs/06-cross-cutting.md §8, step-7 read clause)
+// MARK: - WS16 (docs/testing.md, step-7 read clause)
 
-/// WS16 (docs/06-cross-cutting.md §8): after `perform(.remove(id))`, the ID is
+/// WS16 (docs/testing.md): after `perform(.remove(id))`, the ID is
 /// absent from `browse(.recent)` and `details(for:)` / `pastePayload(for:)`
-/// throw `.notFound(id)` (docs/06-cross-cutting.md §8 WS16; docs/02-domain.md
+/// throw `.notFound(id)` (docs/testing.md WS16; docs/architecture.md
 /// §6 — the detail/paste planners reject a missing target as `.notFound`).
 @Test func removedIDAbsentFromBrowseAndDetailsPastePayloadThrowNotFound() async throws {
     let storeURL = WSSupport.tempStoreURL("ws16-read-clause")
@@ -126,7 +126,7 @@ extension WSReadClauseClosureBTests {
     }
 
     // WS16: "the ID absent from subsequent browse" — the removed item does not
-    // appear in `browse(.recent)` (docs/06-cross-cutting.md §8 WS16).
+    // appear in `browse(.recent)` (docs/testing.md WS16).
     let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
     #expect(
         page.rows.allSatisfy { $0.item.id != ref.id },
@@ -138,7 +138,7 @@ extension WSReadClauseClosureBTests {
     )
 
     // WS16: "detail/paste" on the absent ID returns `.notFound`
-    // (docs/06-cross-cutting.md §8 WS16; docs/02-domain.md §6).
+    // (docs/testing.md WS16; docs/architecture.md).
     await #expect(throws: HistoryFailure.notFound(ref.id)) {
         try await history.details(for: ref.id)
     }
@@ -147,13 +147,13 @@ extension WSReadClauseClosureBTests {
     }
 }
 
-// MARK: - WS19 (docs/06-cross-cutting.md §8, step-7 read clause)
+// MARK: - WS19 (docs/testing.md, step-7 read clause)
 
-/// WS19 (docs/06-cross-cutting.md §8): after the out-of-order coalesce — an
+/// WS19 (docs/testing.md): after the out-of-order coalesce — an
 /// identical capture whose `observedAt` is earlier than the stored
 /// `lastCopiedAt` — `browse(.recent)` shows one row with the winner unchanged:
 /// same ID, preserved Content Version, incremented occurrence count, and
-/// `lastCopiedAt` held at the later time (docs/02-domain.md §3.1).
+/// `lastCopiedAt` held at the later time (docs/architecture.md).
 @Test func browseShowsOneRowAfterOutOfOrderCoalesceWithWinnerUnchanged() async throws {
     let storeURL = WSSupport.tempStoreURL("ws19-read-clause")
     defer { WSSupport.removeStore(storeURL) }
@@ -173,7 +173,7 @@ extension WSReadClauseClosureBTests {
     ) else { return }
 
     // Act: identical capture at t1 < t2, no source — coalesces without moving
-    // recency or source backward (docs/02-domain.md §3.1).
+    // recency or source backward (docs/architecture.md).
     let coalesceReceipt = try await history.perform(.capture(
         WSSupport.textCapture(text, observedAt: earlierObservedAt)
     ))
@@ -190,34 +190,34 @@ extension WSReadClauseClosureBTests {
         "WS19: browse shows one row after out-of-order coalesce"
     )
     let row = try #require(page.rows.first)
-    // WS19: "the winner ID is unchanged" (docs/06-cross-cutting.md §8 WS19).
+    // WS19: "the winner ID is unchanged" (docs/testing.md WS19).
     #expect(
         row.item.id == insertedRef.id,
         "WS19: the winner ID is unchanged"
     )
-    // WS19: Content Version preserved by the coalesce (docs/02-domain.md §13).
+    // WS19: Content Version preserved by the coalesce (docs/architecture.md).
     #expect(
         row.item.contentVersion == insertedRef.contentVersion,
         "WS19: Content Version is preserved"
     )
-    // WS19: "occurrence count increments" (docs/02-domain.md §3.1).
+    // WS19: "occurrence count increments" (docs/architecture.md).
     #expect(
         row.copyCount == 2,
         "WS19: the occurrence count incremented to 2"
     )
-    // WS19: "lastCopiedAt does not move backward" (docs/02-domain.md §3.1).
+    // WS19: "lastCopiedAt does not move backward" (docs/architecture.md).
     #expect(
         row.lastCopiedAt == laterObservedAt,
         "WS19: lastCopiedAt stayed at t2 (no backward move)"
     )
 }
 
-// MARK: - WS21 (docs/06-cross-cutting.md §8, step-7 read clause)
+// MARK: - WS21 (docs/testing.md, step-7 read clause)
 
-/// WS21 (docs/06-cross-cutting.md §8): after `setRetentionPolicy` lowers the
+/// WS21 (docs/testing.md): after `setRetentionPolicy` lowers the
 /// cap below the current unpinned count, `browse(.recent)` shows exactly the
 /// policy-surviving rows — the newest item alone survives when the cap is
-/// lowered to 1 (docs/02-domain.md §12 eviction order: `lastCopiedAt`
+/// lowered to 1 (docs/architecture.md eviction order: `lastCopiedAt`
 /// ascending).
 @Test func browseShowsPolicySurvivorsAfterRetentionPolicyCommit() async throws {
     let storeURL = WSSupport.tempStoreURL("ws21-read-clause")
@@ -225,7 +225,7 @@ extension WSReadClauseClosureBTests {
     let history = try await WSSupport.openHistory(storeURL: storeURL)
 
     // Three unpinned captures with strictly increasing observation times:
-    // eviction order is `lastCopiedAt` ascending (docs/02-domain.md §12),
+    // eviction order is `lastCopiedAt` ascending (docs/architecture.md),
     // so alpha and bravo are the victims and charlie is the survivor.
     let source = "com.example.ws21r"
     guard (await Self.captureText(
@@ -245,7 +245,7 @@ extension WSReadClauseClosureBTests {
     ) else { return }
 
     // Lower the cap to 1: the two oldest unpinned items retire in the same
-    // History Commit (docs/02-domain.md §12, §13).
+    // History Commit (docs/architecture.md, §13).
     let receipt = try await history.perform(.setRetentionPolicy(maximumUnpinnedItems: 1))
     guard case let .committed(commit) = receipt,
           case let .retentionPolicySet(removedCount) = commit.outcome else {
@@ -259,7 +259,7 @@ extension WSReadClauseClosureBTests {
     )
 
     // WS21: `browse(.recent)` shows exactly the one policy-surviving row —
-    // charlie, the newest item (docs/06-cross-cutting.md §8 WS21).
+    // charlie, the newest item (docs/testing.md WS21).
     let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
     #expect(
         page.rows.count == 1,

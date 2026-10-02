@@ -68,6 +68,36 @@ struct CopySourceHistoryTests {
         #expect(try await history.browse(.init(kind: .recent, limit: 10)) == before)
     }
 
+    @Test(arguments: [SQLiteValue.integer(Int64.max), .real(1.5)])
+    func invalidNewSourceCounterRollsBackOccurrenceAndSourceInsertion(sourceCount: SQLiteValue) async throws {
+        let history = try await WSSupport.makeHistory()
+        let item = try await copy("note", source: "com.example.editor", at: 1, in: history)
+        let exhausted = sourceCount == .integer(Int64.max)
+        let oldCopyCount: UInt64 = exhausted ? UInt64(Int64.max) : 1
+        try await history.authority.withTestDatabase { authority in
+            try authority.database.execute("UPDATE history_items SET sourceCount=?,copyCount=? WHERE id=?",
+                bindings: [sourceCount, .blob(sqliteUInt64(oldCopyCount)), .text(item.id.rawValue.uuidString)])
+        }
+        let before = try await history.details(for: item.id)
+        let usage = try await history.usage()
+        let sources = try await history.copySources(for: item.id, expectedCopyCount: oldCopyCount, offset: 0)
+        let failure: HistoryFailure = exhausted ? .capacityExceeded(.copyCount) : .persistence(.corruptStoredValue)
+        await #expect(throws: failure) {
+            try await copy("note", source: "com.example.browser", at: 2, in: history)
+        }
+        #expect(try await history.details(for: item.id) == before)
+        #expect(try await history.usage() == usage)
+        #expect(try await history.copySources(for: item.id, expectedCopyCount: oldCopyCount, offset: 0) == sources)
+        let storedType = try await history.authority.withTestDatabase { authority in
+            let row = try authority.database.prepare("SELECT typeof(sourceCount) FROM history_items WHERE id=?",
+                                                     bindings: [.text(item.id.rawValue.uuidString)])
+            defer { row.finalize() }
+            guard try row.step() else { throw HistoryFailure.persistence(.invariantViolation) }
+            return try row.text(at: 0)
+        }
+        #expect(storedType == (exhausted ? "integer" : "real"))
+    }
+
     @Test func sourcePagesAreBoundedAndNewCopiesExpireTheirOrdering() async throws {
         let history = try await WSSupport.makeHistory()
         let item = try await copy("note", source: "app.0", at: 0, in: history)

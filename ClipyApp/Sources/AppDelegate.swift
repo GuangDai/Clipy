@@ -5,7 +5,7 @@
 /// observable; Clipy keeps the state ON the delegate so the single
 /// `@NSApplicationDelegateAdaptor` serves both the scenes and AppKit).
 ///
-/// Owning spec: docs/01-architecture.md §2 (ClipyApp composition-root row),
+/// Owning spec: docs/architecture.md (ClipyApp composition-root row),
 /// §6 (window behavior lives on the main actor); the store open is
 /// `AppComposition.open` (05 §13) — moved from first-panel-appearance to
 /// launch so the capture loop is always live (a clipboard manager that
@@ -190,15 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSWorkspace.shared.activateFileViewerSelecting([directory])
         }
         super.init()
-        reloadNativeAppearance()
-        reloadInteractionSettings()
-        installPanelAppearanceObservation()
-        previewState.onFloatingPreviewTransition = { [weak self] transition in
-            self?.handleFloatingPreviewTransition(transition)
-        }
-        previewState.onPreparationTargetChanged = { [weak self] item in
-            self?.prepareFloatingPreview(for: item)
-        }
+        configureSharedState()
     }
 
     init(
@@ -224,6 +216,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.storeURL = storeURL
         self.revealStoreLocationOperation = revealStoreLocationOperation
         super.init()
+        configureSharedState()
+    }
+
+    isolated deinit {
+        // A disposable owner can be released without an application-wide
+        // termination callback. Block observers otherwise remain registered
+        // with their notification center after their weak owner disappears.
+        removePanelAppearanceObservation()
+        removeWorkspaceLifecycleObservation()
+        removeMemoryPressureObservation()
+        panelContentFitTask?.cancel()
+        compositionOpenAttempt?.task.cancel()
+    }
+
+    private func configureSharedState() {
         reloadNativeAppearance()
         reloadInteractionSettings()
         installPanelAppearanceObservation()
@@ -240,6 +247,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The composed application object once `AppComposition.open` has
     /// succeeded; `nil` while opening or after a failure.
     private(set) var composition: AppComposition?
+
+    /// Store-open completion may already be queued when termination begins.
+    /// It must not install a fresh graph after the side-effect owners stop.
+    @ObservationIgnored private var isTerminating = false
 
     /// The failure that ended the open attempt, shown in the failure pane.
     private(set) var openFailure: (any Error)?
@@ -339,10 +350,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The documented public `OpenSettingsAction` captured from the panel's
     /// live SwiftUI tree by PanelRootView (audit S-5 / SPEC-IMPL-010: no
     /// private `showSettingsWindow:` responder selector). The status-item
-    /// menu's "Settings…" invokes it. It is nil only until the panel content
-    /// first appears; `openSettingsFromStatusMenu` keeps that bounded
-    /// pre-first-summon gap to app activation alone rather than inventing a
-    /// synthetic scene call. `@ObservationIgnored`: pure wiring bookkeeping,
+    /// menu's "Settings…" invokes it once installed. Before the panel first
+    /// appears, the app's existing Command-comma menu item opens that same
+    /// SwiftUI Settings scene. `@ObservationIgnored`: pure wiring bookkeeping,
     /// never render state.
     @ObservationIgnored
     private var settingsOpenOperation: (@MainActor () -> Void)?
@@ -350,6 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - AppKit-owned surfaces
 
     private var statusItem: NSStatusItem?
+    private var statusItemLanguage = AppLanguageSettings.load()
     /// The right-click menu controller. Lazily built on first use (or first
     /// hosted-test read); the menu is attached to the status item only for
     /// the duration of one pop-up (see `presentStatusItemMenu`).
@@ -462,14 +473,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        isTerminating = true
+        closePanel()
+        hideFloatingPreviewPane()
+        releasePanelWindows()
         stopSummonShortcut()
         panelContentFitTask?.cancel()
+        panelContentFitTask = nil
+        pendingPanelContentFitInput = nil
         removeMemoryPressureObservation()
         removeWorkspaceLifecycleObservation()
-        if let defaultsObserverToken {
-            NotificationCenter.default.removeObserver(defaultsObserverToken)
-            self.defaultsObserverToken = nil
-        }
+        removePanelAppearanceObservation()
         compositionOpenAttempt?.task.cancel()
 #if CLIPY_UDS_F0
         unixSocketF0Listener?.stop()
@@ -493,13 +507,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// drawing area closes through the existing sole lifecycle owner; only a
     /// later explicit summon starts a fresh session using new screen facts.
     func applicationDidChangeScreenParameters(_ notification: Notification) {
-        guard let panel,
-              panel.isPresented,
-              !panel.isReachable(
-                  in: NSScreen.screens.map(\.visibleFrame)
-              )
-        else { return }
-        closePanel()
+        guard let panel, panel.isPresented else { return }
+        let visibleFrames = NSScreen.screens.map(\.visibleFrame)
+        guard panel.isReachable(in: visibleFrames) else {
+            closePanel()
+            return
+        }
+        panel.fitToVisibleFrames(visibleFrames)
+        followMainPanelFrameWithPreview()
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
@@ -683,12 +698,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The status menu's Settings entry: activate first (an LSUIElement
     /// agent never activates on its own — the same reason the panel
     /// footer's Settings row activates), then invoke the captured public
-    /// OpenSettingsAction. Before the panel content's first appearance no
-    /// action has been captured yet; activation is then the entire bounded
-    /// effect rather than a synthetic or private-selector scene call.
+    /// OpenSettingsAction. Before the panel's first appearance, invoke the
+    /// Command-comma item SwiftUI supplies for the declared Settings scene.
+    /// AppKit dispatches its own menu action; neither a localized title nor
+    /// a private responder selector is needed.
     private func openSettingsFromStatusMenu() {
         NSApp.activate()
-        settingsOpenOperation?()
+        if let settingsOpenOperation {
+            settingsOpenOperation()
+            return
+        }
+        guard let appMenu = NSApp.mainMenu?.items.first?.submenu else { return }
+        // performActionForItem does not validate automatically (NSMenu docs).
+        appMenu.update()
+        guard let index = appMenu.items.firstIndex(where: {
+            $0.keyEquivalent == ","
+                && $0.keyEquivalentModifierMask == .command
+                && $0.isEnabled
+        }) else { return }
+        appMenu.performActionForItem(at: index)
     }
 
     /// Installed by PanelRootView from its live SwiftUI environment.
@@ -707,45 +735,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isPanelKeepOpenActive.toggle()
     }
 
-    /// Creates the panel lazily, positions it, and orders it front as key
+    /// Reuses the prepared panel (or creates it before store readiness),
+    /// positions it, and orders it front as key
     /// window. The view state's observation is re-activated per open (the
     /// panel's close deactivates it — browsing state is fresh per summon).
     private func openPanel(at mode: PopupPositionMode) {
-        guard workspaceActivity.permitsProductActivity else { return }
+        guard !isTerminating, workspaceActivity.permitsProductActivity else { return }
         reloadInteractionSettings()
         if !interactionSettings.remembersSearch {
             composition?.viewState.clearSearch()
         }
-        if panel == nil {
-            panel = FloatingPanel(
-                rootView: PanelRootView(appDelegate: self),
-                previewState: previewState,
-                isSelectionSubmissionEnabled: { [weak self] in
-                    guard let self,
-                          let composition = self.composition,
-                          let panelSurfaceState = self.panelSurfaceState,
-                          panelSurfaceState.isAtListRoot
-                    else { return false }
-                    return panelSurfaceState.selectedReference(
-                        in: composition.viewState.displayedRows
-                    ) != nil
-                },
-                onSubmitSelection: { [weak self] in
-                    self?.submitPanelSelection()
-                },
-                isKeepOpenActive: { [weak self] in
-                    self?.isPanelKeepOpenActive ?? false
-                },
-                onDidChangeScreen: { [weak self] in
-                    self?.hideFloatingPreviewPane()
-                },
-                onFrameChanged: { [weak self] in
-                    self?.followMainPanelFrameWithPreview()
-                },
-                onClosed: { [weak self] in self?.panelDidClose() }
-            )
+        ensurePanelWindow()
+        if let composition {
+            composition.viewState.activate(restoring:
+                composition.historyBrowsingPreferences.readingItemID(for: .panel))
         }
-        composition?.viewState.activate()
         panel?.open(
             at: mode,
             statusItemButtonScreenFrame: statusItemButtonScreenFrame()
@@ -755,12 +759,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Construct the reusable hosting trees while the graph is ready and
+    /// browsing is inactive. No window is ordered, laid out explicitly, or
+    /// assigned a preview target; the next summon still owns activation.
+    private func preparePanelWindows() {
+        guard !isTerminating, composition != nil else { return }
+        ensurePanelWindow()
+        ensureFloatingPreviewWindow()
+    }
+
+    private func ensurePanelWindow() {
+        guard !isTerminating, panel == nil else { return }
+        panel = FloatingPanel(
+            rootView: PanelRootView(appDelegate: self),
+            previewState: previewState,
+            isSelectionSubmissionEnabled: { [weak self] in
+                guard let self,
+                      let composition = self.composition,
+                      let panelSurfaceState = self.panelSurfaceState,
+                      panelSurfaceState.isAtListRoot
+                else { return false }
+                return panelSurfaceState.selectedReference(
+                    in: composition.viewState.displayedRows
+                ) != nil
+            },
+            isSearchCompletionActive: { [weak self] in
+                self?.panelSurfaceState?.searchCompletion.consumesPanelCommands ?? false
+            },
+            onSubmitSelection: { [weak self] in
+                self?.submitPanelSelection()
+            },
+            isKeepOpenActive: { [weak self] in
+                self?.isPanelKeepOpenActive ?? false
+            },
+            onDidChangeScreen: { [weak self] in
+                self?.previewState.screenChanged()
+            },
+            onFrameChanged: { [weak self] in
+                self?.followMainPanelFrameWithPreview()
+            },
+            presentationDuration: { AppMotionSettings.duration(for: $0) },
+            onClosed: { [weak self] in self?.panelDidClose() }
+        )
+    }
+
+    private func ensureFloatingPreviewWindow() {
+        guard !isTerminating, floatingPreviewPanel == nil else { return }
+        floatingPreviewPanel = FloatingPreviewPanel(
+            rootView: FloatingPreviewRootView(appDelegate: self),
+            presentationDuration: { AppMotionSettings.duration(for: $0) }
+        )
+    }
+
     private func submitPanelSelection() {
         guard let composition,
               let reference = panelSurfaceState?.selectedReference(
                   in: composition.viewState.displayedRows
               )
         else { return }
+        if HistorySearchCopy.issue(for: composition.viewState) == nil,
+           composition.viewState.sourceResolutionError == nil,
+           composition.viewState.searchFilters.hasValidDates() {
+            composition.searchHistoryStore.recordSubmittedSearch(
+                HistorySearchDefinition(viewState: composition.viewState)
+            )
+        }
         composition.viewState.requestPaste(reference)
     }
 
@@ -827,26 +890,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Content-fit coalescing: row/chrome changes arrive in bursts (page
     /// loads, banner transitions), so the latest analytic demand applies
-    /// after a short settle — the same replaceable-task discipline as the
-    /// panel's deferred focus-loss close.
+    /// on the next MainActor turn. A single slot retains only the latest
+    /// demand without restarting a timer for every intermediate update.
     @ObservationIgnored
     private var panelContentFitTask: Task<Void, Never>?
-
     @ObservationIgnored
-    private var floatingPreviewFitTask: Task<Void, Never>?
+    private var pendingPanelContentFitInput: PanelContentFit.Input?
+
     @ObservationIgnored
     private var configuredPreviewGap = PanelGeometry.persistedFloatingPreviewGap(from: .standard)
+    @ObservationIgnored
+    private var configuredPreviewWidth = PanelGeometry.persistedFloatingPreviewWidth(from: .standard)
+
+    func resizeFloatingPreviewWidth() {
+        floatingPreviewPanel?.resizeWidth(at: NSEvent.mouseLocation.x)
+    }
+
+    func finishFloatingPreviewWidthResize() {
+        floatingPreviewPanel?.finishWidthResize()
+    }
+
+    func adjustFloatingPreviewWidth(by delta: CGFloat) {
+        floatingPreviewPanel?.adjustWidth(by: delta)
+    }
 
     /// The panel content's analytic height demand (HistoryPanelView's
-    /// `PanelContentFit.Input` reports). Coalesced ~40 ms, then applied to
+    /// `PanelContentFit.Input` reports). Coalesced one MainActor turn, then applied to
     /// the window through FloatingPanel's instant, top-edge-pinned fit;
     /// the persisted height is the ceiling, never a fixed size.
     func panelContentFitDidChange(_ input: PanelContentFit.Input) {
-        panelContentFitTask?.cancel()
+        guard !isTerminating, panel?.isPresented == true else { return }
+        pendingPanelContentFitInput = input
+        guard panelContentFitTask == nil else { return }
         panelContentFitTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(40))
             guard !Task.isCancelled, let self else { return }
             self.panelContentFitTask = nil
+            guard let input = self.pendingPanelContentFitInput else { return }
+            self.pendingPanelContentFitInput = nil
             self.panel?.fitToContent(
                 idealHeight: PanelContentFit.idealHeight(input)
             )
@@ -863,28 +943,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               panel.isPresented,
               floatingPreviewPanel?.isPresented == true
         else { return }
-        updatePreviewHeightCeiling()
         floatingPreviewPanel?.present(beside: panel)
-    }
-
-    func floatingPreviewContentHeightDidChange(_ height: CGFloat, for item: HistoryItemReference) {
-        guard previewState.isOpen, previewState.previewedItem == item else { return }
-        floatingPreviewFitTask?.cancel()
-        floatingPreviewFitTask = Task { @MainActor [weak self] in
-            // Apply window geometry after SwiftUI finishes measuring. The
-            // rendered height is independent of the window proposal, and
-            // repeated measurements in one pass collapse to the latest one.
-            await Task.yield()
-            guard !Task.isCancelled, let self,
-                  self.previewState.isOpen, self.previewState.previewedItem == item else { return }
-            self.floatingPreviewFitTask = nil
-            self.floatingPreviewPanel?.fitToContent(height: height)
-        }
-    }
-
-    private func updatePreviewHeightCeiling() {
-        let saved = PanelGeometry.persistedSize(from: .standard).height
-        previewState.availablePreviewHeight = min(saved, panel?.screen?.visibleFrame.height ?? saved)
     }
 
     /// The preview pane state publishes its show/update/hide transitions
@@ -900,6 +959,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 prepareFloatingPreview(for: nil)
                 return
             }
+            if case .update = transition {
+                floatingPreviewPanel?.cancelArrival()
+            }
             floatingPreviewLoader?.clear()
             if let pendingPreview, pendingPreview.item == item {
                 floatingPreviewLoader = pendingPreview.loader
@@ -908,12 +970,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 prepareFloatingPreview(for: nil)
                 floatingPreviewLoader = makePreviewLoader(for: item, viewState: composition.viewState)
             }
-            if floatingPreviewPanel == nil {
-                floatingPreviewPanel = FloatingPreviewPanel(
-                    rootView: FloatingPreviewRootView(appDelegate: self)
-                )
-            }
-            updatePreviewHeightCeiling()
+            ensureFloatingPreviewWindow()
             floatingPreviewPanel?.present(beside: panel)
         case .hide:
             hideFloatingPreviewPane()
@@ -926,9 +983,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         prepareFloatingPreview(for: nil)
         floatingPreviewLoader?.clear()
         floatingPreviewLoader = nil
-        floatingPreviewFitTask?.cancel()
-        floatingPreviewFitTask = nil
         floatingPreviewPanel?.dismiss()
+    }
+
+    private func releasePanelWindows() {
+        // Hosting roots retain this app owner. Retire them, including roots
+        // prepared but never displayed, when their graph lifetime ends.
+        floatingPreviewPanel?.contentView = nil
+        floatingPreviewPanel = nil
+        panel?.contentView = nil
+        panel = nil
+        previewState.pointerSurfacesContainingPointer = nil
+        previewState.pointerIsBetweenSurfaces = nil
+        settingsOpenOperation = nil
     }
 
     /// Bookkeeping after every panel close: reset the keep-open pin (it is
@@ -938,7 +1005,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         isPanelKeepOpenActive = false
         panelContentFitTask?.cancel()
         panelContentFitTask = nil
+        pendingPanelContentFitInput = nil
         composition?.cancelPendingPaste()
+        if let composition {
+            composition.historyBrowsingPreferences.rememberReadingPosition(
+                composition.viewState.readingItemID ?? panelSurfaceState?.selection, for: .panel
+            )
+        }
         hideFloatingPreviewPane()
         panelSurfaceState?.endSession()
         composition?.viewState.deactivate()
@@ -951,7 +1024,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// shows a progress view; on failure, the failure pane; a cancelled
     /// attempt returns to idle so a later summon retries.
     func openCompositionIfNeeded() {
-        guard composition == nil,
+        guard !isTerminating, composition == nil,
               openFailure == nil,
               compositionOpenAttempt == nil else { return }
         Task { [weak self] in
@@ -1013,6 +1086,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// open failure remains terminal for the app shell and keeps its original
     /// diagnostic value in `openFailure`.
     private func openOrAwaitComposition() async throws -> AppComposition {
+        guard !isTerminating else { throw CancellationError() }
         if let composition {
             return composition
         }
@@ -1063,8 +1137,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         do {
             let opened = try await attempt.task.value
+            guard !isTerminating else {
+                opened.stop()
+                await opened.stopLocalAutomation()
+                throw CancellationError()
+            }
             if composition == nil {
                 installComposition(opened)
+                preparePanelWindows()
 #if CLIPY_UDS_F0
                 startUnixSocketF0ListenerIfRequested()
 #endif
@@ -1172,7 +1252,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // just as `openPanel` would, so the History view starts its first
         // authoritative observation without closing/reopening the panel.
         if panel?.isPresented == true {
-            opened.viewState.activate()
+            opened.viewState.activate(restoring:
+                opened.historyBrowsingPreferences.readingItemID(for: .panel))
             panelSurfaceState.beginSession(rows: opened.viewState.rows)
         }
     }
@@ -1232,7 +1313,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Hosted tests substitute only the real composition's system boundaries,
     /// then install it through the same callback wiring as production.
     func installCompositionForTesting(_ composition: AppComposition) {
+        if let installed = self.composition, installed !== composition {
+            closePanel()
+            hideFloatingPreviewPane()
+            releasePanelWindows()
+        }
         installComposition(composition)
+    }
+
+    /// Opts a disposable hosted owner into the same preparation used after
+    /// production store open. Ordinary hosted fixtures retain lazy windows.
+    func preparePanelWindowsForTesting() {
+        preparePanelWindows()
     }
 
     /// Hosted panel-lifecycle entry through the real AppDelegate owner. The
@@ -1253,6 +1345,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     var panelForTesting: FloatingPanel? { panel }
+    var floatingPreviewPanelForTesting: FloatingPreviewPanel? { floatingPreviewPanel }
+
+    func waitForPanelContentFitForTesting() async {
+        await panelContentFitTask?.value
+    }
 
     /// Hosted Card 15D tests enter through the composition-owned callback
     /// boundary without constructing an AX tree or real assistive client.
@@ -1282,6 +1379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateStatusItemImage() {
+        statusItemLanguage = AppLanguageSettings.load()
         let isPaused = captureAccessState == .userPaused
         let symbolName = statusItemSymbolName
         let accessibilityLabel = AppCaptureCopy.statusLabel(isPaused: isPaused)
@@ -1411,8 +1509,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated {
                 self?.reloadPanelAppearance()
                 self?.reloadInteractionSettings()
+                if self?.statusItemLanguage != AppLanguageSettings.load() {
+                    self?.updateStatusItemImage()
+                }
             }
         }
+    }
+
+    private func removePanelAppearanceObservation() {
+        guard let defaultsObserverToken else { return }
+        NotificationCenter.default.removeObserver(defaultsObserverToken)
+        self.defaultsObserverToken = nil
     }
 
     /// Republishes the appearance snapshot after any defaults write. The
@@ -1422,8 +1529,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func reloadPanelAppearance() {
         reloadNativeAppearance()
         let gap = PanelGeometry.persistedFloatingPreviewGap(from: .standard)
-        if configuredPreviewGap != gap {
+        let width = PanelGeometry.persistedFloatingPreviewWidth(from: .standard)
+        if configuredPreviewGap != gap || configuredPreviewWidth != width {
             configuredPreviewGap = gap
+            configuredPreviewWidth = width
             followMainPanelFrameWithPreview()
         }
         let loaded = PanelAppearanceSettings.load(from: .standard)

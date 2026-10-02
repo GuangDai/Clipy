@@ -59,10 +59,11 @@ struct DetachedContentReclamationTests {
         await resumeCleanup(history, gate)
     }
 
-    @Test func reopenResumesCancelledPhysicalReclamationWithoutAnotherHistoryCommit() async throws {
+    @Test(arguments: [false, true])
+    func reopenResumesCancelledPhysicalReclamationWithoutAnotherHistoryCommit(legacyOwner: Bool) async throws {
         let url = WSSupport.tempStoreURL("detached-reclamation-reopen")
         defer { WSSupport.removeStore(url) }
-        let committed = try await createClosedDetachedStore(url)
+        let committed = try await createClosedDetachedStore(url, legacyOwner: legacyOwner)
         #expect(committed.contents > 0 && committed.representations > 0)
         let reopened = try await WSSupport.openHistory(storeURL: url)
         #expect(try await reopened.browse(.init(kind: .recent, limit: 1)).rows.isEmpty)
@@ -73,7 +74,7 @@ struct DetachedContentReclamationTests {
         #expect(reclaimed.journalCount == committed.journalCount)
     }
 
-    @Test func detachedOwnerIDCannotReconnectOldCanonicalContentBeforeCleanup() async throws {
+    @Test func forcedOwnerIDReuseCannotReconnectDetachedCanonicalOrRevisionsBeforeCleanup() async throws {
         let history = try await WSSupport.makeHistory()
         let captured = try await history.perform(.capture(WSSupport.textCapture(
             "old private payload", observedAt: Date(timeIntervalSinceReferenceDate: 1)
@@ -81,6 +82,12 @@ struct DetachedContentReclamationTests {
         guard let commit = captured.commit, case .inserted(let item) = commit.outcome else {
             Issue.record("Expected fixture capture"); return
         }
+        _ = try await history.perform(.revise(.init(
+            itemID: item.id, expected: item.contentVersion,
+            intent: .replace(.init(decisions: [
+                .init(typeIdentifier: "public.utf8-plain-text", action: .replace(bytes: Data("old private revision".utf8)))
+            ]))
+        )))
         await history.authority.waitForBlobCleanup()
         let gate = SuspensionGate()
         await parkCleanup(history, gate)
@@ -91,11 +98,21 @@ struct DetachedContentReclamationTests {
             let candidate = try await preparation.prepare(WSSupport.textCapture(
                 "different new payload", observedAt: Date(timeIntervalSinceReferenceDate: 2)
             ))
-            await #expect(throws: CaptureCandidateIDCollision.self) {
-                try await history.authority.commitCapture(candidate)
+            let receipt = try await history.authority.commitCapture(candidate)
+            guard let inserted = receipt.commit, case .inserted(let fresh) = inserted.outcome else {
+                throw HistoryFailure.persistence(.invariantViolation)
             }
-            #expect(try await counts(history) == before)
-            #expect(try await history.browse(.init(kind: .recent, limit: 1)).rows.isEmpty)
+            #expect(fresh.id == item.id)
+            let after = try await counts(history)
+            #expect(after.contents == before.contents + 1)
+            #expect(after.detached == before.detached)
+            #expect(try await history.details(for: fresh.id).revisions.isEmpty)
+            #expect(try await history.pastePayload(for: fresh.id).representations.map(\.bytes)
+                    == [Data("different new payload".utf8)])
+            let canonical = try await history.representation(.init(
+                item: fresh, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+            ))
+            #expect(canonical.bytes == Data("different new payload".utf8))
             await resumeCleanup(history, gate)
         } catch {
             await resumeCleanup(history, gate)
@@ -103,13 +120,28 @@ struct DetachedContentReclamationTests {
         }
     }
 
-    private func createClosedDetachedStore(_ url: URL) async throws -> Counts {
+    private func createClosedDetachedStore(_ url: URL, legacyOwner: Bool) async throws -> Counts {
         let history = try await WSSupport.openHistory(storeURL: url)
         try await populate(history)
+        let oldOwner = try await history.authority.withTestDatabase { authority in
+            let row = try authority.database.prepare("SELECT id FROM history_items LIMIT 1")
+            defer { row.finalize() }
+            guard try row.step() else { throw HistoryFailure.persistence(.invariantViolation) }
+            return try row.text(at: 0)
+        }
         let gate = SuspensionGate()
         await parkCleanup(history, gate)
         _ = try await history.perform(.clear(.all))
         await gate.waitForPark(AuthoritySuspensionPoint.blobCleanupBatchEntry.rawValue)
+        if legacyOwner {
+            // Current databases written before NULL detachment retain the
+            // removed UUID. Reopen must reclaim that shape intact, using
+            // startup's existing bounded ownership walk and no migration.
+            try await history.authority.withTestDatabase { authority in
+                try authority.database.execute("UPDATE contents SET itemID=? WHERE itemID IS NULL",
+                                               bindings: [.text(oldOwner)])
+            }
+        }
         let task = await history.authority.blobCleanupTask
         await history.authority.cancelBlobCleanup()
         await resumeCleanup(history, gate)

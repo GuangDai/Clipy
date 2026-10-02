@@ -1,8 +1,134 @@
 @testable import ContentPreview
+import Dispatch
 import Foundation
 import Testing
 
 struct PreviewTextResourceTests {
+    @Test(arguments: [(false, 4), (true, 4), (false, 12)])
+    func cancellationStopsCharacterScalarAndGroupPreparation(combining: Bool, cancellationCheck: Int) async {
+        let source = combining ? "e" + String(repeating: "\u{301}", count: 8_192)
+            : String(repeating: "x", count: 8_192)
+        let task = Task {
+            var checks = 0
+            do {
+                _ = try PreviewText(text: source, wasTruncated: false,
+                    configuration: .init(maximumCharacters: nil, segmentUTF16Budget: 2),
+                    checkCancellation: {
+                        checks += 1
+                        if checks == cancellationCheck { withUnsafeCurrentTask { $0?.cancel() } }
+                        try Task.checkCancellation()
+                    })
+                return false
+            } catch is CancellationError {
+                return checks == cancellationCheck
+            } catch {
+                Issue.record(error)
+                return false
+            }
+        }
+        #expect(await task.value)
+    }
+
+    @Test(arguments: ["\n", "\r", "\r\n", "\u{B}", "\u{C}", "\u{85}", "\u{2028}", "\u{2029}"])
+    func shortSegmentsWithAnyUnicodeNewlineHaveTheirOwnNativeBridge(newline: String) {
+        let source = "ab" + newline + "cd"
+        let text = PreviewText(text: source, wasTruncated: false,
+                              configuration: .init(segmentUTF16Budget: 2))
+        #expect(Data(text.displaySegments.joined().utf8) == Data(source.utf8))
+        #expect(text.displaySegmentGroups.allSatisfy { $0.count == 1 })
+    }
+
+    #if DEBUG
+    @Test(.serialized, arguments: [false, true])
+    @MainActor
+    func synchronousTextWorkKeepsRasterRenderingAvailableAndQueuesMoreText(cancelOlderRender: Bool) async throws {
+        let renderer = ContentPreview()
+        let started = DispatchSemaphore(value: 0)
+        let resume = DispatchSemaphore(value: 0)
+        let png = try #require(Data(base64Encoded:
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="))
+        let older = ContentPreviewDebugInstrumentation.$textRenderDidStart.withValue({
+            started.signal()
+            // A synchronous parser/native-font call cannot suspend to make
+            // its actor available. Keep this worker synchronously occupied.
+            _ = Self.waitForSignal(resume, until: .now() + 5)
+        }) {
+            Task {
+                await renderer.renderHistoryPane([
+                    PreviewRepresentation(typeIdentifier: "public.html", bytes: Data("<p>older</p>".utf8))
+                ])
+            }
+        }
+        let startDeadline = ContinuousClock.now.advanced(by: .seconds(3))
+        var didStart = false
+        while !didStart, ContinuousClock.now < startDeadline {
+            didStart = Self.waitForSignal(started, until: .now())
+            if !didStart { try? await Task.sleep(for: .milliseconds(10)) }
+        }
+        if cancelOlderRender { older.cancel() }
+        var imageOutcome: PreviewOutcome?
+        let image = Task { imageOutcome = await renderer.rasterizePNGForDisplay(png) }
+        var queuedTextOutcome: PreviewOutcome?
+        let queuedText = Task {
+            queuedTextOutcome = await renderer.renderHistoryPane([
+                PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("newer".utf8))
+            ])
+        }
+        var busySnapshot: ContentPreviewDebugSnapshot?
+        let observation = Task {
+            while !Task.isCancelled {
+                busySnapshot = await renderer.debugSnapshot()
+                if busySnapshot?.queuedTextJobs == 1 { return }
+                await Task.yield()
+            }
+        }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while (imageOutcome == nil || busySnapshot?.queuedTextJobs != 1), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let imageWhileTextWasOccupied = imageOutcome
+        let snapshotWhileTextWasOccupied = busySnapshot
+        let textBeforeCancellation = queuedTextOutcome
+        queuedText.cancel()
+        let cancellationDeadline = ContinuousClock.now.advanced(by: .seconds(1))
+        while queuedTextOutcome == nil, ContinuousClock.now < cancellationDeadline {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        let cancelledBeforeOlderWorkerWasReleased = queuedTextOutcome
+        // Join both jobs even on failure so an actor-blocking regression
+        // reports its result instead of hanging the test process.
+        resume.signal()
+        let olderOutcome = await older.value
+        await image.value
+        await queuedText.value
+        observation.cancel()
+        await observation.value
+        #expect(didStart)
+        #expect(snapshotWhileTextWasOccupied?.queuedTextJobs == 1)
+        #expect(textBeforeCancellation == nil)
+        #expect(cancelledBeforeOlderWorkerWasReleased == .failed(.cancelled))
+        if let imageWhileTextWasOccupied, case .content(.raster(let raster)) = imageWhileTextWasOccupied {
+            #expect(raster.width == 1 && raster.height == 1)
+        } else {
+            Issue.record("The independent raster slot must remain available while the text worker is occupied")
+        }
+        #expect(olderOutcome == (cancelOlderRender
+            ? .failed(.cancelled) : .content(.text(PreviewText(text: "older", wasTruncated: false)))))
+        let settled = await renderer.debugSnapshot()
+        #expect(settled.activeJobs == 0)
+        #expect(settled.retainedSourceBytes == 0)
+        #expect(settled.queuedTextJobs == 0)
+        let retry = await renderer.renderHistoryPane([
+            PreviewRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("retry".utf8))
+        ])
+        #expect(retry == .content(.text(PreviewText(text: "retry", wasTruncated: false))))
+    }
+
+    private static func waitForSignal(_ semaphore: DispatchSemaphore, until deadline: DispatchTime) -> Bool {
+        semaphore.wait(timeout: deadline) == .success
+    }
+    #endif
+
     @Test func shortSegmentGroupsBoundBridgesWithoutRejoiningAnOversizedGrapheme() async throws {
         let source = "Prefix\ne" + String(repeating: "\u{301}", count: 20_000)
         let outcome = await ContentPreview().renderHistoryPane([

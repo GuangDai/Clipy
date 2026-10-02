@@ -3,9 +3,9 @@
 /// thresholds) as one optional-per-dimension policy value, plus the
 /// authoritative configured-policy READ value (`HistoryRetentionConfiguration`)
 /// the settings surface renders on panel-open.
-/// Owning spec: docs/v2/V2-02-retention.md §3.1 (declaration shape and the
+/// Owning spec: docs/storage.md (declaration shape and the
 /// construction-time both-nil revision normalization); roadmap slice:
-/// docs/v2/V2-roadmap.md §6 R.1 "Core contract" (RET-COMPILE-1/2); decision
+/// docs/testing.md R.1 "Core contract" (RET-COMPILE-1/2); decision
 /// record: DC-23 — all three dimensions ship as ONE policy value, each
 /// independently disable-able via `nil` (`V2-roadmap` §4 DC-23). Distinct
 /// from v1's package `RetentionPolicy` (`02` §5.5), which keeps the
@@ -101,10 +101,10 @@ public struct RevisionRetention: Sendable, Hashable {
 /// settings surface's panel-open read (`ClipboardHistory
 /// .retentionConfiguration()`).
 ///
-/// Owning spec: docs/v2/V2-07-ux.md §5.2 ("the settings panel shows the
+/// Owning spec: docs/interface.md ("the settings panel shows the
 /// configured budget") and §6.3 (each settings section renders from the
 /// capability's status value on panel-open — a one-shot read per §4.2.2);
-/// audit: docs/reviews/2026-08-20-clipy-maccy-audit/02-spec-implementation.md
+/// audit: docs/testing.md
 /// SPEC-IMPL-003. This is configured POLICY state only; current content
 /// counts and bytes are returned separately by `ClipboardHistory.usage()`.
 /// This value carries no usage field. Both

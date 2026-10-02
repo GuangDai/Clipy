@@ -109,8 +109,8 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
                 && $0.phase == (mode == .exact ? "exact-scan-complete" : "regexp-scan-complete")
         })
         #expect(scanComplete.rowsProcessed == first.rows.count + 1)
-        #expect(scanComplete.rowsTotal == expectedIDs.count)
-        #expect(firstEvents.filter { $0.phase == "sqlite-batch" }.reduce(0) { $0 + $1.rowsProcessed } == expectedIDs.count)
+        #expect(scanComplete.rowsTotal == first.rows.count + 1)
+        #expect(firstEvents.filter { $0.phase == "sqlite-batch" }.reduce(0) { $0 + $1.rowsProcessed } == first.rows.count + 1)
         #expect(scanComplete.rowsTotal < retained.rows.count)
         #expect(scanComplete.matchedRows == 6)
         for phase in ["evaluation-complete", "continuation", "page-materialization", "complete"] {
@@ -120,7 +120,7 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
             #expect(summary.matchedRows == 6)
             if phase == "evaluation-complete" || phase == "complete" {
                 #expect(summary.rowsProcessed == first.rows.count + 1)
-                #expect(summary.rowsTotal == expectedIDs.count)
+                #expect(summary.rowsTotal == first.rows.count + 1)
             }
         }
 
@@ -230,7 +230,10 @@ struct SearchWorkerScanBudgetAndLaneInstrumentationTests {
                 cursor: current
             ))
             for row in page.rows {
-                #expect(seen.insert(row.item.id).inserted)
+                try #require(seen.insert(row.item.id).inserted)
+            }
+            if page.next != nil {
+                try #require(!page.rows.isEmpty, "A continuation must make progress")
             }
             cursor = page.next
             pages += 1

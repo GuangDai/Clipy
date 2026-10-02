@@ -42,6 +42,32 @@ struct HistoryExternalOpenerTests {
         await #expect(throws: HistoryOpenFailure.changed) { try await opener.open(option) }
     }
 
+    @Test(arguments: ["public.url", "public.file-url"])
+    func oversizedURLDoesNotHideARasterUnlessItDeclaresAFileReference(_ identifier: String) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let address = (identifier == "public.url" ? "https://example.com/" : "file:///tmp/")
+            + String(repeating: "a", count: 16 * 1_024)
+        let item = try await capture([
+            .init(typeIdentifier: identifier, bytes: Data(address.utf8)),
+            .init(typeIdentifier: "public.png", bytes: Data([1, 2, 3]))
+        ], in: history)
+        var resolvedTypes: [String] = []
+        let opener = HistoryExternalOpener(history: history, applicationFor: { _, type in
+            resolvedTypes.append(type)
+            return URL(filePath: "/Applications/Viewer.app")
+        })
+        if identifier == "public.file-url" {
+            await #expect(throws: HistoryOpenFailure.unavailable) { try await opener.options(for: item) }
+            #expect(resolvedTypes.isEmpty, "an invalid file reference cannot open its icon instead")
+        } else {
+            let options = try await opener.options(for: item)
+            #expect(options.count == 1)
+            #expect(options.first?.request.typeIdentifier == "public.png")
+            #expect(options.first?.imageExtension == "png")
+            #expect(resolvedTypes == ["public.png"])
+        }
+    }
+
     @Test func invalidMultiItemReferenceDoesNotHideValidSibling() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let item = try await capture([
@@ -53,6 +79,32 @@ struct HistoryExternalOpenerTests {
         #expect(options.count == 1)
         #expect(options.first?.request.pasteboardItemIndex == 1)
         #expect(options.first?.file?.path == "/tmp/valid.txt")
+    }
+
+    @Test(arguments: [false, true])
+    func aMultiImageMenuResolvesEachEncodingOnceAndRefreshesOnNextRequest(initiallyUnavailable: Bool) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let item = try await capture((0..<3).map { index in
+            .init(typeIdentifier: "public.png", bytes: Data([UInt8(index + 1)]), pasteboardItemIndex: index)
+        }, in: history)
+        var application = initiallyUnavailable ? nil : URL(filePath: "/Applications/Viewer.app")
+        var resolvedTypes: [String] = []
+        let opener = HistoryExternalOpener(history: history, applicationFor: { _, type in
+            resolvedTypes.append(type)
+            return application
+        })
+        if initiallyUnavailable {
+            await #expect(throws: HistoryOpenFailure.noApplication) { try await opener.options(for: item) }
+        } else {
+            #expect(try await opener.options(for: item).count == 3)
+        }
+        #expect(resolvedTypes == ["public.png"], "default-app lookup is shared by this gesture's three images")
+        let newApplication = URL(filePath: "/Applications/AnotherViewer.app")
+        application = newApplication
+        let refreshed = try await opener.options(for: item)
+        #expect(refreshed.count == 3)
+        #expect(refreshed.allSatisfy { $0.application == newApplication })
+        #expect(resolvedTypes == ["public.png", "public.png"], "a later menu reads changed system defaults")
     }
 
     @Test func unavailableImageApplicationDoesNotHideAnOpenableRepresentation() async throws {

@@ -11,13 +11,13 @@
 /// window's geometry. A Space-triggered
 /// quick-look overlay (`HistoryQuickLookOverlay`) can cover the whole
 /// surface.
-/// Owning spec: docs/01-architecture.md §5.2/§5.4/§5.6/§5.7 (gesture →
+/// Owning spec: docs/architecture.md (gesture →
 /// action, browse, paste hand-off via `requestPaste`, thumbnail), §6
 /// (main-actor UI built only from HistoryCore DTOs);
-/// docs/03b-instruction-set.md §10 (typed failures surfaced via
-/// `FailurePresentation`); docs/04-coherence.md §5 (observation lifecycle:
+/// docs/architecture.md (typed failures surfaced via
+/// `FailurePresentation`); docs/storage.md (observation lifecycle:
 /// activate/deactivate, snapshot replacement); UX principles and
-/// accessibility per docs/v2/V2-07-ux.md §3/§9.
+/// accessibility per docs/interface.md
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -37,11 +37,11 @@ enum PanelSessionSelection {
         rows.first?.item.id
     }
 
-    static func movedSelection(
+    static func movedSelection<Rows: RandomAccessCollection>(
         _ selection: HistoryItemID?,
-        in rows: [HistoryRow],
+        in rows: Rows,
         direction: PanelSelectionDirection
-    ) -> HistoryItemID? {
+    ) -> HistoryItemID? where Rows.Element == HistoryRow, Rows.Index == Int {
         guard !rows.isEmpty else { return nil }
         guard let selection,
               let currentIndex = rows.firstIndex(where: {
@@ -158,15 +158,20 @@ final class HistoryPanelSurfaceState {
             // Retire the browsing pane synchronously before navigation or
             // preview dismissal can transfer keyboard focus (UI-7).
             previewState.setBrowsingHistory(detailsPath.isEmpty)
+            if !detailsPath.isEmpty { searchCompletion.close() }
         }
     }
     var selection: HistoryItemID?
+    /// Only an explicit keyboard request should reveal a selection. Page
+    /// eviction can reconcile the selected ID without moving the viewport.
+    private(set) var keyboardNavigationGeneration = 0
     /// The exact item the Space-triggered quick-look overlay renders.
     /// Reference-exact like the preview target and retired by the same
     /// purge/session transitions as the selection, so overlay content can
     /// never outlive its authoritative row (review Card 9B).
     var quickLookReference: HistoryItemReference?
     let thumbnails: ThumbnailStore
+    let searchCompletion = HistorySearchCompletionState()
     private(set) var appliedPurgeGeneration = 0
     private(set) var sessionGeneration = 0
     private(set) var isSessionActive = false
@@ -302,6 +307,7 @@ final class HistoryPanelSurfaceState {
     /// raw search draft intentionally survives reopen; selection/details/
     /// preview/quick look do not (approved Card 14A close policy).
     func endSession() {
+        searchCompletion.close()
         guard isSessionActive else { return }
         isSessionActive = false
         thumbnails.isSurfaceActive = false
@@ -376,6 +382,7 @@ final class HistoryPanelSurfaceState {
         noteKeyboardNavigation()
         let unchanged = selection == id
         selection = id
+        keyboardNavigationGeneration += 1
         guard unchanged else { return }
         previewState.handleSelectionChange(
             PreviewSelectionResolution.resolve(selectedID: id, rows: rows).reference,
@@ -490,6 +497,9 @@ final class HistoryPanelSurfaceState {
 /// store from it, and only in-package callers inject a store directly.
 struct HistoryPanelView: View {
     @Environment(\.locale) private var locale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(AppMotionSettings.defaultsKey) private var motionLevel = AppMotionSpeed.fastest.rawValue
+    private var motionSpeed: AppMotionSpeed { AppMotionSpeed(rawValue: motionLevel) ?? .fastest }
     @AppStorage(PanelShortcutSettings.defaultsKey) private var shortcutData = Data()
     private var shortcuts: PanelShortcutSettings { PanelShortcutSettings.load(data: shortcutData) }
 
@@ -513,6 +523,7 @@ struct HistoryPanelView: View {
     /// coalesces and applies it to the hosting window. Nil in previews and
     /// view-only tests leaves the view frameless as before.
     private let onContentFitChange: ((PanelContentFit.Input) -> Void)?
+    private let topNoticeHeight: CGFloat
 
     @State private var surfaceState: HistoryPanelSurfaceState
     @State private var dismissedFailureEpisode: Int?
@@ -538,6 +549,7 @@ struct HistoryPanelView: View {
         keepPanelOpenIsActive: Bool = false,
         onToggleKeepPanelOpen: (() -> Void)? = nil,
         sourceIconProvider: SourceIconProvider = .none,
+        topNoticeHeight: CGFloat = 0,
         onContentFitChange: ((PanelContentFit.Input) -> Void)? = nil
     ) {
         self.init(
@@ -552,6 +564,7 @@ struct HistoryPanelView: View {
             keepPanelOpenIsActive: keepPanelOpenIsActive,
             onToggleKeepPanelOpen: onToggleKeepPanelOpen,
             sourceIcons: SourceIconStore(provider: sourceIconProvider),
+            topNoticeHeight: topNoticeHeight,
             onContentFitChange: onContentFitChange
         )
     }
@@ -578,6 +591,7 @@ struct HistoryPanelView: View {
         keepPanelOpenIsActive: Bool = false,
         onToggleKeepPanelOpen: (() -> Void)? = nil,
         sourceIcons: SourceIconStore?,
+        topNoticeHeight: CGFloat = 0,
         onContentFitChange: ((PanelContentFit.Input) -> Void)? = nil
     ) {
         self.viewState = viewState
@@ -590,6 +604,7 @@ struct HistoryPanelView: View {
         self.onQuit = onQuit
         self.onRequestClose = onRequestClose
         self.onContentFitChange = onContentFitChange
+        self.topNoticeHeight = topNoticeHeight
         _sourceIcons = State(initialValue: sourceIcons)
         _surfaceState = State(
             initialValue: surfaceState ?? HistoryPanelSurfaceState(
@@ -601,6 +616,10 @@ struct HistoryPanelView: View {
     }
 
     var body: some View {
+        let quickLookItem = surfaceState.resolvedQuickLookReference(
+            in: displayedSelectionRows,
+            hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
+        )
         ZStack {
             mainColumn
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -638,7 +657,8 @@ struct HistoryPanelView: View {
             // The content-fit oracle: any change to the displayed rows,
             // typography, or chrome republishes the analytic height demand;
             // the composition root coalesces and fits the hosting window.
-            .onChange(of: contentFitInput, initial: true) { _, input in
+            .onChange(of: reportedContentFitInput, initial: true) { _, input in
+                guard let input else { return }
                 onContentFitChange?(input)
             }
             .onChange(of: surfaceState.isSessionActive, initial: true) { _, isActive in
@@ -737,21 +757,26 @@ struct HistoryPanelView: View {
             // The quick-look overlay layers above the whole browsing panel;
             // it renders only while the surface
             // state holds a trigger-time exact reference.
-            if let quickLookItem = surfaceState.resolvedQuickLookReference(
-                in: displayedSelectionRows,
-                hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
-            ) {
-                HistoryQuickLookOverlay(
-                    viewState: viewState,
-                    previewState: previewState,
-                    item: quickLookItem,
-                    sourceIcons: sourceIcons,
-                    onDismiss: { surfaceState.quickLookReference = nil }
-                )
-                // Removed/revised content must not remain visible as a
-                // retained fading-out view after its target is invalidated.
-                .transition(.identity)
+            ZStack {
+                if let quickLookItem {
+                    HistoryQuickLookOverlay(
+                        viewState: viewState,
+                        previewState: previewState,
+                        item: quickLookItem,
+                        sourceIcons: sourceIcons,
+                        onDismiss: { surfaceState.quickLookReference = nil }
+                    )
+                    // Removal has no transition; invalidated sensitive
+                    // content leaves immediately, including during insertion.
+                    .transition(AppMotionArrival.transition(reduceMotion: reduceMotion))
+                }
             }
+            .animation(
+                quickLookItem == nil ? nil : AppMotionSettings.animation(
+                    speed: motionSpeed, reduceMotion: reduceMotion, effect: .presentation
+                ),
+                value: quickLookItem != nil
+            )
         }
     }
 
@@ -778,7 +803,8 @@ struct HistoryPanelView: View {
                     )
                     else { return }
                     viewState.requestPasteFromDisplayedRow(selected)
-                }
+                },
+                completion: surfaceState.searchCompletion
             )
             panelActions
         }
@@ -821,7 +847,10 @@ struct HistoryPanelView: View {
         // Restrained motion, SwiftUI-local only: the failure banner's
         // appearance animates inside the browsing column.
         .animation(
-            .easeInOut(duration: 0.18),
+            AppMotionSettings.animation(
+                speed: motionSpeed,
+                reduceMotion: reduceMotion
+            ),
             value: isFailureBannerVisible
         )
     }
@@ -831,6 +860,10 @@ struct HistoryPanelView: View {
     private var browsingRoot: some View {
         VStack(spacing: 0) {
             browsingHeader
+                // The header's candidates extend over the list. Its whole
+                // sibling must be above the native scroll view, not only the
+                // SearchHeaderView nested inside its HStack.
+                .zIndex(1)
 
             HistoryListView(
                 viewState: viewState,
@@ -843,6 +876,7 @@ struct HistoryPanelView: View {
                 areShortcutsEnabled: surfaceState.isAtListRoot,
                 selection: $surfaceState.selection,
                 inputMode: surfaceState.inputMode,
+                keyboardNavigationGeneration: surfaceState.keyboardNavigationGeneration,
                 onFocusHistory: {
                     isSearchFieldFocused = false
                     // An actual click is a choice, not pointer transit.
@@ -890,6 +924,15 @@ struct HistoryPanelView: View {
     /// states report the full-height demand instead of the row-derived one
     /// (the overlay condition is the same resolved reference the ZStack
     /// renders with, keeping demand and rendering in lockstep).
+    private var reportedContentFitInput: PanelContentFit.Input? {
+        let input = contentFitInput
+        // A replacement query clears old rows immediately. Its temporary
+        // empty loading surface keeps the current window height; genuine
+        // empty results and failures still publish their settled demand.
+        guard !viewState.isLoadingFirstPage || input.prefersFullHeight else { return nil }
+        return input
+    }
+
     private var contentFitInput: PanelContentFit.Input {
         let snippetLineLimit = appearance.snippetLineCount.baseLineLimit(
             density: appearance.rowDensity
@@ -907,12 +950,12 @@ struct HistoryPanelView: View {
             },
             density: appearance.rowDensity,
             fontSize: appearance.rowFontSize,
-            hasWindowedPages: viewState.hasWindowedPages,
             showsPaginationControl:
                 viewState.hasNextPage || viewState.isLoadingPage,
-            isFilterChipVisible:
-                viewState.typeFilter != .all || viewState.showsPinnedOnly,
+            usesPinnedGrouping: viewState.sortOrder == .automatic,
+            isFilterChipVisible: viewState.isSearchStatusVisible,
             isFailureBannerVisible: isFailureBannerVisible,
+            topNoticeHeight: topNoticeHeight,
             prefersFullHeight:
                 !surfaceState.detailsPath.isEmpty
                     || surfaceState.resolvedQuickLookReference(
@@ -923,7 +966,7 @@ struct HistoryPanelView: View {
     }
 
     /// Keyboard navigation follows the same authoritative filtered lanes
-    /// as HistoryListView, with pinned rows first.
+    /// as HistoryListView, preserving the selected authoritative sort order.
     private var displayedSelectionRows: [HistoryRow] {
         viewState.displayedRows
     }
@@ -1125,9 +1168,12 @@ struct HistoryPanelView: View {
     internal static func itemCountText(
         for viewState: HistoryViewState,
         locale: Locale = .current,
-        bundle: Bundle = .main
+        bundle: Bundle = AppLocalization.bundle
     ) -> String {
-        HistoryCountCopy.items(
+        if viewState.isLoadingFirstPage {
+            return HistorySearchCopy.text("Updating results…", bundle: bundle)
+        }
+        return HistoryCountCopy.items(
             count: viewState.displayedCount,
             hasNextPage: viewState.displayedCountIsLowerBound,
             locale: locale,
@@ -1206,8 +1252,7 @@ struct HistoryPanelView: View {
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .clearSearch, whileEditingText: isSearchFieldFocused))
 
                 Button(PanelChromeCopy.text("Clear filters")) {
-                    viewState.typeFilter = .all
-                    viewState.showsPinnedOnly = false
+                    viewState.clearFilters()
                     isSearchFieldFocused = true
                 }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .clearFilters, whileEditingText: isSearchFieldFocused))

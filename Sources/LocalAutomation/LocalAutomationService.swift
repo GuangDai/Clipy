@@ -15,6 +15,10 @@ public actor LocalAutomationService {
     private var suspendedSource: (any DispatchSourceRead)?
     private var sourceTermination: AsyncStream<Void>?
     private var connections: [UUID: Task<Void, Never>] = [:]
+    private var shutdown: Task<Void, Never>?
+#if DEBUG
+    private var injectedAcceptFailure: (code: Int32, observed: AsyncStream<Void>.Continuation)?
+#endif
 
     public init(ingress: LocalAutomationIngress, endpointURL: URL) {
         self.ingress = ingress
@@ -22,6 +26,10 @@ public actor LocalAutomationService {
     }
 
     public func start() async throws {
+        // stop() releases actor isolation while joining the source and its
+        // requests. Do not bind a replacement while the old socket is live.
+        while let shutdown { await shutdown.value }
+        try Task.checkCancellation()
         guard listener == nil else { return }
         try LocalAutomationSocket.withAddress(endpointURL) { _, _ in () }
         try prepareDirectory()
@@ -80,12 +88,20 @@ public actor LocalAutomationService {
     }
 
     public func stop() async {
+        if let shutdown {
+            await shutdown.value
+            return
+        }
         // Cancellation wakes every bounded read/write wait. Each connection
         // task is its descriptor's sole closer; stop joins them before return.
         let source = readSource
         let termination = sourceTermination
         let identity = endpointIdentity
         let pending = Array(connections.values)
+#if DEBUG
+        injectedAcceptFailure?.observed.finish()
+        injectedAcceptFailure = nil
+#endif
         readSource = nil
         sourceTermination = nil
         listener = nil
@@ -96,24 +112,39 @@ public actor LocalAutomationService {
             self.suspendedSource = nil
         }
         for task in pending { task.cancel() }
-        if let termination {
-            for await _ in termination {}
+        // A cancelled caller would immediately leave an AsyncStream loop.
+        // Keep resource cleanup in its own task so every stop caller joins
+        // actual descriptor closure and the same bounded request cleanup.
+        let cleanup = Task {
+            if let termination {
+                for await _ in termination {}
+            }
+            self.removeEndpoint(matching: identity)
+            for task in pending { await task.value }
+            self.shutdown = nil
         }
-        removeEndpoint(matching: identity)
-        for task in pending { await task.value }
+        shutdown = cleanup
+        await cleanup.value
     }
 
-    private func acceptConnections(_ source: any DispatchSourceRead) {
+    private func acceptConnections(_ source: any DispatchSourceRead) async {
         guard readSource === source, let descriptor = listener else {
             source.resume()
             return
         }
         while connections.count < 4 {
-            let connection = Darwin.accept(descriptor, nil, nil)
+            let connection = acceptDescriptor(descriptor)
             if connection < 0 {
-                if errno == EINTR { continue }
-                if errno != EAGAIN && errno != EWOULDBLOCK { source.cancel() }
+                let acceptError = errno
+                if acceptError == EINTR { continue }
                 source.resume()
+                if acceptError != EAGAIN && acceptError != EWOULDBLOCK {
+                    // Cancelling only the source closes the FD but leaves a
+                    // non-nil listener that start() mistakes for a live one.
+                    // Retire the same source/endpoint through the normal join
+                    // before a later Settings retry can bind a replacement.
+                    await stop()
+                }
                 return
             }
             guard LocalAutomationSocket.sameUser(connection) else {
@@ -127,6 +158,30 @@ public actor LocalAutomationService {
         }
         suspendedSource = source
     }
+
+    private func acceptDescriptor(_ descriptor: Int32) -> Int32 {
+#if DEBUG
+        if let failure = injectedAcceptFailure {
+            injectedAcceptFailure = nil
+            failure.observed.yield(())
+            failure.observed.finish()
+            errno = failure.code
+            return -1
+        }
+#endif
+        return Darwin.accept(descriptor, nil, nil)
+    }
+
+#if DEBUG
+    /// A one-shot POSIX failure at the real listener's accept boundary avoids
+    /// exhausting the test process's FDs or closing an owner-owned descriptor.
+    package func injectNextAcceptFailureForTesting(_ code: Int32) -> AsyncStream<Void> {
+        let signal = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        injectedAcceptFailure?.observed.finish()
+        injectedAcceptFailure = (code, signal.continuation)
+        return signal.stream
+    }
+#endif
 
     private func handle(_ descriptor: Int32, id: UUID) async {
         defer {
@@ -144,8 +199,10 @@ public actor LocalAutomationService {
             )
             let shape = try LocalAutomationFrames.decodeRequestHeader(header)
             let json = try await LocalAutomationSocket.receive(shape.count, from: descriptor, deadline: deadline)
-            try Task.checkCancellation()
-            let output = await LocalAutomationReplyMapping.execute(json: json, credential: shape.credential, ingress: ingress)
+            let ingress = self.ingress
+            let output = try await LocalAutomationSocket.withDeadline(deadline) {
+                await LocalAutomationReplyMapping.execute(json: json, credential: shape.credential, ingress: ingress)
+            }
             try await LocalAutomationSocket.send(LocalAutomationFrames.responseHeader(output), to: descriptor, deadline: deadline)
             try await LocalAutomationSocket.send(output.stdout, to: descriptor, deadline: deadline)
             try await LocalAutomationSocket.send(output.stderr, to: descriptor, deadline: deadline)

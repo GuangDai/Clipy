@@ -9,6 +9,9 @@ struct AutomationMaintenancePresentationTests {
         for (key, translation) in [
             ("Read History", "读取历史"),
             ("Change History", "修改历史"),
+            ("Organize History", "整理历史"),
+            ("Revise and Delete Items", "修订与删除条目"),
+            ("Commands and Permissions", "命令与所需权限"),
             ("Advanced Details", "高级详情"),
             ("Clipboard Content", "剪贴板内容"),
             ("Space on Disk", "磁盘占用"),

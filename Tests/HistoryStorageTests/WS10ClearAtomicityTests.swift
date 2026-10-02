@@ -1,21 +1,21 @@
-/// WS10 — Clear atomicity (docs/06-cross-cutting.md §8 WS10): the
+/// WS10 — Clear atomicity (docs/testing.md WS10): the
 /// commit/receipt/storage side of `.clear(.unpinned)` and `.clear(.all)`
 /// through the public `SQLiteHistory.perform(_:)` facade and the real
 /// `HistoryAuthority` clear commit path.
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS10's
+/// Phasing (docs/testing.md, WS-clause phasing note): WS10's
 /// "No partial page is observable" clause is a public-read (observed page)
 /// clause and DEFERS to step 7 (reads + observation) — it is NOT asserted
 /// here. This file closes the step-6 commit-side clauses: `.clear(.unpinned)`
 /// removes the COMPLETE unpinned set in one History Commit and preserves
 /// pins — the pinned survivors keep their IDs, Canonical bytes, Content
 /// Versions, and exact `0 ..< pinnedCount` ordinals, because a clear of
-/// unpinned items never disturbs the pinned lane (docs/02-domain.md §5.4
+/// unpinned items never disturbs the pinned lane (docs/architecture.md
 /// "There is no partial clear", D12); `.clear(.all)` removes all remaining
 /// rows in one later commit; Change Position advances exactly once per clear
-/// commit regardless of row count (docs/02-domain.md D6,
-/// docs/05-authority-kernel.md §3.2); and a clear whose affected set is
-/// empty is `.unchanged` with NO position advance (docs/02-domain.md §7: a
+/// commit regardless of row count (docs/architecture.md D6,
+/// docs/storage.md); and a clear whose affected set is
+/// empty is `.unchanged` with NO position advance (docs/architecture.md: a
 /// commit's mutation list is non-empty; §8 `planClear`). Row-level state is
 /// asserted through the INDEPENDENT second `SQLite connection` over the same
 /// on-disk store (see `WSSupport`).
@@ -53,7 +53,7 @@ private static let sources = [
 /// bravo (index 1) and delta (index 3) at the back of the pinned lane
 /// (commits 5–6) — interleaving pinned and unpinned items so the clear must
 /// select by pin state, and `.last` placement twice yielding ordinals 0 and
-/// 1 in pin order (docs/02-domain.md §10 steps 3–4). Returns `nil` after
+/// 1 in pin order (docs/architecture.md steps 3–4). Returns `nil` after
 /// recording an issue if any arrange receipt is not the expected commit.
 private static func arrangeFourItemsTwoPinned(
     on history: SQLiteHistory
@@ -90,11 +90,11 @@ private static func arrangeFourItemsTwoPinned(
     return (pinnedIDs: pinnedIDs, unpinnedIDs: unpinnedIDs)
 }
 
-/// WS10 (docs/06-cross-cutting.md §8): `.clear(.unpinned)` retires the
+/// WS10 (docs/testing.md): `.clear(.unpinned)` retires the
 /// complete unpinned set in ONE History Commit — `.cleared(count: 2)` at a
 /// single advanced position — and preserves pins: exactly the two pinned
 /// rows survive, bytes and versions intact, ordinals still exactly 0 ..< 2
-/// in pin order (docs/02-domain.md §5.4, D12).
+/// in pin order (docs/architecture.md, D12).
 @Test func clearUnpinnedRetiresCompleteUnpinnedSetInOneCommitPreservingPinnedLaneAndOrdinals() async throws {
     let storeURL = WSSupport.tempStoreURL("ws10-clear-unpinned")
     defer { WSSupport.removeStore(storeURL) }
@@ -114,7 +114,7 @@ private static func arrangeFourItemsTwoPinned(
     }
     // WS10: Change Position 7 — the complete unpinned set retires in one
     // commit, so the position advances exactly once for the whole clear
-    // (docs/02-domain.md D6; docs/05-authority-kernel.md §3.2).
+    // (docs/architecture.md D6; docs/storage.md).
     #expect(commit.position.rawValue == 7)
     guard case let .cleared(count) = commit.outcome else {
         Issue.record("WS10: expected .cleared(count:) for .clear(.unpinned), got \(commit.outcome)")
@@ -126,7 +126,7 @@ private static func arrangeFourItemsTwoPinned(
 
     // Storage side, through the INDEPENDENT container: ONLY the two pinned
     // rows survive — the complete unpinned set is gone, no partial clear
-    // (docs/02-domain.md §5.4).
+    // (docs/architecture.md).
     let container = try WSSupport.makeDatabase(storeURL: storeURL)
     let rows = try WSSupport.fetchRows(container)
     #expect(rows.count == 2)
@@ -134,7 +134,7 @@ private static func arrangeFourItemsTwoPinned(
 
     // WS10: "preserves pins" — the pinned lane is undisturbed: ordinals are
     // still exactly 0 ..< 2 in pin order, bravo at 0 and delta at 1
-    // (docs/02-domain.md D12; §5.4: `.unpinned` retains every pinned item).
+    // (docs/architecture.md D12; §5.4: `.unpinned` retains every pinned item).
     let bravoRow = try #require(rows.first(where: { $0.id == arranged.pinnedIDs[0].rawValue }))
     let deltaRow = try #require(rows.first(where: { $0.id == arranged.pinnedIDs[1].rawValue }))
     #expect(bravoRow.pinOrdinal == 0)
@@ -142,7 +142,7 @@ private static func arrangeFourItemsTwoPinned(
 
     // The survivors are fully intact — initial Content Version, one
     // occurrence, Canonical bytes byte-exact: a clear touches only its
-    // affected set (docs/02-domain.md §5.4, §8 `planClear`).
+    // affected set (docs/architecture.md, §8 `planClear`).
     let survivors: [(row: WSSupport.StoredItem, text: String)] = [
         (bravoRow, Self.texts[1]),
         (deltaRow, Self.texts[3]),
@@ -156,16 +156,16 @@ private static func arrangeFourItemsTwoPinned(
     }
 
     // WS10: the durable singleton matches the receipt's position — one
-    // commit for the whole clear (docs/06-cross-cutting.md §7.1).
+    // commit for the whole clear (docs/testing.md).
     let position = try WSSupport.fetchPosition(container)
     #expect(position.rawValue == 7)
 }
 
-/// WS10 (docs/06-cross-cutting.md §8): `.clear(.all)` after the unpinned
+/// WS10 (docs/testing.md): `.clear(.all)` after the unpinned
 /// clear retires every remaining row (the two pinned survivors) in ONE later
 /// History Commit — `.cleared(count: 2)`, the position advanced exactly once
 /// more, zero rows left. A further `.clear(.all)` on the now-empty store is
-/// `.unchanged`: an empty affected set is no commit (docs/02-domain.md §7 —
+/// `.unchanged`: an empty affected set is no commit (docs/architecture.md —
 /// a commit's mutation list is non-empty; §8 `planClear`), so the position
 /// does NOT advance.
 @Test func clearAllRetiresRemainingRowsInOneCommitAndEmptyClearIsUnchangedWithoutAdvance() async throws {
@@ -195,14 +195,14 @@ private static func arrangeFourItemsTwoPinned(
         return
     }
     // WS10: Change Position 8 — one advance for the whole clear, exactly
-    // once more than the unpinned clear (docs/02-domain.md D6).
+    // once more than the unpinned clear (docs/architecture.md D6).
     #expect(commit.position.rawValue == 8)
     guard case let .cleared(count) = commit.outcome else {
         Issue.record("WS10: expected .cleared(count:) for .clear(.all), got \(commit.outcome)")
         return
     }
     // WS10: "removes all remaining rows in one later commit" — the two
-    // pinned survivors are not protected from `.all` (docs/02-domain.md
+    // pinned survivors are not protected from `.all` (docs/architecture.md
     // §5.4: `.all` removes every item).
     #expect(count == 2)
 
@@ -215,7 +215,7 @@ private static func arrangeFourItemsTwoPinned(
     #expect(positionAfterClearAll.rawValue == 8)
 
     // Act: a third `.clear(.all)` on the empty store. The affected set is
-    // empty, so there is no commit (docs/02-domain.md §7: a commit's
+    // empty, so there is no commit (docs/architecture.md: a commit's
     // mutation list is non-empty; §8 `planClear`: empty affected set is
     // `.unchanged`, never a rejection).
     let emptyClearReceipt = try await history.perform(.clear(.all))
@@ -224,7 +224,7 @@ private static func arrangeFourItemsTwoPinned(
         return
     }
     // WS10: the position does NOT advance for a no-op clear — the singleton
-    // is still 8 and the store is still empty (docs/04-coherence.md §4: no
+    // is still 8 and the store is still empty (docs/storage.md: no
     // position or invalidation without a durable mutation).
     let positionAfterNoop = try WSSupport.fetchPosition(container)
     #expect(positionAfterNoop.rawValue == 8)

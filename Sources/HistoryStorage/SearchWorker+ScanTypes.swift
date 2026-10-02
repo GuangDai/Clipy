@@ -1,6 +1,6 @@
 /// Scan-budget and deferred-presentation value types shared by the search
-/// lanes and the page materializer (docs/03b-instruction-set.md §8;
-/// docs/04-coherence.md §6).
+/// lanes and the page materializer (docs/architecture.md;
+/// docs/storage.md).
 /// Split out of SearchWorker.swift (file-size hygiene); same target,
 /// unchanged semantics.
 import Foundation
@@ -33,7 +33,7 @@ extension SearchWorker {
     }
 
     /// The page-driven scan directive for order-preserving lanes (03b §8;
-    /// docs/04-coherence.md §6): after the continuation anchor (when
+    /// docs/storage.md): after the continuation anchor (when
     /// present), at most `limit + 1` matched rows can still influence the
     /// returned page or its `next`-cursor decision, so the scan may stop
     /// once that many post-anchor survivors exist. Fuzzy still scans every

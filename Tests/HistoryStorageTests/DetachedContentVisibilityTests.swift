@@ -19,7 +19,8 @@ struct DetachedContentVisibilityTests {
             _ = try await history.perform(.remove(item.id))
             // This is the distinguishing fixture: payload rows still exist,
             // so successful assertions cannot be explained by physical GC.
-            #expect(try await contentCount(in: history, owner: item.id) == 1)
+            #expect(try await contentCount(in: history, owner: item.id) == 0)
+            #expect(try await contentCount(in: history, owner: nil) == 1)
             for kind in [HistoryBrowseKind.recent, .search(text: "needle", mode: .exact),
                          .search(text: "needle", mode: .fuzzy)] {
                 #expect(try await history.browse(.init(kind: kind, limit: 10)).rows.isEmpty)

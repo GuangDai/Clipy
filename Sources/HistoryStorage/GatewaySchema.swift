@@ -5,7 +5,8 @@ import HistoryCore
 
 extension ConnectionRow {
     internal init(statement: SQLiteStatement) throws {
-        guard let id = UUID(uuidString: try statement.text(at: 0)),
+        let rawID = try statement.text(at: 0)
+        guard let id = UUID(uuidString: rawID), id.uuidString == rawID,
               let kind = Int16(exactly: try statement.integer(at: 2)),
               let status = Int16(exactly: try statement.integer(at: 3)),
               let version = UInt16(exactly: try statement.integer(at: 6)) else {

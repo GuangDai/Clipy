@@ -43,6 +43,12 @@ struct BuiltInAutomationScope: Codable, Equatable, Sendable {
     var startDate = Date(timeIntervalSinceReferenceDate: 0)
     var endDate = Date(timeIntervalSinceReferenceDate: 0)
 
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.source == rhs.source && lhs.applications.utf8.elementsEqual(rhs.applications.utf8)
+            && lhs.historyLimit == rhs.historyLimit && lhs.timeRange == rhs.timeRange
+            && lhs.startDate == rhs.startDate && lhs.endDate == rhs.endDate
+    }
+
     var validTimeRange: Bool {
         timeRange != .custom || (startDate <= endDate
             && startDate.timeIntervalSinceReferenceDate.isFinite && endDate.timeIntervalSinceReferenceDate.isFinite)
@@ -54,8 +60,16 @@ struct BuiltInAutomationScope: Codable, Equatable, Sendable {
     }
 
     func includes(application: String?, copiedAt: Date?, now: Date) -> Bool {
-        if !applicationIDs.isEmpty {
-            guard let application, applicationIDs.contains(application.lowercased()) else { return false }
+        includes(application: application, copiedAt: copiedAt, now: now,
+                 allowedApplicationIDs: Set(applicationIDs))
+    }
+
+    /// A history range reuses this set instead of splitting the same filter
+    /// and scanning every configured ID for each of its up to 1,000 rows.
+    func includes(application: String?, copiedAt: Date?, now: Date,
+                  allowedApplicationIDs: Set<String>) -> Bool {
+        if !allowedApplicationIDs.isEmpty {
+            guard let application, allowedApplicationIDs.contains(application.lowercased()) else { return false }
         }
         guard timeRange != .any else { return true }
         guard let copiedAt else { return false }

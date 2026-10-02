@@ -1,16 +1,16 @@
 /// HistoryListView.swift — pinned items followed by recent history, separated
 /// by one unobtrusive rule when both groups are present.
-/// with single selection, last-row pagination prefetch, the panel keyboard
+/// with single selection, viewport-driven pagination, the panel keyboard
 /// surface, and the empty states. Rows render the view state's DISPLAYED
 /// lanes: History applies type/pinned filters before pagination. Row content
 /// uses the available width without changing metadata formats on resize.
-/// Owning spec: docs/01-architecture.md §5.2 (gesture → action), §5.4
+/// Owning spec: docs/architecture.md (gesture → action), §5.4
 /// (browse/observe), §6 (main-actor selection);
-/// docs/03b-instruction-set.md §8 (default ordering: pinned rows by ordinal
+/// docs/architecture.md (default ordering: pinned rows by ordinal
 /// ascending, then unpinned by lastCopiedAt descending);
-/// docs/04-coherence.md §5 (snapshot-replacement pages — the list renders
+/// docs/storage.md (snapshot-replacement pages — the list renders
 /// `HistoryViewState.rows`, never deltas) and §6 (cursor expiry is handled by
-/// `HistoryViewState.loadNextPage()`); accessibility per docs/v2/V2-07-ux.md §9.
+/// `HistoryViewState.loadNextPage()`); accessibility per docs/interface.md
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -20,7 +20,7 @@ import SwiftUI
 /// (hoisted to the panel so the preview pane can dwell on it) drives the
 /// panel shortcuts (⏎ copy, ⌫ remove, ⌘P pin toggle, ⌥⌘↑/⌥⌘↓ pin to
 /// top/bottom, ⌘I details push).
-/// Additional pages are requested when the last row appears and shown with a
+/// Additional pages are requested near the visible edges and shown with a
 /// trailing spinner row while `isLoadingPage` (04 §6: observation covers only
 /// the first page; continuations are one-shot browses owned by the view state).
 /// `density` is the panel's row-density preference, threaded unchanged into
@@ -28,6 +28,7 @@ import SwiftUI
 /// `snippetLineCount`/`fontSize` are the row-typography preferences,
 /// likewise threaded unchanged into each row.
 struct HistoryListView: View {
+    @Environment(\.locale) private var locale
     private let viewState: HistoryViewState
     private let thumbnails: ThumbnailStore
     private let density: HistoryRowDensity
@@ -38,6 +39,7 @@ struct HistoryListView: View {
     private let areShortcutsEnabled: Bool
     private let selection: Binding<HistoryItemID?>
     private let inputMode: PanelInputMode
+    private let keyboardNavigationGeneration: Int
     private let onFocusHistory: () -> Void
     private let onHoverRow: (HistoryItemID) -> Void
     private let onKeyboardSelection: (HistoryItemID?) -> Void
@@ -55,6 +57,7 @@ struct HistoryListView: View {
         areShortcutsEnabled: Bool = true,
         selection: Binding<HistoryItemID?>,
         inputMode: PanelInputMode = .keyboard,
+        keyboardNavigationGeneration: Int = 0,
         onFocusHistory: @escaping () -> Void = {},
         onHoverRow: @escaping (HistoryItemID) -> Void = { _ in },
         onKeyboardSelection: @escaping (HistoryItemID?) -> Void,
@@ -71,6 +74,7 @@ struct HistoryListView: View {
         self.areShortcutsEnabled = areShortcutsEnabled
         self.selection = selection
         self.inputMode = inputMode
+        self.keyboardNavigationGeneration = keyboardNavigationGeneration
         self.onFocusHistory = onFocusHistory
         self.onHoverRow = onHoverRow
         self.onKeyboardSelection = onKeyboardSelection
@@ -80,37 +84,33 @@ struct HistoryListView: View {
 
     @State private var dragSource = HistoryListDraggingView()
     @State private var viewportHeight: CGFloat = 0
+    @State private var firstVisibleRowID: HistoryItemID?
 
     var body: some View {
+        let _ = locale
         // Observe row facts directly. A periodic TimelineView must not own
         // publication of captures, pin changes or updated accessibility labels.
         VStack(spacing: 0) {
-            if viewState.hasWindowedPages {
-                HStack {
-                    Button(HistoryListCopy.text("Newer")) { viewState.loadPreviousPage() }
-                        .disabled(!viewState.hasPreviousPage || viewState.isLoadingPage)
-                        .accessibilityIdentifier("clipy.history.newer")
-                    Spacer()
-                    Button(HistoryListCopy.text("Latest")) { viewState.returnToLatest() }
-                        .accessibilityIdentifier("clipy.history.latest")
-                }
-                .padding(.horizontal)
-                .padding(.vertical, 6)
-            }
             content(now: Date())
         }
         .background { selectionShortcuts }
+        .onChange(of: viewState.hasAuthoritativeFirstPage) { _, hasPage in
+            // A new query or return-to-latest request starts at its first
+            // result even if that query happens to include the old anchor.
+            if hasPage { firstVisibleRowID = nil }
+        }
+        .onChange(of: viewState.restoredReadingItemID, initial: true) { _, id in
+            guard let id else { return }
+            firstVisibleRowID = id
+            selection.wrappedValue = id
+        }
     }
 
     @ViewBuilder
     private func content(now: Date) -> some View {
-        let rows = viewState.displayedRows
-        if viewState.rows.isEmpty {
+        let rows = viewState.rowsForPresentation
+        if rows.isEmpty {
             emptyState
-        } else if rows.isEmpty {
-            // Keep the displayed-row fallback consistent with the current
-            // query while presentation reconciles its loaded lanes.
-            filteredEmptyState
         } else {
             list(rows: rows, now: now)
         }
@@ -122,7 +122,7 @@ struct HistoryListView: View {
         // Reuse this render's displayed rows for the lane boundary instead
         // of materializing both filtered lanes several times (03b §8).
         let firstUnpinnedID = rows.first { $0.pinnedPosition == nil }?.item.id
-        let showsGroupSeparator = rows.first?.pinnedPosition != nil
+        let showsGroupSeparator = viewState.sortOrder == .automatic && rows.first?.pinnedPosition != nil
             && (firstUnpinnedID != nil || viewState.hasNextPage || viewState.isLoadingPage)
         let separatorID = showsGroupSeparator ? firstUnpinnedID : nil
         return ScrollViewReader { proxy in
@@ -149,7 +149,14 @@ struct HistoryListView: View {
                     }
                     paginationControl
                 }
+                .scrollTargetLayout()
                 .padding(.horizontal, PanelContentFit.listRowHorizontalInset)
+            }
+            // Preserve the actual reading position when bounded pagination
+            // removes a page above it or inserts newer rows before it.
+            .scrollPosition(id: $firstVisibleRowID, anchor: .top)
+            .onScrollTargetVisibilityChange(idType: HistoryItemID.self, threshold: 0.01) { ids in
+                viewState.prefetchPagesIfNeeded(visibleRowIDs: ids)
             }
             .background { NativePanelBackground() }
             .focusable()
@@ -159,11 +166,13 @@ struct HistoryListView: View {
             // navigation, never by mirroring an earlier search-focus value.
             .accessibilityIdentifier("clipy.history.scroll")
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
-            .onChange(of: selection.wrappedValue) { _, selected in
+            .onChange(of: keyboardNavigationGeneration) { _, _ in
                 // Pointer hover must never scroll rows out from under the mouse.
                 // Keyboard selection, including arrows received by Search,
                 // reveals its current target without choosing an initial row.
-                if inputMode == .keyboard, let selected { proxy.scrollTo(selected) }
+                if inputMode == .keyboard, let selected = selection.wrappedValue {
+                    proxy.scrollTo(selected)
+                }
             }
             .onKeyPress(keys: [.upArrow, .downArrow, .pageUp, .pageDown, .home, .end]) { press in
                 guard !isSearchFieldFocused, areShortcutsEnabled else { return .ignored }
@@ -224,14 +233,27 @@ struct HistoryListView: View {
             dragSource: dragSource,
             externalOpener: viewState.externalOpener,
             onCopy: { reference in
+                guard viewState.displayedRow(for: reference.id)?.item == reference else { return }
                 selection.wrappedValue = reference.id
                 onFocusHistory()
                 viewState.requestPasteFromDisplayedRow(reference)
             },
-            onPin: { id, placement in viewState.pin(id, at: placement) },
-            onUnpin: { id in viewState.unpin(id) },
-            onRemove: { id in viewState.remove(id) },
-            onShowDetails: onShowDetails
+            onPin: { id, placement in
+                guard viewState.displayedRow(for: id)?.item == row.item else { return }
+                viewState.pin(id, at: placement)
+            },
+            onUnpin: { id in
+                guard viewState.displayedRow(for: id)?.item == row.item else { return }
+                viewState.unpin(id)
+            },
+            onRemove: { id in
+                guard viewState.displayedRow(for: id)?.item == row.item else { return }
+                viewState.remove(id)
+            },
+            onShowDetails: { reference in
+                guard viewState.displayedRow(for: reference.id)?.item == reference else { return }
+                onShowDetails(reference)
+            }
         )
         .padding(EdgeInsets(
             top: PanelContentFit.listRowVerticalInset,
@@ -239,15 +261,14 @@ struct HistoryListView: View {
             bottom: PanelContentFit.listRowVerticalInset,
             trailing: PanelContentFit.listRowHorizontalInset
         ))
+        .disabled(viewState.isLoadingFirstPage)
+        .allowsHitTesting(!viewState.isLoadingFirstPage)
         // Hover selection (Maccy's HoverSelectionModifier): the surface
         // state arbitrates pointer-vs-keyboard mode, so hover selects
         // without scrolling only in mouse mode and otherwise defers until
         // the mouse next moves.
         .onHover { inside in
-            if inside { onHoverRow(row.item.id) }
-        }
-        .onAppear {
-            viewState.prefetchNextPageIfNeeded(appearingRowID: row.item.id)
+            if inside, !viewState.isLoadingFirstPage { onHoverRow(row.item.id) }
         }
     }
 
@@ -283,10 +304,14 @@ struct HistoryListView: View {
     @ViewBuilder
     private var emptyState: some View {
         if viewState.isLoadingFirstPage {
-            ProgressView()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel(HistoryListCopy.text("Loading clipboard history"))
-        } else if viewState.typeFilter != .all || viewState.showsPinnedOnly {
+            // Search already owns the loading indicator. Keep an empty
+            // viewport until the first page arrives instead of a second
+            // full-surface spinner.
+            Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let issue = HistorySearchCopy.issue(for: viewState) {
+            emptyMessage(HistorySearchCopy.text("Check search conditions"), symbol: "exclamationmark.magnifyingglass",
+                         description: issue)
+        } else if viewState.hasActiveFilters {
             filteredEmptyState
         } else if viewState.isSearchActive {
             emptyMessage("No Results", symbol: "magnifyingglass",
@@ -417,6 +442,7 @@ private struct HistoryListViewPreview: View {
         history: PreviewClipboardHistory.populated
     )
     @State private var selection: HistoryItemID?
+    @State private var keyboardNavigationGeneration = 0
 
     var body: some View {
         HistoryListView(
@@ -424,7 +450,11 @@ private struct HistoryListViewPreview: View {
             thumbnails: thumbnails,
             isSearchFieldFocused: false,
             selection: $selection,
-            onKeyboardSelection: { selection = $0 },
+            keyboardNavigationGeneration: keyboardNavigationGeneration,
+            onKeyboardSelection: {
+                selection = $0
+                keyboardNavigationGeneration += 1
+            },
             onShowDetails: { _ in }
         )
         .task { viewState.activate() }

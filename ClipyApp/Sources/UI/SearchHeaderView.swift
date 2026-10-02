@@ -1,10 +1,10 @@
 /// SearchHeaderView.swift — the panel's query surface: the rounded search
-/// field, the three-mode search picker (⌘1/⌘2/⌘3), the history-wide row
-/// filter menu, and directly removable active filters.
-/// Owning spec: docs/01-architecture.md §5.4 (browse/search flow);
-/// docs/03a-instruction-set.md §7 (search modes);
-/// docs/06-cross-cutting.md §2 (fuzzy 64-Character query bound);
-/// accessibility per docs/v2/V2-07-ux.md §9.
+/// field, ordinary search modes (⌘1/⌘2/⌘3), explicit advanced expressions,
+/// history-wide metadata filters, and directly removable active conditions.
+/// Owning spec: docs/architecture.md (browse/search flow);
+/// docs/architecture.md (search modes);
+/// docs/testing.md (fuzzy 64-Character query bound);
+/// accessibility per docs/interface.md
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -20,6 +20,11 @@ import SwiftUI
 /// so switching modes never truncates clipboard syntax typed by the user.
 struct SearchHeaderView: View {
     @Environment(\.locale) private var locale
+    @Environment(\.searchHistoryStore) private var searchHistoryStore
+    @State private var showsSearchOptions = false
+    @State private var showsExpressionGuide = false
+    @State private var showsSearchLibrary = false
+    @State private var completion: HistorySearchCompletionState
 
     private let viewState: HistoryViewState
     private let searchFieldFocused: Binding<Bool>
@@ -34,7 +39,8 @@ struct SearchHeaderView: View {
         shortcuts: PanelShortcutSettings = PanelShortcutSettings(),
         areShortcutsEnabled: Bool = true,
         onMoveSelection: @escaping (Int) -> Void = { _ in },
-        onSubmitSelection: @escaping () -> Void = {}
+        onSubmitSelection: @escaping () -> Void = {},
+        completion: HistorySearchCompletionState? = nil
     ) {
         self.viewState = viewState
         self.searchFieldFocused = searchFieldFocused
@@ -42,6 +48,7 @@ struct SearchHeaderView: View {
         self.areShortcutsEnabled = areShortcutsEnabled
         self.onMoveSelection = onMoveSelection
         self.onSubmitSelection = onSubmitSelection
+        _completion = State(initialValue: completion ?? HistorySearchCompletionState())
     }
 
     var body: some View {
@@ -54,42 +61,166 @@ struct SearchHeaderView: View {
                 filterMenu
                     .frame(width: 24, height: 24)
             }
-            if hasActiveFilters {
-                Button {
-                    viewState.typeFilter = .all
-                    viewState.showsPinnedOnly = false
-                    searchFieldFocused.wrappedValue = true
-                } label: {
-                    HStack(spacing: 5) {
-                        switch viewState.typeFilter {
-                        case .all: EmptyView()
-                        case .text: Image(systemName: "text.alignleft")
-                        case .images: Image(systemName: "photo")
-                        case .links: Image(systemName: "link")
-                        }
-                        if viewState.showsPinnedOnly {
-                            Image(systemName: "pin.fill")
-                        }
-                        Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .semibold))
-                    }
-                        .font(.caption)
-                        .padding(.horizontal, 6)
-                        .background(Color.accentColor.opacity(0.1), in: Capsule())
-                }
-                .buttonStyle(.borderless)
-                .tint(.accentColor)
-                .accessibilityIdentifier("clipy.search.clear-filters")
-                .accessibilityLabel(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
-                .accessibilityValue(filterSummary)
-                .help(filterSummary + " · " + PanelChromeCopy.text("Clear filters", bundle: copyBundle))
+            // Candidates extend below this row over the status controls.
+            // The outer header's ordering does not order these siblings.
+            .zIndex(completion.isPresented ? 1 : 0)
+            if viewState.isSearchStatusVisible {
+                searchStatusRow.frame(height: 15)
             }
         }
+        .zIndex(completion.isPresented ? 20 : 0)
         .background { modeShortcuts }
+        .popover(isPresented: $showsSearchOptions, arrowEdge: .bottom) {
+            HistorySearchOptionsView(
+                viewState: viewState, completion: completion,
+                showsExpressionGuide: showsExpressionGuide
+            )
+        }
+        .onChange(of: showsSearchOptions) { _, isPresented in
+            if !isPresented { searchFieldFocused.wrappedValue = true }
+        }
+        .popover(isPresented: $showsSearchLibrary, arrowEdge: .bottom) {
+            if let store = searchHistoryStore {
+                SearchLibraryView(viewState: viewState, store: store) {
+                    searchFieldFocused.wrappedValue = true
+                }
+            }
+        }
+        .onChange(of: showsSearchLibrary) { _, isPresented in
+            if !isPresented { searchFieldFocused.wrappedValue = true }
+        }
+        .onAppear { configureCompletion() }
+        .onDisappear { completion.close() }
+        .onChange(of: searchFieldFocused.wrappedValue) { _, focused in
+            if focused { configureCompletion() }
+            else { completion.setFocused(false) }
+        }
+        .onChange(of: areShortcutsEnabled) { _, enabled in
+            if !enabled { completion.close() }
+            else { configureCompletion() }
+        }
+        .onChange(of: viewState.sourceCompletionPosition) { _, position in
+            completion.updateHistoryPosition(position)
+        }
+        .onChange(of: viewState.searchMode) { _, _ in configureCompletion() }
+    }
+
+    private func configureCompletion() {
+        completion.configure(history: viewState.history, mode: viewState.searchMode) { await viewState.sourceApplicationsForCompletion() }
+        completion.updateHistoryPosition(viewState.sourceCompletionPosition)
     }
 
     private var hasActiveFilters: Bool {
-        viewState.typeFilter != .all || viewState.showsPinnedOnly
+        viewState.hasActiveFilters
+    }
+
+    private func openOptions(expressionGuide: Bool = false) {
+        showsExpressionGuide = expressionGuide
+        searchFieldFocused.wrappedValue = false
+        showsSearchOptions = true
+    }
+
+    @ViewBuilder
+    private var searchStatusRow: some View {
+        if let issue = HistorySearchCopy.issue(for: viewState, bundle: copyBundle) {
+            Button { openOptions(expressionGuide: true) } label: {
+                Label(issue, systemImage: "exclamationmark.circle")
+                    .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.caption).buttonStyle(AppMotionPressStyle()).foregroundStyle(.red)
+            .help(issue)
+            .accessibilityIdentifier("clipy.search.expression.error")
+        } else {
+            HStack(spacing: 5) {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 5) {
+                        if viewState.hasWrappedSearchConditions {
+                            Button { openOptions(expressionGuide: true) } label: {
+                                Label(HistorySearchCopy.text("Expression", bundle: copyBundle), systemImage: "chevron.left.forwardslash.chevron.right")
+                            }
+                            .buttonStyle(AppMotionPressStyle()).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("clipy.search.expression.help")
+                        }
+                        if viewState.sortOrder != .automatic {
+                            filterChip(HistorySearchCopy.sortTitle(viewState.sortOrder, bundle: copyBundle),
+                                       symbol: "arrow.up.arrow.down", id: "sort") {
+                                viewState.sortOrder = .automatic
+                            }
+                        }
+                        if viewState.typeFilter != .all {
+                            filterChip(typeFilterTitle, symbol: "line.3.horizontal.decrease", id: "type") {
+                                viewState.typeFilter = .all
+                            }
+                        }
+                        if viewState.showsPinnedOnly {
+                            filterChip(PanelActionsCopy.text("Pinned Only", bundle: copyBundle), symbol: "pin.fill", id: "pinned") {
+                                viewState.showsPinnedOnly = false
+                            }
+                        }
+                        if let source = viewState.searchFilters.source {
+                            filterChip(source, symbol: "app.badge", id: "source") {
+                                viewState.searchFilters.sourceApplication = ""
+                            }
+                        }
+                        if viewState.searchFilters.dateRange != .anyTime {
+                            filterChip(dateFilterTitle, symbol: "calendar", id: "date") {
+                                viewState.searchFilters.dateRange = .anyTime
+                            }
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+                if hasActiveFilters {
+                    Button {
+                        viewState.clearFilters()
+                        searchFieldFocused.wrappedValue = true
+                    } label: { Image(systemName: "xmark.circle.fill") }
+                        .buttonStyle(AppMotionPressStyle()).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("clipy.search.clear-filters")
+                        .accessibilityLabel(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
+                        .accessibilityValue(filterSummary)
+                        .help(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
+                }
+            }
+            .font(.caption)
+        }
+    }
+
+    private func filterChip(_ title: String, symbol: String, id: String, clear: @escaping () -> Void) -> some View {
+        Button {
+            clear()
+            searchFieldFocused.wrappedValue = true
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: symbol)
+                Text(title).lineLimit(1)
+                Image(systemName: "xmark").font(.system(size: 8, weight: .semibold))
+            }
+            .padding(.horizontal, 5)
+            .background(Color.accentColor.opacity(0.1), in: Capsule())
+        }
+        .buttonStyle(AppMotionPressStyle()).foregroundStyle(Color.accentColor)
+        .accessibilityIdentifier("clipy.search.clear-filter.\(id)")
+        .accessibilityLabel(HistorySearchCopy.format("Remove filter: %@", title, bundle: copyBundle))
+        .help(title)
+    }
+
+    private var typeFilterTitle: String {
+        switch viewState.typeFilter {
+        case .all: PanelActionsCopy.text("All", bundle: copyBundle)
+        case .text: PanelActionsCopy.text("Text", bundle: copyBundle)
+        case .images: PanelActionsCopy.text("Images", bundle: copyBundle)
+        case .links: PanelActionsCopy.text("Links", bundle: copyBundle)
+        }
+    }
+
+    private var dateFilterTitle: String {
+        let filters = viewState.searchFilters
+        if filters.dateRange == .custom {
+            let style = Date.FormatStyle(date: .abbreviated, time: .omitted).locale(locale)
+            return filters.startDate.formatted(style) + " – " + filters.endDate.formatted(style)
+        }
+        return HistorySearchCopy.text(filters.dateRange.title, bundle: copyBundle)
     }
 
     private var filterSummary: String {
@@ -103,6 +234,8 @@ struct SearchHeaderView: View {
         if viewState.showsPinnedOnly {
             parts.append(PanelActionsCopy.text("Pinned Only", bundle: copyBundle))
         }
+        if let source = viewState.searchFilters.source { parts.append(source) }
+        if viewState.searchFilters.dateRange != .anyTime { parts.append(dateFilterTitle) }
         return parts.joined(separator: " · ")
     }
 
@@ -112,17 +245,34 @@ struct SearchHeaderView: View {
 
     private var searchField: some View {
         HStack(spacing: PanelTheme.spacingXSmall) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
+            ZStack {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                    .opacity(viewState.isLoadingFirstPage ? 0 : 1)
+                    .accessibilityHidden(true)
+                if viewState.isLoadingFirstPage {
+                    ProgressView().controlSize(.small)
+                        .accessibilityLabel(HistorySearchCopy.text("Updating results…", bundle: copyBundle))
+                        .accessibilityIdentifier("clipy.search.updating")
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(width: 16)
             HistorySearchField(
                 text: searchTextBinding,
                 isFocused: searchFieldFocused,
                 placeholder: PanelActionsCopy.text("Search clipboard…", bundle: copyBundle),
                 accessibilityLabel: PanelActionsCopy.text("Search clipboard history", bundle: copyBundle),
                 onMoveSelection: onMoveSelection,
-                onSubmit: onSubmitSelection
+                onSubmit: {
+                    if HistorySearchCopy.issue(for: viewState) == nil, viewState.searchFilters.hasValidDates() {
+                        searchHistoryStore?.recordSubmittedSearch(HistorySearchDefinition(viewState: viewState))
+                    }
+                    onSubmitSelection()
+                },
+                completion: completion
             )
+            .frame(minWidth: 0, maxWidth: .infinity)
             // Keep the editor's width and text position stable as the user
             // enters the first character or clears the query (V2-07 §3).
             // The empty slot has no control or accessibility element.
@@ -137,7 +287,7 @@ struct SearchHeaderView: View {
                             .frame(width: 24, height: PanelContentFit.searchFieldHeight)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(AppMotionPressStyle())
                     .help(PanelActionsCopy.text("Clear search", bundle: copyBundle))
                     .accessibilityIdentifier("clipy.search.clear")
                     .accessibilityLabel(PanelActionsCopy.text("Clear search", bundle: copyBundle))
@@ -160,6 +310,12 @@ struct SearchHeaderView: View {
                     ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.08), lineWidth: 1)
                 .allowsHitTesting(false)
         }
+        .overlay(alignment: .topLeading) {
+            if completion.isPresented {
+                HistorySearchCompletionView(completion: completion)
+                    .offset(y: PanelContentFit.searchFieldHeight + 4)
+            }
+        }
     }
 
     /// Counts include traversed rows in the complete filtered query. A
@@ -167,9 +323,12 @@ struct SearchHeaderView: View {
     internal static func resultCountText(
         for viewState: HistoryViewState,
         locale: Locale = .current,
-        bundle: Bundle = .main
+        bundle: Bundle = AppLocalization.bundle
     ) -> String {
-        HistoryCountCopy.results(
+        if viewState.isLoadingFirstPage {
+            return HistorySearchCopy.text("Updating results…", bundle: bundle)
+        }
+        return HistoryCountCopy.results(
             count: viewState.displayedCount,
             hasNextPage: viewState.displayedCountIsLowerBound,
             locale: locale,
@@ -187,12 +346,23 @@ struct SearchHeaderView: View {
                 Text(PanelActionsCopy.text("Regular Expression", bundle: copyBundle)).tag(SearchMode.regexp)
             }
             .pickerStyle(.inline)
+            Divider()
+            Button(HistorySearchCopy.text("Insert condition / show suggestions", bundle: copyBundle)) {
+                configureCompletion()
+                completion.requestFromMenu()
+                searchFieldFocused.wrappedValue = true
+            }
+            .accessibilityIdentifier("clipy.search.completion.request")
+            Button(HistorySearchCopy.text("Expression guide…", bundle: copyBundle)) {
+                openOptions(expressionGuide: true)
+            }
         } label: {
             Group {
                 switch viewState.searchMode {
                 case .exact: Image(systemName: "equal")
                 case .fuzzy: Image(systemName: "text.magnifyingglass")
                 case .regexp: Text(".*").font(.system(.body, design: .monospaced).weight(.semibold))
+                case .expression: Image(systemName: "text.magnifyingglass")
                 }
             }
             .frame(width: 24, height: 24)
@@ -212,6 +382,7 @@ struct SearchHeaderView: View {
         case .exact: return PanelActionsCopy.text("Exact", bundle: copyBundle)
         case .fuzzy: return PanelActionsCopy.text("Fuzzy", bundle: copyBundle)
         case .regexp: return PanelActionsCopy.text("Regular Expression", bundle: copyBundle)
+        case .expression: return PanelActionsCopy.text("Fuzzy", bundle: copyBundle)
         }
     }
 
@@ -232,6 +403,14 @@ struct SearchHeaderView: View {
             .pickerStyle(.inline)
             Divider()
             Toggle(PanelActionsCopy.text("Pinned Only", bundle: copyBundle), isOn: pinnedOnlyBinding)
+            Divider()
+            Button(HistorySearchCopy.text("Date and application…", bundle: copyBundle)) { openOptions() }
+            if searchHistoryStore != nil {
+                Button(SearchLibraryCopy.text("Saved searches and history…", bundle: copyBundle)) {
+                    searchFieldFocused.wrappedValue = false
+                    showsSearchLibrary = true
+                }
+            }
         } label: {
             Image(systemName: "line.3.horizontal.decrease")
                 .font(.system(size: 13, weight: .medium))
@@ -260,7 +439,7 @@ struct SearchHeaderView: View {
 
     private var searchModeBinding: Binding<SearchMode> {
         Binding<SearchMode>(
-            get: { viewState.searchMode },
+            get: { viewState.searchMode == .expression ? .fuzzy : viewState.searchMode },
             set: { viewState.searchMode = $0 }
         )
     }

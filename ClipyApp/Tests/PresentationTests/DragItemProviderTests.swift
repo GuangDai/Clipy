@@ -7,7 +7,7 @@ import Testing
 /// Async UI ordering only; storage bytes/lineage use the real History suite.
 @MainActor
 struct DragItemProviderTests {
-    @Test func dragReadsOneCurrentPayloadAndRetainsItAfterPanelCloses() async throws {
+    @Test func aNewerPayloadCannotStartADragFromTheDisplayedOlderReference() async throws {
         let original = Self.reference(version: 1)
         let current = Self.reference(version: 2)
         let read = PausedDragRead()
@@ -21,12 +21,8 @@ struct DragItemProviderTests {
         let loading = Task { try await state.dragPayload(for: original) }
         try #require(await pollUntil { await read.isWaiting })
         await read.finish(.success(Self.payload(current)))
-        let payload = try #require(try await loading.value)
+        #expect(try await loading.value == nil)
         state.deactivate()
-        let writers = try HistoryListDraggingView.pasteboardItems(for: payload)
-        #expect(writers.count == 2)
-        #expect(writers[0].data(forType: .string) == Data("current first".utf8))
-        #expect(writers[1].data(forType: .string) == Data("current second".utf8))
         #expect(await read.requestCount == 1)
         #expect(state.failure == nil)
         await history.finishObservation()

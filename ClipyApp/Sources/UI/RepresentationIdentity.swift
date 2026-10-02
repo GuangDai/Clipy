@@ -11,6 +11,21 @@ struct RepresentationIdentity: Hashable, Sendable {
         self.pasteboardItemIndex = pasteboardItemIndex
     }
 
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.pasteboardItemIndex == rhs.pasteboardItemIndex
+            && lhs.typeIdentifier.utf8.elementsEqual(rhs.typeIdentifier.utf8)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(pasteboardItemIndex)
+        // String's default equality normalizes Unicode composition. Formats
+        // are exact identifiers; hash their original bytes without a Data copy.
+        var spelling = typeIdentifier
+        spelling.withUTF8 { bytes in
+            hasher.combine(bytes: UnsafeRawBufferPointer(bytes))
+        }
+    }
+
     var accessibilityLabel: String {
         pasteboardItemIndex == 0 ? typeIdentifier : "\(pasteboardItemIndex + 1) · \(typeIdentifier)"
     }

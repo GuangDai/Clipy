@@ -1,7 +1,7 @@
 /// GlobalHotKey.swift — the global ⌘⇧C summon hotkey: a minimal Carbon
 /// `RegisterEventHotKey` wrapper (the same mechanism Maccy uses through the
 /// KeyboardShortcuts package — replicated WITHOUT adding a dependency, per
-/// docs/roadmap/07-external-deps.md's no-new-dependencies rule).
+/// docs/architecture.md's no-new-dependencies rule).
 ///
 /// Carbon hotkeys are the one global-shortcut API that needs no
 /// accessibility grant (`NSEvent.addGlobalMonitorForEvents` cannot deliver
@@ -10,16 +10,15 @@
 /// MainActor's executor is the main thread, but Apple publishes no
 /// symbol-level guarantee that Carbon invokes an event-dispatcher-target
 /// handler on that thread (audit S-6,
-/// docs/reviews/2026-08-20-clipy-maccy-audit/01-standards.md), so the C
+/// docs/testing.md), so the C
 /// callback below checks `Thread.isMainThread` at runtime and block-hops
 /// through the main queue when the expectation ever fails — per
-/// docs/00-overview.md §5 the required outcome (MainActor-isolated firing)
+/// docs/architecture.md the required outcome (MainActor-isolated firing)
 /// is enforced, not assumed.
 ///
-/// Registration is process-lifetime (Maccy's `Popup.swift` design note:
-/// repeatedly enabling/disabling a Carbon hotkey leaks handler slots), and
-/// every press toggles the panel — the open/close decision lives with the
-/// caller's action.
+/// Registration is owned by the shortcut controller. Rebinding or recording
+/// removes both Carbon references; destroying a registration does the same.
+/// Every press toggles the panel through the caller's action.
 import Carbon.HIToolbox
 import Foundation
 
@@ -54,6 +53,12 @@ final class GlobalHotKey {
         self.modifiers = modifiers
         self.hotKeyID = EventHotKeyID(signature: Self.signature, id: id)
         self.action = action
+    }
+
+    /// Carbon retains only an unowned user-data pointer. Remove its handler
+    /// on the same actor before the referenced Swift object is destroyed.
+    isolated deinit {
+        unregister()
     }
 
     /// The 'CLPY' four-char signature namespacing Clipy's hotkey IDs.

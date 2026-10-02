@@ -101,39 +101,56 @@ public enum PreviewOutcome: Equatable, Sendable {
     case failed(PreviewFailure)
 }
 
+internal enum PreviewResourceLimits {
+    static let richTextInputBytes = 1_048_576
+    static let referenceInputBytes = 16 * 1_024
+}
+
 #if DEBUG
 /// Content-free deterministic instrumentation. Task-local inheritance lets
 /// loader tests park a render after accounting without adding a Release hook
 /// or mutable singleton (PREVIEW-A3/A4/A5).
 package enum ContentPreviewDebugInstrumentation {
     @TaskLocal package static var renderDidStart: (@Sendable () async -> Void)? = nil
+    @TaskLocal package static var textRenderDidStart: (@Sendable () -> Void)? = nil
 }
 
 public struct ContentPreviewDebugSnapshot: Equatable, Sendable {
     package let activeJobs: Int
     package let retainedSourceBytes: Int
     package let queuedRasterJobs: Int
+    package let queuedTextJobs: Int
 }
 #endif
 
 /// One concrete renderer; no protocol/registry/plugin/cache. The actor keeps
-/// native decode off the MainActor and owns one native slot plus in-flight
-/// accounting; it owns no completed artifact cache.
+/// decoding off the MainActor and owns one raster slot and one text slot plus
+/// in-flight accounting; it owns no completed artifact cache.
 public actor ContentPreview {
-    /// Preserve the old single-decoder resource ceiling while allowing text
-    /// work to overtake a slow native rasterization. Waiters carry no content;
-    /// their caller tasks retain their own immutable snapshots.
-    private var rasterizationActive = false
-    private struct RasterizationWaiter {
+    /// One decoded text document can coexist with one native rasterization,
+    /// preserving the previous resource ceiling. Waiting never starts decoding
+    /// or segmentation. Waiters carry no content; their callers keep snapshots.
+    private enum RenderSlot: Int, Sendable { case raster, text }
+    private struct RenderWaiter {
         let id: UUID
         let deadline: ContinuousClock.Instant
         let continuation: CheckedContinuation<PreviewFailure?, Never>
     }
-    private var rasterizationWaiters: [RasterizationWaiter] = []
+    private struct RenderSlotState {
+        var active = false
+        var waiters: [RenderWaiter] = []
+    }
+    private var renderSlots = [RenderSlotState(), RenderSlotState()]
+
+    /// Waiting requests retain their supplied Data just as active requests
+    /// do. Share the two existing 64 MiB native-source budgets across active
+    /// and queued work instead of allocating one budget for every caller.
+    private static let maximumRetainedSourceBytes = 2 * ResourceProfile.historyPane.maximumInputBytes
+    private static let maximumQueuedRendersPerSlot = 32
+    private var retainedSourceBytes = 0
 
     #if DEBUG
     private var debugActiveJobs = 0
-    private var debugRetainedSourceBytes = 0
     #endif
 
     public init() {}
@@ -144,7 +161,8 @@ public actor ContentPreview {
     public static func prepareHistoryPane(
         _ representations: [PreviewRepresentationMetadata]
     ) -> [PreviewSource] {
-        func source(_ index: Int, _ kind: PreviewSource.Kind, maximum: Int = 64 * 1_048_576) -> PreviewSource {
+        func source(_ index: Int, _ kind: PreviewSource.Kind,
+                    maximum: Int = ResourceProfile.historyPane.maximumInputBytes) -> PreviewSource {
             PreviewSource(
                 representationIndex: index, typeIdentifier: representations[index].typeIdentifier,
                 byteCount: representations[index].byteCount, maximumInputBytes: maximum, kind: kind
@@ -160,16 +178,16 @@ public actor ContentPreview {
             }
         }
         if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.rtf.rawValue }) {
-            candidates.append(source(index, .rtf, maximum: 1_048_576))
+            candidates.append(source(index, .rtf, maximum: PreviewResourceLimits.richTextInputBytes))
         } else if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.flatRTFD.rawValue }) {
-            candidates.append(source(index, .rtfd, maximum: 1_048_576))
+            candidates.append(source(index, .rtfd, maximum: PreviewResourceLimits.richTextInputBytes))
         } else if let index = representations.firstIndex(where: { $0.typeIdentifier == ClipboardFormatIdentifier.html.rawValue }) {
-            candidates.append(source(index, .html, maximum: 1_048_576))
+            candidates.append(source(index, .html, maximum: PreviewResourceLimits.richTextInputBytes))
         } else if let index = representations.firstIndex(where: {
             $0.typeIdentifier == ClipboardFormatIdentifier.url.rawValue
                 || $0.typeIdentifier == ClipboardFormatIdentifier.fileURL.rawValue
         }) {
-            candidates.append(source(index, .reference, maximum: 16 * 1_024))
+            candidates.append(source(index, .reference, maximum: PreviewResourceLimits.referenceInputBytes))
         }
         return candidates
     }
@@ -196,16 +214,9 @@ public actor ContentPreview {
         })
         var outcome = PreviewOutcome.unavailable(.unsupported)
         for source in sources {
-            #if DEBUG
-            // The selected renderer accounts for its own bytes. Include the
-            // siblings still retained by this wrapper, exactly once per await.
-            let siblingBytes = totalInputBytes - source.byteCount
-            debugRetainedSourceBytes += siblingBytes
-            defer { debugRetainedSourceBytes -= siblingBytes }
-            #endif
-            outcome = await renderSelectedHistoryPane(
+            outcome = await renderSelectedSource(
                 source, representation: representations[source.representationIndex],
-                textConfiguration: textConfiguration
+                textConfiguration: textConfiguration, retainedInputBytes: totalInputBytes
             )
             if !source.permitsFallback(after: outcome) { return outcome }
         }
@@ -216,17 +227,23 @@ public actor ContentPreview {
         _ source: PreviewSource, representation: PreviewRepresentation,
         textConfiguration: PreviewTextConfiguration = .init()
     ) async -> PreviewOutcome {
+        await renderSelectedSource(source, representation: representation,
+                                   textConfiguration: textConfiguration,
+                                   retainedInputBytes: representation.bytes.count)
+    }
+
+    private func renderSelectedSource(
+        _ source: PreviewSource, representation: PreviewRepresentation,
+        textConfiguration: PreviewTextConfiguration, retainedInputBytes: Int
+    ) async -> PreviewOutcome {
         if let failure = source.preflightFailure { return failure }
         guard representation.typeIdentifier.utf8.elementsEqual(source.typeIdentifier.utf8),
               representation.bytes.count == source.byteCount else { return .failed(.malformedRepresentation) }
         let outcome = await renderRepresentation(
             representation, kind: source.kind, maximumInputBytes: source.maximumInputBytes,
-            profile: .historyPane, textConfiguration: textConfiguration
+            profile: .historyPane, textConfiguration: textConfiguration,
+            retainedInputBytes: retainedInputBytes
         )
-        guard !Task.isCancelled else { return .failed(.cancelled) }
-        if case .content(.text(let text)) = outcome {
-            PreviewTextTypography.prepare(text)
-        }
         return Task.isCancelled ? .failed(.cancelled) : outcome
     }
 
@@ -242,28 +259,55 @@ public actor ContentPreview {
     private func renderRepresentation(
         _ representation: PreviewRepresentation, kind: PreviewSource.Kind,
         maximumInputBytes: Int, profile: ResourceProfile,
-        textConfiguration: PreviewTextConfiguration = .init()
+        textConfiguration: PreviewTextConfiguration = .init(),
+        retainedInputBytes: Int? = nil
     ) async -> PreviewOutcome {
         guard representation.bytes.count <= maximumInputBytes else { return .failed(.resourceLimit) }
+        guard !Task.isCancelled else { return .failed(.cancelled) }
+        let inputBytes = retainedInputBytes ?? representation.bytes.count
+        guard inputBytes <= Self.maximumRetainedSourceBytes - retainedSourceBytes else {
+            // Other requests own this capacity. The same source can succeed
+            // when they finish, so expose the existing retryable outcome.
+            return .failed(.renderer)
+        }
+        retainedSourceBytes += inputBytes
+        defer { retainedSourceBytes -= inputBytes }
         #if DEBUG
         debugActiveJobs += 1
-        debugRetainedSourceBytes += representation.bytes.count
         defer {
             debugActiveJobs -= 1
-            debugRetainedSourceBytes -= representation.bytes.count
         }
         #endif
         guard !Task.isCancelled else { return .failed(.cancelled) }
+        let slot: RenderSlot
+        if case .image = kind { slot = .raster } else { slot = .text }
+        if let failure = await acquireRenderSlot(slot) {
+            return .failed(Task.isCancelled ? .cancelled : failure)
+        }
+        defer { releaseRenderSlot(slot) }
+        return await renderOffActor(representation, kind: kind, maximumInputBytes: maximumInputBytes,
+                                    profile: profile, textConfiguration: textConfiguration)
+    }
+
+    private static func render(
+        _ representation: PreviewRepresentation, kind: PreviewSource.Kind,
+        maximumInputBytes: Int, profile: ResourceProfile,
+        textConfiguration: PreviewTextConfiguration
+    ) -> PreviewOutcome {
         switch kind {
         case .image:
-            return await renderRasterOffActor(representation, profile: profile)
+            return renderRaster(representation, profile: profile)
         case .text(let codec):
             guard let decoded = codec.decode(representation.bytes), !decoded.isEmpty else {
                 return .failed(.malformedRepresentation)
             }
-            return .content(.text(PreviewText(
-                text: decoded, wasTruncated: false, configuration: textConfiguration
-            )))
+            do {
+                return .content(.text(try PreviewText(
+                    text: decoded, wasTruncated: false, configuration: textConfiguration,
+                    checkCancellation: { try Task.checkCancellation() }
+                )))
+            } catch is CancellationError { return .failed(.cancelled) }
+            catch { return .failed(.malformedRepresentation) }
         case .rtf:
             return PreviewRTFRenderer.render(representation.bytes, textConfiguration: textConfiguration)
         case .rtfd:
@@ -280,36 +324,42 @@ public actor ContentPreview {
 
     #if DEBUG
     public func debugSnapshot() -> ContentPreviewDebugSnapshot {
-        ContentPreviewDebugSnapshot(activeJobs: debugActiveJobs, retainedSourceBytes: debugRetainedSourceBytes,
-                                    queuedRasterJobs: rasterizationWaiters.count)
+        ContentPreviewDebugSnapshot(activeJobs: debugActiveJobs, retainedSourceBytes: retainedSourceBytes,
+                                    queuedRasterJobs: renderSlots[RenderSlot.raster.rawValue].waiters.count,
+                                    queuedTextJobs: renderSlots[RenderSlot.text.rawValue].waiters.count)
     }
     #endif
 
-    /// One production suspension exists around native raster work in every
-    /// build: the actor remains available to resolve a newer text preview,
-    /// while a single native slot preserves bounded decode concurrency.
-    private func renderRasterOffActor(
-        _ representation: PreviewRepresentation,
-        profile: ResourceProfile
+    /// Parsing, segmentation, and native font fallback run away from the
+    /// accounting actor. A slow rich-text document cannot delay acquisition,
+    /// cancellation, or timeout of another preview's native raster slot.
+    private func renderOffActor(
+        _ representation: PreviewRepresentation, kind: PreviewSource.Kind,
+        maximumInputBytes: Int, profile: ResourceProfile,
+        textConfiguration: PreviewTextConfiguration
     ) async -> PreviewOutcome {
-        if let failure = await acquireRasterizationSlot() {
-            return .failed(Task.isCancelled ? .cancelled : failure)
-        }
-        defer { releaseRasterizationSlot() }
         guard !Task.isCancelled else { return .failed(.cancelled) }
 
         #if DEBUG
         let renderDidStart = ContentPreviewDebugInstrumentation.renderDidStart
+        let textRenderDidStart = ContentPreviewDebugInstrumentation.textRenderDidStart
         #endif
         let priority = Task.currentPriority
         let task = Task.detached(priority: priority) {
             #if DEBUG
-            if let renderDidStart {
-                await renderDidStart()
+            if case .image = kind {
+                if let renderDidStart { await renderDidStart() }
+            } else {
+                textRenderDidStart?()
             }
             #endif
             guard !Task.isCancelled else { return PreviewOutcome.failed(.cancelled) }
-            let outcome = Self.renderRaster(representation, profile: profile)
+            let outcome = Self.render(representation, kind: kind, maximumInputBytes: maximumInputBytes,
+                                      profile: profile, textConfiguration: textConfiguration)
+            guard !Task.isCancelled else { return .failed(.cancelled) }
+            if case .content(.text(let text)) = outcome {
+                PreviewTextTypography.prepare(text)
+            }
             return Task.isCancelled ? .failed(.cancelled) : outcome
         }
         return await withTaskCancellationHandler(
@@ -318,21 +368,27 @@ public actor ContentPreview {
         )
     }
 
-    private func acquireRasterizationSlot() async -> PreviewFailure? {
+    private func acquireRenderSlot(_ slot: RenderSlot) async -> PreviewFailure? {
         guard !Task.isCancelled else { return .cancelled }
-        guard rasterizationActive else {
-            rasterizationActive = true
+        guard renderSlots[slot.rawValue].active else {
+            renderSlots[slot.rawValue].active = true
             return nil
         }
+        // Byte admission alone cannot bound thousands of tiny sources and
+        // their continuations/timers. Refuse excess waiters before creating
+        // either object; current exact demand may retry after a slot drains.
+        guard renderSlots[slot.rawValue].waiters.count < Self.maximumQueuedRendersPerSlot else {
+            return .renderer
+        }
         let id = UUID()
-        // A native image decoder can remain busy after cancellation. Keep
-        // the native concurrency ceiling, but let subsequent requests reach
-        // the existing retryable renderer failure (01 §6; review PRV-1).
+        // ImageIO, FileWrapper deserialization, strict text decoding, and
+        // native font fallback can remain busy after cancellation. Keep each
+        // resource ceiling while allowing a queued request to fail and retry.
         let deadline = ContinuousClock.now.advanced(by: .seconds(2))
         let timeout = Task {
             do { try await Task.sleep(until: deadline, clock: .continuous) }
             catch { return }
-            finishRasterizationWaiter(id, failure: .renderer)
+            finishRenderWaiter(id, slot: slot, failure: .renderer)
         }
         defer { timeout.cancel() }
         return await withTaskCancellationHandler {
@@ -343,27 +399,27 @@ public actor ContentPreview {
                     continuation.resume(returning: .cancelled)
                     return
                 }
-                rasterizationWaiters.append(RasterizationWaiter(
+                renderSlots[slot.rawValue].waiters.append(RenderWaiter(
                     id: id, deadline: deadline, continuation: continuation
                 ))
             }
         } onCancel: {
-            Task { await self.finishRasterizationWaiter(id, failure: .cancelled) }
+            Task { await self.finishRenderWaiter(id, slot: slot, failure: .cancelled) }
         }
     }
 
-    private func finishRasterizationWaiter(_ id: UUID, failure: PreviewFailure) {
-        guard let index = rasterizationWaiters.firstIndex(where: { $0.id == id }) else {
+    private func finishRenderWaiter(_ id: UUID, slot: RenderSlot, failure: PreviewFailure) {
+        guard let index = renderSlots[slot.rawValue].waiters.firstIndex(where: { $0.id == id }) else {
             // A waiter already handed the slot owns it and releases it via
-            // renderRasterOffActor's defer, even if it was just cancelled.
+            // renderRepresentation's defer, even if it was just cancelled.
             return
         }
-        rasterizationWaiters.remove(at: index).continuation.resume(returning: failure)
+        renderSlots[slot.rawValue].waiters.remove(at: index).continuation.resume(returning: failure)
     }
 
-    private func releaseRasterizationSlot() {
-        while !rasterizationWaiters.isEmpty {
-            let waiter = rasterizationWaiters.removeFirst()
+    private func releaseRenderSlot(_ slot: RenderSlot) {
+        while !renderSlots[slot.rawValue].waiters.isEmpty {
+            let waiter = renderSlots[slot.rawValue].waiters.removeFirst()
             // Recheck at handoff: actor scheduling must not let a delayed
             // timeout admit native work after its acquisition deadline.
             guard ContinuousClock.now < waiter.deadline else {
@@ -373,7 +429,7 @@ public actor ContentPreview {
             waiter.continuation.resume(returning: nil)
             return
         }
-        rasterizationActive = false
+        renderSlots[slot.rawValue].active = false
     }
 
     private static func renderRaster(
@@ -523,14 +579,7 @@ fileprivate enum PreviewTextCodec: Sendable {
                 hasBOM = false
             }
             let body = bytes.dropFirst(hasBOM ? 2 : 0)
-            var units: [UInt16] = []
-            units.reserveCapacity(body.count / 2)
-            var iterator = body.makeIterator()
-            while let first = iterator.next(), let second = iterator.next() {
-                units.append(littleEndian
-                    ? UInt16(first) | (UInt16(second) << 8)
-                    : (UInt16(first) << 8) | UInt16(second))
-            }
+            let units = PreviewUTF16CodeUnits(bytes: body, littleEndian: littleEndian)
             // Validate the complete source before applying any display cap.
             // Explicit code units reject unpaired surrogates without repair;
             // a second FEFF/FFFE is content, never another encoding marker

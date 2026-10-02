@@ -27,7 +27,7 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         // Arm production dwell without inheriting another journey's preference.
         app.launchArguments += [
-            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES",
             "-clipy.preview.isTextLengthLimited", "YES",
             "-clipy.preview.maximumTextCharacters", "50000",

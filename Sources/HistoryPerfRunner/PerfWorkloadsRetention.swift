@@ -1,5 +1,5 @@
 /// §9 V2-02 R-active retention workloads: the Record 3 measurement halves
-/// (`docs/v2/V2-02-retention.md` Record 3) that the projection-maintenance
+/// (`docs/storage.md` Record 3) that the projection-maintenance
 /// push lanes (WL1a capture scaling, WL4 mass eviction) do not cover —
 /// capture composition with R1+R2 active (`RET-PERF-1`/`RET-PERF-3`), the
 /// revise-path expansion with R2+R3 active (`RET-PERF-1`'s revise half,
@@ -63,11 +63,10 @@ private func activeCaptureLanePolicies(
 }
 
 /// The R-active revise-lane policy (V2-02 §4.3/§7: revise fires R2+R3 only).
-/// R2's budget is twice the steady-state footprint (per item: 64 Canonical +
-/// 2 × 32 revision bytes), so the lane always runs its O(retained) scalar
-/// sweep (`RET-PERF-1` revise half: SQL retained-byte metadata fetch + sweep + the
-/// revised item's row restamp) yet never retires anything — the measured
-/// revise cost is the expansion pass plus the R3 prune, not eviction noise.
+/// The storage budget is twice the seeded footprint (per item: 64 Canonical +
+/// 2 × 32 revision bytes), keeping these fixtures below that byte limit.
+/// This setup does not establish which inventory/planning work a production
+/// commit performs; the workload records only its public elapsed time.
 /// R3 maxRevisionsPerItem = 2 (§8.3 admits 1 … 100): a pre-warmed item
 /// holds exactly 2 revisions, so every measured append makes the post-append
 /// count 3 > 2 and prunes exactly ONE oldest inactive revision (§5; D3 keeps
@@ -92,10 +91,9 @@ private func activeReviseLanePolicies(
 /// `RET-PERF-2`). All three lanes active with nothing to do: R1's cutoff
 /// spares the 60-s-fresh seeds, R2's budget is twice the seeded footprint,
 /// and the R3 count threshold exceeds every stored count (the seeds carry
-/// ZERO revisions), so PHASE A's scalar exceedance pass detects nothing and
-/// decodes no lineage — the measured construct is exactly the O(retained)
-/// scalar pass (inventory + projection columns + planner) plus the one
-/// config-row commit. `revisionCountLimit` alternates 100/99 between
+/// zero revisions). The public operation timer does not attribute cost to
+/// inventory reads, planning, decoding or the configuration commit.
+/// `revisionCountLimit` alternates 100/99 between
 /// iterations (both §8.3-in-range) so the swept VALUE always differs from the
 /// persisted one and the sweep commits rather than collapsing to the
 /// same-value `.unchanged` no-op.
@@ -120,12 +118,8 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
     var fixtures: [WorkloadFixture] = []
 
     // --- Capture with R1+R2 active (RET-PERF-1 capture half / RET-PERF-3) ---
-    // §9 bullets 1-2: the capture commit's composition cost with the
-    // expansion pass live. The planning path reads SQL retained-byte metadata scalar
-    // columns and decodes ZERO retained content payloads (V2-02 §3.3b/§4.2;
-    // RET-PERF-3's adopted-projection posture), so the measured delta over
-    // WL1a is the projection-maintenance overhead: the inserted item's row
-    // create + the O(retained) scalar sweep + one R2 retirement per capture.
+    // Time public capture with age/storage retention configured. A difference
+    // from the separate capture workload cannot isolate one internal phase.
     do {
         let captureKey = "retentionExpansionCapture"
         let captureEnvelope = complexityEnvelope(for: captureKey)
@@ -191,7 +185,7 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
             ratio: captureRatio,
             bound: captureEnvelope.bound,
             pass: capturePassed,
-            note: "Capture composition with R1+R2 active (V2-02 §4.2/§7; Record 3 RET-PERF-1/RET-PERF-3): the planning path reads SQL retained-byte metadata scalar columns and decodes zero retained content payloads, so the delta over WL1a is projection maintenance — the inserted item's row create, the O(retained) scalar sweep plus its eviction-order sort, and exactly one R2 retirement per capture (budget pinned at the seeded footprint; R1 maxAge 3,600 s §8.3 never fires on the 60-s-fresh seeds). §9 bullets 1-2. \(captureEnvelope.scaleSpan)× retained and \(captureEnvelope.bound)× bound leave a \(captureEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof (the planner's eviction-order sort is O(N log N))."
+            note: "Capture distinct short text with age/storage retention enabled: maxAge is 3,600 seconds, seeds begin 60 seconds old, and the storage budget equals the seeded payload footprint. One warmup and five inserts are timed per retained-row scale. The \(captureEnvelope.bound)× bound checks the observed median ratio over a \(captureEnvelope.scaleSpan)× span. This timer includes preparation and commit; it records no internal sweep, sort, decode or retirement counts and does not attribute a difference from the separate capture workload to one internal phase."
         ))
         printResult(
             captureKey,
@@ -209,13 +203,9 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
     }
 
     // --- Revise with R2+R3 active (RET-PERF-1 revise half, §4.3) ---
-    // §9 bullets 1-2: the revise-path expansion reuses the same O(retained)
-    // scalar sweep (V2-02 §4.3: SQL retained-byte metadata fetch + sweep + the revised
-    // item's row restamp) and is measured in RET-PERF-1 alongside capture.
-    // R2 active (generous budget, retires nothing) keeps the sweep on every
-    // commit; R3 count 2 prunes exactly one oldest inactive revision per
-    // measured append — steady-state churn over DISTINCT items round-robin,
-    // each item's lineage small (2 revisions pre-warm, 2 after each prune).
+    // Time a third revision append over distinct round-robin items after
+    // seeding two revisions each, with a count limit of two and a generous
+    // storage budget. Internal planning/decode/prune work is not instrumented.
     do {
         let reviseKey = "retentionExpansionRevise"
         let reviseEnvelope = complexityEnvelope(for: reviseKey)
@@ -283,7 +273,7 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
             ratio: reviseRatio,
             bound: reviseEnvelope.bound,
             pass: revisePassed,
-            note: "Revise-path expansion with R2+R3 active (V2-02 §4.3/§7; Record 3 RET-PERF-1 revise half): the revision append runs the same O(retained) scalar sweep plus eviction-order sort as capture — SQL retained-byte metadata fetch, planner pass, and the revised item's row restamp, zero blob decodes for the non-primary items (RET-PLATFORM-2) — and R3 maxRevisionsPerItem 2 (§8.3) prunes exactly one oldest inactive revision per measured append over distinct round-robin items. R2's twice-footprint budget retires nothing, so eviction noise stays out of the measurement. §9 bullets 1-2. \(reviseEnvelope.scaleSpan)× retained and \(reviseEnvelope.bound)× bound leave a \(reviseEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof (the planner's eviction-order sort is O(N log N))."
+            note: "Append a third revision to a different item on each invocation after seeding two revisions per item. The per-item revision count limit is two and the storage budget is twice the seeded footprint. One warmup and five appends are timed per retained-row scale. The \(reviseEnvelope.bound)× bound checks the observed median ratio over a \(reviseEnvelope.scaleSpan)× span. No internal sweep, sort, decode or prune counts are recorded, and the timings do not establish asymptotic complexity."
         ))
         printResult(
             reviseKey,
@@ -301,13 +291,9 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
     }
 
     // --- .setRetentionPolicies scalar sweep (RET-PERF-2, §4.4) ---
-    // §9 bullet 5: the full-sweep scalar pass is O(retained). Exceedance is
-    // detected from the SQL retained-byte metadata projection (V2-02 §3.3b), so the
-    // sweep decodes a lineage ONLY for an exceeding item — none here — while
-    // the R1/R2 scalar sweep over the inventory and the PHASE-A per-item
-    // threshold walk still touch every retained row. A fresh store per
-    // iteration (the WL4 mass-eviction discipline) keeps each sample's
-    // corpus identical; the alternating in-range value commits every time.
+    // A fresh store per invocation keeps the corpus identical. Time the
+    // public policy change without assuming which rows an optimized storage
+    // path needs to inspect or attributing cost to a specific internal phase.
     do {
         let sweepKey = "retentionPolicySweep"
         let sweepEnvelope = complexityEnvelope(for: sweepKey)
@@ -350,7 +336,7 @@ func workloadActiveRetentionExpansion() async -> [WorkloadFixture] {
             ratio: sweepRatio,
             bound: sweepEnvelope.bound,
             pass: sweepPassed,
-            note: "The .setRetentionPolicies full sweep's scalar pass walks every retained row and sorts for eviction order — O(N log N) in retained count (§9 bullet 5; V2-02 §4.4, Record 3 RET-PERF-2): the R1/R2 inventory sweep and the R3 per-item threshold walk touch every retained row while PHASE A decodes a lineage only for an EXCEEDING item — the zero-revision seeds exceed nothing (threshold 99/100, §8.3), so zero blob decodes and zero retirements/prunes; the alternating satisfied-but-different value commits the config row every iteration instead of the same-value .unchanged no-op. Five timed samples on a fresh store per iteration; \(sweepEnvelope.scaleSpan)× retained and \(sweepEnvelope.bound)× bound leave a \(sweepEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof."
+            note: "Set age/storage/revision policies on a fresh short-text store without revisions for each invocation. The chosen budgets exceed the seeded footprint, and the revision count limit alternates between 99 and 100. One warmup and five policy changes are timed per retained-row scale. The \(sweepEnvelope.bound)× bound checks the observed median ratio over a \(sweepEnvelope.scaleSpan)× span. No internal sweep, sort, decode or pruning work is counted; these timings do not establish asymptotic complexity."
         ))
         printResult(
             sweepKey,

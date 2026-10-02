@@ -6,7 +6,7 @@ import Foundation
 /// vocabulary at one boundary. Public failures contain no raw SQL, model
 /// object, file path, or stringly typed reason.
 ///
-/// docs/03b-instruction-set.md §10
+/// docs/architecture.md
 public enum HistoryFailure: Error, Sendable, Equatable {
     /// The referenced item no longer exists in retained history.
     case notFound(HistoryItemID)
@@ -37,7 +37,7 @@ public enum HistoryFailure: Error, Sendable, Equatable {
 
 /// Caller-input validation rejections.
 ///
-/// docs/03b-instruction-set.md §10
+/// docs/architecture.md
 public enum InvalidInputReason: Sendable, Equatable {
     /// A capture carried no representations.
     case emptyCapture
@@ -62,6 +62,8 @@ public enum InvalidInputReason: Sendable, Equatable {
     case invalidRegularExpression
     /// A browse/observation limit or source-page offset is outside its allowed range.
     case invalidPageLimit
+    /// A browse request supplied both a continuation cursor and an item to locate.
+    case conflictingPageAnchors
     /// A thumbnail pixel size is outside the allowed range.
     case invalidPixelSize
     /// A retention policy configuration is not valid.
@@ -72,7 +74,7 @@ public enum InvalidInputReason: Sendable, Equatable {
 
 /// Pin placement rejections.
 ///
-/// docs/03b-instruction-set.md §10
+/// docs/architecture.md
 public enum PinnedPlacementFailure: Sendable, Equatable {
     /// The item to be pinned no longer exists.
     case targetMissing
@@ -84,7 +86,7 @@ public enum PinnedPlacementFailure: Sendable, Equatable {
 
 /// The configured capacity dimension that rejected an action.
 ///
-/// docs/03b-instruction-set.md §10
+/// docs/architecture.md
 public enum CapacityKind: Sendable, Equatable {
     /// The retained item count limit.
     case retainedItems
@@ -107,7 +109,7 @@ public enum CapacityKind: Sendable, Equatable {
 
 /// Why an action is temporarily unavailable.
 ///
-/// docs/03b-instruction-set.md §10
+/// docs/architecture.md
 public enum UnavailableReason: Sendable, Equatable {
     /// A fact proof required for the action is being rebuilt.
     case factProof
@@ -116,17 +118,20 @@ public enum UnavailableReason: Sendable, Equatable {
     /// A durable write failed because the store volume has no free space,
     /// or storage's stamped-plan capacity admission refused the action
     /// before any write because its external payload provably cannot fit
-    /// (docs/05-authority-kernel.md §16).
+    /// (docs/storage.md).
     case insufficientDiskSpace
     /// A regexp scan hit its fixed engine deadline or abandoned an incomplete
     /// match, or a search exceeded its SQLite snapshot lifetime (V2-09 §4).
     /// No partial or mixed-snapshot result is published; the query is retryable.
     case searchEngineDeadline
+    /// Thumbnail source/decode work or its exact-key consumers reached the
+    /// bounded concurrent admission limit. Retry after thumbnail capacity changes.
+    case thumbnailResources
 }
 
 /// Persistence-layer failures, mapped at the storage boundary.
 ///
-/// docs/03b-instruction-set.md §10
+/// docs/architecture.md
 public enum PersistenceFailure: Sendable, Equatable {
     /// The store could not be opened.
     case openStore

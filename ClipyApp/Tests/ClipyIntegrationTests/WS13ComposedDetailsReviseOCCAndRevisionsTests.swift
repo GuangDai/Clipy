@@ -1,6 +1,6 @@
 /// WS13Composed — Details + revision OCC through the composed detail/edit
-/// surfaces (docs/06-cross-cutting.md §8 WS13/WS6 clause shapes;
-/// docs/03b-instruction-set.md §9; 02 §11): the detail read is
+/// surfaces (docs/testing.md WS13/WS6 clause shapes;
+/// docs/architecture.md; 02 §11): the detail read is
 /// reference-exact, the editor's stale-save path (`.staleContent` from
 /// `viewState.revise`) is surfaced as a typed failure, and the incoherent
 /// draft (hide every representation) is rejected as

@@ -1,5 +1,5 @@
 /// Direct cursor-codec proofs for the opaque, process-local pagination token
-/// (docs/04-coherence.md §6; docs/05-authority-kernel.md §16).
+/// (docs/storage.md; docs/storage.md).
 ///
 /// These tests use the package-only codec seam deliberately: callers cannot
 /// mint or inspect `HistoryPageCursor`, while HistoryStorage must prove every
@@ -70,6 +70,55 @@ private func mutateCursorObject(
     var object = try #require(root[key] as? [String: Any])
     mutation(&object)
     root[key] = object
+}
+
+@Test(arguments: [HistoryBrowseKind.recent, .search(text: "outer text", mode: .fuzzy)])
+func cursorConditionRoundTripBindsItsLiteralUnicodeAndPresence(kind: HistoryBrowseKind) throws {
+    let original = try HistorySearchExpression.parse("source-id:com.example.\u{e9}")
+    let changed = try HistorySearchExpression.parse("source-id:com.example.e\u{301}")
+    let request = HistoryBrowseRequest(kind: kind, limit: 3, conditionExpression: original)
+    let encoded = try encodedCursor(queryShape: StoredQueryShape(request: request))
+    let decoded = try PageCursorCodec.decode(encoded, processMarker: cursorProcessMarker)
+    #expect(decoded.queryShape.matches(request))
+    #expect(!decoded.queryShape.matches(HistoryBrowseRequest(kind: kind, limit: 3, conditionExpression: changed)))
+    #expect(!decoded.queryShape.matches(HistoryBrowseRequest(kind: kind, limit: 3)))
+    let unconditioned = try PageCursorCodec.decode(
+        encodedCursor(queryShape: StoredQueryShape(request: HistoryBrowseRequest(kind: kind, limit: 3))),
+        processMarker: cursorProcessMarker
+    )
+    #expect(!unconditioned.queryShape.matches(request))
+}
+
+@Test func cursorEnvelopeIncludesConditionAlongsideExistingMaximumTextAndSourceFilters() throws {
+    let limits = HistoryLimits.standard
+    // JSON escapes each control byte to six bytes. All four query fields
+    // remain within their existing independent UTF-8 admission budgets.
+    let term = String(repeating: "\0", count: limits.maximumSearchTermUTF8Bytes)
+    let condition = try HistorySearchExpression.parse(term)
+    let filter = HistoryFilter(
+        sourceApplication: String(repeating: "\0", count: limits.maximumSourceApplicationObservationUTF8Bytes),
+        sourceApplicationIDs: (0..<4).map {
+            String($0) + String(repeating: "\0", count: limits.maximumSourceApplicationObservationUTF8Bytes - 1)
+        }
+    )
+    let request = HistoryBrowseRequest(kind: .search(text: term, mode: .exact), limit: 3,
+                                       filter: filter, conditionExpression: condition)
+    let cursor = try encodedCursor(queryShape: StoredQueryShape(request: request))
+    let decoded = try PageCursorCodec.decode(cursor, processMarker: cursorProcessMarker)
+    #expect(decoded.queryShape.matches(request))
+}
+
+@Test(arguments: ["(", "source:", "type:unknown",
+                  String(repeating: "a", count: HistoryLimits.standard.maximumSearchTermUTF8Bytes + 1)])
+func cursorDecodeRejectsMalformedOrOverBudgetCondition(condition: String) throws {
+    let cursor = try cursorByMutatingJSON(encodedCursor()) { root in
+        try mutateCursorObject(named: "queryShape", in: &root) { query in
+            query["conditionExpression"] = condition
+        }
+    }
+    #expect(throws: PageCursorRejection.malformedCursor) {
+        try PageCursorCodec.decode(cursor, processMarker: cursorProcessMarker)
+    }
 }
 
 /// Every query/anchor family used by recent, exact, fuzzy, and regexp browse

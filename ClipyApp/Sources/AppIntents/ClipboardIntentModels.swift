@@ -86,7 +86,12 @@ struct ClipboardHistoryItemEntity: TransientAppEntity {
         let historyDetails = details.details
         id = historyDetails.item.id.description
         title = details.title
-        typeIdentifiers = Array(Set(historyDetails.effective.map(\.typeIdentifier))).sorted {
+        // Different clipboard items may preserve canonically equivalent
+        // identifier spellings. Swift String sets would drop one exact format.
+        var seenTypes: Set<Data> = []
+        typeIdentifiers = historyDetails.effective.map(\.typeIdentifier).filter {
+            seenTypes.insert(Data($0.utf8)).inserted
+        }.sorted {
             $0.unicodeScalars.lexicographicallyPrecedes($1.unicodeScalars)
         }
         lastCopiedAt = historyDetails.occurrence.lastCopiedAt

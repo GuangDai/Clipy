@@ -7,6 +7,14 @@ import Foundation
 import HistoryCore
 import PasteboardAdapter
 
+#if DEBUG
+/// Parks only the concrete post-read clipboard boundary in hosted tests.
+/// The granted History read and the pasteboard writer remain production code.
+enum ClipboardIntentDebugInstrumentation {
+    @TaskLocal static var beforePasteboardWrite: (@Sendable () async -> Void)?
+}
+#endif
+
 struct SearchHistoryIntent: AppIntent {
     static let title: LocalizedStringResource = "Search Clipboard History"
     static let description = IntentDescription(
@@ -61,6 +69,8 @@ struct SearchHistoryIntent: AppIntent {
             return .result(value: page.rows.map {
                 ClipboardHistoryItemEntity(row: $0)
             })
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ClipboardIntentFailure.map(error)
         }
@@ -101,6 +111,8 @@ struct GetItemDetailsIntent: AppIntent {
                 throw ClipboardIntentFailure.temporarilyUnavailable
             }
             return .result(value: ClipboardHistoryItemEntity(details: details))
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ClipboardIntentFailure.map(error)
         }
@@ -146,14 +158,22 @@ struct PasteItemIntent: AppIntent {
             guard case .pastePayload(let payload) = result else {
                 throw ClipboardIntentFailure.temporarilyUnavailable
             }
+            #if DEBUG
+            await ClipboardIntentDebugInstrumentation.beforePasteboardWrite?()
+            #endif
             let name = pasteboardName
             try await MainActor.run {
+                // Cancellation may arrive while this actor hop is queued.
+                // Check before staging or clearing the system pasteboard.
+                try Task.checkCancellation()
                 let pasteboard = name.map {
                     NSPasteboard(name: NSPasteboard.Name($0))
                 } ?? .general
                 try PasteboardAdapter(pasteboard: pasteboard).write(payload)
             }
             return .result(value: true)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ClipboardIntentFailure.map(error)
         }
@@ -195,6 +215,8 @@ struct PinItemIntent: AppIntent {
             case .unpin, .removed:
                 throw ClipboardIntentFailure.temporarilyUnavailable
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ClipboardIntentFailure.map(error)
         }
@@ -236,6 +258,8 @@ struct UnpinItemIntent: AppIntent {
             case .pin, .removed:
                 throw ClipboardIntentFailure.temporarilyUnavailable
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ClipboardIntentFailure.map(error)
         }
@@ -279,6 +303,8 @@ struct RemoveItemIntent: AppIntent {
             case .pin, .unpin:
                 throw ClipboardIntentFailure.temporarilyUnavailable
             }
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw ClipboardIntentFailure.map(error)
         }

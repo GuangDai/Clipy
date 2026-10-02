@@ -1,9 +1,9 @@
 /// Deterministic-concurrency harness for the walking-skeleton proofs WS12
 /// (observation registration race), WS13 (transaction failure), WS15
 /// (thumbnail version fence), and WS20 (concurrent revision and coalescing)
-/// in docs/06-cross-cutting.md §8.
+/// in docs/testing.md
 ///
-/// Roadmap-owned test infrastructure (docs/roadmap/03-historystorage.md,
+/// Roadmap-owned test infrastructure (docs/storage.md,
 /// "Deliverables — test infrastructure"): scaffolded at step 0 as
 /// `SuspensionGate`, finished at step 5 with `resumeAll()` and the
 /// `runParked(at:operation:whileCommitting:)` helper. The file is
@@ -41,14 +41,32 @@ actor SuspensionGate {
     /// `waitForPark(_:)` for the same point.
     func park(at point: String) async {
         await withCheckedContinuation { continuation in
-            precondition(
-                parked[point] == nil,
-                "SuspensionGate: two tasks parked at '\(point)'"
-            )
-            parked[point] = continuation
-            for observer in parkObservers.removeValue(forKey: point) ?? [] {
-                observer.resume()
+            register(continuation, at: point)
+        }
+    }
+
+    /// Failure cleanup may cancel a request before it reaches the gate. The
+    /// cancellation check and registration share this actor turn so a late
+    /// cancelled request cannot park after edge-triggered resumeAll teardown.
+    /// Ordinary park still supports tests intentionally parking cancelled work.
+    func parkUnlessCancelled(at point: String) async {
+        await withCheckedContinuation { continuation in
+            guard !Task.isCancelled else {
+                continuation.resume()
+                return
             }
+            register(continuation, at: point)
+        }
+    }
+
+    private func register(_ continuation: CheckedContinuation<Void, Never>, at point: String) {
+        precondition(
+            parked[point] == nil,
+            "SuspensionGate: two tasks parked at '\(point)'"
+        )
+        parked[point] = continuation
+        for observer in parkObservers.removeValue(forKey: point) ?? [] {
+            observer.resume()
         }
     }
 
@@ -77,6 +95,13 @@ actor SuspensionGate {
         await withCheckedContinuation { continuation in
             parkObservers[point, default: []].append(continuation)
         }
+    }
+
+    /// Read the actual gate state without registering a waiter. Tests that
+    /// also have a request completion handle can stop immediately on an early
+    /// failure instead of waiting forever for a suspension it never reached.
+    func isParked(_ point: String) -> Bool {
+        parked[point] != nil
     }
 
     /// Runs `operation` paused at the named point while `interference`

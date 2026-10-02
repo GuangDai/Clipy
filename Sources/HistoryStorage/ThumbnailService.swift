@@ -1,5 +1,5 @@
 /// Thumbnail single-flight service + its owned decode worker
-/// (docs/04-coherence.md §9; docs/05-authority-kernel.md §14.5).
+/// (docs/storage.md; docs/storage.md).
 ///
 /// The `SQLiteHistory` facade's `thumbnail(for:pixels:)` pipeline enters
 /// this service before source hydration. The service atomically joins or
@@ -13,7 +13,7 @@
 /// The flight entry is removed when its task completes, and completed bytes
 /// are NOT retained by HistoryStorage.
 ///
-/// The version fence (WS15, docs/06-cross-cutting.md §8): ImageIO decode
+/// The version fence (WS15, docs/testing.md): ImageIO decode
 /// occurs only after all SwiftData objects and context have been released —
 /// the facade guarantees that by construction: `thumbnailSource` returns one
 /// immutable selection and the facade passes only its `Data` into this
@@ -27,30 +27,30 @@
 /// returned under an old key (§9).
 ///
 /// Only immutable `Sendable` values cross actor boundaries: `Data` in,
-/// `ThumbnailPayload` out (docs/01-architecture.md §6; Part VI §6).
+/// `ThumbnailPayload` out (docs/architecture.md; Part VI §6).
 import Foundation
 import HistoryCore
 import ImageIO
 import UniformTypeIdentifiers
 
-// MARK: - Single-flight key (docs/04-coherence.md §9)
+// MARK: - Single-flight key (docs/storage.md)
 
 /// The single-flight key: one flight per (item reference, pixel dimensions).
 /// The reference carries both the item ID and the Content Version
 /// (`HistoryItemReference`), so two requests for the same item at different
 /// Effective Content states produce different flights and different payloads,
 /// and a stale-reference result cannot be misapplied to a newer row
-/// (docs/04-coherence.md §9; WS15).
+/// (docs/storage.md; WS15).
 internal struct ThumbnailFlightKey: Sendable, Hashable {
     internal let item: HistoryItemReference
     internal let pixels: PixelSize
 }
 
-// MARK: - WS15 suspension point (docs/06-cross-cutting.md §8)
+// MARK: - WS15 suspension point (docs/testing.md)
 
 /// Named suspension point of `ThumbnailService` for the deterministic
 /// concurrency harness (`SuspensionGate` in HistoryStorageTests; WS15).
-/// docs/roadmap/03-historystorage.md step-5 note (concurrency harness).
+/// docs/storage.md step-5 note (concurrency harness).
 ///
 /// Test seam, compiled in always and harmless in production: the handler is
 /// `nil` unless a test installs one via @testable, so the point is a no-op
@@ -61,20 +61,20 @@ internal enum ThumbnailServiceSuspensionPoint: String, Sendable {
     /// At decode entry, after the source-inclusive flight is installed — the
     /// WS15 fence-to-decode window: a revision committing here changes the
     /// item "during decode", and the result must stay tagged with the verified
-    /// old reference (docs/04-coherence.md §9).
+    /// old reference (docs/storage.md).
     case decodeEntry = "ThumbnailService.thumbnail.entry"
 }
 
-// MARK: - ThumbnailService (docs/04-coherence.md §9)
+// MARK: - ThumbnailService (docs/storage.md)
 
 /// Owns the thumbnail flight table and its decode worker
-/// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9).
+/// (docs/storage.md; docs/storage.md).
 ///
 /// Single-flight, not a completed-result cache: an existing in-flight
 /// source-to-decode `Task` for the exact key is shared, and on completion
 /// (success, failure, OR cancellation) the entry is removed. Completed bytes
 /// are NOT retained (§9 step 7; the G1 completed-thumbnail cache is deferred,
-/// docs/06-cross-cutting.md §3).
+/// docs/testing.md).
 ///
 /// The actor holds the flight dictionary and the owned `ThumbnailWorker`; the
 /// worker owns no state, so every decode is independent and only immutable
@@ -84,18 +84,33 @@ package actor ThumbnailService {
     /// One source-to-decode task per exact key. Source hydration lives inside
     /// the shared task, so concurrent callers retain one bounded source value
     /// rather than one value per caller.
-    private var flights: [
-        ThumbnailFlightKey: Task<ThumbnailPayload?, Error>
-    ] = [:]
+    private struct Flight: Sendable {
+        let token: Int
+        let task: Task<ThumbnailPayload?, Error>
+        var callers: Set<Int>
+    }
+    private var flights: [ThumbnailFlightKey: Flight] = [:]
+    private var nextToken = 0
+
+    /// Admission includes retired creators until their native work actually
+    /// returns. The join table above alone cannot account for that ownership.
+    internal static let maximumInFlightCount = 32
+    private let maximumLiveCreators: Int
+    private static let maximumCallersPerFlight = 32
+    private var liveTokens: Set<Int> = []
+    private var liveCallerCount = 0
+    private var liveCallerCountsByKey: [ThumbnailFlightKey: Int] = [:]
+
+    private struct SourceWaiter {
+        let token: Int
+        let continuation: CheckedContinuation<Void, any Error>
+    }
+    private var activeSourceToken: Int?
+    private var sourceWaiters: [SourceWaiter] = []
+    private var capacityObservers: [UUID: AsyncStream<Void>.Continuation] = [:]
 
     /// The owned off-Authority decode worker (§9 step 6; §14.5).
     private let worker = ThumbnailWorker()
-
-    /// Only the active creator hydrates source bytes. Queued creators await
-    /// a completion-only task, retaining their source-loading closure and
-    /// reference rather than full image Data. The Void result never retains
-    /// the predecessor's encoded thumbnail payload.
-    private var completionTail: Task<Void, Never>?
 
     /// The roadmap-owned WS15 suspension handler; `nil` in production
     /// (test seam — see `ThumbnailServiceSuspensionPoint`).
@@ -103,12 +118,17 @@ package actor ThumbnailService {
         @Sendable (ThumbnailServiceSuspensionPoint) async -> Void
     )?
 
-    package init() {}
+    package init() { maximumLiveCreators = Self.maximumInFlightCount }
 
-    // MARK: Roadmap-owned test seam (docs/roadmap/03-historystorage.md step-5 note; WS15)
+    internal init(maximumInFlightCount: Int) {
+        precondition((1...Self.maximumInFlightCount).contains(maximumInFlightCount))
+        maximumLiveCreators = maximumInFlightCount
+    }
+
+    // MARK: Roadmap-owned test seam (docs/storage.md step-5 note; WS15)
 
     /// Installs (or clears) the suspension handler the deterministic
-    /// concurrency harness drives for WS15 (docs/06-cross-cutting.md §8).
+    /// concurrency harness drives for WS15 (docs/testing.md).
     /// Test seam — `nil` in production, compiled in always, set via
     /// @testable; see `ThumbnailServiceSuspensionPoint`.
     internal func setSuspensionHandler(
@@ -117,9 +137,36 @@ package actor ThumbnailService {
         suspensionHandler = handler
     }
 
-    /// Owner-test observation of admitted exact keys, including queued work.
-    /// It exposes no source bytes and does not change scheduling.
-    internal var inFlightCount: Int { flights.count }
+    /// Real creator ownership, including cancelled native work still running.
+    internal var inFlightCount: Int { liveTokens.count }
+    internal var queuedSourceCount: Int { sourceWaiters.count }
+    internal var capacityObserverCount: Int { capacityObservers.count }
+    internal var inFlightCallerCount: Int { liveCallerCount }
+
+    /// Derived worker availability only; this does not publish a History
+    /// mutation or retain image bytes. Register before the current-capacity
+    /// event so release cannot be missed between rejection and subscription.
+    internal func capacityChanges() -> AsyncStream<Void> {
+        let pair = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        guard !Task.isCancelled else { pair.continuation.finish(); return pair.stream }
+        let id = UUID()
+        pair.continuation.onTermination = { @Sendable [weak self] _ in
+            Task { await self?.removeCapacityObserver(id) }
+        }
+        capacityObservers[id] = pair.continuation
+        let canJoin = flights.keys.contains {
+            (liveCallerCountsByKey[$0] ?? 0) < Self.maximumCallersPerFlight
+        }
+        if (liveTokens.count < maximumLiveCreators || canJoin),
+           liveCallerCount < maximumLiveCreators * Self.maximumCallersPerFlight {
+            pair.continuation.yield(())
+        }
+        return pair.stream
+    }
+
+    private func removeCapacityObserver(_ id: UUID) {
+        capacityObservers.removeValue(forKey: id)
+    }
 
     /// Joins or creates the source-inclusive single-flight for one exact key.
     /// The creator installs the task before the first suspension; that task
@@ -145,16 +192,23 @@ package actor ThumbnailService {
         try Task.checkCancellation()
         let key = ThumbnailFlightKey(item: item, pixels: pixels)
 
+        nextToken += 1
+        let caller = nextToken
+
         // Existing-key callers cross their own scalar version fence before
         // sharing the creator's source/decode result. A failed join never
         // cancels or removes the creator-owned flight.
-        if let existing = flights[key] {
-            try await validateJoin()
-            try Task.checkCancellation()
-            let payload = try await existing.value
-            try Task.checkCancellation()
-            return payload
+        if let task = flights[key]?.task, let token = flights[key]?.token {
+            try reserveCaller(key)
+            flights[key]?.callers.insert(caller)
+            return try await awaitFlight(task, token: token, key: key, caller: caller) {
+                try await validateJoin()
+            }
         }
+        guard liveTokens.count < maximumLiveCreators else {
+            throw HistoryFailure.temporarilyUnavailable(.thumbnailResources)
+        }
+        try reserveCaller(key)
 
         // Snapshot actor-owned immutable dependencies, then install the task
         // without suspension. Its source phase runs the Authority's complete
@@ -162,17 +216,24 @@ package actor ThumbnailService {
         // one shared task.
         let worker = worker
         let handler = suspensionHandler
-        let predecessor = completionTail
+        let token = caller
+        liveTokens.insert(token)
         let task = Task<ThumbnailPayload?, Error> {
-            await predecessor?.value
-            guard let sourceBytes = try await loadSource() else {
-                return nil
-            }
+            defer { finishFlight(key, token: token) }
+            try await acquireSourceSlot(token)
+            defer { releaseSourceSlot(token) }
+            // Queueing must not turn retired display demand into another
+            // full source read. Last-caller cancellation cancels this shared
+            // task; an exact-key survivor keeps it alive instead.
+            try Task.checkCancellation()
+            guard let sourceBytes = try await loadSource() else { return nil }
+            try Task.checkCancellation()
 
             // WS15 parks after the source/version fence and before ImageIO.
             // The flight is already visible, so a concurrent stale caller
             // takes the validated join path instead of creating another load.
             await handler?(.decodeEntry)
+            try Task.checkCancellation()
 
             return try await worker.decodeThumbnail(
                 sourceBytes: sourceBytes,
@@ -180,26 +241,100 @@ package actor ThumbnailService {
                 pixels: pixels
             )
         }
-        flights[key] = task
-        completionTail = Task {
-            // Every terminal outcome advances the queue. The source task
-            // still carries its original result/error to its exact-key callers.
-            _ = try? await task.value
-        }
+        flights[key] = Flight(token: token, task: task, callers: [caller])
 
-        // §9 step 7: remove the flight entry on success, failure, OR
-        // cancellation — completed bytes are NOT retained. The deferred
-        // removal runs unconditionally before the value/error propagates.
+        return try await awaitFlight(task, token: token, key: key, caller: caller) {}
+    }
+
+    private func awaitFlight(
+        _ task: Task<ThumbnailPayload?, Error>, token: Int,
+        key: ThumbnailFlightKey, caller: Int,
+        validate: @Sendable () async throws -> Void
+    ) async throws -> ThumbnailPayload? {
         defer {
-            flights.removeValue(forKey: key)
-            if flights.isEmpty { completionTail = nil }
+            releaseCaller(key, token: token, caller: caller)
+            finishCaller(key)
         }
-        let payload = try await task.value
-        // Native work is shared and may outlive an individual caller. Its
-        // successful result belongs only to callers that still want it;
-        // cancelling this caller never cancels another consumer's decode.
+        return try await withTaskCancellationHandler {
+            try await validate()
+            try Task.checkCancellation()
+            let payload = try await task.value
+            try Task.checkCancellation()
+            return payload
+        } onCancel: {
+            Task { await self.releaseCaller(key, token: token, caller: caller) }
+        }
+    }
+
+    private func releaseCaller(_ key: ThumbnailFlightKey, token: Int, caller: Int) {
+        guard flights[key]?.token == token,
+              flights[key]?.callers.remove(caller) != nil else { return }
+        if flights[key]?.callers.isEmpty == true {
+            flights.removeValue(forKey: key)?.task.cancel()
+            // A new caller cannot join this cancelled task. Its live token
+            // and source slot remain owned until the task's actual exit.
+        }
+    }
+
+    private func finishFlight(_ key: ThumbnailFlightKey, token: Int) {
+        if flights[key]?.token == token { flights.removeValue(forKey: key) }
+        guard liveTokens.remove(token) != nil else { return }
+        publishReleasedCapacity()
+    }
+
+    private func reserveCaller(_ key: ThumbnailFlightKey) throws {
+        guard (liveCallerCountsByKey[key] ?? 0) < Self.maximumCallersPerFlight,
+              liveCallerCount < maximumLiveCreators * Self.maximumCallersPerFlight else {
+            throw HistoryFailure.temporarilyUnavailable(.thumbnailResources)
+        }
+        liveCallerCountsByKey[key, default: 0] += 1
+        liveCallerCount += 1
+    }
+
+    private func finishCaller(_ key: ThumbnailFlightKey) {
+        guard let previous = liveCallerCountsByKey[key] else { return }
+        liveCallerCountsByKey[key] = previous > 1 ? previous - 1 : nil
+        liveCallerCount -= 1
+        publishReleasedCapacity()
+    }
+
+    private func publishReleasedCapacity() {
+        for observer in capacityObservers.values { observer.yield(()) }
+    }
+
+    private func acquireSourceSlot(_ token: Int) async throws {
         try Task.checkCancellation()
-        return payload
+        guard activeSourceToken != nil else {
+            activeSourceToken = token
+            return
+        }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                guard !Task.isCancelled else {
+                    continuation.resume(throwing: CancellationError())
+                    return
+                }
+                sourceWaiters.append(SourceWaiter(token: token, continuation: continuation))
+            }
+        } onCancel: {
+            Task { await self.cancelSourceWaiter(token) }
+        }
+    }
+
+    private func cancelSourceWaiter(_ token: Int) {
+        guard let index = sourceWaiters.firstIndex(where: { $0.token == token }) else { return }
+        sourceWaiters.remove(at: index).continuation.resume(throwing: CancellationError())
+    }
+
+    private func releaseSourceSlot(_ token: Int) {
+        guard activeSourceToken == token else { return }
+        guard !sourceWaiters.isEmpty else {
+            activeSourceToken = nil
+            return
+        }
+        let next = sourceWaiters.removeFirst()
+        activeSourceToken = next.token
+        next.continuation.resume()
     }
 
     /// Package-only direct-source convenience used by the Part VI §9 runner
@@ -224,10 +359,10 @@ package actor ThumbnailService {
     }
 }
 
-// MARK: - ThumbnailWorker (docs/05-authority-kernel.md §14.5; §9 step 6)
+// MARK: - ThumbnailWorker (docs/storage.md; §9 step 6)
 
 /// The off-Authority ImageIO decode worker
-/// (docs/05-authority-kernel.md §14.5; docs/04-coherence.md §9 step 6).
+/// (docs/storage.md; docs/storage.md step 6).
 ///
 /// Owns no state: every decode is independent and only immutable `Sendable`
 /// values cross the actor boundary (`Data` in, `ThumbnailPayload` out). The
@@ -279,6 +414,7 @@ internal actor ThumbnailWorker {
         item: HistoryItemReference,
         pixels: PixelSize
     ) throws -> ThumbnailPayload {
+        try Task.checkCancellation()
         let limits = HistoryLimits.standard
 
         // Phase 1 — decode/downsample (§9 step 6; §14.5).
@@ -295,7 +431,7 @@ internal actor ThumbnailWorker {
         }
 
         // Primary-image index (audit
-        // docs/reviews/2026-08-20-clipy-maccy-audit/03-apple-platform.md
+        // docs/testing.md
         // §7 APL-C-06): a HEIF/HEIC container may carry auxiliary images
         // and designate a primary image other than index 0, so forcing 0
         // can decode the wrong image. CGImageSourceGetPrimaryImageIndex
@@ -340,6 +476,7 @@ internal actor ThumbnailWorker {
             // representation reads and paste remain independent (05 §16).
             throw HistoryFailure.thumbnailUnavailable
         }
+        try Task.checkCancellation()
 
         // Phase 2 — re-encode as PNG and enforce the output bound (06 §2).
         //
@@ -367,6 +504,7 @@ internal actor ThumbnailWorker {
             // image is an encode-side invariant, not stored-value corruption.
             throw Self.encodingFailure
         }
+        try Task.checkCancellation()
 
         let encodedBytes = mutableData as Data
 

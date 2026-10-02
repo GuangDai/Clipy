@@ -14,20 +14,26 @@ struct HistoryRowCopyTests {
         )))
     }
 
-    @Test("copy counts use localized grouping and translated plural forms",
-          arguments: [UInt64(1), 2, 5_000])
-    func localizedOccurrences(_ count: UInt64) throws {
+    @Test("copy counts preserve plural forms, grouping, and the complete unsigned range")
+    func localizedOccurrences() throws {
         let english = try bundle("en")
         let chinese = try bundle("zh-Hans")
-        let digits = count == 5_000 ? "5,000" : String(count)
-        let noun = count == 1 ? "time" : "times"
-        #expect(HistoryRowCopy.copyCount(count, locale: Locale(identifier: "en_US")) == "×\(digits)")
-        #expect(HistoryRowCopy.copiedCount(
-            count, bundle: english, locale: Locale(identifier: "en_US")
-        ) == "Copied \(digits) \(noun)")
-        #expect(HistoryRowCopy.copiedCount(
-            count, bundle: chinese, locale: Locale(identifier: "zh_Hans_CN")
-        ) == "已复制 \(digits) 次")
+        let cases: [(UInt64, String)] = [
+            (1, "1"), (2, "2"), (5_000, "5,000"),
+            (UInt64(Int64.max), "9,223,372,036,854,775,807"),
+            (UInt64(Int64.max) + 1, "9,223,372,036,854,775,808"),
+            (UInt64.max, "18,446,744,073,709,551,615"),
+        ]
+        for (count, digits) in cases {
+            let noun = count == 1 ? "time" : "times"
+            #expect(HistoryRowCopy.copyCount(count, locale: Locale(identifier: "en_US")) == "×\(digits)")
+            #expect(HistoryRowCopy.copiedCount(
+                count, bundle: english, locale: Locale(identifier: "en_US")
+            ) == "Copied \(digits) \(noun)")
+            #expect(HistoryRowCopy.copiedCount(
+                count, bundle: chinese, locale: Locale(identifier: "zh_Hans_CN")
+            ) == "已复制 \(digits) 次")
+        }
     }
 
     @Test("language and numeric region are independent")
@@ -39,22 +45,4 @@ struct HistoryRowCopyTests {
         ) == "已复制 5.000 次")
     }
 
-    @Test("signed and unsigned occurrence boundaries retain exact digits and plural forms")
-    func completeOccurrenceRange() throws {
-        let locale = Locale(identifier: "en_US")
-        let english = try bundle("en")
-        let chinese = try bundle("zh-Hans")
-        let boundaries: [(UInt64, String)] = [
-            (UInt64(Int64.max), "9,223,372,036,854,775,807"),
-            (UInt64(Int64.max) + 1, "9,223,372,036,854,775,808"),
-            (UInt64.max, "18,446,744,073,709,551,615"),
-        ]
-        for (count, digits) in boundaries {
-            #expect(HistoryRowCopy.copyCount(count, locale: locale) == "×\(digits)")
-            let englishCount = HistoryRowCopy.copiedCount(count, bundle: english, locale: locale)
-            let chineseCount = HistoryRowCopy.copiedCount(count, bundle: chinese, locale: locale)
-            #expect(englishCount == "Copied \(digits) times")
-            #expect(chineseCount == "已复制 \(digits) 次")
-        }
-    }
 }

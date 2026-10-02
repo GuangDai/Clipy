@@ -1,5 +1,5 @@
 /// ThumbnailStoreTests — the panel thumbnail store acceptance suite
-/// (docs/01-architecture.md §5.7; docs/04-coherence.md §9; docs/
+/// (docs/architecture.md; docs/storage.md; docs/
 /// roadmap/05-presentationui.md), driven by a scripted `ClipboardHistory`
 /// double that answers one fixed encoded 1×1 PNG per exact reference.
 ///
@@ -88,6 +88,46 @@ private actor ThumbnailDisplayCancellationProbe {
 @MainActor
 struct ThumbnailStoreTests {
 
+    #if DEBUG
+    @Test func lastAppearanceRetiresOnlyItsFlightAndLateResultCannotReplaceReappearance() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000E1", version: 1)
+        let other = reference("00000000-0000-0000-0000-0000000000E2", version: 1)
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+        store.setDisplayed(item, true)
+        store.setDisplayed(item, true)
+        store.setDisplayed(other, true)
+        store.prefetch(item)
+        store.prefetch(other)
+        try #require(await pollUntil { await history.requestCount == 2 })
+
+        store.setDisplayed(item, false)
+        #expect(store.inFlightCount == 2, "The replacement row still needs the same flight")
+        #expect(await history.cancellationCount == 0)
+        store.setDisplayed(item, false)
+        #expect(store.inFlightCount == 1)
+        try #require(await pollUntil { await history.cancellationCount == 1 })
+        #expect(store.purgeGeneration == 0)
+
+        store.setDisplayed(item, true)
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 3 })
+        #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
+        try #require(await pollUntil { store.debugFetchCompletionCount == 1 })
+        #expect(store.debugDiscardedFetchCompletionCount == 1)
+        #expect(store.imagePixelSize(for: item) == nil)
+        #expect(store.inFlightCount == 2, "The old completion must not consume the new same-key flight")
+
+        #expect(await history.completeRequest(for: other, with: .success(fixturePNGData)))
+        #expect(await history.completeRequest(for: item, occurrence: 1, with: .success(fixturePNGData)))
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
+        #expect(store.imagePixelSize(for: item) != nil)
+        #expect(store.imagePixelSize(for: other) != nil)
+        #expect(store.cachedEntryCount == 2)
+        #expect(store.debugFetchCompletionCount == 3)
+    }
+    #endif
+
     // MARK: - Fixtures
 
     /// One exact reference with a fixed literal UUID.
@@ -156,7 +196,7 @@ struct ThumbnailStoreTests {
 
         // The revised reference fetches its own answer: nil, no image.
         store.prefetch(revised)
-        #expect(await pollUntil { store.inFlightCount == 0 })
+        #expect(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: revised) == 1)
         #expect(store.imagePixelSize(for: revised) == nil)
         // The original's decoded pixels are untouched.
@@ -191,7 +231,7 @@ struct ThumbnailStoreTests {
         let store = ThumbnailStore(history: history)
 
         store.prefetch(item)
-        #expect(await pollUntil { store.inFlightCount == 0 })
+        #expect(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: item) == 1)
 
         store.prefetch(item)
@@ -214,7 +254,7 @@ struct ThumbnailStoreTests {
         store.prefetch(original)
         #expect(store.inFlightCount == 1)
         #expect(!store.isUnavailable(for: original))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.cachedEntryCount == 1)
         #expect(store.cachedDecodedBytes == 0)
         #expect(store.isUnavailable(for: original))
@@ -251,7 +291,7 @@ struct ThumbnailStoreTests {
         let history = ThumbnailScriptHistory(failureByReference: [item: .thumbnailUnavailable])
         let store = ThumbnailStore(history: history)
         store.prefetch(item)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         try #require(store.cachedEntryCount == 1)
         #expect(store.isUnavailable(for: item))
 
@@ -269,7 +309,7 @@ struct ThumbnailStoreTests {
         #expect(!store.isUnavailable(for: item))
         store.prefetch(item)
         #expect(!store.isUnavailable(for: item))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: item) == 2)
         #expect(store.isUnavailable(for: item))
     }
@@ -282,16 +322,16 @@ struct ThumbnailStoreTests {
         ])
         let store = ThumbnailStore(history: history, maximumEntries: 1, maximumDecodedBytes: 64)
         store.prefetch(first)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.cachedEntryCount == 1)
         store.prefetch(second)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.cachedEntryCount == 1)
         #expect(store.cachedDecodedBytes == 0)
         #expect(!store.isUnavailable(for: first))
         #expect(store.isUnavailable(for: second))
         store.prefetch(first)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: first) == 2)
         #expect(await history.requestCount(for: second) == 1)
         #expect(store.isUnavailable(for: first))
@@ -306,12 +346,12 @@ struct ThumbnailStoreTests {
         store.prefetch(item)
         try #require(await pollUntil { await history.requestCount == 1 })
         #expect(await history.completeRequest(for: item, with: .cancelled))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
         #expect(store.cachedEntryCount == 0)
         store.prefetch(item)
         try #require(await pollUntil { await history.requestCount == 2 })
         #expect(await history.completeRequest(for: item, occurrence: 1, with: .success(nil)))
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
     }
 
     @Test func unavailableResultsAndPurgesStayWithinTheirOwningSurface() async throws {
@@ -321,7 +361,7 @@ struct ThumbnailStoreTests {
         let second = ThumbnailStore(history: history)
         first.prefetch(item)
         second.prefetch(item)
-        try #require(await pollUntil { first.inFlightCount == 0 && second.inFlightCount == 0 })
+        try #require(await pollUntil { first.liveRequestCount == 0 && first.pendingRequestCount == 0 && second.liveRequestCount == 0 && second.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: item) == 2)
         #expect(first.cachedEntryCount == 1)
         #expect(second.cachedEntryCount == 1)
@@ -333,7 +373,7 @@ struct ThumbnailStoreTests {
         #expect(second.inFlightCount == 0)
         #expect(await history.requestCount(for: item) == 2)
         first.prefetch(item)
-        try #require(await pollUntil { first.inFlightCount == 0 })
+        try #require(await pollUntil { first.liveRequestCount == 0 && first.pendingRequestCount == 0 })
         #expect(await history.requestCount(for: item) == 3)
     }
 
@@ -439,6 +479,43 @@ struct ThumbnailStoreTests {
         }
     }
 
+    @Test func lastAppearanceCancelsAnAlreadyStartedDisplayRaster() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000000E3", version: 1)
+        let history = PausableThumbnailHistory()
+        let store = ThumbnailStore(history: history)
+        let probe = ThumbnailDisplayCancellationProbe()
+        try await ContentPreviewDebugInstrumentation.$renderDidStart.withValue({
+            await probe.parkFirst()
+        }) {
+            try await exerciseLastAppearanceDisplayCancellation(
+                item: item, history: history, store: store, probe: probe
+            )
+        }
+    }
+
+    // Keep the scenario outside TaskLocal's generic operation closure, as
+    // in exerciseDisplayCancellation's Swift 6.2 codegen workaround.
+    private func exerciseLastAppearanceDisplayCancellation(
+        item: HistoryItemReference, history: PausableThumbnailHistory,
+        store: ThumbnailStore, probe: ThumbnailDisplayCancellationProbe
+    ) async throws {
+        store.setDisplayed(item, true)
+        store.prefetch(item)
+        try #require(await pollUntil { await history.requestCount == 1 })
+        #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
+        let started = await probe.waitUntilFirstRenderStarts()
+        if !started { await probe.resume() }
+        try #require(started)
+        store.setDisplayed(item, false)
+        #expect(store.inFlightCount == 0)
+        let cancelled = await probe.waitUntilCancellation()
+        await probe.resume()
+        #expect(cancelled)
+        try #require(await pollUntil { store.debugDiscardedFetchCompletionCount == 1 })
+        #expect(store.cachedEntryCount == 0)
+        #expect(store.cachedDecodedBytes == 0)
+    }
+
     @Test func nativeSlotTimeoutDoesNotRetainAnUnavailableResult() async throws {
         let first = reference("00000000-0000-0000-0000-0000000000DE", version: 1)
         let second = reference("00000000-0000-0000-0000-0000000000DF", version: 1)
@@ -474,7 +551,7 @@ struct ThumbnailStoreTests {
         try #require(timedOut)
         #expect(!store.isUnavailable(for: second))
         #expect(store.imagePixelSize(for: second) == nil)
-        try #require(await pollUntil { store.inFlightCount == 0 })
+        try #require(await pollUntil { store.liveRequestCount == 0 && store.pendingRequestCount == 0 })
 
         store.prefetch(second)
         try #require(await pollUntil { store.imagePixelSize(for: second) != nil })
@@ -808,7 +885,7 @@ struct ThumbnailStoreTests {
             for item in items where await history.requestCount(for: item) != 1 {
                 return false
             }
-            return store.inFlightCount == 0
+            return store.liveRequestCount == 0 && store.pendingRequestCount == 0
         })
         #expect(store.cachedEntryCount <= 3)
     }
@@ -889,7 +966,7 @@ struct ThumbnailStoreTests {
 
         store.prefetch(item)
         let settled = await pollUntil {
-            guard store.inFlightCount == 0 else { return false }
+            guard store.liveRequestCount == 0, store.pendingRequestCount == 0 else { return false }
             return await history.requestCount(for: item) == 1
         }
         #expect(settled)
@@ -912,7 +989,7 @@ struct ThumbnailStoreTests {
 
         store.prefetch(item)
         let settled = await pollUntil {
-            guard store.inFlightCount == 0 else { return false }
+            guard store.liveRequestCount == 0, store.pendingRequestCount == 0 else { return false }
             return await history.requestCount(for: item) == 1
         }
         #expect(settled)
@@ -957,7 +1034,7 @@ struct ThumbnailStoreTests {
             for item in items where await history.requestCount(for: item) != 1 {
                 return false
             }
-            return store.inFlightCount == 0
+            return store.liveRequestCount == 0 && store.pendingRequestCount == 0
         })
         // Every 1×1 BGRA8 hit costs exactly 4 decoded bytes; nothing crossed
         // either fixed bound, so both ledgers reflect the whole working set.
@@ -1000,6 +1077,11 @@ struct ThumbnailStoreTests {
 /// unstructured-task scheduling order. Target-internal (not file-private) so
 /// the ThumbnailMeasurement suite can drive the same parked boundary.
 actor PausableThumbnailHistory: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        // Thumbnail responses contain no application occurrence fixtures.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         throw HistoryBackupFailure.writeFailed
     }
@@ -1027,8 +1109,12 @@ actor PausableThumbnailHistory: ClipboardHistory {
 
     private var requests: [Request] = []
     private var continuations: [Int: CheckedContinuation<ThumbnailPayload?, Error>] = [:]
+    private var cancelledRequests: Set<Int> = []
 
     var requestCount: Int { requests.count }
+    var cancellationCount: Int { cancelledRequests.count }
+
+    private func recordCancellation(_ index: Int) { cancelledRequests.insert(index) }
 
     /// Releases one parked request. `false` makes a missing/already-released
     /// request observable to the test instead of silently hiding a fixture
@@ -1113,8 +1199,14 @@ actor PausableThumbnailHistory: ClipboardHistory {
     ) async throws -> ThumbnailPayload? {
         let index = requests.count
         requests.append(Request(item: item, pixels: pixels))
-        return try await withCheckedThrowingContinuation { continuation in
-            continuations[index] = continuation
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                continuations[index] = continuation
+            }
+        } onCancel: {
+            // Observe cancellation without releasing the non-cooperative
+            // fixture. The test still controls its real terminal response.
+            Task { await self.recordCancellation(index) }
         }
     }
 

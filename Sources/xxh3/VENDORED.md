@@ -1,34 +1,7 @@
-# Vendored xxHash
+# xxHash 来源与用途
 
-This target vendors the [xxHash](https://github.com/Cyan4973/xxHash) single-file
-sources (`xxhash.h`, `xxhash.c`) at the recorded version below. `xxhash.c` follows the
-header's own single-file build guidance (`#define XXH_STATIC_LINKING_ONLY` +
-`#define XXH_IMPLEMENTATION` before `#include "xxhash.h"`); XXH3 is included in
-the single-file build. SwiftPM defines `XXH_INLINE_ALL` for both C translation
-units, making upstream implementations translation-unit-local; the only
-global entry point is `clipy_xxh3_64bits` (`include/xxh3.h`). The vendored
-headers stay target-private (not under `include/`).
+本目标保留 [xxHash v0.8.3](https://github.com/Cyan4973/xxHash/tree/v0.8.3) 的 `xxhash.h` 和 `xxhash.c`，来源 commit 为 `e626a72bc2321cd320e953a0ccf1584cad60f363`，于 2026-07-22 取得。上游 BSD 2-Clause 版权和许可原文保留在源码头部。
 
-## Recorded source version
+SwiftPM 为 C 编译单元定义 `XXH_INLINE_ALL`，上游实现保持单元内部可见。Clipy 的入口是 `include/xxh3.h` 声明的 `clipy_xxh3_64bits`；上游头文件不作为公共头导出。
 
-- **Upstream repository:** https://github.com/Cyan4973/xxHash
-- **Tag:** `v0.8.3`
-- **Commit:** `e626a72bc2321cd320e953a0ccf1584cad60f363`
-  - Lightweight tag (no annotated-tag object): `git ls-remote
-    https://github.com/Cyan4973/xxHash.git refs/tags/v0.8.3` reports a single
-    line and no `refs/tags/v0.8.3^{}` peeled line, so the tag names the commit
-    above directly.
-- **Retrieved:** 2026-07-22, from
-  `https://codeload.github.com/Cyan4973/xxHash/tar.gz/refs/tags/v0.8.3`.
-
-xxHash is distributed under the BSD 2-Clause License; the copyright/license
-headers are retained verbatim in the vendored sources.
-
-## Update policy
-
-xxh3 is the external dependency introduced at roadmap step 3
-(docs/roadmap/07-external-deps.md). When its vendored sources change, record
-the new tag/commit and retrieval date, then run the XXH3-64 behavior tests.
-The fixtures cover
-empty input, `a`, `abc`, and `Clipy` through the production wrapper on the
-macOS arm64 runner.
+指纹只用于剪贴板去重候选查询，最终仍需字节确认，不用于身份、文件验证或仓库基础设施。模块关系见 [架构](../../docs/architecture.md)，实际存储用途见 [存储](../../docs/storage.md)。依赖改动使用 CI 中真实 wrapper 行为测试验证。

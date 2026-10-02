@@ -267,6 +267,10 @@ private actor ReceiptOrderedHistory: ClipboardHistory {
         try await backing.browse(request)
     }
 
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await backing.sourceApplications(request)
+    }
+
     func copySources(
         for id: HistoryItemID, expectedCopyCount: UInt64, offset: Int
     ) async throws -> HistoryCopySourcePage {

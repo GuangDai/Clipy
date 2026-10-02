@@ -1,14 +1,14 @@
 /// ScriptedHistory.swift — the scripted `ClipboardHistory` doubles and shared
-/// helpers for the PresentationUI suites (docs/01-architecture.md §4; docs/
+/// helpers for the PresentationUI suites (docs/architecture.md; docs/
 /// roadmap/05-presentationui.md). These doubles exercise view-state and
 /// thumbnail responses through the public seam exactly as SwiftUI previews
 /// do; integration tests use the real HistoryStorage implementation. Per
-/// docs/01-architecture.md §4, a scripted double is legitimate here because
+/// docs/architecture.md, a scripted double is legitimate here because
 /// these are VIEW-STATE tests (what `HistoryViewState`/`ThumbnailStore` do
 /// with pages, cursors, and failures), never storage semantic tests.
 ///
 /// The doubles are actors (implicitly `Sendable`, satisfying the
-/// `ClipboardHistory: Sendable` refinement of docs/03a-instruction-set.md §3)
+/// `ClipboardHistory: Sendable` refinement of docs/architecture.md)
 /// so they can both script responses and record the requests they received.
 /// DTOs are built through their `package` initializers, reachable from this
 /// SwiftPM test target.
@@ -19,16 +19,15 @@ import Testing
 // MARK: - ScriptedHistory (view-state double)
 
 /// A scripted `ClipboardHistory` for `HistoryViewState` tests
-/// (docs/roadmap/05-presentationui.md):
+/// (docs/interface.md):
 ///
 /// - `observe` records the request, registers the stream continuation as the
 ///   live one, and yields `observedFirstPage` immediately; later pages are
 ///   pushed by the test via `emitObservedPage(_:)` (observation is snapshot
-///   replacement, docs/04-coherence.md §5 — the double never sends deltas).
+///   replacement, docs/storage.md — the double never sends deltas).
 /// - `browse` answers from a cursor-keyed script: a page, a typed failure such
 ///   as `.snapshotExpired`, or a deterministic non-cooperative suspension
-///   released by the test (docs/03a-instruction-set.md §7; docs/
-///   04-coherence.md §6).
+///   released by the test (docs/architecture.md; docs/testing.md).
 /// - `perform` records every action and either throws `performFailure` or
 ///   returns the scripted receipt (`.unchanged` by default).
 /// - `details` throws `.notFound`; `pastePayload` uses an optional scripted
@@ -36,12 +35,23 @@ import Testing
 /// - `retentionConfiguration` returns the scripted configured-policy value
 ///   and records the request count (V2-07 §6.3's panel-open read).
 actor ScriptedHistory: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        guard (1...32).contains(request.limit) else { throw HistoryFailure.invalidInput(.invalidPageLimit) }
+        guard let observedFirstPage else { throw HistoryFailure.temporarilyUnavailable(.factProof) }
+        let position = observedFirstPage.position
+        guard request.cursor == nil else { throw HistoryFailure.snapshotExpired(current: position) }
+        let applications = Array(Set(observedFirstPage.rows.compactMap(\.lastSource).filter { !$0.isEmpty }))
+            .sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+        guard applications.count <= request.limit else { throw HistoryFailure.temporarilyUnavailable(.factProof) }
+        return HistorySourceApplicationPage(position: position, applications: applications)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         throw HistoryBackupFailure.writeFailed
     }
 
 
-    /// One scripted browse outcome (docs/03a-instruction-set.md §7).
+    /// One scripted browse outcome (docs/architecture.md).
     enum BrowseOutcome {
         case page(HistoryPage)
         case failure(HistoryFailure)
@@ -145,7 +155,7 @@ actor ScriptedHistory: ClipboardHistory {
     // MARK: Test control
 
     /// Pushes one observed page to the live stream — models a later
-    /// authoritative snapshot (docs/04-coherence.md §5). Returns whether
+    /// authoritative snapshot (docs/storage.md). Returns whether
     /// this unbounded stream accepted the page; a cancelled stream refuses it.
     @discardableResult
     func emitObservedPage(_ page: HistoryPage) -> Bool {
@@ -314,11 +324,16 @@ actor ScriptedHistory: ClipboardHistory {
 // MARK: - ThumbnailScriptHistory (thumbnail double)
 
 /// A scripted `ClipboardHistory` for `ThumbnailStore` tests
-/// (docs/01-architecture.md §5.7; docs/03b-instruction-set.md §9):
+/// (docs/architecture.md; docs/architecture.md):
 /// `thumbnail` answers a fixed encoded PNG per exact reference, `nil` for
 /// unscripted references, or throws a scripted failure — and records every
 /// request so prefetch idempotence and negative caching are observable.
 actor ThumbnailScriptHistory: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        // Encoded PNG fixtures supply no retained application observations.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         throw HistoryBackupFailure.writeFailed
     }
@@ -329,7 +344,7 @@ actor ThumbnailScriptHistory: ClipboardHistory {
         throw HistoryFailure.notFound(request.item.id)
     }
 
-    /// Encoded PNG bytes per exact reference (docs/03b-instruction-set.md §9).
+    /// Encoded PNG bytes per exact reference (docs/architecture.md).
     private let pngByReference: [HistoryItemReference: Data]
 
     /// Typed failure per exact reference.
@@ -427,8 +442,7 @@ actor ThumbnailScriptHistory: ClipboardHistory {
 // MARK: - PausablePreviewHistory (preview fence double)
 
 /// A scripted `ClipboardHistory` for `PreviewContentLoader` fence tests
-/// (audit docs/reviews/2026-08-20-clipy-maccy-audit/
-/// 02-spec-implementation.md §SPEC-IMPL-007;
+/// (audit docs/testing.md;
 /// 05-recommended-target-design.md §4.1 PREVIEW-FENCE-1): the exact-version
 /// metadata read reuses `details(for:)`, which records the request, then SUSPENDS until the test resumes it. The fixture's
 /// `PastePayload` supplies metadata and separately requested bytes, but never
@@ -438,6 +452,11 @@ actor ThumbnailScriptHistory: ClipboardHistory {
 /// already suspended would replace the first continuation (leaking it), so
 /// tests keep one selection per ID.
 actor PausablePreviewHistory: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        // Scripted representations do not establish application occurrences.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         throw HistoryBackupFailure.writeFailed
     }
@@ -572,7 +591,7 @@ func previewMetadata(for payload: PastePayload) -> HistoryDetails {
 }
 
 /// Records the references handed to `HistoryViewState.onPaste`
-/// (docs/01-architecture.md §5.6): the closure is synchronous and `@Sendable`,
+/// (docs/architecture.md): the closure is synchronous and `@Sendable`,
 /// so it hops into this actor via a `Task` and the test polls the result.
 actor PasteCallRecorder {
     private(set) var received: [HistoryItemReference] = []
@@ -596,7 +615,7 @@ final class SynchronousPasteCallRecorder {
 
 // MARK: - Shared fixtures
 
-/// One canned row at a fixed reference (docs/03b-instruction-set.md §8).
+/// One canned row at a fixed reference (docs/architecture.md).
 /// Fixed UUID literals keep assertions readable; the force unwrap cannot fail
 /// for a well-formed literal — a malformed one is a fixture-authoring bug
 /// that must fail loudly, never silently produce a broken dataset.
@@ -621,9 +640,8 @@ func fixtureRow(
     )
 }
 
-/// One canned page over a named next-cursor token (docs/
-/// 03b-instruction-set.md §8; cursor minting is package-only,
-/// docs/03a-instruction-set.md §7).
+/// One canned page over a named next-cursor token (docs/interface.md; cursor minting is package-only,
+/// docs/architecture.md).
 func fixturePage(rows: [HistoryRow], next: String?) -> HistoryPage {
     HistoryPage(
         position: ChangePosition(rawValue: 1),
@@ -638,7 +656,7 @@ func fixtureCursor(_ token: String) -> HistoryPageCursor {
 }
 
 /// A valid, fixed 1×1 RGBA PNG (70 bytes) — the encoded thumbnail bytes the
-/// doubles return (docs/03b-instruction-set.md §9: History hands the UI
+/// doubles return (docs/architecture.md: History hands the UI
 /// encoded, `Sendable` bytes, never `NSImage`/`CGImage`).
 let fixturePNGBytes: [UInt8] = [
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,

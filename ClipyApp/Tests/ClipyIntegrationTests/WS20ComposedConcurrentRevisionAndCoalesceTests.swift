@@ -1,5 +1,5 @@
 /// WS20Composed — Concurrent revision and coalescing, composed essence
-/// (docs/06-cross-cutting.md §8 WS20; docs/02-domain.md §11; 05 §6.2):
+/// (docs/testing.md WS20; docs/architecture.md; 05 §6.2):
 /// a Copy Coalescing commit made BETWEEN a revision's phases (from the
 /// caller's side: between the OCC read and the revise submit) still lets
 /// the revision commit — the occurrence folds and the Content Version
@@ -22,7 +22,7 @@ import Testing
 
 struct WS20ComposedConcurrentRevisionAndCoalesceTests {
 
-    /// WS20 (docs/06-cross-cutting.md §8): a coalescing capture between
+    /// WS20 (docs/testing.md): a coalescing capture between
     /// the detail read (OCC base) and the revise submit does NOT stale the
     /// revision: the revision commits at exactly one successor Content
     /// Version and the occurrence has folded to 2 in the same final state.

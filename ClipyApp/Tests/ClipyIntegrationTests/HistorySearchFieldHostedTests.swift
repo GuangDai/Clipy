@@ -46,6 +46,71 @@ struct HistorySearchFieldHostedTests {
     }
 
     @Test
+    func candidateHeightTracksNativeWindowResizeWithoutAnotherInputEvent() async throws {
+        let (panel, field) = makePanel()
+        defer { panel.close() }
+        let content = try #require(panel.contentView)
+        panel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.maxY - 420,
+                              width: panel.frame.width, height: 420), display: true)
+        field.frame.origin.y = content.bounds.maxY - field.frame.height - 12
+        field.autoresizingMask = [.minYMargin]
+        var available: CGFloat?
+        field.onAvailableHeightChange = { available = $0 }
+        field.update(text: "$", isFocused: true)
+        try #require(await ComposedSupport.waitFor { available != nil })
+        let before = try #require(available)
+        let changedFrame = NSRect(x: panel.frame.minX, y: panel.frame.maxY - 220,
+                                  width: panel.frame.width, height: 220)
+        panel.setFrame(changedFrame, display: true)
+        let expected = max(0, field.convert(field.bounds, to: content).minY - content.bounds.minY - 8)
+        try #require(expected < before)
+        try #require(await ComposedSupport.waitFor { available == expected })
+
+        // Resize notifications and editor updates share one actor turn. The
+        // next report must use the final native viewport, not an earlier frame.
+        let heights: [CGFloat] = [360, 180, 300]
+        for height in heights {
+            panel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.maxY - height,
+                                  width: panel.frame.width, height: height), display: true)
+            field.update(text: "$source:Saf", isFocused: true)
+        }
+        let finalExpected = max(0, field.convert(field.bounds, to: content).minY - content.bounds.minY - 8)
+        try #require(finalExpected != expected)
+        try #require(await ComposedSupport.waitFor { available == finalExpected })
+    }
+
+    @Test
+    func longCompletionScrollsItsCaretAndNativeArrowsContinueEditingAfterRefresh() throws {
+        let (panel, field) = makePanel()
+        defer { panel.close() }
+        field.frame.size.width = 125
+        field.update(text: "$source-id:com.apple.Saf", isFocused: true)
+        let editor = try #require(field.currentEditor() as? NSTextView)
+        let expression = "$source-id:\"com.apple.Safari\"$"
+        let insertion = HistorySearchCompletionInsertion(
+            id: 1, originalText: editor.string,
+            replacementRange: NSRange(location: 0, length: (editor.string as NSString).length),
+            text: expression, selectionOffset: nil
+        )
+        try #require(field.applyCompletion(insertion))
+        let end = (expression as NSString).length
+        #expect(editor.selectedRange() == NSRange(location: end, length: 0))
+        field.update(text: expression, isFocused: true)
+        #expect(field.currentEditor() === editor)
+        let caretScreen = editor.firstRect(forCharacterRange: editor.selectedRange(), actualRange: nil)
+        let caretWindow = panel.convertFromScreen(caretScreen)
+        let caretField = field.convert(caretWindow, from: nil)
+        #expect(caretField.minX >= field.bounds.minX - 1)
+        #expect(caretField.maxX <= field.bounds.maxX + 1)
+        editor.moveLeft(nil)
+        #expect(editor.selectedRange().location == end - 1)
+        editor.moveRight(nil)
+        #expect(editor.selectedRange().location == end)
+        editor.insertText(" retained", replacementRange: editor.selectedRange())
+        #expect(editor.string == expression + " retained")
+    }
+
+    @Test
     func markedTextKeepsItsEditorAndOwnsNavigationAndConfirmation() throws {
         let (panel, field) = makePanel()
         defer { panel.close() }

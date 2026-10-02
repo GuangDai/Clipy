@@ -1,5 +1,5 @@
 # XcodeGen spec for the ClipyApp application target and its hosted
-# hosted integration/presentation bundles (docs/01-architecture.md §9 item 6: the app
+# hosted integration/presentation bundles (docs/architecture.md item 6: the app
 # target is XcodeGen-owned; the library graph stays SwiftPM-owned).
 # Regenerate from the repo root with:
 #   xcodegen generate --spec ClipyApp/project.yml
@@ -152,6 +152,12 @@ targets:
       GCC_TREAT_WARNINGS_AS_ERRORS: YES
     dependencies:
       - target: ClipyApp
+      # Running UI fixtures seed through the production History writer before
+      # launching Clipy; the test process releases that owner before app open.
+      - package: Clipy
+        product: HistoryCore
+      - package: Clipy
+        product: HistoryStorage
       - target: ClipyDragReceiver
         link: false
         embed: true
@@ -166,9 +172,22 @@ schemes:
         ClipyIntegrationTests: [test]
         ClipyPresentationTests: [test]
     test:
+      macroExpansion: ClipyApp
+      environmentVariables:
+        CLIPY_FIXTURES_DIR: "$(CLIPY_FIXTURES_DIR)"
       targets:
         - ClipyIntegrationTests
         - ClipyPresentationTests
+        - ClipyUITests
+  # GUI shards build only their app/UI dependency graph. Hosted bundles are
+  # compiled and tested by ClipyApp in shard 4 and the complete-suite entry.
+  ClipyAppGUI:
+    build:
+      targets:
+        ClipyApp: all
+        ClipyUITests: [test]
+    test:
+      targets:
         - ClipyUITests
   ClipyUDSF0Evidence:
     build:

@@ -1,11 +1,9 @@
 import Foundation
-import HistoryCore
 import SwiftUI
 
 /// Visible rows prepare only file references and app names;
 /// raster bytes and temporary files are deferred until the user clicks.
 struct HistoryOpenMenu: View {
-    let item: HistoryItemReference
     let opener: HistoryExternalOpener
     let onFailure: (HistoryOpenFailure) -> Void
     @Environment(\.locale) private var locale

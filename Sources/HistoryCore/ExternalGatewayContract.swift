@@ -1,5 +1,5 @@
 /// Public External Gateway concern protocols and immutable values.
-/// Owning spec: docs/v2/V2-05-external-gateway.md §3.3/§7.1–§7.3.
+/// Owning spec: docs/automation.md
 /// Foundation-only; the Gateway actor, grants, audit persistence, transport,
 /// and concrete facade construction remain owned by `HistoryStorage`.
 import Foundation

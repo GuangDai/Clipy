@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 /// store only bundle identifiers. Selection reads bundle metadata, never runs
 /// the application or reads any clipboard content (V2-07 §6).
 struct CapturePrivacySettingsView: View {
+    @Environment(\.locale) private var interfaceLocale
     @State private var ignoreList = CaptureIgnoreList()
     @State private var isChoosingApplications = false
     @State private var showsManualEntry = false
@@ -13,6 +14,7 @@ struct CapturePrivacySettingsView: View {
     @State private var selectionFailed = false
 
     var body: some View {
+        let _ = interfaceLocale
         Section {
             ForEach(ignoreList.bundleIDs, id: \.self) { identifier in
                 IgnoredApplicationRow(identifier: identifier) {
@@ -91,12 +93,14 @@ struct CapturePrivacySettingsView: View {
 }
 
 private struct IgnoredApplicationRow: View {
+    @Environment(\.locale) private var interfaceLocale
     let identifier: String
     let onRemove: () -> Void
     @State private var name: String?
     @State private var icon: NSImage?
 
     var body: some View {
+        let _ = interfaceLocale
         HStack(spacing: 8) {
             Group {
                 if let icon {
@@ -131,6 +135,6 @@ private struct IgnoredApplicationRow: View {
 
 enum CapturePrivacyCopy {
     static func text(_ key: String) -> String {
-        Bundle.main.localizedString(forKey: key, value: key, table: "CapturePrivacy")
+        AppLocalization.bundle.localizedString(forKey: key, value: key, table: "CapturePrivacy")
     }
 }

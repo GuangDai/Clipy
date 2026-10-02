@@ -1,12 +1,11 @@
-/// Retained item state: copy origin and occurrence, pin ordinal, and the fully
-/// hydrated history item value.
-/// Owning spec: docs/02-domain.md §3. Immutable pure values — no I/O, actors,
-/// clocks, UUID generation, or version minting (docs/02-domain.md §1, §4).
+/// Retained copy-origin, occurrence, and pin-ordinal values.
+/// Owning spec: docs/architecture.md Immutable pure values — no I/O, actors,
+/// clocks, UUID generation, or version minting (docs/architecture.md, §4).
 import Foundation
 import HistoryCore
 
 /// Observed origin of one accepted capture.
-/// docs/02-domain.md §3.1
+/// docs/architecture.md
 ///
 /// `sourceApplication` and `lineageHint` are observations, not authenticated
 /// provenance. A lineage hint never bypasses byte comparison (§3.1, §9.3).
@@ -21,7 +20,7 @@ package struct CopyOrigin: Sendable, Hashable {
 }
 
 /// Folded copy-occurrence record of one retained item.
-/// docs/02-domain.md §3.1
+/// docs/architecture.md
 ///
 /// A new item initializes all first/last values from the accepted capture and
 /// sets `count = 1`. Copy Coalescing produces a complete replacement value:
@@ -54,7 +53,7 @@ package struct CopyOccurrence: Sendable, Hashable {
 }
 
 /// Persistence encoding of one item's position in the pinned order.
-/// docs/02-domain.md §3.2
+/// docs/architecture.md
 ///
 /// `<` orders by `rawValue`; Swift does not synthesize `Comparable` here.
 /// `rawValue` is non-negative: planners only ever mint `0 ..< p` for `p`
@@ -72,40 +71,5 @@ package struct PinOrdinal: Sendable, Hashable, Comparable {
 
     package static func < (lhs: Self, rhs: Self) -> Bool {
         lhs.rawValue < rhs.rawValue
-    }
-}
-
-/// Fully hydrated state of one retained history item.
-/// docs/02-domain.md §3.3
-///
-/// Used only when an operation requires content lineage; list and search
-/// reads do not expose or hydrate it. Removal is absence from the retained
-/// set — there is no tombstone flag, and a removed ID is never resurrected or
-/// reassigned (D15).
-package struct HistoryItemState: Sendable, Hashable {
-    package let id: HistoryItemID
-    package let contentVersion: ContentVersion
-    package let canonical: CanonicalContent
-    package let revisions: [ContentRevision]
-    package let activeRevisionID: RevisionID?
-    package let occurrence: CopyOccurrence
-    package let pinOrdinal: PinOrdinal?
-
-    package init(
-        id: HistoryItemID,
-        contentVersion: ContentVersion,
-        canonical: CanonicalContent,
-        revisions: [ContentRevision],
-        activeRevisionID: RevisionID?,
-        occurrence: CopyOccurrence,
-        pinOrdinal: PinOrdinal?
-    ) {
-        self.id = id
-        self.contentVersion = contentVersion
-        self.canonical = canonical
-        self.revisions = revisions
-        self.activeRevisionID = activeRevisionID
-        self.occurrence = occurrence
-        self.pinOrdinal = pinOrdinal
     }
 }

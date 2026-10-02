@@ -588,6 +588,34 @@ struct HCRAtomicAppendTests {
         #expect(deferredState.sequences == [1, 2])
     }
 
+    @Test("retention rejects an unknown change kind before deleting that record")
+    func retentionRejectsUnknownKindWithoutCommitting() async throws {
+        let epoch = Date(timeIntervalSinceReferenceDate: 902_200_000)
+        let id = HistoryItemID(rawValue: UUID())
+        let limits = try #require(JournalLimits(
+            maxAffectedItemsPerRecord: 3,
+            maxJournalRecordCount: 1,
+            compactionCadenceCommits: 50
+        ))
+        let authority = try await Self.makeJournalStore([
+            SeedRecord(sequence: 1, itemID: id, createdAt: epoch),
+        ], limits: limits)
+        let before = try await Self.snapshot(in: authority)
+        let rawKind = (try #require(before.records.first)).kindRaw
+        try await authority.withTestDatabase { authority in
+            try authority.database.execute("UPDATE history_change_records SET changeKindRaw = 0")
+        }
+        await #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+            try await Self.append(sequence: 2, itemID: id, createdAt: epoch, limits: limits, in: authority)
+        }
+        try await authority.withTestDatabase { authority in
+            try authority.database.execute(
+                "UPDATE history_change_records SET changeKindRaw = ?", bindings: [.integer(Int64(rawKind))]
+            )
+        }
+        #expect(try await Self.snapshot(in: authority) == before)
+    }
+
     @Test("below count/byte bounds off cadence selects no prefix read")
     func noPressureSelectsNoPrefixRead() {
         #expect(HCRStore.prefixReadScope(

@@ -1,9 +1,8 @@
 /// PreviewAccessProbeRunner — one short-lived child process running the
 /// DEBUG-only package `PreviewAccessProbe` (Sources/ContentPreview/
 /// PreviewAccessProbe.swift) over ONE fixture for the PLAY-TIER-1A decoder
-/// access-mode characterization (docs/v2/V2-08-decoder-access-modes.md;
-/// docs/reviews/2026-08-22-clipy-maccy-deep-review/
-/// 04-tdd-remediation-playbook.md §26 TIER row 1).
+/// access-mode characterization (docs/formats-preview.md;
+/// docs/testing.md TIER row 1).
 ///
 /// Why a child (the HistoryRestartProbe posture): the incremental-range
 /// mode decodes DELIBERATELY TRUNCATED payloads, and framework decoders log

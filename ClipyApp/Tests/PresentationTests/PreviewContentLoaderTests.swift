@@ -1,6 +1,5 @@
 /// PreviewContentLoaderTests — the preview loader's cancellation /
-/// exact-reference fence (audit docs/reviews/2026-08-20-clipy-maccy-audit/
-/// 02-spec-implementation.md §SPEC-IMPL-007; 05-recommended-target-design.md
+/// exact-reference fence (audit docs/testing.md; 05-recommended-target-design.md
 /// §4.1 PREVIEW-FENCE-1) and its bounded off-MainActor image decode outcome
 /// (01-standards.md §S-2; 02 §SPEC-IMPL-002). Driven through
 /// `PausablePreviewHistory`, which suspends every exact-version metadata read until
@@ -15,6 +14,40 @@ import Testing
 
 @MainActor
 struct PreviewContentLoaderTests {
+    @Test func staleRetryFlagDoesNotDiscardTheCurrentPreparedRead() async throws {
+        let item = reference("00000000-0000-0000-0000-0000000001E2", version: 1)
+        let history = OverlappingPreviewHistory()
+        let loader = PreviewContentLoader(history: history)
+        let preparation = loader.prepare(item: item, textConfiguration: .init())
+        try #require(await pollUntil { await history.requestCount == 1 })
+        await history.resumeRequest(0, with: payload(for: item, text: "prepared once"))
+        await preparation.value
+
+        // A view-level retry generation may outlive its failed target. The
+        // current preparation is already a successful episode, so that flag
+        // must not turn it into another metadata/payload read.
+        var finished = false
+        let display = Task {
+            await loader.loadForDisplay(item: item, textConfiguration: .init(), isRetry: true)
+            finished = true
+        }
+        var reachedBoundary = false
+        for _ in 0..<2_000 {
+            let requestCount = await history.requestCount
+            if finished || requestCount > 1 { reachedBoundary = true; break }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        #expect(reachedBoundary)
+        #expect(finished)
+        #expect(await history.requestCount == 1)
+        #expect(!preparation.isCancelled)
+        // If the regression creates a second request, release it so a failed
+        // assertion still leaves no deliberately parked operation behind.
+        await history.resumeRequest(1, with: payload(for: item, text: "duplicate read"))
+        await display.value
+        #expect(loader.phase == .content(.text("prepared once")))
+    }
+
     @Test func clearingAPreparedReadFencesItsLateCompletion() async throws {
         let item = reference("00000000-0000-0000-0000-0000000001E1", version: 1)
         let history = PausablePreviewHistory()
@@ -463,7 +496,9 @@ struct PreviewContentLoaderTests {
         #expect(loader.canRetryFailure)
 
         await history.scriptPayload(payload(for: refA, text: "recovered"))
-        let retry = Task { await loader.retry() }
+        let retry = Task {
+            await loader.loadForDisplay(item: refA, textConfiguration: .init(), isRetry: true)
+        }
         try #require(await pollUntil { await history.payloadRequests.count == 2 })
         #expect(loader.requestedItem == refA)
         #expect(loader.phase == .loading)
@@ -717,6 +752,11 @@ private actor PreviewRenderGate {
 /// resumed explicitly by request order, making generation ordering observable
 /// without sleeps or a second storage implementation.
 private actor OverlappingPreviewHistory: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        // These payload/metadata episodes define no retained-source snapshot.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         throw HistoryBackupFailure.writeFailed
     }

@@ -7,7 +7,7 @@ import HistoryStorage
 /// (`ceil(p*n) < n`); below its support floor the rank is omitted from
 /// the encoded JSON entirely instead of disguising a sample maximum. The
 /// 11-sample exact-search budget therefore carries p50 only
-/// (docs/AUDIT.md IND-07 measurement budget).
+/// (docs/testing.md IND-07 measurement budget).
 struct AdmissionPercentiles: Codable, Sendable, Equatable {
     let p50Ms: Double
     let p95Ms: Double?
@@ -33,6 +33,7 @@ struct AdmissionFixture: Codable, Sendable {
     let percentiles: AdmissionPercentiles?
     let validation: [String: String]
     let notes: [String]
+    let searchWork: [SQLiteScaleSearchWork]?
 }
 
 struct AdmissionSeedFixture: Codable, Sendable, Equatable {

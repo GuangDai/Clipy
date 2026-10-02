@@ -1,5 +1,5 @@
 /// WS18Composed — Pagination and cursor expiry through the composed panel
-/// surface (docs/06-cross-cutting.md §8 WS18; docs/04-coherence.md §6):
+/// surface (docs/testing.md WS18; docs/storage.md):
 /// `viewState.loadNextPage()` (the list's last-row trigger) appends the
 /// continuation page with no overlap or gap, `hasNextPage` tracks the
 /// cursor, and a cursor invalidated by an intervening commit surfaces
@@ -14,7 +14,7 @@ import Testing
 
 struct WS18ComposedPaginationTests {
 
-    /// WS18 (docs/06-cross-cutting.md §8; 04 §6): with 4 rows and a
+    /// WS18 (docs/testing.md; 04 §6): with 4 rows and a
     /// pageLimit of 3, the observed first page holds 3 rows and reports a
     /// next page; `loadNextPage()` appends exactly the missing fourth row
     /// (no overlap, no gap) and `hasNextPage` turns false.

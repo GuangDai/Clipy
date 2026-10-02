@@ -50,7 +50,8 @@ enum ClipboardIntentFailure:
              .history(.invalidInput(.invalidPageLimit)),
              .history(.invalidInput(.invalidSearchTerm)):
             return .invalidRequest
-        case .notFound:
+        case .notFound,
+             .history(.invalidPinnedPlacement(.targetMissing)):
             return .itemUnavailable
         case .requestDenied(.rateLimited),
              .history,

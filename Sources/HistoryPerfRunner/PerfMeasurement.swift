@@ -1,8 +1,5 @@
-/// Measurement helpers and §9 coverage/complexity checks.
-/// Split out of PerformanceSuite.swift (file-size hygiene); same target, unchanged semantics.
+/// Sampling and report helpers for the performance experiments.
 import Foundation
-import HistoryCore
-import HistoryStorage
 
 // MARK: - Errors
 
@@ -10,6 +7,7 @@ import HistoryStorage
 enum PerfError: Error, Sendable {
     case captureUnexpectedOutcome
     case reviseUnexpectedOutcome
+    case searchUnexpectedResult
 }
 
 // MARK: - Measurement helpers
@@ -42,167 +40,10 @@ func safeRatio(_ numerator: Double, _ denominator: Double) -> Double {
     numerator > 0 && denominator > 0 ? numerator / denominator : .infinity
 }
 
-/// Validates the declarative §9 workload map against the fixtures emitted by
-/// one run. This is structural coverage, independent from each workload's own
-/// pass/fail result: a thrown workload still proves that its gate remains wired,
-/// while a deleted/renamed workload or a drifted bullet label fails the runner.
-func section9CoverageIssues(_ fixtures: [WorkloadFixture]) -> [String] {
-    var issues: [String] = []
-    var fixturesByKey: [String: [WorkloadFixture]] = [:]
-    for fixture in fixtures {
-        fixturesByKey[fixture.key, default: []].append(fixture)
-    }
-
-    for key in fixturesByKey.keys.sorted() {
-        guard let matchingFixtures = fixturesByKey[key] else { continue }
-        if matchingFixtures.count != 1 {
-            issues.append(
-                "workload \(key) emitted \(matchingFixtures.count) fixtures; expected 1"
-            )
-        }
-        guard let expectation = section9WorkloadCoverage[key] else {
-            issues.append("workload \(key) is absent from the §9 coverage map")
-            continue
-        }
-        for fixture in matchingFixtures where fixture.bullet != expectation.bulletLabel {
-            issues.append(
-                "workload \(key) labels bullet \(fixture.bullet); "
-                    + "expected \(expectation.bulletLabel)"
-            )
-        }
-    }
-
-    for key in section9WorkloadCoverage.keys.sorted()
-    where fixturesByKey[key] == nil {
-        issues.append("required §9 workload \(key) did not emit a fixture")
-    }
-
-    let declaredBullets = section9WorkloadCoverage.values.reduce(into: Set<Int>()) {
-        $0.formUnion($1.bulletNumbers)
-    }
-    if declaredBullets != requiredSection9Bullets {
-        issues.append(
-            "coverage map declares \(declaredBullets.sorted()); expected "
-                + "\(requiredSection9Bullets.sorted())"
-        )
-    }
-
-    let emittedBullets = fixturesByKey.keys.reduce(into: Set<Int>()) { result, key in
-        guard let expectation = section9WorkloadCoverage[key] else { return }
-        result.formUnion(expectation.bulletNumbers)
-    }
-    if emittedBullets != requiredSection9Bullets {
-        issues.append(
-            "emitted workloads cover \(emittedBullets.sorted()); expected "
-                + "\(requiredSection9Bullets.sorted())"
-        )
-    }
-    return issues.sorted()
-}
-
-/// Validates the declarative complexity-envelope table independently from any
-/// timing result. This catches a workload deletion, a malformed corpus span,
-/// a bound that no longer preserves its declared headroom, or an attempt to
-/// apply WL1a's narrow exception to another workload before CI pays the cost of
-/// constructing the release fixtures.
-func section9ComplexityEnvelopeIssues(
-    envelopes: [String: WorkloadComplexityEnvelope] = section9WorkloadEnvelopes
-) -> [String] {
-    var issues: [String] = []
-    let declaredKeys = Set(section9WorkloadCoverage.keys)
-    let expectedEnvelopeKeys = declaredKeys.subtracting(section9RecordOnlyWorkloads)
-    let envelopeKeys = Set(envelopes.keys)
-
-    for key in section9RecordOnlyWorkloads.sorted()
-    where !declaredKeys.contains(key) {
-        issues.append("record-only workload \(key) is absent from the §9 coverage map")
-    }
-    for key in expectedEnvelopeKeys.subtracting(envelopeKeys).sorted() {
-        issues.append("gated workload \(key) has no complexity envelope")
-    }
-    for key in envelopeKeys.subtracting(expectedEnvelopeKeys).sorted() {
-        issues.append("unexpected complexity envelope for workload \(key)")
-    }
-
-    for key in envelopes.keys.sorted() {
-        guard let envelope = envelopes[key] else { continue }
-        let scales = envelope.measurementScales
-        guard scales.count >= 2 else {
-            issues.append(
-                "workload \(key) needs at least two measurement scales"
-            )
-            continue
-        }
-        guard scales.allSatisfy({ $0 > 0 }) else {
-            issues.append("workload \(key) measurement scales must be positive")
-            continue
-        }
-        guard zip(scales, scales.dropFirst()).allSatisfy({ pair in
-            pair.0 < pair.1
-        }) else {
-            issues.append(
-                "workload \(key) measurement scales must be strictly increasing"
-            )
-            continue
-        }
-        guard envelope.bound.isFinite, envelope.bound > 0 else {
-            issues.append("workload \(key) bound must be positive and finite")
-            continue
-        }
-
-        let scaleSpan = envelope.scaleSpan
-        guard scaleSpan.isFinite, scaleSpan > 1 else {
-            issues.append(
-                "workload \(key) scale span must be finite and greater than one"
-            )
-            continue
-        }
-        let theoreticalRatio = envelope.theoreticalRatio
-        guard theoreticalRatio.isFinite, theoreticalRatio > 0 else {
-            issues.append(
-                "workload \(key) theoretical ratio must be positive and finite"
-            )
-            continue
-        }
-
-        switch envelope.headroomPolicy {
-        case .standard:
-            if key == "captureScalesWithRetainedCount" {
-                issues.append(
-                    "workload \(key) must declare the WL1a retained-inventory exception"
-                )
-            }
-        case .wl1aRetainedInventoryException:
-            if key != "captureScalesWithRetainedCount" {
-                issues.append(
-                    "workload \(key) cannot use WL1a's retained-inventory exception"
-                )
-            }
-        }
-
-        let minimumHeadroom = envelope.headroomPolicy.minimumFactor
-        if envelope.headroomFactor < minimumHeadroom {
-            issues.append(
-                "workload \(key) headroom \(envelope.headroomFactor)× is below "
-                    + "the \(minimumHeadroom)× policy floor over theoretical "
-                    + "ratio \(theoreticalRatio)"
-            )
-        }
-    }
-    return issues.sorted()
-}
-
-/// Returns a validated declaration to a workload body. `runAll()` executes no
-/// workloads when the declaration validator reports an issue; the precondition
-/// is a defensive backstop for direct package/test calls.
+/// Settings used directly by the selected experiment.
 func complexityEnvelope(for key: String) -> WorkloadComplexityEnvelope {
-    let issues = section9ComplexityEnvelopeIssues()
-    precondition(
-        issues.isEmpty,
-        "invalid §9 complexity-envelope table: \(issues.joined(separator: "; "))"
-    )
-    guard let envelope = section9WorkloadEnvelopes[key] else {
-        preconditionFailure("missing complexity envelope for workload \(key)")
+    guard let envelope = workloadEnvelopes[key] else {
+        preconditionFailure("missing measurement settings for workload \(key)")
     }
     return envelope
 }
@@ -257,4 +98,3 @@ func measureMedian(
     }
     return median(samples)
 }
-

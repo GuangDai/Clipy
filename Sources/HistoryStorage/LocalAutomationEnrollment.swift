@@ -1,6 +1,13 @@
 import Foundation
 import HistoryCore
 
+#if DEBUG
+internal enum LocalAutomationEnrollmentDebugInstrumentation {
+    @TaskLocal static var beforeVerifiedPublication: (@Sendable () async -> Void)?
+    @TaskLocal static var didJoinPendingChange: (@Sendable () async -> Void)?
+}
+#endif
+
 /// The in-app enable/grant controls receive only durable connection facts.
 /// Neither credential copy crosses into observable Settings state (V2-05 §0.3).
 public struct LocalAutomationEnrollmentState: Sendable, Equatable {
@@ -15,12 +22,29 @@ public enum LocalAutomationEnrollmentFailure: Error, Sendable {
 }
 
 extension LocalAutomationIngress {
+    /// The app's one listener coordinator waits for an actual in-flight
+    /// enrollment operation before reading custody and durable access. The
+    /// ordinary Settings methods retain their existing busy behavior.
+    public func stateWhenAvailable(clientDirectory: URL) async throws -> LocalAutomationEnrollmentState {
+        try Task.checkCancellation()
+        while let completion = enrollmentCompletion {
+#if DEBUG
+            await LocalAutomationEnrollmentDebugInstrumentation.didJoinPendingChange?()
+#endif
+            // A cancelled waiter cannot cancel the operation's shared finish
+            // signal. Its sole stream consumer belongs to this independent task.
+            await completion.value
+            try Task.checkCancellation()
+        }
+        return try await state(clientDirectory: clientDirectory)
+    }
+
     /// Reconciles interrupted enrollment before reporting configured access.
     /// Revoked server copies are retained for truthful connection_revoked replies.
     public func state(clientDirectory: URL) async throws -> LocalAutomationEnrollmentState {
         guard !isChangingEnrollment else { throw LocalAutomationEnrollmentFailure.busy }
-        isChangingEnrollment = true
-        defer { isChangingEnrollment = false }
+        let completion = beginEnrollmentChange()
+        defer { finishEnrollmentChange(completion) }
         return try await enrollmentState(clientDirectory: clientDirectory)
     }
 
@@ -28,8 +52,8 @@ extension LocalAutomationIngress {
     /// A newly published connection always has zero grants (V2-05 §0.3).
     public func enable(clientDirectory: URL) async throws -> LocalAutomationEnrollmentState {
         guard !isChangingEnrollment else { throw LocalAutomationEnrollmentFailure.busy }
-        isChangingEnrollment = true
-        defer { isChangingEnrollment = false }
+        let completion = beginEnrollmentChange()
+        defer { finishEnrollmentChange(completion) }
         let current = try await enrollmentState(clientDirectory: clientDirectory)
         if current.connection != nil { return current }
         // A disabled Settings read need not access server credential files. Explicit
@@ -49,6 +73,9 @@ extension LocalAutomationIngress {
             guard try await credentialStore.loadCredential(for: connection) == credential.exactBytes else {
                 throw LocalAutomationEnrollmentFailure.credentialUnavailable
             }
+#if DEBUG
+            await LocalAutomationEnrollmentDebugInstrumentation.beforeVerifiedPublication?()
+#endif
             try Task.checkCancellation()
             try await authority.publishVerifiedLocalAutomationEnrollment(
                 connection, displayName: "Local Automation"
@@ -70,8 +97,8 @@ extension LocalAutomationIngress {
     /// works if a lost/malformed client file prevented Settings from loading.
     public func revoke(clientDirectory: URL) async throws -> LocalAutomationEnrollmentState {
         guard !isChangingEnrollment else { throw LocalAutomationEnrollmentFailure.busy }
-        isChangingEnrollment = true
-        defer { isChangingEnrollment = false }
+        let completion = beginEnrollmentChange()
+        defer { finishEnrollmentChange(completion) }
         let connections = try await authority.connections()
         for connection in connections where connection.enrollKind == .localAutomation
             && connection.status == .active {
@@ -87,8 +114,8 @@ extension LocalAutomationIngress {
         clientDirectory: URL
     ) async throws -> LocalAutomationEnrollmentState {
         guard !isChangingEnrollment else { throw LocalAutomationEnrollmentFailure.busy }
-        isChangingEnrollment = true
-        defer { isChangingEnrollment = false }
+        let completion = beginEnrollmentChange()
+        defer { finishEnrollmentChange(completion) }
         let current = try await enrollmentState(clientDirectory: clientDirectory)
         guard let connection = current.connection else {
             throw LocalAutomationEnrollmentFailure.credentialUnavailable
@@ -132,5 +159,20 @@ extension LocalAutomationIngress {
             connection: connection.id,
             grants: Set(grants.filter { $0.revokedAt == nil }.map(\.capability))
         )
+    }
+
+    private func beginEnrollmentChange() -> AsyncStream<Void>.Continuation {
+        let completion = AsyncStream<Void>.makeStream()
+        isChangingEnrollment = true
+        enrollmentCompletion = Task {
+            for await _ in completion.stream {}
+        }
+        return completion.continuation
+    }
+
+    private func finishEnrollmentChange(_ completion: AsyncStream<Void>.Continuation) {
+        isChangingEnrollment = false
+        enrollmentCompletion = nil
+        completion.finish()
     }
 }

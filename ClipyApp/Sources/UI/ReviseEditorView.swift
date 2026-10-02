@@ -6,10 +6,10 @@
 /// concurrency (03a §5 `RevisionRequest.expected`), so an edit based on a
 /// superseded state fails typed as `.staleContent` (03b §10), which this
 /// view surfaces without dismissing or replacing the user's draft.
-/// Owning spec: docs/03a-instruction-set.md §5 (`RevisionDraft`,
+/// Owning spec: docs/architecture.md (`RevisionDraft`,
 /// `RevisionDecision`, `.incoherentRevisionDraft`); detail DTOs
-/// docs/03b-instruction-set.md §9; Main-actor UI docs/01-architecture.md §6;
-/// roadmap: docs/roadmap/05-presentationui.md (step 9).
+/// docs/architecture.md; Main-actor UI docs/architecture.md;
+/// roadmap: docs/interface.md (step 9).
 import ClipboardFormats
 import Foundation
 import HistoryCore
@@ -18,11 +18,11 @@ import SwiftUI
 enum ReviseEditorPresentation {
     /// Product decision 3D: Save never claims to redact Canonical Content or
     /// previously committed revisions.
-    static func revisionDisclosure(bundle: Bundle = .main) -> String {
+    static func revisionDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         PanelActionsCopy.revisionDisclosure(bundle: bundle)
     }
 
-    static func formatIndependenceDisclosure(bundle: Bundle = .main) -> String {
+    static func formatIndependenceDisclosure(bundle: Bundle = AppLocalization.bundle) -> String {
         PanelActionsCopy.text(
             "Editing one format leaves other kept formats unchanged. The destination app may use those formats instead.",
             bundle: bundle
@@ -108,6 +108,7 @@ struct ReviseEditorView: View {
 
     @State private var singleFormatHeaderHeight: CGFloat = 0
     @State private var isSaving = false
+    @State private var saveTask: Task<Void, Never>?
     @State private var isReloading = false
     @State private var reloadTask: Task<Void, Never>?
     @State private var replacementTask: Task<Void, Never>?
@@ -221,7 +222,8 @@ struct ReviseEditorView: View {
                 // result never overwrites a rebased or independently edited
                 // draft; Save Revision retains its original version check.
                 let identity = target.representation
-                guard !isSaving, !isReloading, replacementTask == nil,
+                guard readFence.isActive, !readFence.isPurged,
+                      !isSaving, !isReloading, replacementTask == nil,
                       draft.itemReference == target.item,
                       draft.replacementText(for: identity.typeIdentifier,
                           pasteboardItemIndex: identity.pasteboardItemIndex)
@@ -229,11 +231,20 @@ struct ReviseEditorView: View {
                 draft.setReplacementText(result, for: identity.typeIdentifier,
                     pasteboardItemIndex: identity.pasteboardItemIndex)
             }
+            .appLanguage()
         }
-        .onAppear { prepareDirectEditing() }
+        .onAppear {
+            readFence.resume()
+            prepareDirectEditing()
+        }
         .onDisappear {
+            readFence.suspend()
+            saveTask?.cancel()
+            saveTask = nil
+            isSaving = false
             cancelReplacementLoad()
             cancelReload()
+            workflowTarget = nil
         }
         .alert(
             alertTitle,
@@ -412,7 +423,7 @@ struct ReviseEditorView: View {
             HStack(spacing: PanelTheme.spacingLarge) {
                 Spacer(minLength: PanelTheme.spacingSmall)
                 Button {
-                    Task { await save() }
+                    startSave()
                 } label: {
                     if isSaving {
                         Label(PanelActionsCopy.text("Saving…", bundle: copyBundle), systemImage: "hourglass")
@@ -489,7 +500,7 @@ struct ReviseEditorView: View {
             alignment: .leading,
             spacing: PanelTheme.spacingXXXSmall
         ) {
-            if Set(draft.canonicalRepresentations.map(\.pasteboardItemIndex)).count > 1 {
+            if draft.pasteboardItemCount > 1 {
                 Text("\(pasteboardItemIndex + 1)")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -736,13 +747,29 @@ struct ReviseEditorView: View {
     /// user explicitly reloads. Success dismisses and observation refreshes
     /// the row list (03b §10; 04 §5; review Card 3B).
     @MainActor
+    private func startSave() {
+        guard saveTask == nil, readFence.isActive, !readFence.isPurged else { return }
+        saveTask = Task {
+            await save()
+            guard !Task.isCancelled else { return }
+            saveTask = nil
+        }
+    }
+
+    @MainActor
     private func save() async {
-        guard !isSaving, !isReloading, replacementTask == nil, draft.canSubmit else { return }
+        guard !Task.isCancelled, readFence.isActive, !readFence.isPurged,
+              !isSaving, !isReloading, replacementTask == nil, draft.canSubmit else { return }
+        _ = readFence.reconcile(viewState.surfacePurge, item: draft.itemReference)
+        guard !readFence.isPurged else { return }
+        let generation = readFence.generation
         // The submitted request is a snapshot. Keep its draft controls fixed
         // until it settles, so successful dismissal cannot discard later
         // input that was never included in the committed revision.
         isSaving = true
-        defer { isSaving = false }
+        defer {
+            if !Task.isCancelled { isSaving = false }
+        }
         let snapshot = draft
         do {
             // UTF-16 replacement encoding visits every code unit. Prepare the
@@ -761,10 +788,17 @@ struct ReviseEditorView: View {
             }
             try Task.checkCancellation()
             _ = try await viewState.reviseKeepingDetails(request) { reference in
+                // The committed receipt still publishes its purge when the
+                // editor closes. Only this live editor may retarget Details.
+                _ = readFence.reconcile(viewState.surfacePurge, item: snapshot.itemReference)
+                guard !Task.isCancelled, readFence.owns(generation),
+                      draft.itemReference == snapshot.itemReference else { return }
                 onReferenceAdvance?(reference)
             }
+            guard !Task.isCancelled, readFence.owns(generation) else { return }
             completeDismissal()
         } catch let failure as HistoryFailure {
+            guard !Task.isCancelled, readFence.owns(generation) else { return }
             if case .staleContent = failure {
                 draft.markStale()
                 reloadNotice = nil
@@ -773,6 +807,7 @@ struct ReviseEditorView: View {
                 activeAlert = .saveFailure(failure)
             }
         } catch {
+            guard !Task.isCancelled, readFence.owns(generation) else { return }
             guard error is CancellationError else {
                 activeAlert = .saveFailure(nil)
                 return

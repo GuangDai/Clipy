@@ -322,6 +322,40 @@ struct GatewayCurrentStateValidationTests {
         }
     }
 
+    @Test("grant chronology cannot precede enrollment or its own grant")
+    func grantLifecycleTimesAreCoherent() async throws {
+        let authority = try Self.makeAuthority()
+        try await authority.withTestDatabase { owner in
+            let context = owner.database
+            try context.writeTransaction { try SQLiteHistorySchema.create(in: context) }
+            for (grantedAt, revokedAt) in [
+                (Self.enrolledAt.addingTimeInterval(-1), Optional<Date>.none),
+                (Self.enrolledAt.addingTimeInterval(10), Optional(Self.enrolledAt.addingTimeInterval(9))),
+            ] {
+                try Self.resetFixture(in: context)
+                try Self.insertConnection(in: context)
+                try Self.insertGrant(grantedAt: grantedAt, revokedAt: revokedAt, in: context)
+                Self.expectFailure(.persistence(.invariantViolation)) {
+                    _ = try GatewayAdministration.loadCurrentState(
+                        appIntentsConnectionID: Self.appIntentsID, in: context
+                    )
+                }
+            }
+
+            // A coarse or corrected clock can give adjacent lifecycle
+            // transitions the same instant; equality must remain admitted.
+            try Self.resetFixture(in: context)
+            try Self.insertConnection(in: context)
+            try Self.insertGrant(
+                grantedAt: Self.enrolledAt, revokedAt: Self.enrolledAt, in: context
+            )
+            let state = try GatewayAdministration.loadCurrentState(
+                appIntentsConnectionID: Self.appIntentsID, in: context
+            )
+            #expect(state.grants.count == 1)
+        }
+    }
+
     @Test("the durable default identity must still identify App Intents")
     func defaultIdentityRelationFailsClosed() async throws {
         let authority = try Self.makeAuthority()

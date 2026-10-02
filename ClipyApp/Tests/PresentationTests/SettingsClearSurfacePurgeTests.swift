@@ -121,6 +121,11 @@ struct SettingsClearSurfacePurgeTests {
 /// Presentation view-state tests (01-architecture §4). It does not stand in
 /// for a writer or assert storage semantics.
 private actor SettingsClearReceiptHistory: ClipboardHistory {
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        // This Clear receipt script defines no complete source-discovery page.
+        throw HistoryFailure.temporarilyUnavailable(.factProof)
+    }
+
     func backup(to directory: URL) async throws -> HistoryBackupReceipt {
         throw HistoryBackupFailure.writeFailed
     }

@@ -1,7 +1,7 @@
 /// RevisionStateBlobCodec tests (roadmap step 4, codec B): §7.3 round trips —
 /// full revision lineage, active Revision ID, occurrence first/last source,
 /// pin ordinal, and Content Version survival — plus one rejection test per
-/// docs/05-authority-kernel.md §4 decode check (docs/06-cross-cutting.md
+/// docs/storage.md decode check (docs/testing.md
 /// §7.4), each failing closed as `.persistence(.corruptStoredValue)`.
 ///
 /// Invalid-but-decodable blobs are crafted through the production serializer
@@ -84,7 +84,7 @@ internal func storedRevision(
 
 /// Serializes a wire value through the production container format so a
 /// rejection test crafts its corrupt blob exactly the way production writes
-/// valid ones (docs/06-cross-cutting.md §7.4).
+/// valid ones (docs/testing.md).
 internal func wireBlob(
     formatVersion: UInt16 = 1,
     revisions: [StoredRevisionV1],
@@ -137,10 +137,10 @@ internal func smallLimits(
     )!
 }
 
-// MARK: - Round trips (docs/06-cross-cutting.md §7.3)
+// MARK: - Round trips (docs/testing.md)
 
 /// A Canonical-state item: empty revision list, nil active ID, no revision
-/// bytes (docs/05-authority-kernel.md §3.1, D3).
+/// bytes (docs/storage.md, D3).
 @Test func roundTripPreservesCanonicalStateItem() throws {
     let canonical = try makeCanonical()
     let blob = try RevisionStateBlobCodec.encode(revisions: [], activeRevisionID: nil)
@@ -187,7 +187,7 @@ internal func smallLimits(
 
 /// Occurrence first/last time and first/last source, pin ordinal, and
 /// Content Version survive as validated row scalars (§7.3: "occurrence
-/// first/last source, pin ordinal"; docs/05-authority-kernel.md §4).
+/// first/last source, pin ordinal"; docs/storage.md).
 @Test func roundTripPreservesRowScalars() throws {
     let firstCopiedAt = Date(timeIntervalSinceReferenceDate: 100)
     let lastCopiedAt = Date(timeIntervalSinceReferenceDate: 200.5)

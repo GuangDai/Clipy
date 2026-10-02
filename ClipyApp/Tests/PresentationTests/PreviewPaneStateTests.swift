@@ -42,6 +42,42 @@ struct PreviewPaneStateTests {
         PreviewPaneState(autoOpenDelay: .zero)
     }
 
+    @Test(arguments: [false, true])
+    func screenRetirementSkipsFocusRedwellAndPreservesReentrantSelectionChanges(selectionCleared: Bool) async {
+        let state = makeState()
+        defer { state.panelClosed() }
+        let first = reference()
+        let next = reference()
+        state.handleSelectionChange(first)
+        state.togglePreview(for: first)
+        var preparationTargets: [HistoryItemReference] = []
+        state.onPreparationTargetChanged = { target in
+            if let target { preparationTargets.append(target) }
+        }
+        state.onFloatingPreviewTransition = { [weak state] transition in
+            guard case .hide = transition, let state else { return }
+            state.panelBecameKey()
+            state.handleSelectionChange(selectionCleared ? nil : next, isExplicit: true)
+        }
+
+        state.screenChanged()
+        #expect(preparationTargets.isEmpty)
+        #expect(state.isAutoOpenEnabled)
+        #expect(!state.isOpen && state.previewedItem == nil)
+        state.pointerMoved(over: .mainPanel)
+        if selectionCleared {
+            await Task.yield()
+            await Task.yield()
+            #expect(preparationTargets.isEmpty)
+            #expect(!state.isOpen)
+        } else {
+            await waitForScheduledDwell { state.isOpen }
+            #expect(preparationTargets == [next])
+            #expect(state.previewedItem == next)
+        }
+        state.onFloatingPreviewTransition = nil
+    }
+
     @Test func leavingBrowsingCancelsAlreadyQueuedDwell() async {
         let state = makeState()
         defer { state.panelClosed() }
@@ -763,6 +799,87 @@ struct PreviewPaneStateTests {
         #expect(state.previewedItem == nil)
     }
 
+    @Test func gapTransitSurvivesTheGraceAndLeavingTheGapStillHides() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        var isInGap = true
+        var readCount = 0
+        state.pointerSurfacesContainingPointer = { [] }
+        state.pointerIsBetweenSurfaces = {
+            readCount += 1
+            return isInGap
+        }
+        let item = reference()
+        state.togglePreview(for: item)
+        state.pointerEntered(.mainPanel)
+        state.pointerExited(.mainPanel)
+        await waitForScheduledDwell { readCount > 0 }
+        #expect(state.previewedItem == item)
+        #expect(state.isOpen)
+        isInGap = false
+        try? await Task.sleep(for: .milliseconds(75))
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen, "The untracked gap must not hold the preview after departure")
+    }
+
+    @Test func resizingCancelsQueuedExitAndMouseUpOutsideRestoresTheGrace() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        state.pointerSurfacesContainingPointer = { [] }
+        let item = reference()
+        state.togglePreview(for: item)
+        state.pointerEntered(.preview)
+        state.pointerExited(.preview)
+        state.beginPreviewResize()
+        state.pointerExited(.preview)
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isResizingPreview)
+        #expect(state.previewedItem == item)
+        state.endPreviewResize()
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isResizingPreview)
+        #expect(!state.isOpen)
+    }
+
+    @Test func endingResizeInsidePreviewKeepsItUntilTheNextRealDeparture() async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        var nativePresence: Set<PreviewPaneState.PreviewPointerSurface> = [.preview]
+        state.pointerSurfacesContainingPointer = { nativePresence }
+        state.togglePreview(for: reference())
+        state.beginPreviewResize()
+        state.pointerExited(.preview)
+        state.endPreviewResize()
+        await Task.yield()
+        #expect(state.isOpen)
+        nativePresence = []
+        state.pointerExited(.preview)
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen)
+    }
+
+    @Test(arguments: ["close", "details", "remove", "selection", "dismiss"])
+    func retiringThePreviewAlwaysCancelsResize(_ action: String) async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        let item = reference()
+        state.togglePreview(for: item)
+        state.beginPreviewResize()
+        switch action {
+        case "close": state.panelClosed()
+        case "details": state.setBrowsingHistory(false)
+        case "remove": state.purge(.item(item.id))
+        case "selection": state.handleSelectionChange(nil)
+        default: state.dismissPreview()
+        }
+        state.endPreviewResize()
+        await Task.yield()
+        #expect(!state.isResizingPreview)
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+    }
+
     @Test func nativePointerReentryIntoMainPanelCancelsAStalePreviewExit() async {
         let state = makePointerState()
         defer { state.panelClosed() }
@@ -781,30 +898,95 @@ struct PreviewPaneStateTests {
         #expect(!state.isOpen)
     }
 
-    @Test func informationPopoverKeepsItsPreviewAliveOutsideBothWindowSurfaces() async {
+    @Test(arguments: [false, true])
+    func closingPopoverOrFileConfirmationRestoresTheExitGraceOutsideBothWindows(fileConfirmation: Bool) async {
         let state = makePointerState()
         defer { state.panelClosed() }
+        state.pointerSurfacesContainingPointer = { [] }
         let item = reference()
         state.togglePreview(for: item)
         state.pointerEntered(.preview)
-        state.isInformationPresented = true
+        if fileConfirmation { state.isFileConfirmationPresented = true }
+        else { state.isInformationPresented = true }
         state.pointerExited(.preview)
         await Task.yield()
         await Task.yield()
         #expect(state.isOpen)
         #expect(state.previewedItem == item)
-        // Escape's first step dismisses information, preserving the preview.
-        state.isInformationPresented = false
+        // Dismissal starts the ordinary grace without another native exit.
+        if fileConfirmation { state.isFileConfirmationPresented = false }
+        else { state.isInformationPresented = false }
         #expect(state.isOpen)
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
     }
 
-    @Test func openingInformationCancelsTheEffectOfAnAlreadyQueuedExit() async {
+    @Test(arguments: [false, true], [false, true])
+    func closingPopoverOrFileConfirmationKeepsThePreviewUnderTheActualPointer(
+        fileConfirmation: Bool, insideMainPanel: Bool
+    ) async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        let surface: PreviewPaneState.PreviewPointerSurface = insideMainPanel ? .mainPanel : .preview
+        var nativePresence: Set<PreviewPaneState.PreviewPointerSurface> = [surface]
+        state.pointerSurfacesContainingPointer = { nativePresence }
+        let item = reference()
+        state.togglePreview(for: item)
+        state.pointerEntered(.preview)
+        if fileConfirmation { state.isFileConfirmationPresented = true }
+        else { state.isInformationPresented = true }
+        state.pointerExited(.preview)
+
+        // No entry event accompanies modal dismissal. Native containment
+        // must restore presence in either browsing window.
+        if fileConfirmation { state.isFileConfirmationPresented = false }
+        else { state.isInformationPresented = false }
+        await Task.yield()
+        await Task.yield()
+        #expect(state.isOpen)
+        #expect(state.previewedItem == item)
+
+        nativePresence = []
+        state.pointerExited(surface)
+        await waitForScheduledDwell { !state.isOpen }
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func retiringThePreviewDuringAModalDoesNotScheduleAnotherHide(fileConfirmation: Bool) async {
+        let state = makePointerState()
+        defer { state.panelClosed() }
+        state.pointerSurfacesContainingPointer = { [] }
+        let item = reference()
+        var transitions: [PreviewPaneState.FloatingPreviewTransition] = []
+        state.onFloatingPreviewTransition = { transitions.append($0) }
+        state.togglePreview(for: item)
+        state.pointerEntered(.preview)
+        if fileConfirmation { state.isFileConfirmationPresented = true }
+        else { state.isInformationPresented = true }
+        state.pointerExited(.preview)
+
+        #expect(state.dismissPreview())
+        if fileConfirmation { state.isFileConfirmationPresented = false }
+        else { state.isInformationPresented = false }
+        await Task.yield()
+        await Task.yield()
+        #expect(!state.isOpen)
+        #expect(state.previewedItem == nil)
+        #expect(transitions == [.show(item), .hide])
+    }
+
+    @Test(arguments: [false, true])
+    func openingPopoverOrFileConfirmationRetiresAnAlreadyQueuedExit(fileConfirmation: Bool) async {
         let state = makePointerState()
         defer { state.panelClosed() }
         state.togglePreview(for: reference())
         state.pointerEntered(.preview)
         state.pointerExited(.preview)
-        state.isInformationPresented = true
+        if fileConfirmation { state.isFileConfirmationPresented = true }
+        else { state.isInformationPresented = true }
         await Task.yield()
         await Task.yield()
         #expect(state.isOpen)

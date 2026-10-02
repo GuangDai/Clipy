@@ -33,8 +33,24 @@ extension HistoryAuthority {
             count = increment.partialValue
         }
         if !exists {
-            try database.execute("UPDATE history_items SET sourceCount=sourceCount+1 WHERE id=?",
-                                 bindings: [.text(itemID.rawValue.uuidString)])
+            // SQLite promotes overflowing INTEGER addition to REAL. Only
+            // advance a valid representable counter; a refusal must abort
+            // the enclosing capture transaction before a source is inserted.
+            try database.execute("""
+                UPDATE history_items SET sourceCount=sourceCount+1
+                WHERE id=? AND typeof(sourceCount)='integer'
+                  AND sourceCount>=0 AND sourceCount<?
+                """, bindings: [.text(itemID.rawValue.uuidString), .integer(Int64.max)])
+            if try database.changedRowCount != 1 {
+                let stored = try database.prepare("SELECT sourceCount FROM history_items WHERE id=?",
+                                                  bindings: [.text(itemID.rawValue.uuidString)])
+                defer { stored.finalize() }
+                guard try stored.step() else { throw HistoryFailure.persistence(.invariantViolation) }
+                let sourceCount = try stored.integer(at: 0)
+                guard sourceCount >= 0 else { throw HistoryFailure.persistence(.corruptStoredValue) }
+                if sourceCount == Int64.max { throw HistoryFailure.capacityExceeded(.copyCount) }
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
         }
         try database.execute("""
             INSERT INTO copy_sources(itemID,sourceKey,application,firstCopiedAt,lastCopiedAt,copyCount)
@@ -53,7 +69,7 @@ extension HistoryAuthority {
         for itemID: HistoryItemID, expectedCopyCount: UInt64, offset: Int
     ) throws -> HistoryCopySourcePage {
         guard offset >= 0 else { throw HistoryFailure.invalidInput(.invalidPageLimit) }
-        return try database.readTransaction {
+        return try database.readTransaction(checkingCancellation: true) {
             guard let item = try HistoryItemRowHydration.metadata(itemID: itemID, in: database, limits: limits)
             else { throw HistoryFailure.notFound(itemID) }
             guard item.occurrence.count == expectedCopyCount else {
@@ -66,7 +82,9 @@ extension HistoryAuthority {
             defer { query.finalize() }
             var sources: [CopySourceSummary] = []
             var hasMore = false
-            while try query.step() {
+            while true {
+                try Task.checkCancellation()
+                guard try query.step() else { break }
                 if sources.count == 32 { hasMore = true; break }
                 guard try query.isNull(at: 0)
                     || query.textByteCount(at: 0) <= limits.maximumSourceApplicationObservationUTF8Bytes else {

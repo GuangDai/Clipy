@@ -1,6 +1,6 @@
 /// Search evaluation worker for request-owned SQLite snapshots (V2-09 §4).
-/// Owning spec: docs/03b-instruction-set.md §8 (frozen search behavior);
-/// bounds: docs/06-cross-cutting.md §2; fixtures: docs/06-cross-cutting.md
+/// Owning spec: docs/architecture.md (frozen search behavior);
+/// bounds: docs/testing.md; fixtures: docs/testing.md
 /// §8 WS17.
 ///
 /// The facade supplies only an immutable store location. Each request opens
@@ -12,7 +12,7 @@
 /// The actor exists to confine the non-Sendable Fuse 1.4.0 matcher: `Fuse`
 /// is a pre-concurrency class with no `Sendable` conformance, so it lives
 /// entirely as actor-isolated state and never appears in a public or
-/// package signature (docs/01-architecture.md §6; docs/AUDIT.md §4b).
+/// package signature (docs/architecture.md; docs/testing.md).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -22,24 +22,25 @@ import Fuse
 /// The handler is always nil in production and is compiled in so `@testable`
 /// coherence proofs can place a commit inside the snapshot→evaluation gap or
 /// cancellation at a bounded scan checkpoint without retaining any SwiftData
-/// value across the suspension (docs/04-coherence.md §5/§7; REVIEW Card 11B).
+/// value across the suspension (docs/storage.md; REVIEW Card 11B).
 internal enum SearchWorkerSuspensionPoint: String, Sendable {
     case evaluationEntry = "SearchWorker.page.evaluationEntry"
 #if DEBUG
     case exactScanChunk = "SearchWorker.page.exactScanChunk"
+    case expressionScanChunk = "SearchWorker.page.expressionScanChunk"
     case regexpScanChunk = "SearchWorker.page.regexpScanChunk"
     case fuzzyScanChunk = "SearchWorker.page.fuzzyScanChunk"
     case sqliteBatchComplete = "SearchWorker.page.sqliteBatchComplete"
 #endif
 }
 
-/// Search evaluation worker (docs/05-authority-kernel.md §14.2). Roadmap
+/// Search evaluation worker (docs/storage.md). Roadmap
 /// step 7: the three frozen search modes plus the recent-equivalent empty
-/// term (docs/03b-instruction-set.md §8; docs/06-cross-cutting.md §8 WS17).
+/// term (docs/architecture.md; docs/testing.md WS17).
 ///
 /// All mode behavior is frozen by 03b §8 and fixture-locked by WS17; the
 /// individual steps cite the paragraph they implement. Determinism follows
-/// docs/04-coherence.md §7: every sort ends with `lastCopiedAt` descending
+/// docs/storage.md: every sort ends with `lastCopiedAt` descending
 /// and History Item ID bytes ascending, and matched ranges are UTF-16
 /// offsets into the returned title/snippet, never `String.Index` values.
 internal actor SearchWorker {
@@ -48,6 +49,12 @@ internal actor SearchWorker {
     /// frozen Foundation/Fuse match calls are synchronous; no matcher object
     /// or mutable state leaves this actor (review playbook §16).
     internal static let cancellationRowInterval = 32
+
+    /// Reentrant scans each own a WAL snapshot and SQLite page cache. Limit
+    /// those live resources across requests as well as each request's batch;
+    /// excess requests fail before opening a connection and never queue here.
+    internal static let maximumConcurrentSnapshots = 4
+    internal var activeSnapshots = 0
 
     /// REVIEW Card 11C: the fixed per-request regexp engine deadline — the
     /// same bound as the two-run master watchdog evidence that proved the
@@ -61,19 +68,19 @@ internal actor SearchWorker {
     internal static let defaultRegexpEngineDeadline: Duration = .milliseconds(2_000)
 
     /// The fixed `HistoryLimits.standard` safety profile
-    /// (docs/06-cross-cutting.md §2): the common 4,096-UTF-8-byte search-term
+    /// (docs/testing.md): the common 4,096-UTF-8-byte search-term
     /// bound, the 512-Character regexp-pattern bound, the 64-Character
     /// fuzzy-query bound, the 1,000/5,000-Character regexp/fuzzy scan prefixes,
     /// and the 322-Character snippet bound.
     internal let limits: HistoryLimits
 
-    /// The confined fuzzy matcher (docs/01-architecture.md §6). Frozen
+    /// The confined fuzzy matcher (docs/architecture.md). Frozen
     /// parameters (03b §8): `threshold` 0.7, `location` 0, `distance` 100,
     /// `isCaseSensitive` false; `tokenize` keeps its `false` default.
     /// `maxPatternLength` is deliberately not passed: it is a dead
     /// parameter in the pinned 1.4.0 revision (stored, never read — see
     /// `Fuse/Classes/Fuse.swift` at krisk/fuse-swift
-    /// 26ba868691b2d8b7bf2b1322951eb591be70ccca; docs/AUDIT.md §4b), so the
+    /// 26ba868691b2d8b7bf2b1322951eb591be70ccca; docs/testing.md), so the
     /// 64-Character query bound is enforced by `page` itself before Fuse
     /// is called.
     internal let fuse: Fuse
@@ -153,6 +160,8 @@ internal actor SearchWorker {
             point = .regexpScanChunk
         case .fuzzy:
             point = .fuzzyScanChunk
+        case .expression:
+            point = .expressionScanChunk
         }
         await suspensionHandler?(point)
 #endif
@@ -169,7 +178,7 @@ internal actor SearchWorker {
     /// One evaluated row in final page order: the corpus scalar row, its
     /// deferred presentation (`nil` on the recent-equivalent lane, 03b §8),
     /// and the complete ordering anchor the next cursor binds to
-    /// (docs/04-coherence.md §6).
+    /// (docs/storage.md).
     internal struct EvaluatedRow {
         let corpusRow: SearchCorpusRow
         let search: DeferredSearchPresentation?
@@ -211,7 +220,7 @@ internal actor SearchWorker {
     /// - Parameter continuationAnchor: The decoded cursor anchor for a
     ///   continuation page, or `nil` for a first page. The anchor drops
     ///   every row up to and including the anchored row in the computed
-    ///   order (docs/04-coherence.md §6).
+    ///   order (docs/storage.md).
     /// - Parameter processMarker: The Authority-owned process-instance
     ///   marker the minted cursor binds to (04 §6); the facade forwards it
     ///   — this worker never mints markers.
@@ -237,13 +246,13 @@ internal actor SearchWorker {
         // The immutable array entry is the matcher oracle used by owner
         // tests. Production filters SQLite rows before copying each batch.
 #if DEBUG
-        let corpus = request.filter == .all ? inputCorpus : SearchCorpusSnapshot(
+        var corpus = request.filter == .all ? inputCorpus : SearchCorpusSnapshot(
             position: inputCorpus.position,
             rows: inputCorpus.rows.filter { HistoryFilterSQL.admits($0, filter: request.filter) },
             debugTrace: inputCorpus.debugTrace
         )
 #else
-        let corpus = request.filter == .all ? inputCorpus : SearchCorpusSnapshot(
+        var corpus = request.filter == .all ? inputCorpus : SearchCorpusSnapshot(
             position: inputCorpus.position,
             rows: inputCorpus.rows.filter { HistoryFilterSQL.admits($0, filter: request.filter) }
         )
@@ -265,6 +274,22 @@ internal actor SearchWorker {
         // boundary. The worker never trusts the already-materialized corpus
         // to imply that its independently supplied request was admitted.
         let admitted = try AdmittedSearchRequest(request, limits: limits)
+        if admitted.mode != .expression, !admitted.term.isEmpty, let condition = admitted.conditionExpression {
+            let matcher = PreparedSearchExpression(condition.root)
+            let rows = corpus.rows.filter { matcher.match($0).matches }
+#if DEBUG
+            corpus = SearchCorpusSnapshot(position: corpus.position, rows: rows, debugTrace: corpus.debugTrace)
+#else
+            corpus = SearchCorpusSnapshot(position: corpus.position, rows: rows)
+#endif
+        }
+        if let target = request.startAround {
+            guard request.cursor == nil, continuationAnchor == nil else {
+                throw HistoryFailure.invalidInput(.conflictingPageAnchors)
+            }
+            return try await pageStartingAtInCorpus(target, request: request, admitted: admitted,
+                                                    corpus: corpus, processMarker: processMarker)
+        }
         let term = admitted.term
         let mode = admitted.mode
         let direction: HistoryPageDirection
@@ -302,8 +327,16 @@ internal actor SearchWorker {
             direction: direction
         )
         let evaluation: EvaluationResult
-        if term.isEmpty {
-            evaluation = evaluateRecentEquivalent(in: corpus, directive: directive)
+        if request.sortOrder != .automatic {
+            evaluation = try await evaluateMetadataOrder(
+                admitted: admitted, in: corpus, sortOrder: request.sortOrder, directive: directive
+            )
+        } else if term.isEmpty {
+            if let root = admitted.expressionRoot {
+                evaluation = try await evaluateExpression(PreparedSearchExpression(root), in: corpus, directive: directive)
+            } else {
+                evaluation = evaluateRecentEquivalent(in: corpus, directive: directive)
+            }
         } else {
             switch mode {
             case .exact:
@@ -321,6 +354,13 @@ internal actor SearchWorker {
             case .fuzzy:
                 evaluation = try await evaluateFuzzy(
                     term: term, in: corpus, directive: directive
+                )
+            case .expression:
+                guard let root = admitted.expressionRoot else {
+                    throw HistoryFailure.persistence(.invariantViolation)
+                }
+                evaluation = try await evaluateExpression(
+                    PreparedSearchExpression(root), in: corpus, directive: directive
                 )
             }
         }
@@ -414,7 +454,7 @@ internal actor SearchWorker {
         return HistoryPage(position: corpus.position, rows: rows, previous: previous, next: next)
     }
 
-    // MARK: - Default-order anchor (docs/04-coherence.md §6)
+    // MARK: - Default-order anchor (docs/storage.md)
 
     /// Both SQLite streaming and the pure matcher fixtures materialize only
     /// returned rows, using the same frozen Unicode/window construction.

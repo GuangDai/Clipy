@@ -51,10 +51,6 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             typeIdentifier: typeIdentifier,
             bytes: originalBytes
         )
-        defer {
-            app.terminate()
-            NSPasteboard.general.clearContents()
-        }
         let expectedItemID = try XCTUnwrap(capturedItemID)
         let pasteboard = NSPasteboard.general
         let source = try XCTUnwrap(pasteboard.pasteboardItems?.first)
@@ -150,10 +146,6 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             capturing: "clipy-editor-stale-original",
             editorJourney: "stale-reload-failure-once"
         )
-        defer {
-            app.terminate()
-            NSPasteboard.general.clearContents()
-        }
 
         let replacement = try authorReplacement(draft, in: app)
         let revisionDisclosure = app.descendants(matching: .any)[
@@ -356,10 +348,6 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             "-clipy.panelContentWidth", "360", "-clipy.panelHeight", "420",
             "-AppleShowScrollBars", "Always",
         ])
-        defer {
-            app.terminate()
-            NSPasteboard.general.clearContents()
-        }
 
         let replacement = try authorReplacement(draft, in: app)
         // At the default window size, metadata and padding must leave a
@@ -499,6 +487,7 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         arguments: [String] = []
     ) throws -> XCUIApplication {
         let pasteboard = NSPasteboard.general
+        addTeardownBlock { @MainActor () async in pasteboard.clearContents() }
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setData(
             bytes ?? Data(value.utf8),
@@ -514,7 +503,7 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
         temporaryDirectory = directory
 
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system"]
         app.launchArguments += arguments
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
@@ -525,6 +514,9 @@ final class EditorRuntimeJourneyUITests: XCTestCase {
             app.launchEnvironment["CLIPY_UI_TEST_EDITOR_JOURNEY"] =
                 editorJourney
         }
+        // Launch/navigation can abort before this helper returns its app.
+        // XCTest teardown still stops the modal owner before directory removal.
+        addTeardownBlock { @MainActor () async in app.terminate() }
         app.launch()
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]

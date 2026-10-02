@@ -7,6 +7,96 @@ import Testing
 @Suite("Gateway audit compaction and rebase (X.4)")
 struct GatewayAuditCompactionTests {
     private enum InjectedFailure: Error { case afterMaintenance }
+    private enum TailDamage: CaseIterable, Sendable {
+        case payload, schema, gap, byteCounter
+
+        var failure: ExternalFailure {
+            switch self {
+            case .payload, .schema: .persistence(.corruptStoredValue)
+            case .gap, .byteCounter: .persistence(.invariantViolation)
+            }
+        }
+    }
+
+    @Test("compaction rejects damaged retained tails even without a trim or beyond its expired prefix",
+          arguments: [false, true], TailDamage.allCases)
+    private func damagedTailCannotBeSkipped(needsAgeTrim: Bool, damage: TailDamage) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            let limits = GatewayAuditTestSupport.limits(maxAuditAgeSeconds: 10, maxAuditReadBatchSize: 2)
+            let fresh = GatewayAuditTestSupport.requestedAt.addingTimeInterval(20)
+            try database.writeTransaction {
+                try GatewayAuditTestSupport.appendRecent(
+                    count: 1, startingAt: needsAgeTrim ? GatewayAuditTestSupport.requestedAt : fresh,
+                    context: database, limits: limits
+                )
+                try GatewayAuditTestSupport.appendRecent(count: 2, startingAt: fresh, context: database, limits: limits)
+                switch damage {
+                case .payload:
+                    try database.execute("UPDATE operation_records SET payloadBlob=? WHERE auditSequence=?",
+                                         bindings: [.blob(Data([0])), .blob(sqliteUInt64(3))])
+                case .schema:
+                    try database.execute("UPDATE operation_records SET auditSchemaVersion=2 WHERE auditSequence=?",
+                                         bindings: [.blob(sqliteUInt64(3))])
+                case .gap:
+                    let config = try HistoryAuthority.loadGatewayConfig(in: database)
+                    let last = try #require(GatewayAuditTestSupport.rows(in: database).last)
+                    try database.execute("DELETE FROM operation_records WHERE auditSequence=?",
+                                         bindings: [.blob(sqliteUInt64(3))])
+                    try GatewayAuditTestSupport.setCounters(
+                        nextAuditSequence: config.nextAuditSequence,
+                        auditBytes: config.auditBytes - GatewayAuditTestSupport.contribution(of: last, limits: limits),
+                        compactionFloor: config.compactionFloor, in: database
+                    )
+                case .byteCounter:
+                    try GatewayAuditTestSupport.setCounters(nextAuditSequence: 4, auditBytes: .max, in: database)
+                }
+            }
+            let before = try GatewayStoreSnapshot.read(in: database)
+            #expect(throws: damage.failure) {
+                try database.writeTransaction {
+                    try GatewayAuditStore.compactIfNeeded(
+                        now: fresh.addingTimeInterval(1),
+                        config: HistoryAuthority.loadGatewayConfig(in: database), in: database, limits: limits
+                    )
+                }
+            }
+            #expect(try GatewayStoreSnapshot.read(in: database) == before,
+                    "Failed maintenance cannot append a marker or discard even its valid expired prefix")
+        }
+    }
+
+    @Test("no-op compaction retains marker overflow checks and corruption precedence", arguments: [false, true])
+    func noOpStillChecksMarkerSequenceOverflow(corruptPayload: Bool) async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            try database.writeTransaction {
+                try GatewayAuditTestSupport.appendRecent(count: 1, context: database)
+                let config = try HistoryAuthority.loadGatewayConfig(in: database)
+                try database.execute("UPDATE operation_records SET auditSequence=?",
+                                     bindings: [.blob(sqliteUInt64(UInt64.max - 1))])
+                try GatewayAuditTestSupport.setCounters(
+                    nextAuditSequence: .max, auditBytes: config.auditBytes,
+                    compactionFloor: .max - 1, in: database
+                )
+                if corruptPayload { try database.execute("UPDATE operation_records SET payloadBlob=?", bindings: [.blob(Data([0]))]) }
+            }
+            let before = try GatewayStoreSnapshot.read(in: database)
+            let failure: ExternalFailure = corruptPayload
+                ? .persistence(.corruptStoredValue) : .persistence(.invariantViolation)
+            #expect(throws: failure) {
+                try database.writeTransaction {
+                    try GatewayAuditStore.compactIfNeeded(
+                        now: GatewayAuditTestSupport.requestedAt,
+                        config: HistoryAuthority.loadGatewayConfig(in: database), in: database
+                    )
+                }
+            }
+            #expect(try GatewayStoreSnapshot.read(in: database) == before)
+        }
+    }
 
     @Test("size compaction appends marker and removes exactly one oldest prefix")
     func sizeCompactionPreservesOneContiguousSuffix() async throws {
@@ -179,6 +269,34 @@ struct GatewayAuditCompactionTests {
                 )
             }
             #expect(try GatewayStoreSnapshot.read(in: database) == before)
+        }
+    }
+
+    @Test("rebase can discard an oversized corrupt prefix while retaining a valid suffix")
+    func oversizedCorruptPrefixCanBeQuarantined() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            try database.writeTransaction {
+                try GatewayAuditTestSupport.appendRecent(count: 3, context: database)
+                try database.execute(
+                    "UPDATE operation_records SET payloadBlob = zeroblob(?) WHERE auditSequence = ?",
+                    bindings: [
+                        .integer(Int64(ExternalLimits.standard.maximumAuditPayloadBlobBytes + 1)),
+                        .blob(sqliteUInt64(1))
+                    ]
+                )
+                try GatewayAuditTestSupport.setCounters(nextAuditSequence: 4, auditBytes: .max, in: database)
+            }
+            _ = try authority.rebaseGatewayAudit(
+                reason: .corruptionDetected, newFloor: 2,
+                requestedAt: GatewayAuditTestSupport.requestedAt,
+                committedAt: GatewayAuditTestSupport.requestedAt
+            )
+            let config = try HistoryAuthority.loadGatewayConfig(in: database)
+            try GatewayAuditStore.validateRetainedState(config: config, in: database)
+            #expect(config.compactionFloor == 2)
+            #expect(try GatewayAuditTestSupport.rows(in: database).map(\.auditSequence) == [2, 3, 4])
         }
     }
 

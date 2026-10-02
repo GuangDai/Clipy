@@ -1,5 +1,5 @@
 /// Step-7 read/observation/no-emission clause closure
-/// (docs/roadmap/README.md §3, WS-clause phasing note): the DEFERRED
+/// (docs/testing.md, WS-clause phasing note): the DEFERRED
 /// public-read / observation / no-emission clauses of WS9, WS10, WS13, WS14,
 /// WS16, WS19, WS21. Each clause below exercises the now-implemented public
 /// read/observation APIs (`browse`, `observe`, `details`, `pastePayload`)
@@ -7,7 +7,7 @@
 /// The commit/storage side of every gate was closed in steps 5–6; this file
 /// closes the remaining step-7 side.
 ///
-/// Per-clause citations (docs/06-cross-cutting.md §8):
+/// Per-clause citations (docs/testing.md):
 ///
 /// - WS9: after the third capture retires the oldest inside the same History
 ///   Commit, `browse(.recent)` shows exactly the two survivors — the retired
@@ -17,7 +17,7 @@
 ///   shows the complete post-clear state (all-or-nothing).
 /// - WS13: after the injected transaction failure, a capture attempt that
 ///   fails produces no replacement page on an `observe` stream (no
-///   invalidation for a failed commit, docs/04-coherence.md §4).
+///   invalidation for a failed commit, docs/storage.md).
 /// - WS14: after restart, `browse(.recent)` + `details` results equal the
 ///   pre-restart public results.
 /// - WS16: after remove, the ID is absent from `browse` and
@@ -64,13 +64,13 @@ internal static func captureText(
     return reference
 }
 
-// MARK: - WS9 (docs/06-cross-cutting.md §8, step-7 read clause)
+// MARK: - WS9 (docs/testing.md, step-7 read clause)
 
-/// WS9 (docs/06-cross-cutting.md §8): with maximum unpinned 2, after the third
+/// WS9 (docs/testing.md): with maximum unpinned 2, after the third
 /// capture retires the oldest inside the same History Commit, `browse(.recent)`
 /// shows exactly the two survivors — items two and three — and the retired
 /// item one's ID is absent from the public read
-/// (docs/roadmap/README.md §3 WS-clause phasing note).
+/// (docs/testing.md WS-clause phasing note).
 @Test func browseShowsTwoSurvivorsAfterThirdCaptureRetiresOldest() async throws {
     let storeURL = WSSupport.tempStoreURL("ws9-read-clause")
     defer { WSSupport.removeStore(storeURL) }
@@ -78,7 +78,7 @@ internal static func captureText(
     let history = try await WSSupport.openHistory(storeURL: storeURL, maximumUnpinned: 2)
 
     // Three DISTINCT unpinned captures with strictly increasing observation
-    // times: eviction order is `lastCopiedAt` ascending (docs/02-domain.md
+    // times: eviction order is `lastCopiedAt` ascending (docs/architecture.md
     // §12), so item one is the oldest eligible victim once the policy is
     // exceeded.
     let source = "com.example.ws9r"
@@ -99,7 +99,7 @@ internal static func captureText(
     ) else { return }
 
     // WS9: `browse(.recent)` shows exactly the two survivors — items two and
-    // three — and item one is absent (docs/06-cross-cutting.md §8 WS9).
+    // three — and item one is absent (docs/testing.md WS9).
     let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
     let rowIDs = Set(page.rows.map { $0.item.id })
     // WS9: "leaving two unpinned items" — the retired ID is gone from the
@@ -114,16 +114,16 @@ internal static func captureText(
     )
 }
 
-// MARK: - WS10 (docs/06-cross-cutting.md §8, step-7 observation clause)
+// MARK: - WS10 (docs/testing.md, step-7 observation clause)
 
-/// WS10 (docs/06-cross-cutting.md §8): "No partial page is observable" —
+/// WS10 (docs/testing.md): "No partial page is observable" —
 /// register `observe(.recent)` before `.clear(.unpinned)`; the replacement
 /// page after the clear commit shows the complete post-clear state
 /// (all-or-nothing — never a page listing a proper subset of the cleared
-/// items). The clear is an atomic History Commit (docs/02-domain.md §5.4),
+/// items). The clear is an atomic History Commit (docs/architecture.md),
 /// so the invalidation it publishes fires only after the complete unpinned set
 /// is retired, and the replacement page reflects that complete state
-/// (docs/04-coherence.md §5).
+/// (docs/storage.md).
 @Test func observeReplacementPageAfterClearShowsCompletePostClearStateNeverPartial() async throws {
     let storeURL = WSSupport.tempStoreURL("ws10-read-clause")
     defer { WSSupport.removeStore(storeURL) }
@@ -161,7 +161,7 @@ internal static func captureText(
     let unpinnedIDs = Set([0, 2].map { refs[$0].id })
     let allIDs = Set(refs.map(\.id))
 
-    // Register the observer BEFORE the clear (docs/04-coherence.md §5 ordering:
+    // Register the observer BEFORE the clear (docs/storage.md ordering:
     // subscribe-before-query). The clear is performed inside the loop AFTER the
     // first page arrives, so the first page is the pre-clear state and the
     // replacement page is the post-clear state — the ordering is deterministic.
@@ -189,7 +189,7 @@ internal static func captureText(
     // WS10: "No partial page is observable" — every page is either the
     // complete pre-clear state (all four items) or the complete post-clear
     // state (exactly the pinned survivors), never a proper subset
-    // (docs/06-cross-cutting.md §8 WS10; docs/02-domain.md §5.4).
+    // (docs/testing.md WS10; docs/architecture.md).
     for page in pages {
         let ids = Set(page.rows.map { $0.item.id })
         #expect(
@@ -199,7 +199,7 @@ internal static func captureText(
     }
 
     // WS10: the replacement page after the clear contains exactly the pinned
-    // survivors (docs/06-cross-cutting.md §8 WS10).
+    // survivors (docs/testing.md WS10).
     let replacementPage = try #require(
         pages.last,
         "WS10: at least one page was collected"
@@ -215,12 +215,12 @@ internal static func captureText(
     )
 }
 
-// MARK: - WS13 (docs/06-cross-cutting.md §8, step-7 no-emission clause)
+// MARK: - WS13 (docs/testing.md, step-7 no-emission clause)
 
-/// WS13 (docs/06-cross-cutting.md §8): after the injected transaction failure
+/// WS13 (docs/testing.md): after the injected transaction failure
 /// on the facade's own Authority, a capture attempt that fails yields no
 /// replacement page on an `observe` stream — the failed commit publishes no
-/// invalidation (docs/04-coherence.md §4; docs/05-authority-kernel.md §10).
+/// invalidation (docs/storage.md; docs/storage.md).
 /// The proof is positional: the first page is at the setup position; the
 /// replacement page (produced by a later SUCCESSFUL capture) jumps exactly one
 /// position — the failed attempt advanced nothing and emitted no page between
@@ -256,7 +256,7 @@ internal static func captureText(
                 didInterfere = true
                 await history.authority.setTransactionFailureInjection(.beforeSingletonUpdate)
                 // WS13: the armed capture fails with .persistence(.transaction)
-                // (docs/05-authority-kernel.md §16). The injection is one-shot
+                // (docs/storage.md). The injection is one-shot
                 // and auto-disarms, so the next capture succeeds.
                 _ = try? await history.perform(.capture(
                     WSSupport.textCapture(
@@ -285,7 +285,7 @@ internal static func captureText(
 
     // WS13: exactly two pages — the first (setup state at position 1) and the
     // replacement (successful capture at position 2). No page exists between
-    // them for the failed attempt (docs/04-coherence.md §4: no invalidation
+    // them for the failed attempt (docs/storage.md: no invalidation
     // for a failed commit).
     #expect(
         pages.count == 2,
@@ -293,7 +293,7 @@ internal static func captureText(
     )
     // WS13: the position gap from 1 to 2 proves exactly ONE commit happened
     // between the two pages (the successful capture); the failed attempt
-    // advanced nothing (docs/05-authority-kernel.md §10).
+    // advanced nothing (docs/storage.md).
     let positions = pages.map(\.position.rawValue)
     #expect(
         positions == [1, 2],

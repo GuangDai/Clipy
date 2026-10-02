@@ -2,24 +2,24 @@
 /// excerpts share the available column width. Copy provenance lives in the
 /// expanded preview; a small accessory identifies multi-source items. The row
 /// paints its rounded selection inside the SwiftUI scrolling list.
-/// Owning spec: docs/01-architecture.md §5.2 (gesture actions), §5.7
+/// Owning spec: docs/architecture.md (gesture actions), §5.7
 /// (thumbnail is requested by exact `HistoryItemReference`);
-/// docs/03b-instruction-set.md §8 (row fields, search presentation, 1-based
+/// docs/architecture.md (row fields, search presentation, 1-based
 /// pin ordinal display) and §12 (paste hand-off);
-/// docs/04-coherence.md §9 (thumbnail single-flight, reference-exact cache);
-/// accessibility per docs/v2/V2-07-ux.md §9.
+/// docs/storage.md (thumbnail single-flight, reference-exact cache);
+/// accessibility per docs/interface.md
 import CoreGraphics
 import Foundation
 import HistoryCore
 import SwiftUI
 
-/// The row's accessibility activation vocabulary (docs/v2/V2-07-ux.md §9):
+/// The row's accessibility activation vocabulary (docs/interface.md):
 /// the default activation and the named Actions-rotor entries the combined
 /// row element exposes. Default activation is the paste hand-off
-/// (docs/01-architecture.md §5.6 — the UI hands a reference to the
+/// (docs/architecture.md — the UI hands a reference to the
 /// composition root and never touches the pasteboard itself), while the
 /// named actions mirror the mutating caller examples of
-/// docs/03b-instruction-set.md §12 (`.placePinned`/`.unpin`/`.remove`)
+/// docs/architecture.md (`.placePinned`/`.unpin`/`.remove`)
 /// plus the details push. One enum so the four `accessibilityAction`
 /// modifiers, the single dispatch method beneath them, and the direct
 /// route/intent tests all share one routing table.
@@ -507,7 +507,7 @@ struct HistoryRowView: View {
     @ViewBuilder
     private var contextMenu: some View {
         if let externalOpener, HistoryExternalOpener.supports(row.typeIdentifiers) {
-            HistoryOpenMenu(item: row.item, opener: externalOpener,
+            HistoryOpenMenu(opener: externalOpener,
                 onFailure: { openFailure = $0 }, options: openOptions,
                 isLoading: isPreparingOpenOptions, failure: openOptionsFailure)
             Divider()

@@ -20,7 +20,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         try FileManager.default.createDirectory(
             at: directory, withIntermediateDirectories: true
         )
-        defer { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
 
         let expectedFilename = "未创建的文件 draft 计划.txt"
         let expectedPath = directory.path + "/" + expectedFilename
@@ -39,13 +39,13 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertEqual(item.types, [fileType])
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        defer { pasteboard.clearContents() }
+        addTeardownBlock { @MainActor () async in pasteboard.clearContents() }
         XCTAssertTrue(pasteboard.writeObjects([item]))
 
         let app = XCUIApplication()
         // Arm production dwell without inheriting another journey's preference.
         app.launchArguments += [
-            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES",
             "-clipy.preview.isTextLengthLimited", "YES",
             "-clipy.preview.maximumTextCharacters", "50000",
@@ -54,7 +54,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store").path
-        defer { app.terminate() }
+        addTeardownBlock { @MainActor () async in app.terminate() }
         app.launch()
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
@@ -237,7 +237,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("explicit file preview.txt")
         let originalAddress = file.absoluteString
         let originalContents = "clipy-file-not-shown-before-confirmation"
@@ -245,7 +245,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         try Data(originalContents.utf8).write(to: file)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        defer { pasteboard.clearContents() }
+        addTeardownBlock { @MainActor () async in pasteboard.clearContents() }
         let item = NSPasteboardItem()
         let fileType = NSPasteboard.PasteboardType("public.file-url")
         XCTAssertTrue(item.setData(Data(originalAddress.utf8), forType: fileType))
@@ -254,7 +254,7 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         // Arm production dwell without inheriting another journey's preference.
         app.launchArguments += [
-            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES",
             "-clipy.preview.isTextLengthLimited", "YES",
             "-clipy.preview.maximumTextCharacters", "50000",
@@ -262,8 +262,10 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory.appendingPathComponent("history.store").path
+        // XCTest aborts on its first assertion failure. Its teardown still
+        // retires the process before the private store is removed.
+        addTeardownBlock { @MainActor () async in app.terminate() }
         app.launch()
-        defer { app.terminate() }
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
         let rows = panel.descendants(matching: .any).matching(
@@ -283,6 +285,9 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertEqual(text(of: address), originalAddress)
         XCTAssertFalse(renderedText.exists, app.debugDescription)
 
+        // Enter through real pointer movement before the modal changes its
+        // owner's geometry; leave the pointer on each confirmation action.
+        request.hover()
         request.click()
         // AppKit also exposes Cancel/Load File in the Touch Bar. Scope both
         // actions to the visible confirmation sheet rather than selecting
@@ -300,9 +305,21 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         XCTAssertFalse(renderedText.exists, app.debugDescription)
         XCTAssertEqual(text(of: address), originalAddress)
 
+        // A completed sheet can leave its action's stationary pointer below
+        // the restored pane. The next actual movement outside both surfaces
+        // must still hide it, and entering the row must re-open the reference.
+        panel.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 1))
+            .withOffset(CGVector(dx: 0, dy: 40)).hover()
+        XCTAssertTrue(waitUntil(timeout: 5) { !preview.exists }, app.debugDescription)
+        XCTAssertTrue(panel.exists, app.debugDescription)
+        rows.firstMatch.hover()
+        XCTAssertTrue(request.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertEqual(text(of: address), originalAddress)
+
         // The second confirmation reads the file's then-current bytes, not a
         // cached copy captured while it was merely a clipboard reference.
         try Data(loadedContents.utf8).write(to: file)
+        request.hover()
         request.click()
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
         confirm.click()

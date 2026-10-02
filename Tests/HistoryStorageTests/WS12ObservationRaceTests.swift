@@ -1,5 +1,5 @@
-/// WS12 — Observation registration race (docs/06-cross-cutting.md §8 WS12;
-/// docs/04-coherence.md §5 race-free observation, §4 internal invalidation):
+/// WS12 — Observation registration race (docs/testing.md WS12;
+/// docs/storage.md race-free observation, §4 internal invalidation):
 /// the subscribe-before-query algorithm's three guarantees — (A) a commit
 /// between registration and the first authoritative query appears in the first
 /// yielded page, (B) a commit between the first query and the race-closing
@@ -13,7 +13,7 @@
 /// concurrency harness (Tests/HistoryStorageTests/ConcurrencyHarness/
 /// ConcurrencyHarness.swift) on the facade's OWN Authority — the five actor
 /// fields of `SQLiteHistory` are `internal` for exactly this harness
-/// (docs/roadmap/03-historystorage.md step-5 note; the comment in
+/// (docs/storage.md step-5 note; the comment in
 /// SQLiteHistory.swift), so `history.authority` is reachable from
 /// `@testable` tests and the two observation-race seams are drivable:
 /// `AuthoritySuspensionPoint.readEntry` (parks between observer registration
@@ -90,7 +90,7 @@ private static func installPositionRecheckPark(
 
 // MARK: Test A — registration → first-query gap (§5 steps 1–5)
 
-/// WS12 (docs/06-cross-cutting.md §8): "Pause an observer between
+/// WS12 (docs/testing.md): "Pause an observer between
 /// registration and first query, commit a change, then resume. Its first
 /// yielded page must include the commit or be replaced before yield."
 ///
@@ -165,7 +165,7 @@ private static func installPositionRecheckPark(
 
 // MARK: Test B — discard path (§5 step 4: recheck detects stale page)
 
-/// WS12 (docs/06-cross-cutting.md §8; 04 §5 step 4): the first query completes
+/// WS12 (docs/testing.md; 04 §5 step 4): the first query completes
 /// at position P BEFORE the interference commit; the phase-1 race-closing
 /// recheck (`currentPosition`) then parks at `.positionRecheckEntry`; on
 /// resume the recheck sees the newer durable position (P' > P), discards the
@@ -236,7 +236,7 @@ private static func installPositionRecheckPark(
 
 // MARK: Test C — coalescing (§4 bufferingNewest(1) + §5 step 7)
 
-/// WS12 (docs/06-cross-cutting.md §8): "Coalesce several later invalidations
+/// WS12 (docs/testing.md): "Coalesce several later invalidations
 /// and verify one fresh page reaches the latest position."
 ///
 /// After the first yield at P0, the latch is rearmed so the SECOND

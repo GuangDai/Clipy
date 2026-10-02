@@ -1,10 +1,10 @@
-/// WS14 — Restart reconstruction (docs/06-cross-cutting.md §8 WS14): the
+/// WS14 — Restart reconstruction (docs/testing.md WS14): the
 /// commit/receipt/storage side of "After insert, coalesce, pin reorder, and
 /// multiple revisions, reopen the store." One on-disk store accumulates an
 /// insert, a Copy Coalescing fold, three first-pins and a `.before` reorder,
 /// and two byte-changing `.replace` revisions of the same item through the
 /// public `SQLiteHistory.perform` and the real step-6 mutation commit
-/// paths (docs/02-domain.md §10/§11, docs/05-authority-kernel.md §9); the
+/// paths (docs/architecture.md, docs/storage.md); the
 /// facade is then REOPENED over the same store. Reads and candidate queries
 /// use durable SQLite metadata and immutable content, without startup rebuilds.
 ///
@@ -16,13 +16,13 @@
 /// fields, §15 projection fields, and pin ordinal match the pre-restart
 /// values, with stored pin ordinals unique and exactly `0 ..< pinnedCount`
 /// (D12); (iii) persisted revisions retain the full append-only list with
-/// the correct active Revision ID, Effective Content (docs/02-domain.md
+/// the correct active Revision ID, Effective Content (docs/architecture.md
 /// §2.6) being the active revision's complete snapshot; and (iv) a post-restart capture of the revised
 /// item's Canonical bytes coalesces into it (receipt `.coalesced` with the
 /// same History Item ID at the preserved Content Version) instead of
 /// inserting a duplicate row, proving candidacy was re-proven from durable
 /// state (revisions never rewrite the Canonical signature used by general
-/// deduplication, docs/02-domain.md §2.6).
+/// deduplication, docs/architecture.md).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -34,7 +34,7 @@ struct WS14RestartReconstructionTests {
 /// Receipt-side assertion for one committed `.placePinned`: a `.committed`
 /// receipt carrying `.placedPinned(expectedID)` at exactly `expectedPosition`
 /// — the one Change Position advance the placement earns
-/// (docs/02-domain.md §13; docs/03a-instruction-set.md §6).
+/// (docs/architecture.md; docs/architecture.md).
 private static func expectPlacedPinned(
     _ receipt: HistoryReceipt,
     id expectedID: HistoryItemID,
@@ -62,8 +62,8 @@ private static func expectPlacedPinned(
 /// Receipt-side assertion for one committed `.revise`: a `.committed` receipt
 /// carrying `.revised(reference)` at exactly `expectedPosition`, naming the
 /// revised item at the minted successor Content Version
-/// (docs/05-authority-kernel.md §9 — the stamper mints
-/// `currentVersion.successor()`; docs/02-domain.md §11 step 6). Returns the
+/// (docs/storage.md — the stamper mints
+/// `currentVersion.successor()`; docs/architecture.md step 6). Returns the
 /// minted reference so the scenario chains the next optimistic-concurrency
 /// token from receipts rather than reconstructing versions by hand.
 private static func revisedReference(
@@ -96,7 +96,7 @@ private static func revisedReference(
     return reference
 }
 
-/// WS14 (docs/06-cross-cutting.md §8): insert A, coalesce A, insert B and C,
+/// WS14 (docs/testing.md): insert A, coalesce A, insert B and C,
 /// pin all three and move C `.before` A, then replace A's Effective Content
 /// twice; reopen the store and assert position, rows, revision lineage, pin
 /// order, and Effective Content against the pre-restart receipts and
@@ -113,7 +113,7 @@ private static func revisedReference(
     // Scenario constants: single-line plain text keeps the §15 projection
     // deterministic (title == body == text), and every capture carries one
     // observed source; observation times are fixed and monotone across the
-    // whole scenario (docs/02-domain.md §3.1 fold rules).
+    // whole scenario (docs/architecture.md fold rules).
     let textA = "ws14 alpha canonical text"
     let textB = "ws14 bravo canonical text"
     let textC = "ws14 charlie canonical text"
@@ -154,7 +154,7 @@ private static func revisedReference(
     let idA = referenceA.id
 
     // Commit 2 — capture A again: Copy Coalescing folds the repeat
-    // observation into A (docs/02-domain.md §13), preserving the winner's ID
+    // observation into A (docs/architecture.md), preserving the winner's ID
     // and Content Version while the occurrence count moves to 2.
     let repeatA = try await history.perform(.capture(
         WSSupport.textCapture(textA, observedAt: secondCopyA, source: sourceA2)
@@ -175,7 +175,7 @@ private static func revisedReference(
     )
     #expect(
         coalescedA.contentVersion == referenceA.contentVersion,
-        "WS14 arrange: coalescing preserves the winner's Content Version (docs/02-domain.md §13)"
+        "WS14 arrange: coalescing preserves the winner's Content Version (docs/architecture.md)"
     )
 
     // Commit 3 — insert B.
@@ -219,7 +219,7 @@ private static func revisedReference(
     let idC = referenceC.id
 
     // Commit 5 — pin A: a first pin with `.last` appends to the empty lane
-    // (docs/02-domain.md §10 steps 2–3): A→0.
+    // (docs/architecture.md steps 2–3): A→0.
     let pinA = try await history.perform(.placePinned(idA, at: .last))
     Self.expectPlacedPinned(pinA, id: idA, position: 5, "pin A .last")
 
@@ -232,14 +232,14 @@ private static func revisedReference(
     Self.expectPlacedPinned(pinC, id: idC, position: 7, "pin C .last")
 
     // Commit 8 — move C `.before` A: [A, B, C] → [C, A, B]
-    // (docs/02-domain.md §10 steps 2–4): C→0, A→1, B→2.
+    // (docs/architecture.md steps 2–4): C→0, A→1, B→2.
     let moveC = try await history.perform(.placePinned(idC, at: .before(idA)))
     Self.expectPlacedPinned(moveC, id: idC, position: 8, "move C .before(A)")
 
     // Commit 9 — first byte-changing revision of A: a `.replace` draft
     // carrying one explicit decision for the item's only Canonical type
-    // (docs/03a-instruction-set.md §5), based on the receipt-captured current
-    // version (optimistic concurrency, docs/02-domain.md §11 step 1).
+    // (docs/architecture.md), based on the receipt-captured current
+    // version (optimistic concurrency, docs/architecture.md step 1).
     let reviseOne = try await history.perform(.revise(RevisionRequest(
         itemID: idA,
         expected: referenceA.contentVersion,
@@ -271,7 +271,7 @@ private static func revisedReference(
     ) else { return }
 
     // The pre-restart commit count, proven one receipt position at a time
-    // above: ten non-empty History Commits (docs/02-domain.md §13).
+    // above: ten non-empty History Commits (docs/architecture.md).
     let preRestartCommitCount: UInt64 = 10
 
     // RESTART: reopen the same on-disk store without rebuilding projections

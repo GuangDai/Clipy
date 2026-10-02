@@ -1,6 +1,6 @@
 /// Revision preparation plus the immutable search-corpus transfer values.
-/// Owning spec: docs/roadmap/03-historystorage.md step-5 note; facade field
-/// list: docs/05-authority-kernel.md §2 (Part V).
+/// Owning spec: docs/storage.md step-5 note; facade field
+/// list: docs/storage.md (Part V).
 ///
 /// `SQLiteHistory.open` constructs all five facade fields; every field is
 /// an `actor`, so `SQLiteHistory: Sendable` is derivable without escape
@@ -11,12 +11,12 @@
 /// `SearchCorpusSnapshot`, `SearchCorpusRow`). `SearchWorker` moved out at
 /// roadmap step 7: its exact/fuzzy/regexp implementation lives
 /// in SearchWorker.swift, with Fuse confined inside the actor per
-/// docs/01-architecture.md §6.
+/// docs/architecture.md
 ///
 /// This file hosts the internal Sendable value types those signatures
 /// require that no other file owns. Step 6 keeps the revision values beside
 /// their preparation actor here; `SearchCorpusSnapshot`/`SearchCorpusRow`
-/// stay here as the docs/05-authority-kernel.md §14.2 contract between the
+/// stay here as the docs/storage.md contract between the
 /// Authority (which captures the corpus) and the `SearchWorker` in
 /// SearchWorker.swift (which evaluates it).
 import Foundation
@@ -25,13 +25,13 @@ import HistoryDomain
 
 /// The output of revision preparation: the Domain-ready proposed revision plus
 /// the durable bounded projection computed from the proposed Effective Content
-/// (docs/05-authority-kernel.md §6.2).
+/// (docs/storage.md).
 ///
 /// Defined at roadmap step 5 to pin the `RevisionPreparationActor` step-6
 /// signature; it remains beside its owner and immutable transfer values.
 internal struct PreparedRevisionBundle: Sendable {
     /// The complete proposed revision for pure Domain planning; Storage minted
-    /// the candidate Revision ID and timestamp (docs/02-domain.md §4).
+    /// the candidate Revision ID and timestamp (docs/architecture.md).
     let domain: PreparedRevision
     /// Projection of the prepared proposed Effective Content (Part V §15).
     let projection: ContentProjection
@@ -44,12 +44,12 @@ internal struct PreparedRevisionBundle: Sendable {
 /// Content, current Effective Content, revision metadata, active ID, and
 /// Content Version, captured by `HistoryAuthority` as a Sendable value —
 /// no row or context escapes
-/// (docs/05-authority-kernel.md §6.2).
+/// (docs/storage.md).
 ///
 /// Defined at roadmap step 5 to pin the `RevisionPreparationActor` step-6
 /// signature; it remains beside its owner and immutable transfer values.
 internal struct RevisionPreparationSnapshot: Sendable {
-    /// The target's validated Canonical Content (docs/02-domain.md §2.3).
+    /// The target's validated Canonical Content (docs/architecture.md).
     let canonical: CanonicalContent
     /// Validated current bytes used for the no-op comparison (02 §11 step 5).
     let current: EffectiveContent
@@ -82,7 +82,7 @@ internal struct SearchCorpusSnapshot: Sendable {
 }
 
 /// One retained item's scalar projection inside a `SearchCorpusSnapshot`
-/// (docs/05-authority-kernel.md §14.2). No Canonical/revision blob is decoded
+/// (docs/storage.md). No Canonical/revision blob is decoded
 /// to build it.
 internal struct SearchCorpusRow: Sendable {
     /// Stable business ID.
@@ -110,7 +110,7 @@ internal struct SearchCorpusRow: Sendable {
     var sourceCount: Int = 0
 }
 
-/// Revision-preparation worker (docs/05-authority-kernel.md §6.2): the
+/// Revision-preparation worker (docs/storage.md): the
 /// off-Authority phase of the OCC-safe two-phase revision flow.
 ///
 /// The Authority captures the `RevisionPreparationSnapshot` and rejects an
@@ -120,26 +120,26 @@ internal struct SearchCorpusRow: Sendable {
 /// creation timestamp, and projects the durable title/search/type summary —
 /// all outside the serial commit interval. The Authority afterwards reloads
 /// the facts and Domain planning rechecks both OCC tokens before the commit
-/// (docs/02-domain.md §11). Missing revert targets and incoherent drafts
+/// (docs/architecture.md). Missing revert targets and incoherent drafts
 /// fail here, before the second Authority entry (§6.2).
 ///
 /// The actor holds only the immutable `HistoryLimits`, so every preparation
 /// is independent and only immutable `Sendable` values cross its boundary
-/// (docs/05-authority-kernel.md Part I-facing confinement rules;
-/// docs/02-domain.md D17).
+/// (docs/storage.md Part I-facing confinement rules;
+/// docs/architecture.md D17).
 internal actor RevisionPreparationActor {
     /// The fixed `HistoryLimits.standard` safety profile in production
-    /// (docs/06-cross-cutting.md §2); focused tests inject smaller bounds.
+    /// (docs/testing.md); focused tests inject smaller bounds.
     private let limits: HistoryLimits
 
     /// Package-injected revision identity and clock dependencies. Production
     /// uses UUID/Date entropy; deterministic tests can pin both without
-    /// moving generation into the pure Domain (docs/01-architecture.md §4).
+    /// moving generation into the pure Domain (docs/architecture.md).
     private let makeRevisionID: @Sendable () -> RevisionID
     private let now: @Sendable () -> Date
 
     /// Creates the preparation actor. Production uses the default
-    /// `HistoryLimits.standard` (docs/06-cross-cutting.md §2).
+    /// `HistoryLimits.standard` (docs/testing.md).
     internal init(
         limits: HistoryLimits = .standard,
         makeRevisionID: @escaping @Sendable () -> RevisionID = {
@@ -156,13 +156,13 @@ internal actor RevisionPreparationActor {
     /// in §6.2's fixed order:
     ///
     /// 1. Resolve the intent into a complete proposed Effective Content
-    ///    (decision resolution: docs/03a-instruction-set.md §5).
+    ///    (decision resolution: docs/architecture.md).
     /// 2. Validate the Part VI hard limits with checked arithmetic — no
-    ///    byte-count calculation wraps (docs/06-cross-cutting.md §2).
+    ///    byte-count calculation wraps (docs/testing.md).
     /// 3. Mint the candidate Revision ID and creation timestamp — entropy
-    ///    lives in Storage, never in the Domain (docs/02-domain.md §4).
+    ///    lives in Storage, never in the Domain (docs/architecture.md).
     /// 4. Project the durable title/search/type summary from the prepared
-    ///    proposed Effective Content (docs/05-authority-kernel.md §15).
+    ///    proposed Effective Content (docs/storage.md).
     ///
     /// The v1 entry point (`retentionPolicies` absent): R3 is disabled for
     /// this preparation, so the path is byte-for-byte v1 (`V2-02` Record 2:
@@ -191,7 +191,7 @@ internal actor RevisionPreparationActor {
     /// check, so the check sees the POST-PRUNE POST-APPEND state — §5.4's
     /// ordering rule ("R3 never relaxes the hard bound; it only prunes below
     /// the user threshold first"). The hard-bound values and their rejection
-    /// semantics are unchanged (docs/06-cross-cutting.md §2: 100 revisions /
+    /// semantics are unchanged (docs/testing.md: 100 revisions /
     /// 256 MiB); with the R3 lane disabled no prune occurs and both checks
     /// degenerate to exactly v1's.
     ///
@@ -244,9 +244,17 @@ internal actor RevisionPreparationActor {
             guard actionsByType.count == source.canonical.representations.count else {
                 throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
             }
+            // Both snapshot contents were normalized and validated by the
+            // Authority (02 §2.1). Resolve current inheritance once by key;
+            // repeated linear searches otherwise make a keep-current draft
+            // quadratic in its representations. The at-most-32 values share
+            // their immutable Data storage; this is not a retained store index.
+            let currentByKey = Dictionary(uniqueKeysWithValues: source.current.representations.map {
+                ($0.key, $0)
+            })
             // Current inheritance preserves that stored identifier spelling.
             // Equivalent spellings can sort differently, so normalize the
-            // resolved result after all decisions (docs/02-domain.md §2.1).
+            // resolved result after all decisions (docs/architecture.md).
             var representations: [ContentRepresentation] = []
             representations.reserveCapacity(source.canonical.representations.count)
             for canonicalRepresentation in source.canonical.representations {
@@ -260,15 +268,13 @@ internal actor RevisionPreparationActor {
                 case .inheritCanonical:
                     representations.append(canonicalRepresentation.content)
                 case .inheritCurrent:
-                    guard let current = source.current.representations.first(where: {
-                        $0.key == canonicalRepresentation.content.key
-                    }) else {
+                    guard let current = currentByKey[canonicalRepresentation.content.key] else {
                         throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
                     }
                     representations.append(current)
                 case .replace(let bytes):
                     // A normalized content set forbids empty-bytes
-                    // representations (docs/02-domain.md §2.1); an oversized
+                    // representations (docs/architecture.md); an oversized
                     // replacement is a size problem (§16).
                     guard !bytes.isEmpty else {
                         throw HistoryFailure.invalidInput(.incoherentRevisionDraft)
@@ -304,7 +310,7 @@ internal actor RevisionPreparationActor {
             case .canonical:
                 // Revert-to-Canonical strips the Canonical fingerprints
                 // (§6.2) — the same shape as the no-active-revision
-                // Effective Content derivation (docs/02-domain.md §2.6).
+                // Effective Content derivation (docs/architecture.md).
                 proposed = EffectiveContent(
                     representations: source.canonical.representations.map(\.content)
                 )
@@ -321,7 +327,7 @@ internal actor RevisionPreparationActor {
         }
 
         // Step 2 — validate the Part VI hard limits with checked arithmetic:
-        // no byte-count calculation wraps (docs/06-cross-cutting.md §2).
+        // no byte-count calculation wraps (docs/testing.md).
         // Representation/byte problems are `.invalidInput`, mirroring the
         // capture path; the per-item revision-count/byte bounds are
         // `.capacityExceeded` with the matching CapacityKind (§16).
@@ -342,11 +348,11 @@ internal actor RevisionPreparationActor {
             proposedTotalBytes = newTotal
         }
         // Step 3 — mint the candidate Revision ID and creation timestamp;
-        // entropy lives in Storage, never in the Domain (docs/02-domain.md
+        // entropy lives in Storage, never in the Domain (docs/architecture.md
         // §4). `basedOn` is the snapshot's Content Version: the Authority
         // already rejected a stale `request.expected` when capturing the
         // snapshot, and Domain planning rechecks both tokens against the
-        // reloaded facts (§6.2; docs/02-domain.md §11 steps 1–2). The mint
+        // reloaded facts (§6.2; docs/architecture.md steps 1–2). The mint
         // is hoisted above the R3 block below so the speculative prune
         // metadata carries the exact revision identity this
         // preparation will propose; the mint is one opaque call with no

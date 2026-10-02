@@ -10,9 +10,9 @@
  * this target; see VENDORED.md for the exact upstream revision and hashes).
  *
  * This header exists so the package target graph matches
- * docs/01-architecture.md §1 and only this single entry point's ABI is relied
+ * docs/architecture.md and only this single entry point's ABI is relied
  * upon; HistoryStorage first consumes it at roadmap step 5
- * (docs/05-authority-kernel.md §6.1, IngestPreparationActor).
+ * (docs/storage.md, IngestPreparationActor).
  */
 
 #ifdef __cplusplus
@@ -21,9 +21,9 @@ extern "C" {
 
 /*
  * Computes the 64-bit XXH3 hash of `input` (the representation fingerprint of
- * docs/02-domain.md §2.2). Evidence only — never identity, never sufficient
+ * docs/architecture.md). Evidence only — never identity, never sufficient
  * for Copy Coalescing (D7); equal fingerprints still require byte
- * confirmation (docs/06-cross-cutting.md §7.6).
+ * confirmation (docs/testing.md).
  */
 uint64_t clipy_xxh3_64bits(const void *input, size_t length);
 

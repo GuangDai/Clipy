@@ -1,5 +1,5 @@
 /// ThumbnailMeasurementTests — owner suite for the DEC-THUMB-CACHE G1
-/// evidence sink (docs/06-cross-cutting.md §3 G1; docs/reviews/
+/// evidence sink (docs/testing.md G1; docs/reviews/
 /// 2026-08-22-clipy-maccy-deep-review/05-evidence-and-open-questions.md §6
 /// "Completed thumbnail cache" row; 11 §4.7). The sink lives in
 /// ThumbnailStore.swift, DEBUG-only and package-scoped (Batch 39 posture);
@@ -98,7 +98,7 @@ struct ThumbnailMeasurementTests {
         store.prefetch(item)
 
         #expect(await pollUntil {
-            store.inFlightCount == 0 && store.cachedEntryCount == 1
+            store.liveRequestCount == 0 && store.pendingRequestCount == 0 && store.cachedEntryCount == 1
         })
         let records = try readRecords(at: fileURL)
         #expect(records.count == 2)
@@ -186,7 +186,7 @@ struct ThumbnailMeasurementTests {
             await history.completeRequest(for: item, with: .success(fixturePNGData))
         )
         #expect(await pollUntil {
-            store.inFlightCount == 0 && (try? readRecords(at: fileURL))?.count == 3
+            store.liveRequestCount == 0 && store.pendingRequestCount == 0 && (try? readRecords(at: fileURL))?.count == 3
         })
         records = try readRecords(at: fileURL)
         #expect(records.map(\.event) == [.started, .rejectedInFlight, .completed])
@@ -223,10 +223,12 @@ struct ThumbnailMeasurementTests {
         #expect(await history.requestCount(for: item) == 2)
     }
 
-    /// Card 9B on the measurement surface: a flight whose reference was
-    /// reset mid-flight still records `.completed`, classified
-    /// `.discarded`, with no entry published.
-    @Test func lateCompletionAfterResetRecordsDiscarded() async throws {
+    /// Retired work records one actual terminal event after History returns.
+    /// Neither a reset nor last-row disappearance fabricates completion.
+    @Test(arguments: [false, true], [false, true])
+    func lateCompletionAfterRetirementRecordsDiscarded(
+        lastAppearance: Bool, cancellationResponse: Bool
+    ) async throws {
         let (directory, fileURL) = try makeMeasurementFile()
         defer { try? FileManager.default.removeItem(at: directory) }
         let item = reference(
@@ -236,14 +238,22 @@ struct ThumbnailMeasurementTests {
         let history = PausableThumbnailHistory()
         let store = measuredStore(history: history, fileURL: fileURL)
 
+        if lastAppearance { store.setDisplayed(item, true) }
         store.prefetch(item)
         #expect(await pollUntil {
             guard await history.requestCount == 1 else { return false }
             return store.inFlightCount == 1
         })
 
-        store.reset()
-        #expect(await history.completeRequest(for: item, with: .success(fixturePNGData)))
+        if lastAppearance { store.setDisplayed(item, false) }
+        else { store.reset() }
+        #expect(store.inFlightCount == 0)
+        try #require(await pollUntil { await history.cancellationCount == 1 })
+        #expect(try readRecords(at: fileURL).map(\.event) == [.started])
+        #expect(store.debugFetchCompletionCount == 0)
+        #expect(await history.completeRequest(
+            for: item, with: cancellationResponse ? .cancelled : .success(fixturePNGData)
+        ))
 
         #expect(await pollUntil {
             store.debugFetchCompletionCount == 1
@@ -252,7 +262,7 @@ struct ThumbnailMeasurementTests {
         let records = try readRecords(at: fileURL)
         #expect(records.map(\.event) == [.started, .completed])
         #expect(records[1].outcome == .discarded)
-        // History completed, but reset retired the request before display
+        // History completed, but retirement removed the request before display
         // decoding. Record the fetch without inventing a raster sample.
         let fetchMs = try #require(records[1].fetchMs)
         #expect(fetchMs >= 0)
@@ -294,7 +304,7 @@ struct ThumbnailMeasurementTests {
         try #require(await pollUntil { store.imagePixelSize(for: first) != nil })
         store.prefetch(second)
         #expect(await pollUntil {
-            guard store.inFlightCount == 0 else { return false }
+            guard store.liveRequestCount == 0, store.pendingRequestCount == 0 else { return false }
             guard await history.requestCount(for: first) == 1 else { return false }
             return await history.requestCount(for: second) == 1
         })

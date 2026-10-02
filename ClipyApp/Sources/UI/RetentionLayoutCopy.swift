@@ -11,7 +11,7 @@ enum RetentionLayoutCopy {
 
     static func countSummary(
         _ configuration: HistoryRetentionConfiguration,
-        bundle: Bundle = .main, locale: Locale = .current
+        bundle: Bundle = AppLocalization.bundle, locale: Locale = .current
     ) -> String {
         guard let maximum = configuration.maximumUnpinnedItems else {
             return text("count-off", "No item count limit", bundle: bundle)
@@ -20,7 +20,7 @@ enum RetentionLayoutCopy {
             locale: locale, maximum.formatted(.number.locale(locale)))
     }
 
-    static func policySummary(_ configuration: HistoryRetentionConfiguration, bundle: Bundle = .main) -> String {
+    static func policySummary(_ configuration: HistoryRetentionConfiguration, bundle: Bundle = AppLocalization.bundle) -> String {
         var enabled: [String] = []
         if configuration.policies.age != nil { enabled.append(text("age", "Age", bundle: bundle)) }
         if configuration.policies.storage != nil { enabled.append(text("storage", "Storage", bundle: bundle)) }
@@ -32,7 +32,7 @@ enum RetentionLayoutCopy {
             enabled.joined(separator: " · "))
     }
 
-    private static func text(_ key: String, _ fallback: String, bundle: Bundle = .main) -> String {
+    private static func text(_ key: String, _ fallback: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(forKey: key, value: fallback, table: "RetentionLayout")
     }
 }

@@ -11,12 +11,13 @@ extension HistoryAuthority {
         _ plan: StampedCommitPlan,
         expectedPreviousPosition: ChangePosition,
         in database: SQLiteDatabase,
-        captureObservation: (application: String?, copiedAt: Date)? = nil
+        captureObservation: (application: String?, copiedAt: Date)? = nil,
+        initialCopySources: [(itemID: HistoryItemID, application: String?, copiedAt: Date)] = []
     ) throws {
         var publishedNewFiles = false
         var committed = false
         defer {
-            if publishedNewFiles && !committed { requestBlobCleanup() }
+            if publishedNewFiles && !committed { requestBlobCleanup(scanningOrphans: true) }
         }
         do {
             try database.writeTransaction(checkingCancellation: true) {
@@ -44,6 +45,12 @@ extension HistoryAuthority {
                     }
                     try recordCopySource(itemID: item.id, application: captureObservation.application,
                                          copiedAt: captureObservation.copiedAt)
+                }
+                // Bounded fixture seeds contain several initial captures in
+                // one stamped commit. Their source facts use the same helper
+                // and transaction as the ordinary single-capture observation.
+                for source in initialCopySources {
+                    try recordCopySource(itemID: source.itemID, application: source.application, copiedAt: source.copiedAt)
                 }
                 if plan.requiresFinalPinOrderValidation {
                     try validateFinalPinOrder(in: database)
@@ -257,7 +264,10 @@ extension HistoryAuthority {
         case .delete(let itemID, _):
             let old = try requireMutationRow(itemID, in: database)
             // The item is the live owner. Removing it hides every revision
-            // immediately; bounded cleanup later reclaims detached content.
+            // immediately. Mark ownership detached in the same transaction
+            // so ordinary cleanup visits the detached index, not the store.
+            try database.execute("UPDATE contents SET itemID = NULL WHERE itemID = ?",
+                                 bindings: [.text(itemID.rawValue.uuidString)])
             try database.execute("DELETE FROM history_items WHERE id = ?", bindings: [.text(itemID.rawValue.uuidString)])
             try database.execute("""
                 UPDATE history_state SET retainedItemCount = retainedItemCount - 1,
@@ -267,14 +277,29 @@ extension HistoryAuthority {
                     .integer(old.pinOrdinal == nil ? 0 : 1), .integer(Int64(old.canonicalBytes)),
                     .integer(Int64(old.revisionBytes)), .text(Self.positionSingletonKey),
                 ])
+            // Normal pinned removal already unpins via .relocatePin, so its
+            // old ordinal is NULL here. Keep direct pinned deletes checked
+            // without imposing a full lane scan on every unpinned removal.
+            if old.pinOrdinal != nil { try validateFinalPinOrder(in: database) }
 
         case .bulkClear(let scope, let affectedCount):
             let predicate = scope == .all ? "" : " WHERE pinOrdinal IS NULL"
-            let totals = try database.prepare("""
-                SELECT count(*), count(pinOrdinal), COALESCE(sum(canonicalBytes), 0),
-                       COALESCE(sum(revisionBytes), 0)
-                FROM history_items\(predicate)
-                """)
+            let totals: SQLiteStatement
+            if scope == .all {
+                // The committed singleton already owns these exact totals.
+                // DELETE's changed-row count below checks cardinality without
+                // scanning every item a second time (V2-09 §4/§6).
+                totals = try database.prepare("""
+                    SELECT retainedItemCount, pinnedItemCount, canonicalBytes, revisionBytes
+                    FROM history_state WHERE key = ?
+                    """, bindings: [.text(Self.positionSingletonKey)])
+            } else {
+                totals = try database.prepare("""
+                    SELECT count(*), count(pinOrdinal), COALESCE(sum(canonicalBytes), 0),
+                           COALESCE(sum(revisionBytes), 0)
+                    FROM history_items\(predicate)
+                    """)
+            }
             defer { totals.finalize() }
             guard try totals.step(), try totals.integer(at: 0) == Int64(affectedCount) else {
                 throw HistoryFailure.persistence(.invariantViolation)
@@ -282,7 +307,15 @@ extension HistoryAuthority {
             let pinned = try totals.integer(at: 1)
             let canonical = try totals.integer(at: 2)
             let revisions = try totals.integer(at: 3)
+            guard pinned >= 0, pinned <= Int64(affectedCount),
+                  canonical >= Int64(affectedCount), revisions >= 0 else {
+                throw HistoryFailure.persistence(.invariantViolation)
+            }
             totals.finalize()
+            try database.execute("""
+                UPDATE contents SET itemID = NULL
+                WHERE itemID IN (SELECT id FROM history_items\(predicate))
+                """)
             try database.execute("DELETE FROM history_items" + predicate)
             guard try database.changedRowCount == Int64(affectedCount) else {
                 throw HistoryFailure.persistence(.invariantViolation)
@@ -293,15 +326,21 @@ extension HistoryAuthority {
             )
 
         case .retirePrefix(let prefix):
-            try database.execute("""
-                DELETE FROM history_items WHERE pinOrdinal IS NULL AND id != ?
+            let predicate = """
+                pinOrdinal IS NULL AND id != ?
                   AND (lastCopiedAt < ? OR (lastCopiedAt = ? AND id <= ?))
-                """, bindings: [
-                    .text(prefix.excludedItemID?.rawValue.uuidString ?? ""),
-                    .real(prefix.through.lastCopiedAt.timeIntervalSinceReferenceDate),
-                    .real(prefix.through.lastCopiedAt.timeIntervalSinceReferenceDate),
-                    .text(prefix.through.itemID.rawValue.uuidString),
-                ])
+                """
+            let bindings: [SQLiteValue] = [
+                .text(prefix.excludedItemID?.rawValue.uuidString ?? ""),
+                .real(prefix.through.lastCopiedAt.timeIntervalSinceReferenceDate),
+                .real(prefix.through.lastCopiedAt.timeIntervalSinceReferenceDate),
+                .text(prefix.through.itemID.rawValue.uuidString),
+            ]
+            try database.execute("""
+                UPDATE contents SET itemID = NULL
+                WHERE itemID IN (SELECT id FROM history_items WHERE \(predicate))
+                """, bindings: bindings)
+            try database.execute("DELETE FROM history_items WHERE " + predicate, bindings: bindings)
             guard try database.changedRowCount == Int64(prefix.itemCount) else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }

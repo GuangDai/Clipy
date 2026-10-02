@@ -14,6 +14,7 @@ fixture_root="$4"
 export XCODEGEN_HOME="$5"
 project="ClipyApp/ClipyApp.xcodeproj"
 shard="${6:-all}"
+app_test_scheme="ClipyApp"
 
 # Balance the existing running-app journeys by their measured elapsed time.
 # Each CI shard owns a separate runner: General pasteboard, focus and windows
@@ -21,12 +22,15 @@ shard="${6:-all}"
 # Leave room in shard 4 for both hosted bundles, not only its GUI journeys.
 gui_group_1=(
   AppearanceJourneyUITests
+  AdvancedInteractionJourneyUITests
   ClipboardJourneyUITests
+  KeyboardShortcutsJourneyUITests
   RetentionCountJourneyUITests
   RetentionPolicyJourneyUITests
   TextPreviewTruncationJourneyUITests
 )
 gui_group_2=(
+  BuiltInAutomationJourneyUITests
   ThumbnailScrollMeasurementJourneyUITests
   CaptureAccessJourneyUITests
   ContentFirstRowJourneyUITests
@@ -34,14 +38,17 @@ gui_group_2=(
   StoreOpenRecoveryJourneyUITests
 )
 gui_group_3=(
+  BuiltInAutomationTransferJourneyUITests
   RTLPreviewGeometryJourneyUITests
   EditorRuntimeJourneyUITests
   FileReferencePreviewJourneyUITests
   HistoryBackupJourneyUITests
+  LanguageSelectionJourneyUITests
   MultiItemDragJourneyUITests
   NarrowSearchHeaderJourneyUITests
   PreviewRecoveryJourneyUITests
   DetailsUnavailableImageJourneyUITests
+  WorkflowSyntaxJourneyUITests
 )
 test_arguments=(-parallel-testing-enabled NO)
 case "$shard" in
@@ -63,9 +70,17 @@ case "$shard" in
     ;;
 esac
 if [[ "$shard" == 1 || "$shard" == 2 || "$shard" == 3 ]]; then
+  app_test_scheme="ClipyAppGUI"
   for test_class in "${selected_classes[@]}"; do
     test_arguments+=("-only-testing:ClipyUITests/$test_class")
   done
+fi
+
+# A manual diagnostic call can select one running-app class without rebuilding
+# every unrelated lane. Ordinary correctness keeps the complete shard groups.
+if [[ -n "${CLIPY_CI_UI_TEST_CLASS:-}" ]]; then
+  app_test_scheme="ClipyAppGUI"
+  test_arguments=(-parallel-testing-enabled NO "-only-testing:ClipyUITests/$CLIPY_CI_UI_TEST_CLASS")
 fi
 
 mkdir -p "$log_dir" "$result_dir" "$fixture_root"
@@ -80,11 +95,12 @@ xcodebuild -list -json -project "$project" > "$log_dir/project-list.json"
 set -o pipefail
 test_exit_code=0
 xcodebuild \
-  -project "$project" -scheme ClipyApp \
+  -project "$project" -scheme "$app_test_scheme" \
   -configuration Debug -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath "$derived_data" \
   -resultBundlePath "$result_dir/app.xcresult" \
   "${test_arguments[@]}" \
+  CLIPY_FIXTURES_DIR="$CLIPY_FIXTURES_DIR" \
   CODE_SIGNING_ALLOWED=NO \
   test 2>&1 | tee "$log_dir/app-build-test.log" || test_exit_code=$?
 

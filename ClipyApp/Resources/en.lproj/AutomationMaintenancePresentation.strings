@@ -26,3 +26,8 @@
 "Path copied." = "Path copied.";
 "Could not copy the path." = "Could not copy the path.";
 "About Content Size" = "About Content Size";
+"Organize History" = "Organize History";
+"Revise and Delete Items" = "Revise and Delete Items";
+"Commands and Permissions" = "Commands and Permissions";
+"Preview access includes content snippets. Full content requires its own permission." = "Preview access includes content snippets. Full content requires its own permission.";
+"Reading returns content to your script; it does not paste or change the system clipboard." = "Reading returns content to your script; it does not paste or change the system clipboard.";

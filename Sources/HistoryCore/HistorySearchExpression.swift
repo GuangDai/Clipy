@@ -1,0 +1,437 @@
+/// Explicit advanced search syntax shared by the UI and History admission.
+/// Parsing is pure and bounded; it never reads application or History state.
+import Foundation
+
+private let expressionTokenLimit = 128
+private let expressionNestingLimit = 16
+
+public struct HistorySearchExpressionError: Error, Sendable, Equatable {
+    public enum Reason: String, Sendable {
+        case queryTooLong, tooManyTerms, tooDeep, expectedTerm, unexpectedToken
+        case unclosedQuote, unclosedParenthesis, missingValue
+        case invalidDate, invalidDateRange, invalidType, invalidFlag
+    }
+
+    public let reason: Reason
+    /// Zero-based Character offset in the original expression.
+    public let offset: Int
+
+    public init(reason: Reason, offset: Int) {
+        self.reason = reason
+        self.offset = offset
+    }
+
+    public var message: String {
+        switch reason {
+        case .queryTooLong: "The expression is too long."
+        case .tooManyTerms: "The expression has too many terms."
+        case .tooDeep: "The expression is nested too deeply."
+        case .expectedTerm: "Enter a search term or condition."
+        case .unexpectedToken: "An operator or closing parenthesis is out of place."
+        case .unclosedQuote: "Close the quoted phrase."
+        case .unclosedParenthesis: "Close the parenthesized group."
+        case .missingValue: "Enter a value after the field name."
+        case .invalidDate: "Use a valid date in YYYY-MM-DD format."
+        case .invalidDateRange: "The end date must be on or after the start date."
+        case .invalidType: "Use type:text, type:images, type:links, or type:all."
+        case .invalidFlag: "Use is:pinned."
+        }
+    }
+}
+
+/// AND (including adjacent terms) binds more tightly than OR; NOT binds
+/// first. Quoted values escape only backslash and double quote. Calendar
+/// dates refer to UTC days, independent of the machine's current timezone.
+public struct HistorySearchExpression: Sendable, Hashable {
+    package indirect enum Node: Sendable, Hashable {
+        case all
+        case text(String)
+        case application(String)
+        case sourceID(String)
+        case noMatch
+        case copiedDate(from: Date?, until: Date?)
+        case type(HistoryContentType)
+        case pinned
+        case and(Node, Node)
+        case or(Node, Node)
+        case not(Node)
+    }
+
+    package let root: Node
+
+    /// Unresolved source/app values; exact `source-id:` terms need no app
+    /// metadata lookup. The order follows their first appearance in the query.
+    public var applicationTerms: [String] {
+        var result: [String] = []
+        func collect(_ node: Node) {
+            switch node {
+            case .application(let value): result.append(value)
+            case .and(let lhs, let rhs), .or(let lhs, let rhs):
+                collect(lhs)
+                collect(rhs)
+            case .not(let child): collect(child)
+            default: break
+            }
+        }
+        collect(root)
+        return result
+    }
+
+    public static func parse(_ text: String) throws(HistorySearchExpressionError) -> Self {
+        guard text.utf8.count <= HistoryLimits.standard.maximumSearchTermUTF8Bytes else {
+            throw HistorySearchExpressionError(reason: .queryTooLong, offset: 0)
+        }
+        var parser = try ExpressionParser(text)
+        return Self(root: try parser.parse())
+    }
+
+    /// A literal expression value, suitable for a full term or after `app:`.
+    public static func quoted(_ value: String) -> String {
+        "\"" + value.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"") + "\""
+    }
+
+    /// App composition resolves display names using installed application
+    /// metadata. This pure transformation substitutes exact source IDs; nil
+    /// leaves a term unresolved, while an empty list matches no History row.
+    /// Each occurrence invokes `transform` once, in query order. The resolved
+    /// serialization must fit the same byte/token/nesting limits as parsing;
+    /// an excessive expansion throws before building its unbounded OR tree.
+    public func replacingApplicationTerms(
+        _ transform: (String) -> [String]?
+    ) throws(HistorySearchExpressionError) -> Self {
+        typealias Shape = (node: Node, bytes: Int, tokens: Int, precedence: Int, depth: Int)
+        func check(bytes: Int, tokens: Int, depth: Int) throws(HistorySearchExpressionError) {
+            guard bytes <= HistoryLimits.standard.maximumSearchTermUTF8Bytes else {
+                throw HistorySearchExpressionError(reason: .queryTooLong, offset: 0)
+            }
+            guard tokens <= expressionTokenLimit else {
+                throw HistorySearchExpressionError(reason: .tooManyTerms, offset: 0)
+            }
+            guard depth <= expressionNestingLimit else {
+                throw HistorySearchExpressionError(reason: .tooDeep, offset: 0)
+            }
+        }
+        func leaf(_ node: Node) throws(HistorySearchExpressionError) -> Shape {
+            // A transform may return a very long identifier. Reject its raw
+            // bytes before quoting could allocate another large String.
+            if case .sourceID(let identifier) = node,
+               identifier.utf8.count > HistoryLimits.standard.maximumSearchTermUTF8Bytes {
+                throw HistorySearchExpressionError(reason: .queryTooLong, offset: 0)
+            }
+            let bytes = Self(root: node).serialized.utf8.count
+            let noMatch: Bool
+            if case .noMatch = node { noMatch = true } else { noMatch = false }
+            let shape: Shape = (node, bytes, noMatch ? 2 : 1, noMatch ? 3 : 4, noMatch ? 1 : 0)
+            try check(bytes: shape.bytes, tokens: shape.tokens, depth: shape.depth)
+            return shape
+        }
+        func combine(_ lhs: Shape, _ rhs: Shape, and: Bool) throws(HistorySearchExpressionError) -> Shape {
+            let precedence = and ? 2 : 1
+            let leftWrap = lhs.precedence < precedence ? 1 : 0
+            let rightWrap = rhs.precedence < precedence ? 1 : 0
+            let parentheses = 2 * (leftWrap + rightWrap)
+            let bytes = lhs.bytes + rhs.bytes + (and ? 1 : 4) + parentheses
+            let tokens = lhs.tokens + rhs.tokens + (and ? 0 : 1) + parentheses
+            let depth = max(lhs.depth + leftWrap, rhs.depth + rightWrap)
+            try check(bytes: bytes, tokens: tokens, depth: depth)
+            return (and ? .and(lhs.node, rhs.node) : .or(lhs.node, rhs.node), bytes, tokens, precedence, depth)
+        }
+        func replace(_ node: Node) throws(HistorySearchExpressionError) -> Shape {
+            switch node {
+            case .application(let name):
+                guard let identifiers = transform(name) else { return try leaf(node) }
+                // An OR of N IDs alone needs 2N-1 tokens. Count-check before
+                // constructing even its first node, without inspecting or
+                // copying a thousands-entry metadata result.
+                guard identifiers.count <= (expressionTokenLimit + 1) / 2 else {
+                    throw HistorySearchExpressionError(reason: .tooManyTerms, offset: 0)
+                }
+                guard let first = identifiers.first else { return try leaf(.noMatch) }
+                var shape = try leaf(.sourceID(first))
+                for identifier in identifiers.dropFirst() {
+                    shape = try combine(shape, leaf(.sourceID(identifier)), and: false)
+                }
+                return shape
+            case .and(let lhs, let rhs):
+                return try combine(replace(lhs), replace(rhs), and: true)
+            case .or(let lhs, let rhs):
+                return try combine(replace(lhs), replace(rhs), and: false)
+            case .not(let child):
+                let replacedChild = try replace(child)
+                let wrap = replacedChild.precedence < 3 ? 1 : 0
+                let bytes = 4 + replacedChild.bytes + 2 * wrap
+                let tokens = 1 + replacedChild.tokens + 2 * wrap
+                let depth = 1 + replacedChild.depth + wrap
+                try check(bytes: bytes, tokens: tokens, depth: depth)
+                return (.not(replacedChild.node), bytes, tokens, 3, depth)
+            default: return try leaf(node)
+            }
+        }
+        return Self(root: try replace(root).node)
+    }
+
+    /// Canonical source text for forwarding a resolved query through the
+    /// ordinary search request and its cursor/observation identity.
+    public var serialized: String {
+        func day(_ value: Date) -> String {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+            let parts = calendar.dateComponents([.year, .month, .day], from: value)
+            return String(format: "%04d-%02d-%02d", parts.year ?? 1, parts.month ?? 1, parts.day ?? 1)
+        }
+        // Append once into the final buffer: left-associated queries must not
+        // copy every earlier term again at each Boolean node. Bare values
+        // avoid growing an admitted 4,096-byte literal solely by quoting it.
+        var result = ""
+        func appendValue(_ value: String, field: String? = nil) {
+            if let field { result += field + ":" }
+            let hasSyntax = value.isEmpty || value.contains {
+                $0.isWhitespace || $0 == "(" || $0 == ")" || $0 == "\""
+            }
+            let looksLikeCondition = field == nil && value.split(
+                separator: ":", maxSplits: 1, omittingEmptySubsequences: false
+            ).first.map {
+                ["app", "source", "source-id", "date", "before", "after", "type", "is"].contains($0.lowercased())
+            } == true && value.contains(":")
+            let looksLikeOperator = field == nil && ["AND", "OR", "NOT"].contains(value.uppercased())
+            result += hasSyntax || looksLikeCondition || looksLikeOperator ? Self.quoted(value) : value
+        }
+        func render(_ node: Node, inside parentPrecedence: Int = 0) {
+            let precedence = switch node {
+            case .or: 1
+            case .and: 2
+            case .not, .noMatch: 3
+            default: 4
+            }
+            if precedence < parentPrecedence { result += "(" }
+            switch node {
+            case .all: result += "type:all"
+            case .noMatch: result += "NOT type:all"
+            case .text(let value): appendValue(value)
+            case .application(let name): appendValue(name, field: "app")
+            case .sourceID(let id): appendValue(id, field: "source-id")
+            case .type(let type): result += "type:" + type.rawValue
+            case .pinned: result += "is:pinned"
+            case .copiedDate(let from, let until):
+                if let from, let until {
+                    let finalDay = until.addingTimeInterval(-86_400)
+                    result += "date:" + day(from)
+                    if finalDay != from { result += ".." + day(finalDay) }
+                } else if let from { result += "after:" + day(from) }
+                else if let until { result += "before:" + day(until) }
+                else { result += "type:all" }
+            case .and(let lhs, let rhs):
+                render(lhs, inside: 2)
+                // Adjacency has exactly AND's precedence, while avoiding a
+                // redundant operator token for each admitted adjacent term.
+                result += " "
+                render(rhs, inside: 2)
+            case .or(let lhs, let rhs):
+                render(lhs, inside: 1)
+                result += " OR "
+                render(rhs, inside: 1)
+            case .not(let child):
+                result += "NOT "
+                render(child, inside: 3)
+            }
+            if precedence < parentPrecedence { result += ")" }
+        }
+        render(root)
+        return result
+    }
+}
+
+private struct ExpressionToken {
+    enum Kind: Equatable {
+        case atom(String, field: String?)
+        case and, or, not, open, close
+    }
+    let kind: Kind
+    let offset: Int
+}
+
+private struct ExpressionParser {
+    typealias Node = HistorySearchExpression.Node
+    typealias Failure = HistorySearchExpressionError
+    let tokens: [ExpressionToken]
+    let endOffset: Int
+    var index = 0
+
+    init(_ text: String) throws(HistorySearchExpressionError) {
+        let characters = Array(text)
+        endOffset = characters.count
+        var scanned: [ExpressionToken] = []
+        var cursor = 0
+        while cursor < characters.count {
+            if characters[cursor].isWhitespace { cursor += 1; continue }
+            let start = cursor
+            let kind: ExpressionToken.Kind
+            if characters[cursor] == "(" {
+                kind = .open
+                cursor += 1
+            } else if characters[cursor] == ")" {
+                kind = .close
+                cursor += 1
+            } else {
+                var value = ""
+                var field: String?
+                var wasQuoted = false
+                var sawColon = false
+                while cursor < characters.count,
+                      !characters[cursor].isWhitespace,
+                      characters[cursor] != "(", characters[cursor] != ")" {
+                    if characters[cursor] == "\"" {
+                        wasQuoted = true
+                        let quoteStart = cursor
+                        cursor += 1
+                        while cursor < characters.count, characters[cursor] != "\"" {
+                            if characters[cursor] == "\\", cursor + 1 < characters.count,
+                               characters[cursor + 1] == "\\" || characters[cursor + 1] == "\"" {
+                                cursor += 1
+                            }
+                            value.append(characters[cursor])
+                            cursor += 1
+                        }
+                        guard cursor < characters.count else {
+                            throw Failure(reason: .unclosedQuote, offset: quoteStart)
+                        }
+                        cursor += 1
+                    } else if characters[cursor] == ":", !wasQuoted, !sawColon {
+                        // An unrecognized first prefix remains literal. No
+                        // later colon can turn that same value into a field;
+                        // lowercasing its growing prefix again is quadratic.
+                        sawColon = true
+                        let prefix = value.lowercased()
+                        if ["app", "source", "source-id", "date", "before", "after", "type", "is"].contains(prefix) {
+                            field = prefix
+                            value = ""
+                        } else {
+                            value.append(":")
+                        }
+                        cursor += 1
+                    } else {
+                        value.append(characters[cursor])
+                        cursor += 1
+                    }
+                }
+                if !wasQuoted, field == nil {
+                    switch value.uppercased() {
+                    case "AND": kind = .and
+                    case "OR": kind = .or
+                    case "NOT": kind = .not
+                    default: kind = .atom(value, field: nil)
+                    }
+                } else {
+                    kind = .atom(value, field: field)
+                }
+            }
+            guard scanned.count < expressionTokenLimit else {
+                throw Failure(reason: .tooManyTerms, offset: start)
+            }
+            scanned.append(ExpressionToken(kind: kind, offset: start))
+        }
+        tokens = scanned
+    }
+
+    mutating func parse() throws(HistorySearchExpressionError) -> Node {
+        guard !tokens.isEmpty else { return .all }
+        let result = try parseOr(depth: 0)
+        guard index == tokens.count else { throw failure(.unexpectedToken) }
+        return result
+    }
+
+    private mutating func parseOr(depth: Int) throws(HistorySearchExpressionError) -> Node {
+        var result = try parseAnd(depth: depth)
+        while consume(.or) { result = .or(result, try parseAnd(depth: depth)) }
+        return result
+    }
+
+    private mutating func parseAnd(depth: Int) throws(HistorySearchExpressionError) -> Node {
+        var result = try parseUnary(depth: depth)
+        while index < tokens.count {
+            if consume(.and) {
+                result = .and(result, try parseUnary(depth: depth))
+            } else {
+                switch tokens[index].kind {
+                case .atom, .open, .not:
+                    result = .and(result, try parseUnary(depth: depth))
+                default: return result
+                }
+            }
+        }
+        return result
+    }
+
+    private mutating func parseUnary(depth: Int) throws(HistorySearchExpressionError) -> Node {
+        guard depth <= expressionNestingLimit else { throw failure(.tooDeep) }
+        guard index < tokens.count else { throw failure(.expectedTerm) }
+        if consume(.not) { return .not(try parseUnary(depth: depth + 1)) }
+        if consume(.open) {
+            let result = try parseOr(depth: depth + 1)
+            guard consume(.close) else { throw failure(.unclosedParenthesis) }
+            return result
+        }
+        let token = tokens[index]
+        guard case .atom(let value, let field) = token.kind else {
+            throw failure(.expectedTerm)
+        }
+        index += 1
+        guard !value.isEmpty else { throw Failure(reason: .missingValue, offset: token.offset) }
+        switch field {
+        case nil: return .text(value)
+        case "app", "source": return .application(value)
+        case "source-id": return .sourceID(value)
+        case "is":
+            guard value.lowercased() == "pinned" else {
+                throw Failure(reason: .invalidFlag, offset: token.offset)
+            }
+            return .pinned
+        case "type":
+            let typeValue = ["image": "images", "link": "links" ][value.lowercased()] ?? value.lowercased()
+            guard let type = HistoryContentType(rawValue: typeValue) else {
+                throw Failure(reason: .invalidType, offset: token.offset)
+            }
+            return .type(type)
+        case "before": return .copiedDate(from: nil, until: try date(value, offset: token.offset))
+        case "after": return .copiedDate(from: try date(value, offset: token.offset), until: nil)
+        case "date":
+            let bounds = value.components(separatedBy: "..")
+            guard bounds.count == 1 || bounds.count == 2 else {
+                throw Failure(reason: .invalidDate, offset: token.offset)
+            }
+            let start = try date(bounds[0], offset: token.offset)
+            let end = try date(bounds.last ?? bounds[0], offset: token.offset)
+            guard end >= start else { throw Failure(reason: .invalidDateRange, offset: token.offset) }
+            return .copiedDate(from: start, until: end.addingTimeInterval(86_400))
+        default: return .text(value)
+        }
+    }
+
+    private func date(_ value: String, offset: Int) throws(HistorySearchExpressionError) -> Date {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 10, bytes[4] == 45, bytes[7] == 45,
+              bytes.enumerated().allSatisfy({ $0.offset == 4 || $0.offset == 7 || (48...57).contains($0.element) }),
+              let year = Int(value.prefix(4)), year >= 1,
+              let month = Int(value.dropFirst(5).prefix(2)),
+              let day = Int(value.suffix(2)) else { throw Failure(reason: .invalidDate, offset: offset) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let components = DateComponents(year: year, month: month, day: day)
+        guard let result = calendar.date(from: components),
+              calendar.dateComponents([.year, .month, .day], from: result) == components else {
+            throw Failure(reason: .invalidDate, offset: offset)
+        }
+        return result
+    }
+
+    private mutating func consume(_ kind: ExpressionToken.Kind) -> Bool {
+        guard index < tokens.count, tokens[index].kind == kind else { return false }
+        index += 1
+        return true
+    }
+
+    private func failure(_ reason: Failure.Reason) -> Failure {
+        Failure(reason: reason, offset: index < tokens.count ? tokens[index].offset : endOffset)
+    }
+}

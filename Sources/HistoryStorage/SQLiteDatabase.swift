@@ -39,27 +39,50 @@ internal struct SQLiteFailure: Error, Equatable, Sendable {
     }
 }
 
+internal struct SQLiteCacheReadWork {
+    internal let hits: UInt32
+    internal let misses: UInt32
+}
+
+internal struct SQLiteStatementReadWork {
+    internal let virtualMachineSteps: Int
+    internal let fullScanSteps: Int
+    internal let sortOperations: Int
+}
+
 internal final class SQLiteDatabase {
     private var handle: OpaquePointer?
     private var readDeadline: SQLiteReadDeadline?
     /// The directory must outlive the SQLite handle, not merely the actor
     /// that happens to own this connection. Statements retain this connection.
     private let storeLocation: HistoryStoreLocation?
+    /// The already acquired persistent-owner token follows the actual writer,
+    /// including Gateway-only owners and its retained statements. Read-only
+    /// search connections never acquire or hold another writer lease.
+    private var storeRootLease: StoreRootLease?
 
     internal convenience init(url: URL?, readOnly: Bool = false) throws {
-        try self.init(url: url, readOnly: readOnly, storeLocation: nil)
+        try self.init(url: url, readOnly: readOnly, storeLocation: nil, storeRootLease: nil)
     }
 
-    internal convenience init(storeLocation: HistoryStoreLocation, readOnly: Bool = false) throws {
-        try self.init(url: storeLocation.databaseURL, readOnly: readOnly, storeLocation: storeLocation)
+    internal convenience init(
+        storeLocation: HistoryStoreLocation, readOnly: Bool = false,
+        storeRootLease: StoreRootLease? = nil
+    ) throws {
+        try self.init(url: storeLocation.databaseURL, readOnly: readOnly,
+                      storeLocation: storeLocation, storeRootLease: storeRootLease)
     }
 
-    private init(url: URL?, readOnly: Bool, storeLocation: HistoryStoreLocation?) throws {
+    private init(
+        url: URL?, readOnly: Bool, storeLocation: HistoryStoreLocation?,
+        storeRootLease: StoreRootLease?
+    ) throws {
         self.storeLocation = storeLocation
+        self.storeRootLease = storeRootLease
         if let url, !url.isFileURL || url.path(percentEncoded: false).utf8.contains(0) {
             throw HistoryFailure.persistence(.openStore)
         }
-        guard !readOnly || url != nil else {
+        guard !readOnly || (url != nil && storeRootLease == nil) else {
             throw HistoryFailure.persistence(.openStore)
         }
         var opened: OpaquePointer?
@@ -109,7 +132,8 @@ internal final class SQLiteDatabase {
     deinit {
         // Stored properties release after this body. Every statement retains
         // self, so finalization precedes this close; only then may the last
-        // storeLocation reference unlink the disposable database/WAL files.
+        // storeLocation reference unlink the disposable database/WAL files,
+        // and only then may storeRootLease release the persistent writer.
         // https://www.sqlite.org/c3ref/close.html
         if let handle { sqlite3_close_v2(handle) }
     }
@@ -121,6 +145,9 @@ internal final class SQLiteDatabase {
         try check(sqlite3_close(handle))
         self.handle = nil
         readDeadline = nil
+        // A refused close leaves the live writer and its lease untouched.
+        // Release ownership only after SQLite has closed successfully.
+        storeRootLease = nil
     }
 
     /// SQLite's backup API includes committed WAL pages. The destination is
@@ -163,18 +190,27 @@ internal final class SQLiteDatabase {
     /// connection or shares mutable state with a cancellation task.
     /// Remove it before ROLLBACK so an expired read cannot interrupt cleanup.
     internal func setReadInterruptionDeadline(_ deadline: ContinuousClock.Instant?) throws {
-        let handle = try openHandle()
-        if let deadline {
-            let state = SQLiteReadDeadline(deadline: deadline)
+        _ = try openHandle()
+        readDeadline = deadline.map { SQLiteReadDeadline(deadline: $0) }
+        restoreReadInterruptionHandler()
+    }
+
+    /// SQLite has one progress-handler slot. Scoped cancellation temporarily
+    /// borrows it; restore the caller's read deadline after COMMIT/ROLLBACK,
+    /// never while transaction cleanup still needs an uninterrupted handle.
+    private func restoreReadInterruptionHandler() {
+        guard let handle else {
+            readDeadline = nil
+            return
+        }
+        if let state = readDeadline {
             sqlite3_progress_handler(handle, 1_000, { context in
                 guard let context else { return 0 }
                 let state = Unmanaged<SQLiteReadDeadline>.fromOpaque(context).takeUnretainedValue()
                 return Task.isCancelled || ContinuousClock().now >= state.deadline ? 1 : 0
             }, Unmanaged.passUnretained(state).toOpaque())
-            readDeadline = state
         } else {
             sqlite3_progress_handler(handle, 0, nil, nil)
-            readDeadline = nil
         }
     }
 
@@ -186,12 +222,43 @@ internal final class SQLiteDatabase {
         get throws { sqlite3_changes64(try openHandle()) }
     }
 
+    /// Sample existing pager counters without resetting connection state.
+    /// Callers take before/after snapshots in one uninterrupted actor interval.
+    internal var cacheReadWork: SQLiteCacheReadWork {
+        get throws {
+            let database = try openHandle()
+            var current: Int32 = 0
+            var highWater: Int32 = 0
+            try check(sqlite3_db_status(database, SQLITE_DBSTATUS_CACHE_HIT, &current, &highWater, 0))
+            let hits = UInt32(bitPattern: current)
+            try check(sqlite3_db_status(database, SQLITE_DBSTATUS_CACHE_MISS, &current, &highWater, 0))
+            return SQLiteCacheReadWork(hits: hits, misses: UInt32(bitPattern: current))
+        }
+    }
+
     /// Each call executes one statement. Schema owners call this once per DDL
     /// statement, allowing bindings everywhere without string interpolation.
     internal func execute(_ sql: String, bindings: [SQLiteValue] = []) throws {
         let statement = try prepare(sql, bindings: bindings)
         defer { statement.finalize() }
         while try statement.step() {}
+    }
+
+    /// VACUUM cannot run inside a transaction. The private backup still
+    /// needs native cancellation while reclaiming a large export's free
+    /// pages, rather than waiting until SQLite has copied the entire file.
+    internal func executeCancellable(_ sql: String) throws {
+        try Task.checkCancellation()
+        let handle = try openHandle()
+        sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
+        defer { restoreReadInterruptionHandler() }
+        do {
+            try execute(sql)
+            try Task.checkCancellation()
+        } catch let failure as SQLiteFailure {
+            try Task.checkCancellation()
+            throw failure
+        }
     }
 
     internal func prepare(
@@ -222,8 +289,30 @@ internal final class SQLiteDatabase {
 
     /// A snapshot starts at the first SELECT in this closure. All reads for
     /// one page/search snapshot run on this connection until COMMIT.
-    internal func readTransaction<T>(_ body: () throws -> T) throws -> T {
-        try transaction(begin: "BEGIN DEFERRED", body)
+    internal func readTransaction<T>(checkingCancellation: Bool = false, _ body: () throws -> T) throws -> T {
+        guard checkingCancellation else { return try transaction(begin: "BEGIN DEFERRED", body) }
+        try Task.checkCancellation()
+        let handle = try openHandle()
+        defer { restoreReadInterruptionHandler() }
+        do {
+            return try transaction(begin: "BEGIN DEFERRED") {
+                // Explicit metadata sorts may scan an older store without the
+                // optional ordering index. Cancellation must interrupt native
+                // SQL work before it has produced its first bounded row.
+                if readDeadline != nil {
+                    restoreReadInterruptionHandler()
+                } else {
+                    sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
+                }
+                defer { sqlite3_progress_handler(handle, 0, nil, nil) }
+                let value = try body()
+                try Task.checkCancellation()
+                return value
+            }
+        } catch let failure as SQLiteFailure {
+            try Task.checkCancellation()
+            throw failure
+        }
     }
 
     /// V2-09 §6: item/revision/reference/aggregate/Gateway writes and the one
@@ -240,9 +329,7 @@ internal final class SQLiteDatabase {
         // one sqlite3_step. Check the owning task from SQLite itself, with
         // no cross-thread connection access or second cancellation writer.
         sqlite3_progress_handler(handle, 1_000, { _ in Task.isCancelled ? 1 : 0 }, nil)
-        defer {
-            if let handle = self.handle { sqlite3_progress_handler(handle, 0, nil, nil) }
-        }
+        defer { restoreReadInterruptionHandler() }
         do {
             return try transaction(begin: "BEGIN IMMEDIATE") {
                 do {
@@ -340,6 +427,19 @@ internal final class SQLiteStatement {
         finished = true
     }
 
+    /// Each recent SELECT is newly prepared, so these counters belong only
+    /// to that statement, including work before an interrupted/failed step.
+    internal var readWork: SQLiteStatementReadWork {
+        get throws {
+            let statement = try openHandle()
+            return SQLiteStatementReadWork(
+                virtualMachineSteps: Int(UInt32(bitPattern: sqlite3_stmt_status(statement, SQLITE_STMTSTATUS_VM_STEP, 0))),
+                fullScanSteps: Int(UInt32(bitPattern: sqlite3_stmt_status(statement, SQLITE_STMTSTATUS_FULLSCAN_STEP, 0))),
+                sortOperations: Int(UInt32(bitPattern: sqlite3_stmt_status(statement, SQLITE_STMTSTATUS_SORT, 0)))
+            )
+        }
+    }
+
     internal func step() throws -> Bool {
         let handle = try openHandle()
         if finished { return false }
@@ -356,6 +456,19 @@ internal final class SQLiteStatement {
             finished = true
             throw database.failure(code: result)
         }
+    }
+
+    /// Reuse a request-owned SELECT after consuming its row. Clear the old
+    /// bindings and row state before rebinding; a failed reset/bind remains
+    /// unusable until the owning request finalizes it.
+    internal func reset(bindings: [SQLiteValue]) throws {
+        let handle = try openHandle()
+        hasRow = false
+        finished = true
+        try database.check(sqlite3_reset(handle))
+        try database.check(sqlite3_clear_bindings(handle))
+        try bind(bindings)
+        finished = false
     }
 
     internal func isNull(at column: Int32) throws -> Bool {
@@ -395,6 +508,26 @@ internal final class SQLiteStatement {
         if count == 0 { return Data() }
         guard let pointer else { throw database.failure(code: SQLITE_NOMEM) }
         return Data(bytes: pointer, count: count)
+    }
+
+    /// Durable title/body projections are literal UTF-8 BLOBs. Validate the
+    /// storage class and bound before allocation, then copy directly into the
+    /// owning String. The SQLite pointer stays inside this synchronous call;
+    /// no intermediate Data or borrowed value survives step/reset/finalize.
+    internal func utf8Blob(at column: Int32, maximumByteCount: Int) throws -> String {
+        let count = try blobByteCount(at: column)
+        guard count <= maximumByteCount else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
+        if count == 0 { return "" }
+        guard let pointer = sqlite3_column_blob(try openHandle(), column) else {
+            throw database.failure(code: SQLITE_NOMEM)
+        }
+        let bytes = UnsafeBufferPointer(start: pointer.assumingMemoryBound(to: UInt8.self), count: count)
+        guard let value = String(validating: bytes, as: UTF8.self) else {
+            throw HistoryFailure.persistence(.corruptStoredValue)
+        }
+        return value
     }
 
     /// Search checks its byte budget before materializing a stored body.

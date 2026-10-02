@@ -31,6 +31,6 @@ enum HistoryBackupDestination {
     }
 
     private static func copy(_ key: String) -> String {
-        Bundle.main.localizedString(forKey: key, value: key, table: "HistoryBackup")
+        AppLocalization.bundle.localizedString(forKey: key, value: key, table: "HistoryBackup")
     }
 }

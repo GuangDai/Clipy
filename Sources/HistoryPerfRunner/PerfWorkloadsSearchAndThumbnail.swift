@@ -4,12 +4,13 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 
-// MARK: - Workload 6: all search modes scan bounded projections (§9 bullet 7)
+// MARK: - Workload 6: small sparse-hit search timing comparisons
 
 func workloadSearchModesScaling() async -> [WorkloadFixture] {
     let bullet = "7"
-    // A 4× retained-row span with an 8× bound leaves a 2× bound over the
-    // span while rejecting the nominal 16× ratio of a quadratic regression.
+    // Keep the existing observed-ratio bound. Sparse exact/regexp queries can
+    // decode far fewer rows than the retained corpus; the bound is not a proof
+    // of full-scan complexity, including when its measured ratio is small.
     let definitions: [(key: String, label: String, mode: SearchMode, term: String)] = [
         ("exactSearchScalesWithRetainedCount", "exact", .exact, "needle"),
         ("fuzzySearchScalesWithRetainedCount", "fuzzy", .fuzzy, "nedle"),
@@ -34,12 +35,14 @@ func workloadSearchModesScaling() async -> [WorkloadFixture] {
     do {
         var medians: [[(Int, Double)]] =
             Array(repeating: [], count: definitions.count)
-        var allMatched = Array(repeating: true, count: definitions.count)
+        var measurements: [[WorkloadSearchMeasurements]] =
+            Array(repeating: [], count: definitions.count)
         for count in measurementScales {
             // The three modes reuse one populated store at each size. This
             // keeps fixture construction identical and prevents population
             // cost from tripling merely to characterize another evaluator.
             let store = try await openMemoryStore()
+            var plantedItem: HistoryItemReference?
 
             // Populate with deterministic items; embed "needle" in the middle item.
             for i in 0..<count {
@@ -55,29 +58,25 @@ func workloadSearchModesScaling() async -> [WorkloadFixture] {
                     ),
                     observedAt: Date(timeIntervalSinceReferenceDate: 600_000_000 + Double(i))
                 )
-                _ = try await store.perform(.capture(capture))
+                let item = try await capturePreparedItem(store, capture: capture)
+                if i == count / 2 { plantedItem = item }
             }
+            guard let plantedItem else { throw PerfError.searchUnexpectedResult }
 
-            // §9 bullet 7: exact, fuzzy, and regexp each evaluate the same
-            // bounded scalar corpus; no cache is added without G2 evidence.
+            // All modes use the same store. Record each request's actual work
+            // instead of assuming that retained count equals evaluated rows.
             for definitionIndex in definitions.indices {
                 let definition = definitions[definitionIndex]
                 let request = HistoryBrowseRequest(
                     kind: .search(text: definition.term, mode: definition.mode),
                     limit: 50
                 )
-                let medianMs = try await measureMedian {
-                    _ = try await store.browse(request)
-                }
-                medians[definitionIndex].append((count, medianMs))
-
-                // The performance gate cannot pass on an empty or otherwise
-                // semantically wrong evaluation merely because it completed
-                // quickly. Every frozen mode must return the planted row.
-                let page = try await store.browse(request)
-                if !page.rows.contains(where: { $0.title.contains("needle") }) {
-                    allMatched[definitionIndex] = false
-                }
+                let measured = try await measurePerfSearchSamples(
+                    history: store, request: request, retainedRows: count, expectedItem: plantedItem,
+                    requiresUniqueResult: definition.mode != .fuzzy
+                )
+                measurements[definitionIndex].append(measured)
+                medians[definitionIndex].append((count, median(measured.rawSamplesMs)))
             }
         }
 
@@ -89,7 +88,7 @@ func workloadSearchModesScaling() async -> [WorkloadFixture] {
                 modeMedians[modeMedians.count - 1].1,
                 modeMedians[0].1
             )
-            let passed = allMatched[definitionIndex] && ratio <= envelope.bound
+            let passed = ratio <= envelope.bound
             let fixture = WorkloadFixture(
                 key: definition.key,
                 bullet: bullet,
@@ -98,7 +97,8 @@ func workloadSearchModesScaling() async -> [WorkloadFixture] {
                 ratio: ratio,
                 bound: envelope.bound,
                 pass: passed,
-                note: "\(definition.label) search over the bounded scalar projection corpus (§9 bullet 7). The expected planted row must match; \(envelope.scaleSpan)× retained rows and an \(envelope.bound)× bound leave a \(envelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — a no-quadratic-observed envelope, not a linear proof (the production corpus sort is O(N log N)). This complexity envelope is not G2 absolute-latency evidence."
+                note: "\(definition.label) search over the same short-text store at each retained-row scale. Every warmup and timed request must return the independently captured planted item; exact/regexp also require it to be the sole result. Each scale records five raw timings and their same-request decoded/evaluated/matched row and batch counts after one discarded warmup. The \(envelope.bound)× bound checks only the observed median ratio over a \(envelope.scaleSpan)× retained-row span. Sparse candidate pruning can reduce row work; SQLite posting-list/planner work is outside these counters. This workload does not establish full-scan complexity, arbitrary-text behavior or an absolute latency budget.",
+                searchMeasurements: measurements[definitionIndex]
             )
             printResult(
                 definition.key,
@@ -116,7 +116,7 @@ func workloadSearchModesScaling() async -> [WorkloadFixture] {
     }
 }
 
-// MARK: - Workload 7: detail and paste decode one item (§9 bullet 8)
+// MARK: - Workload 7: details and paste-payload timing by retained count
 
 func workloadDetailAndPaste() async -> [WorkloadFixture] {
     let bullet = "8"
@@ -127,7 +127,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
     var fixtures: [WorkloadFixture] = []
 
     // --- Details ---
-    // §9 bullet 8: detail/paste decode one item's bounded lineage.
+    // Read one known item at each retained-row scale.
     do {
         var medians: [(Int, Double)] = []
         for count in detailEnvelope.measurementScales {
@@ -148,7 +148,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: detailEnvelope.bound,
             pass: passed,
-            note: "Detail decodes one item's bounded lineage (§9 bullet 8). \(detailEnvelope.scaleSpan)× retained, theoretical ratio \(detailEnvelope.theoreticalRatio)×, and \(detailEnvelope.bound)× bound leave \(detailEnvelope.headroomFactor)× headroom for O(1) retained-count behavior."
+            note: "Read details for one known item without revisions at each retained-row scale. One warmup and five samples are recorded per scale. The \(detailEnvelope.bound)× bound checks the observed median ratio over a \(detailEnvelope.scaleSpan)× span. No internal decode count is recorded; this does not establish asymptotic complexity or behavior with larger revision lineages."
         ))
         printResult(
             detailKey,
@@ -186,7 +186,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: pasteEnvelope.bound,
             pass: passed,
-            note: "Paste payload decodes one item's current Effective Content (§9 bullet 8). \(pasteEnvelope.scaleSpan)× retained, theoretical ratio \(pasteEnvelope.theoreticalRatio)×, and \(pasteEnvelope.bound)× bound leave \(pasteEnvelope.headroomFactor)× headroom for O(1) retained-count behavior."
+            note: "Read the paste payload for one known short-text item at each retained-row scale. One warmup and five samples are recorded per scale. The \(pasteEnvelope.bound)× bound checks the observed median ratio over a \(pasteEnvelope.scaleSpan)× span. No internal decode count is recorded; this does not establish asymptotic complexity or behavior with large/multiple representations."
         ))
         printResult(
             pasteKey,
@@ -206,7 +206,7 @@ func workloadDetailAndPaste() async -> [WorkloadFixture] {
     return fixtures
 }
 
-// MARK: - Workload 8: thumbnail single-flight shares decode (§9 bullet 9)
+// MARK: - Workload 8: sequential and concurrent thumbnail elapsed time
 
 /// PNG's CRC-32/ISO-HDLC checksum (polynomial 0x04C11DB7 in reflected form).
 /// Kept as a pure package-internal helper so the fixture's chunk integrity is
@@ -363,10 +363,9 @@ func workloadThumbnailSingleFlight() async -> [WorkloadFixture] {
         }
         let pixels = PixelSize(width: 32, height: 32)
 
-        // Untimed end-to-end smoke: steps 1–7 remain wired through the public
-        // facade. The single-flight ratio below deliberately isolates steps
-        // 5–7; otherwise eight actor-serialized Authority source fetches hide
-        // whether the decode itself is shared (V1-Verified/04).
+        // An untimed public request checks the complete source/decode path.
+        // The timing comparison uses a prefetched source to isolate service
+        // scheduling and decode cost from source loading.
         _ = try await store.thumbnail(for: ref, pixels: pixels)
 
         // The immutable source bytes are prepared exactly once before either
@@ -388,9 +387,8 @@ func workloadThumbnailSingleFlight() async -> [WorkloadFixture] {
         let seqMedian = median(seqSamples)
 
         // (b) 8 CONCURRENT identical-key calls via async let — record total
-        // wall time. §9 bullet 9: after one bounded source fetch, thumbnail
-        // performs one shared concurrent decode for an identical key. With
-        // single-flight, concurrent-8 total ≈ 1 decode; without, ≈ 8 decodes.
+        // wall time. This compares scheduling/decode elapsed time, without
+        // counting actual decodes. Deterministic owner tests establish sharing.
         // Concurrent warmup (2 calls).
         async let warmA = thumbnailService.thumbnail(pngData, for: ref, pixels: pixels)
         async let warmB = thumbnailService.thumbnail(pngData, for: ref, pixels: pixels)
@@ -428,7 +426,7 @@ func workloadThumbnailSingleFlight() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "After one prefetched immutable source, the production ThumbnailService shares one decode for an identical key (§9 steps 5–7). Concurrent-8 total ≤ \(bound)× sequential-1 median (\(envelope.headroomFactor)× headroom over the one-decode theoretical ratio) proves a single shared decode, not eight; an untimed public-facade call smoke-tests the complete source-fetch pipeline."
+            note: "With one prefetched immutable PNG source, this compares eight sequential per-call timings with one eight-caller identical-key concurrent wall time. The \(bound)× bound checks that observed elapsed-time ratio only. Scheduling and decode overlap affect the ratio; no decode count is recorded, so it cannot prove a single decode or a general concurrency bound. Deterministic HistoryStorage owner tests separately establish single-flight behavior. One untimed public-facade request checks the complete source-fetch path."
         )
         printResult(key, bullet, ratio, bound, passed)
         return [fixture]
@@ -436,4 +434,3 @@ func workloadThumbnailSingleFlight() async -> [WorkloadFixture] {
         return [failureFixture(key: key, bullet: bullet, error: error)]
     }
 }
-

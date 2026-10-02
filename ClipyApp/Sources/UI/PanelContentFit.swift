@@ -1,6 +1,6 @@
 /// PanelContentFit.swift — the panel's analytic content-height oracle
-/// (Maccy's content-fitting popup: the panel is exactly as tall as its
-/// displayed content, up to the persisted height ceiling).
+/// (content-fitting popup: the panel retains room for five compact records
+/// below its toolbar, then grows with content up to the saved height ceiling).
 /// SwiftUI List laziness makes runtime measurement unreliable, so the
 /// ideal height is COMPUTED from the same sources of truth the views use:
 /// PanelTheme metrics for slots/padding, the hoisted list-row insets the
@@ -59,15 +59,19 @@ enum PanelContentFit {
         var unpinnedRows: [RowDescriptor] = []
         var density: HistoryRowDensity = .compact
         var fontSize: HistoryRowFontSize = .medium
-        /// The Newer/Latest windowed-navigation bar (HistoryListView).
-        var hasWindowedPages = false
         /// The trailing pagination control (Older button or loading row):
         /// `hasNextPage || isLoadingPage`, matching the list's condition.
         var showsPaginationControl = false
+        /// Explicit metadata ordering keeps pinned rows in that order and
+        /// therefore has no pinned/recent separator.
+        var usesPinnedGrouping = true
         /// The search header's removable active-filter summary chip.
         var isFilterChipVisible = false
         /// The browsing column's typed-failure banner.
         var isFailureBannerVisible = false
+        /// Root notices occupy normal layout above the browsing column.
+        /// The root reports their natural height only when it changes.
+        var topNoticeHeight: CGFloat = 0
         /// A pushed destination (Details/editor) or the quick-look overlay
         /// fills the whole panel: row-derived shrink-to-fit would clip it.
         /// While set the demand is the full persisted ceiling
@@ -118,9 +122,6 @@ enum PanelContentFit {
     /// No headings or empty group space, including a pinned-only result.
     static let groupSeparatorHeight: CGFloat = 9
 
-    /// The Newer/Latest windowed-navigation bar: the buttons plus their
-    /// 6pt vertical padding (HistoryListView).
-    static let windowedNavigationHeight: CGFloat = 34
 
     /// The trailing pagination control — the loading row's small progress
     /// view plus its 6pt vertical padding, and the same bound covers the
@@ -180,9 +181,13 @@ enum PanelContentFit {
     /// existing clamp instead of a new parameter.
     static let fullHeightDemand: CGFloat = .greatestFiniteMagnitude
 
-    /// No fixed window floor. Empty states contribute their own compact
-    /// message, just as a real row contributes its content height (V2-11).
-    static let minimumHeight: CGFloat = 0
+    /// Five compact, default-font record rows below the existing toolbar,
+    /// plus the same bottom slack as the content-fit calculation. Optional
+    /// filters, banners and pagination add demand above this natural floor.
+    static let minimumHeight: CGFloat = headerHeight + bottomSlack + 5 * rowHeight(
+        RowDescriptor(isImageRow: false, snippetLineCount: 0),
+        density: .compact, fontSize: .medium
+    )
     static let emptyStateHeight: CGFloat = 52
 
     /// The ideal content height for the displayed rows and chrome: header
@@ -203,10 +208,7 @@ enum PanelContentFit {
         if input.isFilterChipVisible {
             height += filterChipDelta
         }
-        if input.hasWindowedPages {
-            height += windowedNavigationHeight
-        }
-        let showsGroupSeparator = !input.pinnedRows.isEmpty
+        let showsGroupSeparator = input.usesPinnedGrouping && !input.pinnedRows.isEmpty
             && (!input.unpinnedRows.isEmpty || input.showsPaginationControl)
         if showsGroupSeparator { height += groupSeparatorHeight }
         if !input.pinnedRows.isEmpty {
@@ -225,10 +227,15 @@ enum PanelContentFit {
         if input.isFailureBannerVisible {
             height += failureBannerHeight
         }
-        return height
+        let notices = input.topNoticeHeight.isFinite ? max(0, input.topNoticeHeight) : 0
+        // Notices take space above the reading floor, instead of consuming
+        // its row slots. The existing native owner still applies the ceiling
+        // and the visible-screen limit to this complete demand.
+        return notices > 0 ? max(height, minimumHeight) + notices : height
     }
 
-    /// A user-controlled ceiling, with no aesthetic minimum.
+    /// Retain the five-row floor even for an older, lower saved ceiling.
+    /// The native owner applies the visible-screen bound after this fit.
     static func clampedHeight(_ ideal: CGFloat, ceiling: CGFloat) -> CGFloat {
         min(max(ideal, minimumHeight), max(ceiling, minimumHeight))
     }

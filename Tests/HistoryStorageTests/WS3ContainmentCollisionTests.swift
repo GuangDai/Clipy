@@ -1,10 +1,10 @@
 /// WS3 — Rich-to-plain containment and collision safety
-/// (docs/06-cross-cutting.md §8 WS3), plus the two §7.6 signature proofs:
+/// (docs/testing.md WS3), plus the two §7.6 signature proofs:
 /// a forced xxh3 collision still requires byte confirmation, and persistent
 /// Canonical candidate postings remain queryable after reopening
-/// (docs/06-cross-cutting.md §7.6; docs/02-domain.md §9.1–§9.2, D7).
+/// (docs/testing.md; docs/architecture.md, D7).
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS3's public
+/// Phasing (docs/testing.md, WS-clause phasing note): WS3's public
 /// read/observation clauses defer to step 7; this file closes the step-5
 /// clauses — the `.coalesced` receipt into the richer Canonical item, the
 /// no-second-row storage proof through the INDEPENDENT second
@@ -15,11 +15,11 @@
 /// (storage side) because the public facade always constructs its own
 /// preparation actor with the real xxh3-64 fingerprint — there is no public
 /// seam to substitute the deterministic collision double. The spec permits
-/// exactly this: docs/01-architecture.md §4 allows a package-only
+/// exactly this: docs/architecture.md allows a package-only
 /// deterministic collision double in Domain/Storage tests, and the test
 /// performs the same `prepare` → `commitCapture` sequence the facade
-/// performs (docs/05-authority-kernel.md §6.1, §9). Parts 1 and 3 cross the
-/// public `ClipboardHistory` interface only (docs/06-cross-cutting.md §8).
+/// performs (docs/storage.md, §9). Parts 1 and 3 cross the
+/// public `ClipboardHistory` interface only (docs/testing.md).
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -28,7 +28,7 @@ import Testing
 
 struct WS3ContainmentCollisionTests {
 
-/// Part 1 — WS3 containment (docs/06-cross-cutting.md §8 WS3): inserting
+/// Part 1 — WS3 containment (docs/testing.md WS3): inserting
 /// rich+plain content and then submitting the matching plain-only capture
 /// coalesces into the richer Canonical item — same History Item ID and
 /// Content Version, the occurrence folded, Change Position advanced once —
@@ -67,7 +67,7 @@ struct WS3ContainmentCollisionTests {
     // Act: submit the matching plain-ONLY capture — the identical plain-text
     // bytes under the identical type identifier, nothing else. Every incoming
     // (typeIdentifier, bytes) pair appears in the retained Canonical set, so
-    // byte-exact containment confirms the coalesce (docs/02-domain.md §9.2).
+    // byte-exact containment confirms the coalesce (docs/architecture.md).
     let receipt = try await history.perform(.capture(
         WSSupport.textCapture(text, observedAt: plainObservedAt, source: plainSource)
     ))
@@ -84,7 +84,7 @@ struct WS3ContainmentCollisionTests {
         return
     }
     // WS3: "coalescing into the richer Canonical item" — the winner is the
-    // rich item, with its Content Version preserved (docs/02-domain.md §13).
+    // rich item, with its Content Version preserved (docs/architecture.md).
     #expect(reference.id == insertedReference.id)
     #expect(reference.contentVersion == insertedReference.contentVersion)
     #expect(reference.contentVersion.rawValue == 1)
@@ -100,7 +100,7 @@ struct WS3ContainmentCollisionTests {
 
     // The occurrence folded: count 2, first observation untouched, last
     // copied time/source moved to the plain-only observation
-    // (docs/05-authority-kernel.md §9 occurrence folding).
+    // (docs/storage.md occurrence folding).
     #expect(row.copyCount == 2)
     #expect(row.firstCopiedAt == richObservedAt)
     #expect(row.lastCopiedAt == plainObservedAt)
@@ -110,8 +110,8 @@ struct WS3ContainmentCollisionTests {
     // WS3: the retained Canonical is still the RICHER set — both
     // representations, byte-exact, in normalized order ("public.html" sorts
     // before "public.utf8-plain-text" in Unicode scalar order,
-    // docs/02-domain.md §2.1). Coalescing never rewrites Canonical Content
-    // (docs/02-domain.md D2).
+    // docs/architecture.md). Coalescing never rewrites Canonical Content
+    // (docs/architecture.md D2).
     let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
     #expect(
         canonical.representations.map(\.content.typeIdentifier)
@@ -127,8 +127,8 @@ struct WS3ContainmentCollisionTests {
     #expect(position.rawValue == 2)
 }
 
-/// Part 2 — §7.6 forced collision (docs/06-cross-cutting.md §7.6;
-/// docs/02-domain.md D7): two captures with DIFFERENT bytes but forced-equal
+/// Part 2 — §7.6 forced collision (docs/testing.md;
+/// docs/architecture.md D7): two captures with DIFFERENT bytes but forced-equal
 /// fingerprints produce TWO distinct items — byte confirmation rejects the
 /// false match. Storage-side proof: `IngestPreparationActor` with the
 /// `ForcedCollisionFingerprint` double plus a direct `HistoryAuthority`
@@ -146,7 +146,7 @@ struct WS3ContainmentCollisionTests {
     // signature entries (typeIdentifier, fingerprint, byteCount) are EQUAL:
     // the second capture's entry intersects the first item's posting set,
     // making it a dedup candidate that only byte confirmation can reject
-    // (docs/02-domain.md §9.1–§9.2). Different byte counts would leave
+    // (docs/architecture.md). Different byte counts would leave
     // candidacy empty and let this test pass without exercising the
     // confirmation step.
     let firstText = "collision witness one"
@@ -233,7 +233,7 @@ struct WS3ContainmentCollisionTests {
 }
 
 /// Part 3 — §7.6 startup completeness, behavioral
-/// (docs/06-cross-cutting.md §7.6): the rich item is inserted through the
+/// (docs/testing.md): the rich item is inserted through the
 /// public facade, the facade is dropped, and `SQLiteHistory` is REOPENED
 /// on the same store without rebuilding an in-memory index. Submitting the
 /// matching plain-only capture again still coalesces into the original item,

@@ -10,6 +10,8 @@ struct ReviseEditorDraft: Sendable {
     enum DismissalDecision: Hashable, Sendable { case dismiss, confirmDiscard }
     private var item: HistoryItemReference
     private let canonical: [HistoryRepresentationMetadata]
+    private let canonicalIndices: [RepresentationIdentity: Int]
+    let pasteboardItemCount: Int
     private var effectiveTypes: Set<RepresentationIdentity>
     private var choices: [RepresentationIdentity: Choice] = [:]
     private var replacementTexts: [RepresentationIdentity: String] = [:]
@@ -26,6 +28,10 @@ struct ReviseEditorDraft: Sendable {
     init(details: HistoryDetails) {
         item = details.item
         canonical = details.canonical
+        canonicalIndices = Dictionary(details.canonical.enumerated().map {
+            ($0.element.representationIdentity, $0.offset)
+        }, uniquingKeysWith: { first, _ in first })
+        pasteboardItemCount = Set(details.canonical.map(\.pasteboardItemIndex)).count
         effectiveTypes = Set(details.effective.map(\.representationIdentity))
     }
     var itemID: HistoryItemID { item.id }
@@ -61,22 +67,24 @@ struct ReviseEditorDraft: Sendable {
     /// A revision keeps every constituent item present. Dropping its final
     /// format would change the captured gesture's item boundaries.
     var hasEmptyPasteboardItem: Bool {
-        Dictionary(grouping: canonical, by: \.pasteboardItemIndex).values.contains { representations in
-            representations.allSatisfy {
-                switch choice(for: $0.typeIdentifier, pasteboardItemIndex: $0.pasteboardItemIndex) {
-                case .hide: true
-                case .keepCurrent: !effectiveTypes.contains($0.representationIdentity)
-                case .useOriginal, .replace: false
-                }
+        var retainedItems: Set<Int> = []
+        for representation in canonical {
+            let retained: Bool
+            switch choice(for: representation.typeIdentifier, pasteboardItemIndex: representation.pasteboardItemIndex) {
+            case .hide: retained = false
+            case .keepCurrent: retained = effectiveTypes.contains(representation.representationIdentity)
+            case .useOriginal, .replace: retained = true
             }
+            if retained { retainedItems.insert(representation.pasteboardItemIndex) }
         }
+        return retainedItems.count < pasteboardItemCount
     }
     var hasEmptyReplacement: Bool {
         canonical.contains { choice(for: $0.typeIdentifier, pasteboardItemIndex: $0.pasteboardItemIndex) == .replace && replacementText(for: $0.typeIdentifier, pasteboardItemIndex: $0.pasteboardItemIndex).isEmpty }
     }
     func choice(for typeIdentifier: String, pasteboardItemIndex: Int = 0) -> Choice { choices[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] ?? .keepCurrent }
     mutating func setChoice(_ choice: Choice, for typeIdentifier: String, pasteboardItemIndex: Int = 0) {
-        guard canonical.contains(where: { $0.typeIdentifier == typeIdentifier && $0.pasteboardItemIndex == pasteboardItemIndex }) else { return }
+        guard canonicalIndices[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] != nil else { return }
         guard choice != .replace || replacementCodecs[RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)] != nil else { return }
         if directEditingIdentity == RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex) {
             directEditingIdentity = nil
@@ -104,7 +112,8 @@ struct ReviseEditorDraft: Sendable {
         return type == .utf8PlainText || type == .utf16PlainText || type == .utf16ExternalPlainText
     }
     func replacementRequest(for typeIdentifier: String, pasteboardItemIndex: Int = 0) -> HistoryRepresentationRequest? {
-        guard let metadata = canonical.first(where: { $0.typeIdentifier == typeIdentifier && $0.pasteboardItemIndex == pasteboardItemIndex }), canReplace(metadata) else { return nil }
+        let identity = RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
+        guard let index = canonicalIndices[identity], canReplace(canonical[index]) else { return nil }
         return HistoryRepresentationRequest(item: item,
             basis: effectiveTypes.contains(RepresentationIdentity(typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)) ? .effective : .canonical,
             typeIdentifier: typeIdentifier, pasteboardItemIndex: pasteboardItemIndex)
@@ -114,7 +123,7 @@ struct ReviseEditorDraft: Sendable {
     mutating func installReplacementSource(_ source: HistoryRepresentation, forDirectEditing: Bool = false) -> Bool {
         if forDirectEditing {
             guard let request = directEditingRequest,
-                  request.typeIdentifier == source.typeIdentifier,
+                  request.typeIdentifier.utf8.elementsEqual(source.typeIdentifier.utf8),
                   request.pasteboardItemIndex == source.pasteboardItemIndex else { return false }
         }
         guard replacementRequest(for: source.typeIdentifier, pasteboardItemIndex: source.pasteboardItemIndex) != nil,

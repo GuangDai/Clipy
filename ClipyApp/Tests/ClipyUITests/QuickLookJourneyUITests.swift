@@ -35,7 +35,7 @@ final class QuickLookJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         // Exact preview text must not inherit a previous custom length.
         app.launchArguments += [
-            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-clipy.preview.isTextLengthLimited", "YES",
             "-clipy.preview.maximumTextCharacters", "50000",
         ]

@@ -1,16 +1,16 @@
-/// WS8 — Pin order (docs/06-cross-cutting.md §8 WS8): the
+/// WS8 — Pin order (docs/testing.md WS8): the
 /// commit/receipt/storage side of pinning three items, moving the last
 /// before the first, and unpinning the item now occupying the middle
 /// position, through the public `SQLiteHistory.perform(.placePinned(_:at:))`
 /// / `.unpin(_:)` and the real step-6 mutation commit path
 /// (`HistoryAuthority.commitPinnedPlacement` / `commitUnpin`;
-/// docs/02-domain.md §10, docs/05-authority-kernel.md §9).
+/// docs/architecture.md, docs/storage.md).
 ///
 /// This file closes WS8's step-6 commit clauses; the separately landed
 /// step-7 read suites own the public-order clause. It asserts the
 /// `.placedPinned(id)` /
 /// `.unpinned(id)` receipt outcomes, exactly one Change Position advance per
-/// non-no-op action and no advance for a no-op placement (docs/02-domain.md
+/// non-no-op action and no advance for a no-op placement (docs/architecture.md
 /// §13), Content Version untouched by pin/reorder/unpin (§13: pin relocation
 /// preserves), a RESTART after each receipt, and stored pin ordinals unique and
 /// exactly `0 ..< pinnedCount` (D12) with the expected id→ordinal mapping,
@@ -27,7 +27,7 @@ struct WS8PinOrderTests {
 /// Receipt-side assertion for one committed `.placePinned`: a `.committed`
 /// receipt carrying `.placedPinned(expectedID)` at exactly `expectedPosition`
 /// — the one Change Position advance the action earns
-/// (docs/02-domain.md §13; docs/03a-instruction-set.md §6).
+/// (docs/architecture.md; docs/architecture.md).
 private static func expectPlacedPinned(
     _ receipt: HistoryReceipt,
     id expectedID: HistoryItemID,
@@ -54,7 +54,7 @@ private static func expectPlacedPinned(
 
 /// Receipt-side assertion for one committed `.unpin`: a `.committed` receipt
 /// carrying `.unpinned(expectedID)` at exactly `expectedPosition`
-/// (docs/02-domain.md §13; docs/03a-instruction-set.md §6).
+/// (docs/architecture.md; docs/architecture.md).
 private static func expectUnpinned(
     _ receipt: HistoryReceipt,
     id expectedID: HistoryItemID,
@@ -82,7 +82,7 @@ private static func expectUnpinned(
 /// WS8: "After each receipt, restart and assert … stored ordinals are unique
 /// and exactly `0 ..< count`." Reopens the facade over the same on-disk store
 /// and asserts the exact persisted id→ordinal mapping (`nil` is unpinned,
-/// docs/05-authority-kernel.md §3.1), D12 uniqueness/contiguity, preserved
+/// docs/storage.md), D12 uniqueness/contiguity, preserved
 /// Content Versions, and the durable position through the INDEPENDENT second
 /// container. Returns the restarted facade so the scenario continues through
 /// the reopened store.
@@ -111,7 +111,7 @@ private static func restartAndAssertStoredPinState(
             "WS8 (\(clause)): stored pin ordinal matches the expected id→ordinal mapping"
         )
         // Pin/reorder/unpin never advances Content Version
-        // (docs/02-domain.md §13: pin relocation preserves content).
+        // (docs/architecture.md: pin relocation preserves content).
         #expect(
             row.contentVersionRaw == 1,
             "WS8 (\(clause)): Content Version remains unchanged"
@@ -141,7 +141,7 @@ private static func restartAndAssertStoredPinState(
     return restarted
 }
 
-/// WS8 (docs/06-cross-cutting.md §8): pin three items (a→0, b→1, c→2), move
+/// WS8 (docs/testing.md): pin three items (a→0, b→1, c→2), move
 /// the last before the first (c→0, a→1, b→2), then unpin the item now
 /// occupying the middle position (c→0, b→1, a unpinned). Each non-no-op
 /// action returns `.placedPinned(id)` / `.unpinned(id)` and advances Change
@@ -203,7 +203,7 @@ private static func restartAndAssertStoredPinState(
     let idC = referenceC.id
 
     // WS8: "Pin three items" — first pins with `.last` append to the pinned
-    // lane (docs/02-domain.md §10 steps 2–3): a→0.
+    // lane (docs/architecture.md steps 2–3): a→0.
     let pinA = try await history.perform(.placePinned(idA, at: .last))
     Self.expectPlacedPinned(pinA, id: idA, position: 4, "pin a .last")
     history = try await Self.restartAndAssertStoredPinState(
@@ -234,7 +234,7 @@ private static func restartAndAssertStoredPinState(
     )
 
     // WS8: "move the last before the first" — `.before(a)` reorders the lane
-    // [a, b, c] → [c, a, b] (docs/02-domain.md §10 steps 2–4): c→0, a→1, b→2.
+    // [a, b, c] → [c, a, b] (docs/architecture.md steps 2–4): c→0, a→1, b→2.
     let move = try await history.perform(.placePinned(idC, at: .before(idA)))
     Self.expectPlacedPinned(move, id: idC, position: 7, "move c .before(a)")
     history = try await Self.restartAndAssertStoredPinState(
@@ -246,9 +246,9 @@ private static func restartAndAssertStoredPinState(
 
     // WS8: "each non-no-op action advances Change Position once" — and a
     // placement that reproduces the existing order is a true no-op
-    // (docs/02-domain.md §10 step 5): b is already last in [c, a, b], so
+    // (docs/architecture.md step 5): b is already last in [c, a, b], so
     // `.last` returns `.unchanged` — no position, no invalidation, no durable
-    // mutation (docs/03a-instruction-set.md §6).
+    // mutation (docs/architecture.md).
     let noop = try await history.perform(.placePinned(idB, at: .last))
     guard case .unchanged = noop else {
         Issue.record("WS8 (no-op b .last): expected .unchanged, got \(noop)")
@@ -263,8 +263,8 @@ private static func restartAndAssertStoredPinState(
 
     // WS8: "unpin the item now occupying the middle position" — a sits
     // between c and b in [c, a, b]; unpinning removes it from the lane and
-    // shifts the later ordinals down (docs/02-domain.md §10): [c, b] with
-    // c→0, b→1, and a unpinned (`nil` ordinal, docs/05-authority-kernel.md
+    // shifts the later ordinals down (docs/architecture.md): [c, b] with
+    // c→0, b→1, and a unpinned (`nil` ordinal, docs/storage.md
     // §3.1).
     let unpin = try await history.perform(.unpin(idA))
     Self.expectUnpinned(unpin, id: idA, position: 8, "unpin a (middle)")

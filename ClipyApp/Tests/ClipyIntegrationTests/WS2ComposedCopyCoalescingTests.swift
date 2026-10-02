@@ -1,5 +1,5 @@
 /// WS2Composed — Copy Coalescing through the composed app stack
-/// (docs/06-cross-cutting.md §8 WS2; docs/roadmap/06-clipyapp.md
+/// (docs/testing.md WS2; docs/architecture.md
 /// "Acceptance"): the same value copied twice (two pasteboard writes → two
 /// adapter freezes) coalesces into ONE item through the real dedup/coalesce
 /// commit path, with the occurrence folded and the row reflected by the real
@@ -14,7 +14,7 @@ import Testing
 
 struct WS2ComposedCopyCoalescingTests {
 
-    /// WS2 (docs/06-cross-cutting.md §8): re-copying the same value (a new
+    /// WS2 (docs/testing.md): re-copying the same value (a new
     /// pasteboard changeCount with identical bytes, later observation)
     /// commits `.coalesced` at Change Position 2 with the SAME History Item
     /// ID and Content Version, occurrence count 2 with a monotone
@@ -41,7 +41,7 @@ struct WS2ComposedCopyCoalescingTests {
 
         // Second copy: clearContents bumps the changeCount; identical bytes
         // under the identical type identifier (the byte-exact confirmation
-        // behind Copy Coalescing, docs/02-domain.md D7), later observation.
+        // behind Copy Coalescing, docs/architecture.md D7), later observation.
         ComposedSupport.setPasteboardContents(text, on: pasteboard)
         let secondCapture = try #require(adapter.capture(observedAt: secondObservedAt))
         #expect(secondCapture.representations == firstCapture.representations)

@@ -27,6 +27,40 @@ import Testing
 @MainActor
 struct PanelKeepOpenAndStatusMenuHostedTests {
 
+    @Test("Settings before first summon dispatches the existing Command-comma item",
+          arguments: [false, true])
+    func settingsBeforeFirstSummonUsesTheAppMenu(installsSceneAction: Bool) {
+        let savedMainMenu = NSApp.mainMenu
+        defer { NSApp.mainMenu = savedMainMenu }
+        let probe = SettingsMenuActionProbe()
+        let mainMenu = NSMenu()
+        let appMenu = NSMenu()
+        appMenu.autoenablesItems = false
+        let menuOwner = NSMenuItem(title: "Clipy", action: nil, keyEquivalent: "")
+        menuOwner.submenu = appMenu
+        mainMenu.addItem(menuOwner)
+        let settingsItem = NSMenuItem(
+            title: "任意本地化标题", action: #selector(SettingsMenuActionProbe.open(_:)),
+            keyEquivalent: ","
+        )
+        settingsItem.keyEquivalentModifierMask = .command
+        settingsItem.target = probe
+        appMenu.addItem(settingsItem)
+        NSApp.mainMenu = mainMenu
+
+        let owner = AppDelegate()
+        var sceneOpens = 0
+        if installsSceneAction {
+            owner.installSettingsOpenOperation { sceneOpens += 1 }
+        }
+        #expect(owner.panelForTesting == nil)
+        owner.statusItemMenuForTesting.performActionForItem(at: 3)
+        #expect(probe.opens == (installsSceneAction ? 0 : 1))
+        #expect(sceneOpens == (installsSceneAction ? 1 : 0))
+        #expect(owner.panelForTesting == nil,
+                "opening Settings never mounts a clipboard browsing panel")
+    }
+
     // MARK: - Click routing
 
     @Test("only a right-mouse-up diverts to the menu")
@@ -269,5 +303,14 @@ struct PanelKeepOpenAndStatusMenuHostedTests {
             try? await Task.sleep(for: .milliseconds(10))
         }
         return false
+    }
+}
+
+@MainActor
+private final class SettingsMenuActionProbe: NSObject {
+    private(set) var opens = 0
+
+    @objc func open(_ sender: NSMenuItem) {
+        opens += 1
     }
 }

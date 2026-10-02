@@ -1,4 +1,4 @@
-/// Body excerpt and UTF-16 translation helpers (03b §8; docs/04-coherence.md §7).
+/// Body excerpt and UTF-16 translation helpers (03b §8; docs/storage.md).
 /// Split out of SearchWorker.swift (file-size hygiene); same target, unchanged semantics.
 import Foundation
 import HistoryCore
@@ -29,7 +29,7 @@ extension SearchWorker {
     /// `…` is one Character and one UTF-16 code unit, so the final snippet
     /// is at most 320 + 2 = 322 Characters — the governing bound is
     /// `HistoryLimits.maximumBodySearchSnippetCharacters`
-    /// (docs/06-cross-cutting.md §2 "Body search snippet"), passed here as
+    /// (docs/testing.md "Body search snippet"), passed here as
     /// `snippetLimit`; the 320-Character window capacity is derived from
     /// it, not hardcoded.
     ///
@@ -291,7 +291,7 @@ extension SearchWorker {
         return (text[..<index], count, index != text.endIndex)
     }
 
-    // MARK: - UTF-16 translation (03b §8; docs/04-coherence.md §7)
+    // MARK: - UTF-16 translation (03b §8; docs/storage.md)
 
     /// Converts half-open Character-offset ranges into UTF-16 offsets into
     /// `text`. A `String`'s UTF-16 view is the concatenation of its

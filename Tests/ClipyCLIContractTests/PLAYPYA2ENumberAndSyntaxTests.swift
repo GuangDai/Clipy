@@ -19,6 +19,24 @@ struct PLAYPYA2ENumberAndSyntaxTests {
         }
     }
 
+    @Test func malformedUTF8InStringsAndBetweenEscapesIsRejectedBeforeTypedDecoding() {
+        let malformed = [
+            Data([0x80]),
+            Data([0xC0, 0xAF]), // overlong encoding
+            Data([0xED, 0xA0, 0x80]), // UTF-8 surrogate
+            Data([0xF4, 0x90, 0x80, 0x80]), // beyond U+10FFFF
+            Data([0xC2]) + Data(#"\u0080"#.utf8),
+            Data(#"\u0080"#.utf8) + Data([0x80]),
+        ]
+        for spelling in malformed {
+            let input = Data("{\"protocolVersion\":1,\"requestID\":\"\(validRequestID)\",\"operation\":\"".utf8)
+                + spelling + Data("\",\"arguments\":{}}".utf8)
+            let rejection = failure(ClipyCLIContract.decodeRequest(input))
+            #expect(rejection?.code == .invalidJSON)
+            #expect(rejection?.requestID == nil)
+        }
+    }
+
     @Test func fractionsExponentsAndOverflowAreTypedInvalidRequests() {
         let inputs = [
             requestBytes(version: "1.0"),

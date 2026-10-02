@@ -13,27 +13,37 @@ public struct PreviewText: Equatable, Sendable {
     public let displaySegmentGroups: [Range<Int>]
 
     internal init(text: String, wasTruncated: Bool, configuration: PreviewTextConfiguration = .init()) {
+        self.init(text: text, wasTruncated: wasTruncated, configuration: configuration, checkCancellation: {})
+    }
+
+    internal init(text: String, wasTruncated: Bool, configuration: PreviewTextConfiguration,
+                  checkCancellation: () throws -> Void) rethrows {
+        try checkCancellation()
         let end = configuration.maximumCharacters.flatMap {
             text.index(text.startIndex, offsetBy: $0, limitedBy: text.endIndex)
         } ?? text.endIndex
+        try checkCancellation()
         self.text = String(text[..<end])
         self.wasTruncated = wasTruncated || end != text.endIndex
-        let segments = Self.segment(self.text,
-            budget: configuration.segmentUTF16Budget, lineBreakBudget: configuration.segmentLineBreakBudget)
+        let segments = try Self.segment(self.text,
+            budget: configuration.segmentUTF16Budget, lineBreakBudget: configuration.segmentLineBreakBudget,
+            checkCancellation: checkCancellation)
         self.displaySegments = segments
-        self.displaySegmentGroups = Self.group(segments)
+        self.displaySegmentGroups = try Self.group(segments, checkCancellation: checkCancellation)
+        try checkCancellation()
     }
 
-    private static func group(_ segments: [Substring]) -> [Range<Int>] {
+    private static func group(_ segments: [Substring], checkCancellation: () throws -> Void) rethrows -> [Range<Int>] {
         var groups: [Range<Int>] = []
         var start = 0
         var shortCount = 0
         for index in segments.indices {
+            if index.isMultiple(of: 256) { try checkCancellation() }
             // Ordinary long and multiline segments stay individual lazy
             // rows. Only short single-line values share one native bridge,
             // capped at eight fields and therefore 512 UTF-16 units.
             let isShort = segments[index].utf16.count <= 64
-                && !segments[index].contains(where: \.isNewline)
+                && !segments[index].unicodeScalars.contains(where: isNewline)
             if isShort {
                 if shortCount == 8 {
                     groups.append(start..<index)
@@ -51,13 +61,27 @@ public struct PreviewText: Equatable, Sendable {
         return groups
     }
 
-    private static func segment(_ text: String, budget: Int, lineBreakBudget: Int) -> [Substring] {
+    private static func isNewline(_ scalar: Unicode.Scalar) -> Bool {
+        // Character iteration on a scalar-bounded slice inside one enormous
+        // combining cluster rescans the remaining cluster for every slice.
+        // Newline scalars have no need for grapheme-boundary discovery.
+        switch scalar.value {
+        case 0x0A...0x0D, 0x85, 0x2028, 0x2029: true
+        default: false
+        }
+    }
+
+    private static func segment(_ text: String, budget: Int, lineBreakBudget: Int,
+                                checkCancellation: () throws -> Void) rethrows -> [Substring] {
         var segments: [Substring] = []
         var start = text.startIndex
         var index = start
         var units = 0
         var lineBreaks = 0
+        var consumed = 0
         while index != text.endIndex {
+            if consumed.isMultiple(of: 1_024) { try checkCancellation() }
+            consumed += 1
             let next = text.index(after: index)
             let count = text[index..<next].utf16.count
             if units > 0, units + min(count, budget) > budget || lineBreaks >= lineBreakBudget {
@@ -80,6 +104,8 @@ public struct PreviewText: Equatable, Sendable {
                 let scalarBudget = min(budget, 64)
                 var scalarIndex = index
                 while scalarIndex != next {
+                    if consumed.isMultiple(of: 1_024) { try checkCancellation() }
+                    consumed += 1
                     let scalar = text.unicodeScalars[scalarIndex]
                     let width = scalar.value > 0xFFFF ? 2 : 1
                     if units + width > scalarBudget {

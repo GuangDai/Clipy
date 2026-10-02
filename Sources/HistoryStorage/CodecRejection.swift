@@ -1,17 +1,17 @@
 /// Shared support for the v1 versioned storage codecs: the rejection
 /// vocabulary with its Part V §16 failure mapping, the normalization checks
 /// every decoder applies, and the one deterministic container format.
-/// Owning spec: docs/05-authority-kernel.md §4 (versioned storage codecs,
+/// Owning spec: docs/storage.md (versioned storage codecs,
 /// decode checks) and §16 (failure translation); bounds:
-/// docs/06-cross-cutting.md §2 (Part VI).
+/// docs/testing.md (Part VI).
 import Foundation
 import HistoryCore
 import HistoryDomain
 
-// MARK: - Codec rejection vocabulary (docs/05-authority-kernel.md §4)
+// MARK: - Codec rejection vocabulary (docs/storage.md)
 
 /// Rejection of a versioned blob at encode or decode time.
-/// docs/05-authority-kernel.md §4
+/// docs/storage.md
 ///
 /// Decode is not a blind memberwise conversion and never silently drops a bad
 /// representation, chooses a duplicate, resets to Canonical, or repairs
@@ -45,7 +45,7 @@ internal enum CodecRejection: Error, Sendable, Equatable {
     case emptyTypeIdentifier
 
     /// A type identifier exceeds the Part VI UTF-8 byte bound
-    /// (docs/06-cross-cutting.md §2).
+    /// (docs/testing.md).
     case typeIdentifierExceedsBound(found: Int, bound: Int)
 
     /// A type identifier appears more than once (§4: "unique ... type
@@ -54,7 +54,7 @@ internal enum CodecRejection: Error, Sendable, Equatable {
 
     /// Type identifiers are not strictly increasing in the stable Unicode
     /// scalar order of a normalized content set (§4: "normalized";
-    /// docs/02-domain.md §2.1).
+    /// docs/architecture.md).
     case nonNormalizedOrder
 
     /// A representation carries zero-length bytes (§4: "no empty-bytes
@@ -67,7 +67,7 @@ internal enum CodecRejection: Error, Sendable, Equatable {
 
     /// Total representation bytes exceed their Part VI aggregate bound.
     /// Totals use checked arithmetic — no byte-count calculation wraps
-    /// (docs/06-cross-cutting.md §2). `found == Int.max` is the deliberate
+    /// (docs/testing.md). `found == Int.max` is the deliberate
     /// diagnostic sentinel when the mathematical overflow total cannot be
     /// represented by `Int`.
     case totalBytesExceedBound(found: Int, bound: Int)
@@ -134,12 +134,12 @@ internal enum CodecRejection: Error, Sendable, Equatable {
 
     /// Encoding a previously validated value failed. Unreachable for valid
     /// input; an encode-side failure is an internal invariant violation, not
-    /// a corrupt stored value (docs/05-authority-kernel.md §16).
+    /// a corrupt stored value (docs/storage.md).
     case encodingFailed
 }
 
 extension CodecRejection {
-    /// The docs/05-authority-kernel.md §16 boundary mapping: every decode
+    /// The docs/storage.md boundary mapping: every decode
     /// rejection is a corrupt persisted value; the encode-side backstop is a
     /// storage invariant violation.
     internal var historyFailure: HistoryFailure {
@@ -196,10 +196,10 @@ internal func mapCodecFailure<T>(_ body: () throws -> T) throws -> T {
     }
 }
 
-// MARK: - Shared normalization checks (docs/05-authority-kernel.md §4)
+// MARK: - Shared normalization checks (docs/storage.md)
 
 /// Normalization checks and envelope arithmetic shared by the v1 blob
-/// decoders. docs/05-authority-kernel.md §4
+/// decoders. docs/storage.md
 internal enum CodecValidation {
     /// Item positions are contiguous and each item has its own normalized
     /// representation set. Boundaries are retained in immutable content.
@@ -242,10 +242,10 @@ internal enum CodecValidation {
     }
 
     /// §4: type identifiers are unique and strictly increasing in the stable
-    /// Unicode scalar order (docs/02-domain.md §2.1). A repeated identifier
+    /// Unicode scalar order (docs/architecture.md). A repeated identifier
     /// is always diagnosed as a duplicate before any ordering violation,
     /// matching the `CanonicalContent` validator's precedence
-    /// (docs/02-domain.md §2.3).
+    /// (docs/architecture.md).
     internal static func requireNormalizedTypeIdentifierOrder(
         _ typeIdentifiers: [String]
     ) throws {
@@ -266,7 +266,7 @@ internal enum CodecValidation {
     /// Checked sum for decode-envelope estimates, clamping to `Int.max` on
     /// overflow. The envelope is only a pre-parse gate and the exact §4 bound
     /// checks still run after parsing, so clamping can never admit an invalid
-    /// blob — and no byte-count calculation wraps (docs/06-cross-cutting.md
+    /// blob — and no byte-count calculation wraps (docs/testing.md
     /// §2).
     internal static func clampedEnvelopeSum(_ terms: [Int]) -> Int {
         var total = 0
@@ -286,7 +286,7 @@ internal enum CodecValidation {
     }
 }
 
-// MARK: - Decode-envelope sizing (docs/05-authority-kernel.md §4)
+// MARK: - Decode-envelope sizing (docs/storage.md)
 
 /// The single owner of the four durable JSON blob envelope formulas.
 ///
@@ -362,10 +362,10 @@ internal enum CodecDecodeEnvelope {
     }
 }
 
-// MARK: - Container format (docs/05-authority-kernel.md §4)
+// MARK: - Container format (docs/storage.md)
 
 /// The one deterministic container format shared by the v1 blob codecs.
-/// docs/05-authority-kernel.md §4
+/// docs/storage.md
 ///
 /// JSON with sorted keys: a property-list integer is a signed 64-bit value,
 /// so full-range `UInt64` fingerprints are not safely representable there,

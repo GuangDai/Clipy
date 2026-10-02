@@ -1,5 +1,5 @@
 /// PersistenceErrorClassification.swift — platform persistence errors to the
-/// closed HistoryCore failure vocabulary (docs/05-authority-kernel.md §16).
+/// closed HistoryCore failure vocabulary (docs/storage.md).
 import Foundation
 import HistoryCore
 

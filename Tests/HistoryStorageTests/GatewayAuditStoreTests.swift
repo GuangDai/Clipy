@@ -318,6 +318,28 @@ struct GatewayAuditStoreTests {
         }
     }
 
+    @Test("oversized persisted audit payloads fail both page and startup validation")
+    func oversizedPayloadIsRejectedBeforeProjection() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        try await history.authority.withTestDatabase { authority in
+            let database = authority.database
+            try database.writeTransaction {
+                try GatewayAuditTestSupport.appendRecent(count: 1, context: database)
+                try database.execute(
+                    "UPDATE operation_records SET payloadBlob = zeroblob(?)",
+                    bindings: [.integer(Int64(ExternalLimits.standard.maximumAuditPayloadBlobBytes + 1))]
+                )
+            }
+            let config = try HistoryAuthority.loadGatewayConfig(in: database)
+            #expect(throws: ExternalFailure.persistence(.corruptStoredValue)) {
+                try GatewayAuditStore.readPage(since: 1, snapshotHead: 2, config: config, in: database)
+            }
+            #expect(throws: HistoryFailure.persistence(.corruptStoredValue)) {
+                try GatewayAuditStore.validateRetainedState(config: config, in: database)
+            }
+        }
+    }
+
     @Test("SQLite rejects duplicate audit sequences without changing durable records")
     func duplicateSequenceIsRejected() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))

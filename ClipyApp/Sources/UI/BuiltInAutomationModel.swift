@@ -14,20 +14,54 @@ final class BuiltInAutomationLibrary {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         do { workflows = try readCurrent() }
+        catch is CancellationError { }
         catch { failure = .unreadableWorkflows }
     }
 
-    func save(_ workflow: BuiltInAutomationWorkflow) throws {
+    func save(_ workflow: BuiltInAutomationWorkflow, orderedIDs: [UUID] = []) throws {
+        try saveAll([workflow], orderedIDs: orderedIDs)
+    }
+
+    /// Revert needs the latest saved definition, including another window's
+    /// edit or deletion. A failed read leaves the last readable snapshot intact.
+    func refresh() throws {
+        let current = try readCurrent()
+        workflows = current
+        failure = nil
+    }
+
+    /// Save only the supplied drafts, together with their visible priority, in
+    /// one preferences write. Other windows' unrelated definitions are retained.
+    func saveAll(_ drafts: [BuiltInAutomationWorkflow], orderedIDs: [UUID] = []) throws {
         guard failure == nil else { throw BuiltInAutomationFailure.unreadableWorkflows }
-        var normalized = workflow
-        normalized.name = normalized.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        try Self.validate(normalized)
+        guard Set(drafts.map(\.id)).count == drafts.count,
+              Set(orderedIDs).count == orderedIDs.count else {
+            throw BuiltInAutomationFailure.invalidWorkflow
+        }
+        let normalized = try drafts.map { draft in
+            var workflow = draft
+            workflow.name = workflow.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            try Self.validate(workflow)
+            return workflow
+        }
         var updated = try readCurrent()
-        if let index = updated.firstIndex(where: { $0.id == normalized.id }) {
-            updated[index] = normalized
-        } else {
-            guard updated.count < 50 else { throw BuiltInAutomationFailure.workflowLimit }
-            updated.append(normalized)
+        for workflow in normalized {
+            if let index = updated.firstIndex(where: { $0.id == workflow.id }) {
+                updated[index] = workflow
+            } else {
+                updated.append(workflow)
+            }
+        }
+        guard updated.count <= 50 else { throw BuiltInAutomationFailure.workflowLimit }
+        // Reorder just this window's known definitions in their existing slots.
+        // Unknown drafts are not implicitly saved and other windows' additions
+        // keep their relative placement and exact definitions.
+        let order = Set(orderedIDs)
+        let slots = updated.indices.filter { order.contains(updated[$0].id) }
+        let byID = Dictionary(uniqueKeysWithValues: updated.map { ($0.id, $0) })
+        let ordered = orderedIDs.compactMap { byID[$0] }
+        for (slot, workflow) in zip(slots, ordered) {
+            updated[slot] = workflow
         }
         try persist(updated)
     }
@@ -55,9 +89,22 @@ final class BuiltInAutomationLibrary {
     }
 
     private func persist(_ updated: [BuiltInAutomationWorkflow]) throws {
-        let data = try JSONEncoder().encode(updated)
+        let data: Data
+        do { data = try JSONEncoder().encode(updated) }
+        catch {
+            if let failure = BuiltInAutomation.definitionNestingFailure(for: error) { throw failure }
+            throw error
+        }
         guard data.count <= 4 * BuiltInAutomation.maximumBytes else {
             throw BuiltInAutomationFailure.textTooLarge
+        }
+        // Validate the actual bytes with the same reader a fresh library and
+        // automatic execution use. Foundation's encoding and decoding nesting
+        // limits need not be identical; a failed draft never replaces saved data.
+        do { _ = try Self.decodeDefinitions(data) }
+        catch {
+            if let failure = BuiltInAutomation.definitionNestingFailure(for: error) { throw failure }
+            throw error
         }
         defaults.set(data, forKey: Self.defaultsKey)
         workflows = updated
@@ -73,6 +120,8 @@ final class BuiltInAutomationLibrary {
                 throw BuiltInAutomationFailure.unreadableWorkflows
             }
             return try Self.decodeDefinitions(data)
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             failure = .unreadableWorkflows
             throw BuiltInAutomationFailure.unreadableWorkflows
@@ -93,10 +142,22 @@ final class BuiltInAutomationLibrary {
         return decoded
     }
 
+    /// The editor uses the same definition checks as persistence, without
+    /// writing preferences or running the workflow against test content.
+    static func validationFailure(for workflow: BuiltInAutomationWorkflow) -> BuiltInAutomationFailure? {
+        do {
+            var normalized = workflow
+            normalized.name = workflow.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            try validate(normalized)
+            return nil
+        } catch {
+            return (error as? BuiltInAutomationFailure) ?? .invalidWorkflow
+        }
+    }
+
     private static func validate(_ workflow: BuiltInAutomationWorkflow) throws {
         guard !workflow.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !workflow.steps.isEmpty,
-              Set(workflow.steps.map(\.id)).count == workflow.steps.count else {
+              !workflow.steps.isEmpty else {
             throw BuiltInAutomationFailure.invalidWorkflow
         }
         try BuiltInAutomation.validateStepTree(workflow.steps)
@@ -108,32 +169,44 @@ final class BuiltInAutomationLibrary {
     }
 
     private static func validateSteps(_ steps: [BuiltInAutomationStep], insideCondition: Bool) throws {
-        // Old flat workflows deferred effects until all their guards passed,
-        // even when a notification appeared before a guard. Keep that behavior.
-        var notificationAllowed = insideCondition || steps.contains {
-            $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation)
+        typealias ValidationFrame = (remaining: ArraySlice<BuiltInAutomationStep>, notificationAllowed: Bool, isEnabled: Bool)
+        func frame(_ children: [BuiltInAutomationStep], insideCondition: Bool, isEnabled: Bool) -> ValidationFrame {
+            // Flat notifications may precede their sibling guard, but cannot
+            // borrow permission from an unrelated conditional branch.
+            (children[...], insideCondition || children.contains {
+                $0.enabled && [.requireText, .requireImage, .containsText, .matchesRegex].contains($0.operation)
+            }, isEnabled)
         }
-        for step in steps {
+        var pending = [frame(steps, insideCondition: insideCondition, isEnabled: true)]
+        while var current = pending.popLast() {
+            try Task.checkCancellation()
+            guard let step = current.remaining.popFirst() else { continue }
+            pending.append(current)
             guard step.find.utf8.count <= 16_384, step.replacement.utf8.count <= 16_384 else {
                 throw BuiltInAutomationFailure.definitionTooLarge
             }
-            guard step.enabled else { continue }
+            let enabled = current.isEnabled && step.enabled
+            let executesBranches = enabled && step.operation == .conditional
+            // Disabled and unused branches still enter the saved file. Check
+            // their field budgets without requiring unfinished edits to run.
+            if let predicate = step.predicate { try predicate.validate(isEnabled: executesBranches) }
+            pending.append(frame(step.otherwiseSteps, insideCondition: true, isEnabled: executesBranches))
+            pending.append(frame(step.thenSteps, insideCondition: true, isEnabled: executesBranches))
+            guard enabled else { continue }
             if step.operation == .replace && step.find.isEmpty { throw BuiltInAutomationFailure.emptyFind }
-            if [.regexReplace, .regexExtract, .matchesRegex].contains(step.operation)
-                || (step.operation == .conditional && step.condition == .matchesRegex) {
-                guard !step.find.isEmpty, (try? NSRegularExpression(pattern: step.find)) != nil else {
+            if [.regexReplace, .regexExtract, .matchesRegex].contains(step.operation) {
+                guard !step.find.isEmpty, let regex = try? NSRegularExpression(pattern: step.find) else {
                     throw BuiltInAutomationFailure.invalidRegex
                 }
+                if step.operation == .regexReplace {
+                    try BuiltInAutomation.validateReplacementTemplate(step.replacement, captureGroupCount: regex.numberOfCaptureGroups)
+                }
             }
-            if [.requireText, .requireImage, .containsText, .matchesRegex].contains(step.operation) {
-                notificationAllowed = true
-            }
-            if step.operation == .notify && !notificationAllowed {
+            if step.operation == .notify && !current.notificationAllowed {
                 throw BuiltInAutomationFailure.notificationNeedsCondition
             }
-            if step.operation == .conditional {
-                try validateSteps(step.thenSteps, insideCondition: true)
-                try validateSteps(step.otherwiseSteps, insideCondition: true)
+            if step.operation == .conditional && step.predicate == nil {
+                try step.effectivePredicate.validate()
             }
         }
     }
@@ -155,6 +228,7 @@ final class BuiltInAutomationModel {
     private(set) var failure: BuiltInAutomationFailure?
     private(set) var isRunning = false
     private(set) var isQueued = false
+    private(set) var isCancelled = false
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var previewSource: BuiltInAutomationInput?
@@ -170,12 +244,24 @@ final class BuiltInAutomationModel {
 
     private func isCurrentRequest(_ request: UUID) -> Bool { generation == request }
 
+    private func recordNotificationFailure(_ failure: BuiltInAutomationFailure, request: UUID) {
+        guard generation == request else { return }
+        self.failure = failure
+    }
+
+    func cancel() {
+        guard isRunning || isQueued else { return }
+        invalidate()
+        isCancelled = true
+    }
+
     func invalidate() {
         generation = UUID()
         task?.cancel()
         task = nil
         isRunning = false
         isQueued = false
+        isCancelled = false
         output = nil
         failure = nil
         previewSource = nil
@@ -227,7 +313,20 @@ final class BuiltInAutomationModel {
                     try Task.checkCancellation()
                     if runEffects && value.matchedConditions && value.requestsNotification {
                         guard await model.isCurrentRequest(request) else { throw CancellationError() }
-                        try await sendNotification(workflow?.name ?? notificationName)
+                        do {
+                            try await sendNotification(workflow?.name ?? notificationName)
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            try Task.checkCancellation()
+                            // Notification delivery is the final effect. Its
+                            // failure does not discard the completed transform,
+                            // so Copy/Apply do not require another computation.
+                            await model.recordNotificationFailure(
+                                (error as? BuiltInAutomationFailure) ?? .notificationFailed,
+                                request: request
+                            )
+                        }
                         try Task.checkCancellation()
                     }
                     return value
@@ -239,7 +338,8 @@ final class BuiltInAutomationModel {
                 self.task = nil
             } catch {
                 guard let self, self.generation == request, !Task.isCancelled else { return }
-                self.failure = (error as? BuiltInAutomationFailure) ?? .historyUnavailable
+                if error is CancellationError { self.isCancelled = true }
+                else { self.failure = (error as? BuiltInAutomationFailure) ?? .historyUnavailable }
                 self.isRunning = false
                 self.isQueued = false
                 self.task = nil

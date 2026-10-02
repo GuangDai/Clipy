@@ -1,11 +1,11 @@
-/// Boundary-limits stress slice: the docs/06-cross-cutting.md §2 admission
+/// Boundary-limits stress slice: the docs/testing.md admission
 /// bounds proven at their exact edges with SYNTHESIZED payloads — no fixture
 /// tree required, so this suite is NOT gated on `FixtureCatalog.available`
 /// and runs in every `swift test` (the generator deliberately ships no
 /// boundary-size binary blobs; see `scripts/generate_fixtures.py`).
 ///
 /// All four assertions pin the inclusive-`≤` admission semantics of
-/// `IngestPreparation.prepare` (docs/05-authority-kernel.md §6.1 steps 1–2)
+/// `IngestPreparation.prepare` (docs/storage.md steps 1–2)
 /// against `HistoryLimits.standard` (06 §2):
 /// - one representation of EXACTLY 64 MiB is admitted; 64 MiB + 1 throws
 ///   `.invalidInput(.byteLimit)`;

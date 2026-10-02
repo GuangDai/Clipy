@@ -55,9 +55,9 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
     /// The complete §0.3 grammar for a supplied or stored credential:
     /// exactly 48 bytes. The provisioning helper receives the minted value
     /// through a dedicated inherited stdin descriptor — never argv,
-    /// environment, a cwd-derived input, or a caller-selected path — so the
-    /// descriptor is drained to EOF and the byte count is the whole
-    /// admission rule.
+    /// environment, a cwd-derived input, or a caller-selected path. A valid
+    /// descriptor is read through EOF. One extra byte proves an
+    /// invalid length without retaining an unbounded caller-controlled input.
     package static func validatedCredentialBytes(_ supplied: Data) throws -> Data {
         guard supplied.count == LocalAutomationCredential.byteCount else {
             throw LocalAutomationClientCredentialCustodyFailure.malformedCredential
@@ -70,9 +70,16 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
     package static func readSuppliedCredential(
         from handle: FileHandle
     ) throws -> Data {
-        let supplied: Data
+        var supplied = Data()
+        supplied.reserveCapacity(LocalAutomationCredential.byteCount + 1)
         do {
-            supplied = try handle.readToEnd() ?? Data()
+            while supplied.count <= LocalAutomationCredential.byteCount {
+                let remaining = LocalAutomationCredential.byteCount + 1 - supplied.count
+                guard let chunk = try handle.read(upToCount: remaining), !chunk.isEmpty else {
+                    break
+                }
+                supplied.append(chunk)
+            }
         } catch {
             throw LocalAutomationClientCredentialCustodyFailure.unavailable
         }
@@ -87,14 +94,6 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
         ".\(credentialFileName).\(token.uuidString).tmp"
     }
 
-    package static func isOrphanedTemporaryFileName(_ name: String) -> Bool {
-        let prefix = ".\(credentialFileName)."
-        let suffix = ".tmp"
-        return name.hasPrefix(prefix)
-            && name.hasSuffix(suffix)
-            && name.count > prefix.count + suffix.count
-    }
-
     // MARK: - Custody operations
 
     /// Loads the credential, or `nil` when the directory or file does not
@@ -103,10 +102,10 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
     /// or repaired; the file must be regular, must belong to the same
     /// effective user as the custody directory, and must read back at exact
     /// length. The final file's ownership/type/mode are checked on its descriptor.
-    /// Own interrupted-write temporaries are reclaimed first.
+    /// Reading never sweeps temporary siblings: a different process may still
+    /// be preparing an atomic replacement in the same directory.
     package func loadCredential() throws -> Data? {
         guard try validateDirectoryIfPresent() else { return nil }
-        try cleanOrphanedTemporaryFiles()
         if Self.isSymbolicLink(atPath: credentialFileURL.path) {
             throw LocalAutomationClientCredentialCustodyFailure.unsafeCredentialFile
         }
@@ -139,9 +138,8 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
 
     /// Installs the credential with a write-temp-then-rename replace so a
     /// concurrent reader never observes a partial file: the temp sibling is
-    /// created at mode `0600`, then atomically renamed over the destination
-    /// (`moveItem` on first install, `replaceItemAt` with the new item's
-    /// metadata afterwards). A symbolic-link or non-regular destination is
+    /// created at mode `0600`, then atomically renamed over the destination.
+    /// A symbolic-link or non-regular destination is
     /// refused rather than followed. Returns only after the installed file
     /// passes full load validation AND reads back byte-exact — the client
     /// half of the §0.3 authority-last publication order.
@@ -158,7 +156,6 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
     private func installCredential(_ exactBytes: Data, replacingExisting: Bool) throws {
         _ = try Self.validatedCredentialBytes(exactBytes)
         try prepareDirectory()
-        try cleanOrphanedTemporaryFiles()
 
         let fileManager = FileManager.default
         let credentialPath = credentialFileURL.path
@@ -185,6 +182,9 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
         ) else {
             throw LocalAutomationClientCredentialCustodyFailure.unavailable
         }
+        // Only this installation owns this temporary. An automatic directory
+        // sweep cannot distinguish a crashed writer from a concurrent writer.
+        defer { try? fileManager.removeItem(at: temporaryURL) }
         do {
             // Normalize so the invariant never depends on creation-attribute
             // semantics; the parent directory is already owner-only.
@@ -193,7 +193,6 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
                 ofItemAtPath: temporaryURL.path
             )
         } catch {
-            try? fileManager.removeItem(at: temporaryURL)
             throw LocalAutomationClientCredentialCustodyFailure.unavailable
         }
         do {
@@ -205,29 +204,22 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
                     throw LocalAutomationClientCredentialCustodyFailure.unavailable
                 }
                 try fileManager.removeItem(at: temporaryURL)
-            } else if fileManager.fileExists(atPath: credentialPath) {
-                _ = try fileManager.replaceItemAt(
-                    credentialFileURL,
-                    withItemAt: temporaryURL,
-                    backupItemName: nil,
-                    // `.withoutCreatingBackup` does not exist in the macOS 26
-                    // SDK's ItemReplacementOptions (CI build error); a nil
-                    // backup name already means no backup is written.
-                    options: [.usingNewMetadataOnly]
-                )
             } else {
-                try fileManager.moveItem(at: temporaryURL, to: credentialFileURL)
+                // One rename handles first install and replacement. A prior
+                // existence probe plus move/replace can race another installer.
+                guard Darwin.rename(temporaryURL.path, credentialPath) == 0 else {
+                    throw LocalAutomationClientCredentialCustodyFailure.unavailable
+                }
             }
         } catch LocalAutomationClientCredentialCustodyFailure.credentialAlreadyExists {
-            try? fileManager.removeItem(at: temporaryURL)
             throw LocalAutomationClientCredentialCustodyFailure.credentialAlreadyExists
         } catch {
-            try? fileManager.removeItem(at: temporaryURL)
             throw LocalAutomationClientCredentialCustodyFailure.unavailable
         }
 
         guard try loadCredential() == exactBytes else {
-            try? fileManager.removeItem(at: credentialFileURL)
+            // A concurrent replacement may now occupy the final path. Its
+            // valid credential must survive this installation's failed readback.
             throw LocalAutomationClientCredentialCustodyFailure.readbackMismatch
         }
     }
@@ -255,35 +247,6 @@ package struct LocalAutomationClientCredentialCustody: Sendable {
             return false
         }
         return (try? fileManager.removeItem(atPath: credentialPath)) != nil
-    }
-
-    /// Reclaims THIS component's own interrupted atomic-write temporaries —
-    /// sibling names matching `isOrphanedTemporaryFileName` that are regular
-    /// files or symbolic links — and nothing else: the credential file,
-    /// unrelated names, and non-regular occupants are all left untouched.
-    /// Removal failure is fail-closed, matching the §0.3 rule that custody
-    /// cleanup failure blocks publication.
-    package func cleanOrphanedTemporaryFiles() throws {
-        let fileManager = FileManager.default
-        guard try validateDirectoryIfPresent() else { return }
-        let names: [String]
-        do {
-            names = try fileManager.contentsOfDirectory(atPath: directoryURL.path)
-        } catch {
-            throw LocalAutomationClientCredentialCustodyFailure.unavailable
-        }
-        for name in names where Self.isOrphanedTemporaryFileName(name) {
-            let path = directoryURL.appendingPathComponent(name).path
-            let isLink = Self.isSymbolicLink(atPath: path)
-            let attributes = try? Self.attributes(atPath: path)
-            let fileType = attributes?[.type] as? FileAttributeType
-            guard isLink || fileType == .typeRegular else { continue }
-            do {
-                try fileManager.removeItem(atPath: path)
-            } catch {
-                throw LocalAutomationClientCredentialCustodyFailure.unavailable
-            }
-        }
     }
 
     // MARK: - Credential directory ownership

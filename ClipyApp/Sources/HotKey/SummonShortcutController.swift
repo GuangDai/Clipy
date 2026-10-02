@@ -12,6 +12,10 @@ final class SummonHotKeyRegistration {
         unregisterAction = unregister
     }
 
+    isolated deinit {
+        unregister()
+    }
+
     /// A registration token has one cleanup. Idempotence makes explicit app
     /// termination and a repeated stop safe without relying on deinit timing.
     func unregister() {

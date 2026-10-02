@@ -1,5 +1,5 @@
 /// Direct admission-branch and cross-layer invariant canaries for capture
-/// preparation (docs/05-authority-kernel.md §6.1 steps 1–7).
+/// preparation (docs/storage.md steps 1–7).
 import Foundation
 import HistoryCore
 import Testing
@@ -57,6 +57,47 @@ private func ingestRepresentation(
 }
 
 struct IngestPreparationAdmissionTests {
+    @Test func cancelledCaptureDoesNotHashItsPayload() async {
+        let preparation = IngestPreparationActor(fingerprint: { _ in
+            Issue.record("Cancelled capture reached payload fingerprinting")
+            return 0
+        })
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await preparation.prepare(ingestCapture([ingestRepresentation("a", byteCount: 1)]))
+        }
+        await #expect(throws: CancellationError.self) { try await task.value }
+    }
+
+    @Test func facadeUsesItsLimitsForCaptureAndRevisionPreparation() async throws {
+        let history = try await SQLiteHistory.open(
+            configuration: HistoryConfiguration(persistence: .temporary),
+            limits: tinyIngestLimits(), makeCandidateID: { HistoryItemID(rawValue: UUID()) }
+        )
+        let emptyUsage = try await history.usage()
+        await #expect(throws: HistoryFailure.invalidInput(.byteLimit)) {
+            try await history.perform(.capture(ingestCapture([ingestRepresentation("a", byteCount: 5)])))
+        }
+        #expect(try await history.usage() == emptyUsage)
+
+        let receipt = try await history.perform(.capture(ingestCapture([ingestRepresentation("a", byteCount: 1)])))
+        guard case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome else {
+            Issue.record("Expected a capture within the injected limits to succeed")
+            return
+        }
+        let beforeRevision = try await history.usage()
+        await #expect(throws: HistoryFailure.invalidInput(.byteLimit)) {
+            try await history.perform(.revise(RevisionRequest(
+                itemID: item.id, expected: item.contentVersion,
+                intent: .replace(RevisionDraft(decisions: [
+                    RevisionDecision(typeIdentifier: "a", action: .replace(bytes: Data(repeating: 0x42, count: 5))),
+                ]))
+            )))
+        }
+        #expect(try await history.usage() == beforeRevision)
+        #expect(try await history.pastePayload(for: item.id).representations.map(\.bytes) == [Data([0x41])])
+    }
+
     @Test func rejectsEveryStepOneCountAndByteBranch() async {
         let preparation = IngestPreparationActor(limits: tinyIngestLimits())
 
@@ -141,6 +182,6 @@ struct IngestPreparationAdmissionTests {
         #expect(bundle.domain.canonical.representations.map {
             $0.content.typeIdentifier
         } == ["a", "b"])
-        #expect(bundle.signatureEntries.map(\.fingerprint.rawValue) == [1, 2])
+        #expect(bundle.domain.canonical.representations.map(\.fingerprint.rawValue) == [1, 2])
     }
 }

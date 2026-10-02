@@ -7,7 +7,7 @@ import Foundation
 /// marker, fingerprint, title, or search text. `HistoryStorage` validates and
 /// prepares it.
 ///
-/// docs/03a-instruction-set.md §4
+/// docs/architecture.md
 public struct CapturedRepresentation: Sendable, Hashable {
     /// Zero-based position of the original system pasteboard item.
     public let pasteboardItemIndex: Int
@@ -28,7 +28,7 @@ public struct CapturedRepresentation: Sendable, Hashable {
 /// This is an observation, not trusted Domain state — the hint is not an item
 /// ID to create. `HistoryStorage` validates and prepares it.
 ///
-/// docs/03a-instruction-set.md §4
+/// docs/architecture.md
 public struct CopyOriginObservation: Sendable, Hashable {
     public let sourceApplication: String?
     public let lineageHint: HistoryItemID?
@@ -53,7 +53,7 @@ public struct CopyOriginObservation: Sendable, Hashable {
 /// content must never be retained even when its ordinary data
 /// appears in a sibling representation.
 ///
-/// docs/03a-instruction-set.md §4
+/// docs/architecture.md
 public struct ClipboardCapture: Sendable, Hashable {
     public let representations: [CapturedRepresentation]
     public let origin: CopyOriginObservation

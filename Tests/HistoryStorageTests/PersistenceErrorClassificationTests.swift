@@ -1,5 +1,5 @@
 /// PersistenceErrorClassificationTests — platform write-failure translation
-/// at the HistoryStorage boundary (docs/05-authority-kernel.md §16).
+/// at the HistoryStorage boundary (docs/storage.md).
 import Foundation
 import HistoryCore
 import Testing

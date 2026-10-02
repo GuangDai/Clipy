@@ -36,6 +36,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-AppleLanguages", "(\(language))", "-AppleLocale", locale,
+            "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES",
             // Keep the native resize edge away from the screen boundary,
             // independent of where a preceding GUI journey left the pointer.

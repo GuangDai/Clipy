@@ -39,6 +39,26 @@ struct PanelSessionSelectionTests {
         #expect(surface.selection == rows[0].item.id)
     }
 
+    @Test func onlyExplicitKeyboardNavigationRequestsScrolling() {
+        let surface = makeSurface()
+        surface.beginSession(rows: rows)
+        defer { surface.endSession() }
+        let initial = surface.keyboardNavigationGeneration
+        surface.moveSelection(in: rows, direction: .next)
+        #expect(surface.keyboardNavigationGeneration == initial + 1)
+        // A repeated boundary key should reveal a selection after the user
+        // manually scrolled away, even though its identifier is unchanged.
+        surface.selectForKeyboardNavigation(rows[0].item.id, in: rows)
+        #expect(surface.keyboardNavigationGeneration == initial + 2)
+        surface.reconcileSessionSelection(rows: Array(rows.dropFirst()), selectsVisibleWindow: true)
+        #expect(surface.selection == rows[1].item.id)
+        #expect(surface.keyboardNavigationGeneration == initial + 2)
+        surface.handleRowHover(rows[2].item.id)
+        surface.notePointerMovement()
+        #expect(surface.selection == rows[2].item.id)
+        #expect(surface.keyboardNavigationGeneration == initial + 2)
+    }
+
     @Test func detailsAndItsInlineEditorCannotSubmitTheRetainedListSelection() {
         let surface = HistoryPanelSurfaceState(
             viewState: HistoryViewState(history: ScriptedHistory()),

@@ -3,3 +3,8 @@
 "Light" = "Light";
 "Dark" = "Dark";
 "Uses the macOS accent color and contrast settings." = "Uses the macOS accent color and contrast settings.";
+"Animation speed" = "Animation speed";
+"%d — Slowest" = "%d — Slowest";
+"%d — Fastest" = "%d — Fastest";
+"Level %d" = "Level %d";
+"Animation changes apply immediately and respect Reduce Motion in macOS." = "Animation changes apply immediately and respect Reduce Motion in macOS.";

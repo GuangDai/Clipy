@@ -111,6 +111,35 @@ struct AppIntentDependencyTests {
             #expect(failure == .temporarilyUnavailable(.storeLocked))
         }
     }
+
+    @Test("cancelling one cold invocation preserves the shared store open")
+    func cancelledProviderWaiterDoesNotConsumeTheOpenedIngress() async throws {
+        let openGate = AppIntentDependencyOpenGate()
+        let historyTask = Task<SQLiteHistory, Error> {
+            await openGate.park()
+            return try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
+        }
+        let resolve = AppIntentDependencyRegistration.register(in: AppDependencyManager()) {
+            let history = try await openGate.awaitHistory(historyTask)
+            return AppIntentHistoryIngress(facade: history.makeAppIntentsHistoryFacade(), onCommittedRemoval: { _ in })
+        }
+        let invocation = Task { try await resolve() }
+        await openGate.waitUntilParked()
+        await openGate.waitUntilProviderIsWaiting()
+        invocation.cancel()
+        await openGate.release()
+        await #expect(throws: CancellationError.self) { try await invocation.value }
+
+        let history = try await historyTask.value
+        let connection = try #require(try await history.connections().first)
+        try await history.grantCapability(.browse, to: connection.id)
+        let ingress = try await resolve()
+        guard case .page(let page) = try await ingress.read(.recent(limit: 1)) else {
+            Issue.record("The next invocation must use the successfully opened store")
+            return
+        }
+        #expect(page.rows.isEmpty)
+    }
 }
 
 /// One deterministic suspension point before the real in-memory store open.

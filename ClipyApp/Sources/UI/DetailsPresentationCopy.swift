@@ -4,11 +4,11 @@
 import Foundation
 
 internal enum DetailsPresentationCopy {
-    static func text(_ key: String, bundle: Bundle = .main) -> String {
+    static func text(_ key: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(forKey: key, value: key, table: "DetailsPresentation")
     }
 
-    static func formatName(_ identifier: String, bundle: Bundle = .main) -> String {
+    static func formatName(_ identifier: String, bundle: Bundle = AppLocalization.bundle) -> String {
         let name: String
         switch identifier {
         case "public.utf8-plain-text": name = "Text · UTF-8"

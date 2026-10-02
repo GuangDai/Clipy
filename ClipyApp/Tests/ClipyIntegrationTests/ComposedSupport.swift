@@ -1,5 +1,5 @@
 /// ComposedSupport — shared fixtures for the M3 re-verification suites
-/// (docs/roadmap/06-clipyapp.md "Acceptance"; docs/roadmap/README.md §3):
+/// (docs/architecture.md "Acceptance"; docs/testing.md):
 /// every WS1–WS21 path re-run end-to-end through the COMPOSED app stack —
 /// the real `SQLiteHistory` facade, the real `PasteboardAdapter` over a
 /// PRIVATE `NSPasteboard` (never `.general`), and the real PresentationUI
@@ -18,7 +18,7 @@
 /// `ContentVersion(rawValue:)`, `PastePayload(…)`) are NOT available here:
 /// every ID/version/payload flows from a real receipt, detail, or paste
 /// read — exactly the caller position ClipyApp itself occupies
-/// (docs/03a-instruction-set.md §2 minting-centralization note).
+/// (docs/architecture.md minting-centralization note).
 import AppKit
 import Foundation
 import HistoryCore
@@ -43,7 +43,7 @@ enum ComposedSupport {
 
     /// The plain-text type identifier the adapter freezes for
     /// `NSPasteboard.PasteboardType.string` — the same normalized UTI the
-    /// ingest path stores (docs/02-domain.md §2.1).
+    /// ingest path stores (docs/architecture.md).
     static let plainTextTypeIdentifier =
         NSPasteboard.PasteboardType.string.rawValue
 
@@ -51,7 +51,7 @@ enum ComposedSupport {
 
     /// Opens a REAL `SQLiteHistory` over a disposable store — same
     /// Authority, planners, codecs, and transaction path as a persistent
-    /// store; only the durability medium differs (docs/05-authority-kernel.md
+    /// store; only the durability medium differs (docs/storage.md
     /// §2). Used for every suite that needs no restart.
     static func openMemoryHistory(
         maximumUnpinned: Int = 200
@@ -134,7 +134,7 @@ enum ComposedSupport {
 
     /// Writes `text` (plus an optional html sibling) onto the private
     /// pasteboard the way a copying application would: clear, then one typed
-    /// payload per representation (docs/03a-instruction-set.md §4 raw shape).
+    /// payload per representation (docs/architecture.md raw shape).
     @MainActor
     static func setPasteboardContents(
         _ text: String,
@@ -162,7 +162,7 @@ enum ComposedSupport {
 
     /// Probes private-pasteboard usability and FAILS the calling test when
     /// `NSPasteboard` cannot round-trip in this hosted environment
-    /// (docs/roadmap/06-clipyapp.md acceptance runs on a macOS host where
+    /// (docs/architecture.md acceptance runs on a macOS host where
     /// this probe always passes).
     @MainActor
     static func requireUsablePasteboard() throws {
@@ -249,7 +249,7 @@ enum ComposedSupport {
         return condition()
     }
 
-    // MARK: Search range indexing (docs/03b-instruction-set.md §8)
+    // MARK: Search range indexing (docs/architecture.md)
 
     /// Extracts the substring at `range` from `text` via the UTF-16 view,
     /// verifying the UTF-16 offsets index correctly — the same check the
@@ -289,6 +289,10 @@ actor PostInitialObservationSuspendingHistory: ClipboardHistory {
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
         try await base.browse(request)
+    }
+
+    func sourceApplications(_ request: HistorySourceApplicationRequest) async throws -> HistorySourceApplicationPage {
+        try await base.sourceApplications(request)
     }
 
     func observe(

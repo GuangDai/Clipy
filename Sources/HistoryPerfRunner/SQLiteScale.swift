@@ -21,6 +21,7 @@ struct SQLiteScaleArguments: Sendable {
     let bodyBytes: Int
     let outputURL: URL
     let fixtureProfile: SQLiteScaleFixtureProfile
+    let largeBodyIndex: Int
 
     init(_ arguments: [String]) throws {
         guard (5...6).contains(arguments.count),
@@ -33,6 +34,7 @@ struct SQLiteScaleArguments: Sendable {
             throw SQLiteScaleError.invalidArguments
         }
         fixtureProfile = SQLiteScaleFixtureProfile(kind: profile, fixedBodyBytes: bytes)
+        largeBodyIndex = fixtureProfile.largestBodyIndex(in: rows)
         self.mode = mode
         storeURL = URL(fileURLWithPath: arguments[1])
         retainedRows = rows
@@ -128,6 +130,8 @@ func runSQLiteScale(arguments: [String]) async -> Int {
             ),
             operatingSystem: ProcessInfo.processInfo.operatingSystemVersionString,
             physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory,
+            machine: admissionMachineMetadata(),
+            swiftVersion: commandOutput("/usr/bin/xcrun", arguments: ["swift", "--version"]),
             samples: samples, logicalBefore: before.map(SQLiteScaleUsage.init),
             logicalAfter: usage.map(SQLiteScaleUsage.init),
             diskAfter: disk, failure: failure,
@@ -135,13 +139,17 @@ func runSQLiteScale(arguments: [String]) async -> Int {
                 "Mixed is a synthetic reference mixture, not measured user behavior: per 100k, 20000 short/64000 medium/14400 long/1520 large/80 very-large items. Lengths use 2048 evenly spaced sample points per band. fixed preserves the former equal-size fixture.",
                 "rawUTF8Bytes reports generated content lengths; indexedTitleUTF8Bytes/indexedSearchBodyUTF8Bytes aggregate actual persisted production projection lengths before revision. Nearest-rank percentiles and floating-point population moments use complete length histograms. The two read/statistics phases are outside query timing.",
                 "Record-only observations; no numeric performance threshold is enforced.",
+                "Any operation, resource read or result-validation failure makes the report fail and the process exit nonzero. Independent search cases may still collect later evidence; their earlier failure is rethrown after the search suite and is never converted into success. A pre-operation resource failure carries no invented latency/memory/row sample.",
                 "Run seed and measure as separate processes. Measure open is cold-process; OS filesystem caches are uncontrolled, not cold-disk evidence.",
                 "RSS/footprint are whole-process endpoint samples. Peak RSS is since process launch, not a resettable per-phase peak; no sampled peak-footprint claim.",
                 "Logical content bytes, returned payload bytes, and observed filesystem allocation are different quantities. No total owned-memory attribution is available in this standalone runner.",
                 "Disk enumeration runs after operation samples; compare seed/measure diskAfter values for growth. APFS shared/compressed blocks are not exclusive allocation.",
-                "The synthetic corpus contains one distinct UTF-8 text representation per item. Scroll retains at most the first 100 rows plus the current page and oldest row to independently check search result identities.",
+                "The synthetic corpus contains one distinct UTF-8 text representation per item. Each title is its first-line marker; all bodies contain bodyhit, only the oldest contains rarebody, and the largest raw value contains largebodyhit near its durable projection tail. Scroll retains at most the first 100 rows plus the current page, oldest row and designated large row to independently check search identities.",
+                "Mixed lengths do not imply diverse text entropy: bodies repeat seven text-shaped blocks. Fixed bodies use ASCII padding. These synthetic cases do not establish performance for arbitrary user text or worst-case index posting distributions.",
                 "Seed and traversal report processedFixtureRows separately; returnedRows is the count of returned browse/search DTO rows. searchWork records same-request Swift decode/evaluation work, including partial work on failure, and excludes SQLite posting-list/planner work.",
-                "Search cases cover absent terms, the oldest item, dense prefixes, a structural regexp, and a fuzzy substitution typo. Dense matches measure two pages separately. Query metadata records expected total matches; returnedRows records returned rows, not internal decoded/evaluated rows.",
+                "Each search page records one saved warmup (sampleIndex 0, isWarmup true) followed by five timed repetitions (sampleIndex 1...5, isWarmup false) in this same process and store. elapsedMilliseconds is the raw request time; group timed records by phase for a median and exclude warmup. Every repetition independently validates identities, page boundaries and presentation. These are warm-cache observations after open/scroll and preceding queries, not cold-disk measurements; non-search phases remain single observations and omit repetition fields. Older report samples omit these optional fields.",
+                "first-page recentWork and full-scroll recentWork/recentPages come from the same production recent-page requests as the results, including partial failed work. full-scroll records each page's raw request latency and sums native counters; its whole-phase timer also includes fixture validation and traversal bookkeeping. VM/fullscan/sort count primary scalar SELECTs, including SQL-filter predicates, anchors/ties/lookahead. Position/transaction SQL, cursor encoding and separate source-validation SQL VM are excluded. Cache hits/misses are connection counter differences across each scalar SELECT prepare/step/decode/source-validation interval, not physical I/O bytes or OS page faults. No SQL complexity conclusion follows from one total traversal time.",
+                "Search cases cover absent terms, the oldest item, dense title/body hits, rare large-body tail snippets with UTF-16 match validation, both common/rare AND operand orders including a common title term, a structural regexp, and a fuzzy substitution typo. Dense matches measure two pages separately; one additional first-page expression repeats the common title term 128 times to expose redundant planner/posting probes. Query metadata records expected total matches; returnedRows records returned rows, not internal decoded/evaluated rows.",
                 "Canonical copy reads the original content after revision. Inactive revision payload copy and real OS pressure/app-cache recovery are not measured here.",
             ]
         )
@@ -165,15 +173,18 @@ private func seedSQLiteScale(
 ) async throws {
     let rowCount = options.retainedRows
     let profile = options.fixtureProfile
+    let largeBodyIndex = options.largeBodyIndex
     _ = try await measureSQLiteScale(phase: "seed", samples: &samples) {
         try await history.seedPerformanceFixture(rowCount: rowCount - 1) { index in
-            profile.capture(at: index)
+            profile.capture(at: index, includeLargeBodyHit: index == largeBodyIndex)
         } progress: { rows in
             if rows.isMultiple(of: 10_000) { print("sqlite-scale seededRows=\(rows)") }
         }
     } fixtureRows: { $0.retainedRows }
     _ = try await measureSQLiteScale(phase: "public-capture", samples: &samples) {
-        try await capturePreparedItem(history, capture: profile.capture(at: rowCount - 1))
+        try await capturePreparedItem(history, capture: profile.capture(
+            at: rowCount - 1, includeLargeBodyHit: rowCount - 1 == largeBodyIndex
+        ))
     }
 }
 
@@ -183,13 +194,21 @@ private func exerciseSQLiteScale(
     samples: inout [SQLiteScaleSample],
     projections: inout PerformanceProjectionLengths?
 ) async throws {
-    let page = try await measureSQLiteScale(phase: "first-page", samples: &samples) {
-        try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 50))
-    } facts: { ($0.rows.count, 0) }
+    let first = try await measureSQLiteScale(phase: "first-page", samples: &samples) {
+        await history.measureRecentPage(HistoryBrowseRequest(kind: .recent, limit: 50))
+    } facts: { (try $0.result.get().rows.count, 0) }
+    recentWork: { SQLiteScaleRecentWork($0.metrics) }
+    let page = try first.result.get()
     guard let selected = page.rows.first?.item else { throw SQLiteScaleError.unexpectedResult }
-    let traversed = try await measureSQLiteScale(phase: "full-scroll", samples: &samples) {
-        try await traverseSQLiteScale(history: history, expectedCount: options.retainedRows)
-    } fixtureRows: { $0.count }
+    let scroll = try await measureSQLiteScale(phase: "full-scroll", samples: &samples) {
+        await measureSQLiteScaleRecentTraversal(
+            history: history, expectedCount: options.retainedRows, largeBodyIndex: options.largeBodyIndex
+        )
+    } facts: { _ = try $0.result.get(); return (0, 0) }
+    recentWork: { $0.work }
+    recentPages: { $0.pages }
+    fixtureRows: { try? $0.result.get().count }
+    let traversed = try scroll.result.get()
     try await exerciseSQLiteScaleSearches(
         history: history, corpus: traversed, position: page.position, samples: &samples
     )
@@ -201,7 +220,7 @@ private func exerciseSQLiteScale(
     } facts: { (0, $0.representations.reduce(0) { $0 + $1.bytes.count }) }
     guard payload.representations.count == 1,
           payload.representations[0].bytes == options.fixtureProfile.capture(
-            at: options.retainedRows - 1
+            at: options.retainedRows - 1, includeLargeBodyHit: options.retainedRows - 1 == options.largeBodyIndex
           ).representations[0].bytes else { throw SQLiteScaleError.unexpectedResult }
     _ = try await measureSQLiteScale(phase: "enable-revision-pruning", samples: &samples) {
         try await history.perform(.setRetentionPolicies(HistoryRetentionPolicies(
@@ -237,34 +256,16 @@ private func exerciseSQLiteScale(
     }
 }
 
-/// Keep100 leading rows and the oldest row as an independent search oracle.
+/// Keep 100 leading rows, the oldest row and one designated large-body row as
+/// an independent search oracle.
 /// Caller memory stays bounded; the position check detects mixed snapshots.
 func traverseSQLiteScale(
     history: SQLiteHistory,
-    expectedCount: Int
+    expectedCount: Int,
+    largeBodyIndex: Int? = nil
 ) async throws -> SQLiteScaleBrowseEvidence {
-    var cursor: HistoryPageCursor?
-    var position: ChangePosition?
-    var count = 0
-    var leadingRows: [HistoryRow] = []
-    var oldestRow: HistoryRow?
-    repeat {
-        let page = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 50, cursor: cursor))
-        if let position, page.position != position { throw SQLiteScaleError.unexpectedResult }
-        position = page.position
-        for row in page.rows {
-            let expectedIndex = expectedCount - count - 1
-            guard expectedIndex >= 0,
-                  row.lastCopiedAt == Date(timeIntervalSinceReferenceDate: 600_000_000 + Double(expectedIndex)),
-                  row.title.hasPrefix("perf-item-\(expectedIndex)-") else {
-                throw SQLiteScaleError.unexpectedResult
-            }
-            if leadingRows.count < 100 { leadingRows.append(row) }
-            oldestRow = row
-            count += 1
-        }
-        cursor = page.next
-    } while cursor != nil
-    guard count == expectedCount else { throw SQLiteScaleError.unexpectedResult }
-    return SQLiteScaleBrowseEvidence(count: count, leadingRows: leadingRows, oldestRow: oldestRow)
+    let measured = await measureSQLiteScaleRecentTraversal(
+        history: history, expectedCount: expectedCount, largeBodyIndex: largeBodyIndex
+    )
+    return try measured.result.get()
 }

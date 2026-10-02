@@ -1,9 +1,9 @@
-/// WS2 — Copy Coalescing (docs/06-cross-cutting.md §8 WS2): the
+/// WS2 — Copy Coalescing (docs/testing.md WS2): the
 /// commit/receipt/storage side of submitting the same capture value a second
 /// time through the public `SQLiteHistory.perform(.capture(_:))` and the
 /// real dedup/coalesce commit path.
 ///
-/// Phasing (docs/roadmap/README.md §3, WS-clause phasing note): WS2's
+/// Phasing (docs/testing.md, WS-clause phasing note): WS2's
 /// public-read clauses defer to step 7; the occurrence-count and
 /// no-second-row clauses are asserted here through the INDEPENDENT second
 /// `SQLite connection` over the same on-disk store (see `WSSupport`), and the
@@ -16,7 +16,7 @@ import Testing
 
 struct WS2CopyCoalescingTests {
 
-/// WS2 (docs/06-cross-cutting.md §8): re-capturing the same value (later
+/// WS2 (docs/testing.md): re-capturing the same value (later
 /// `observedAt`, different source) coalesces into the existing item — same
 /// History Item ID and Content Version, occurrence folded (count 2, monotone
 /// last-copied time, new last source) — commits Change Position 2, and
@@ -27,7 +27,7 @@ struct WS2CopyCoalescingTests {
     let history = try await WSSupport.openHistory(storeURL: storeURL)
 
     // Identical bytes under the identical type identifier both times (the
-    // byte-exact confirmation behind Copy Coalescing, docs/02-domain.md D7);
+    // byte-exact confirmation behind Copy Coalescing, docs/architecture.md D7);
     // only the observation time and source differ.
     let text = "clipy coalescing probe"
     let firstObservedAt = Date(timeIntervalSinceReferenceDate: 700_000_100)
@@ -65,7 +65,7 @@ struct WS2CopyCoalescingTests {
     }
     // WS2: "the same History Item ID and Content Version" — Copy Coalescing
     // preserves the winner's identity and Effective Content state
-    // (docs/02-domain.md §13).
+    // (docs/architecture.md).
     #expect(reference.id == insertedReference.id)
     #expect(reference.contentVersion == insertedReference.contentVersion)
     #expect(reference.contentVersion.rawValue == 1)
@@ -77,14 +77,14 @@ struct WS2CopyCoalescingTests {
     #expect(rows.count == 1)
     let row = try #require(rows.first)
     #expect(row.id == reference.id.rawValue)
-    // Coalescing never mints a Content Version (docs/02-domain.md D2, §13).
+    // Coalescing never mints a Content Version (docs/architecture.md D2, §13).
     #expect(row.contentVersionRaw == 1)
 
     // WS2: "occurrence count 2, monotone last-copied time" — the repeat
     // observation folds into the stored occurrence summary: the first
     // observation is untouched, the last moves forward to the later date,
     // and the last source becomes the new source while the first source is
-    // preserved (docs/05-authority-kernel.md §9 occurrence folding).
+    // preserved (docs/storage.md occurrence folding).
     #expect(row.copyCount == 2)
     #expect(row.firstCopiedAt == firstObservedAt)
     #expect(row.lastCopiedAt == secondObservedAt)
@@ -92,7 +92,7 @@ struct WS2CopyCoalescingTests {
     #expect(row.lastSource == secondSource)
 
     // Canonical Content is preserved byte-exactly by coalescing
-    // (docs/02-domain.md D2): the stored blob still decodes to the original
+    // (docs/architecture.md D2): the stored blob still decodes to the original
     // capture bytes.
     let canonical = try WSSupport.fetchCanonical(itemID: row.id, in: container)
     #expect(canonical.representations.map(\.content.typeIdentifier) == ["public.utf8-plain-text"])

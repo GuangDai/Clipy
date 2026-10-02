@@ -10,7 +10,7 @@ internal struct SQLitePositionRow: Sendable {
 }
 
 extension HistoryAuthority {
-    // MARK: Singleton access (docs/05-authority-kernel.md §3.2, §10)
+    // MARK: Singleton access (docs/storage.md, §10)
 
     /// A point read of the current singleton. The caller owns any surrounding
     /// snapshot/write transaction; this helper never begins a nested one.
@@ -52,10 +52,10 @@ extension HistoryAuthority {
         )
     }
 
-    // MARK: Observation registration (docs/05-authority-kernel.md §14.4)
+    // MARK: Observation registration (docs/storage.md)
 
     /// Registers one invalidation continuation and returns its token and
-    /// stream. docs/05-authority-kernel.md §14.4; docs/04-coherence.md §5
+    /// stream. docs/storage.md; docs/storage.md
     /// step 1 (registration precedes the first authoritative query — the
     /// WS12 ordering rule).
     ///
@@ -87,7 +87,7 @@ extension HistoryAuthority {
         invalidationPublisher.unsubscribe(subscription)
     }
 
-    // MARK: Roadmap-owned test seams (docs/roadmap/03-historystorage.md step 5)
+    // MARK: Roadmap-owned test seams (docs/storage.md step 5)
 
     /// Installs (or clears) the suspension handler the deterministic
     /// concurrency harness drives. Test seam — `nil` in production, compiled

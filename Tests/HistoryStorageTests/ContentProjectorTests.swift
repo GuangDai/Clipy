@@ -1,5 +1,5 @@
-/// Bounded projection tests (docs/05-authority-kernel.md §15;
-/// docs/06-cross-cutting.md §2, §9). Projection must discard whitespace-only
+/// Bounded projection tests (docs/storage.md;
+/// docs/testing.md, §9). Projection must discard whitespace-only
 /// representations and construct the stored corpus without first materializing
 /// an unbounded joined body.
 import Foundation
@@ -51,7 +51,7 @@ private func effectiveTextContent(
     #expect(projection.searchBody.utf8.count == bound)
 }
 
-@Test func titleOnlyProjectionMatchesNewlineAndWhitespaceSemantics() {
+@Test func titleProjectionMatchesNewlineAndWhitespaceSemantics() {
     let fixtures: [(String, String)] = [
         (" \r\n\t\r\n First title \rignored", "First title"),
         ("\r\n\r\n\n\r First title \nignored", "First title"),
@@ -63,14 +63,13 @@ private func effectiveTextContent(
         let content = effectiveTextContent([
             ("public.utf8-plain-text", text),
         ])
-        let title = ContentProjector.projectTitle(content)
+        let title = ContentProjector.project(content).title
         // String equality alone would hide a change to Unicode normalization.
         #expect(Data(title.utf8) == Data(expected.utf8))
-        #expect(Data(title.utf8) == Data(ContentProjector.project(content).title.utf8))
     }
 }
 
-@Test func titleOnlyProjectionKeepsGraphemesAtTheByteLimitBeforeALargeBody() {
+@Test func titleProjectionKeepsGraphemesAtTheByteLimitBeforeALargeBody() {
     let prefix = String(
         repeating: "a",
         count: HistoryLimits.standard.maximumStoredTitleUTF8Bytes - 1
@@ -79,20 +78,21 @@ private func effectiveTextContent(
         + String(repeating: "large body\r\n", count: 50_000)
     for identifier in ["public.utf8-plain-text", "public.utf16-external-plain-text"] {
         let content = effectiveTextContent([(identifier, text)])
-        let title = ContentProjector.projectTitle(content)
+        let title = ContentProjector.project(content).title
         // The decomposed grapheme needs three bytes and cannot fit in the
         // final one-byte slot. Neither its base nor its accent may be split.
         #expect(Data(title.utf8) == Data(prefix.utf8))
-        #expect(Data(title.utf8) == Data(ContentProjector.project(content).title.utf8))
     }
 }
 
-@Test func titleOnlyProjectionStillRejectsMalformedBytesAfterAValidFirstLine() {
+@Test func titleProjectionRejectsMalformedBytesAfterAValidFirstLine() {
     let content = EffectiveContent(representations: [ContentRepresentation(
         typeIdentifier: "public.utf8-plain-text",
         bytes: Data("Valid first line\r\n".utf8) + Data([0xC3, 0x28])
     )])
-    #expect(ContentProjector.projectTitle(content) == "public.utf8-plain-text")
+    let projection = ContentProjector.project(content)
+    #expect(projection.title == "public.utf8-plain-text")
+    #expect(projection.searchBody.isEmpty)
 }
 
 @Test func completedTitleAndBodyBudgetsExcludeLaterText() {
@@ -198,7 +198,6 @@ func nativeUTF16ProjectionHonorsByteOrder(bytes: Data) {
 
     #expect(projection.title == "A中🦊")
     #expect(projection.searchBody == "A中🦊")
-    #expect(ContentProjector.projectTitle(content) == "A中🦊")
 }
 
 @Test(arguments: [
@@ -214,7 +213,6 @@ func externalUTF16ProjectionHonorsByteOrder(bytes: Data) {
     let projection = ContentProjector.project(content)
     #expect(projection.title == "A中")
     #expect(projection.searchBody == "A中")
-    #expect(ContentProjector.projectTitle(content) == "A中")
 }
 
 @Test func misspelledExternalUTF8IdentifierRemainsOpaque() {
@@ -238,34 +236,4 @@ func externalUTF16ProjectionHonorsByteOrder(bytes: Data) {
 
     #expect(size.titleUTF8Bytes == title.utf8.count)
     #expect(size.searchBodyUTF8Bytes == body.utf8.count)
-}
-
-@Test(arguments: [Data(), Data([0xEF, 0xBB, 0xBF, 0x41]), Data("中🙂".utf8)])
-func storedTitleStrictDecodePreservesLiteralBytes(bytes: Data) throws {
-    let title = try ContentProjector.decodeStoredTitle(bytes, limits: .standard)
-    #expect(Data(title.utf8) == bytes)
-}
-
-@Test(arguments: [Data([0xFF]), Data([0xC3]), Data([0xED, 0xA0, 0x80])])
-func storedTitleStrictDecodeRejectsMalformedUTF8(bytes: Data) {
-    #expect(throws: CodecRejection.invalidStoredTitleUTF8) {
-        try ContentProjector.decodeStoredTitle(bytes, limits: .standard)
-    }
-}
-
-@Test func storedTitleByteBoundPrecedesUTF8Decoding() throws {
-    let bound = HistoryLimits.standard.maximumStoredTitleUTF8Bytes
-    let validAtBound = Data(repeating: 0x61, count: bound)
-    let title = try ContentProjector.decodeStoredTitle(validAtBound, limits: .standard)
-    #expect(Data(title.utf8) == validAtBound)
-
-    // Both valid and malformed over-bound storage must fail on the byte
-    // bound first, without repair, truncation or attempted string decoding.
-    for byte in [UInt8(0x61), 0xFF] {
-        #expect(throws: CodecRejection.storedTitleExceedsBound(found: bound + 1, bound: bound)) {
-            try ContentProjector.decodeStoredTitle(
-                Data(repeating: byte, count: bound + 1), limits: .standard
-            )
-        }
-    }
 }

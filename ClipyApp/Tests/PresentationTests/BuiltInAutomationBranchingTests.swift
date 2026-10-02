@@ -63,7 +63,7 @@ struct BuiltInAutomationBranchingTests {
         #expect(output.requestsNotification)
     }
 
-    @Test func oldFlatDefinitionsDecodeAndNestedStepsShareTheLimit() async throws {
+    @Test func oldFlatDefinitionsDecodeAndNestedWorkflowsExceedTheFormerStepLimit() async throws {
         let id = UUID()
         let data = Data("""
         {"id":"\(id.uuidString)","operation":"trim","enabled":true,"find":"","replacement":""}
@@ -72,9 +72,9 @@ struct BuiltInAutomationBranchingTests {
         #expect(old.id == id)
         #expect(old.thenSteps.isEmpty && old.otherwiseSteps.isEmpty)
         let tree = BuiltInAutomationStep(operation: .conditional, condition: .isText,
-                                        thenSteps: (0..<32).map { _ in .init(operation: .trim) })
-        await #expect(throws: BuiltInAutomationFailure.tooManySteps) {
-            try await BuiltInAutomation.run(.text("text"), steps: [tree])
-        }
+                                        thenSteps: (0..<128).map { _ in .init(operation: .trim) })
+        let result = try await BuiltInAutomation.run(.text(" text "), steps: [tree])
+        #expect(result.value == .text("text"))
+        #expect(result.matchedConditions)
     }
 }

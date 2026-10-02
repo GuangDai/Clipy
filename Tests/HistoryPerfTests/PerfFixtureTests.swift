@@ -1,0 +1,126 @@
+/// Deterministic fixture generation and sampling-event helpers.
+import Foundation
+import Testing
+@testable import HistoryPerfRunner
+
+extension HistoryPerfRunnerHelperTests {
+    @Test func admissionAllCandidateNegativeQueryMeasuresTheCompleteRealCorpus() async throws {
+        let rowCount = 12
+        let history = try await openMemoryStore()
+        let profile = AdmissionProfile(
+            retainedRows: rowCount, searchBodyBytes: 1_024,
+            sampleCount: 0, warmupCount: 0, pageLimit: 5
+        )
+        _ = try await history.seedPerformanceFixture(rowCount: rowCount) { index in
+            admissionCapture(index: index, profile: profile)
+        }
+        let measured = await history.measureSearch(admissionExactScanRequest())
+        let page = try validateAdmissionNoHitSearch(measured, expectedScannedRows: rowCount)
+        #expect(page.rows.isEmpty && page.next == nil)
+        #expect(measured.metrics.rowsDecoded == rowCount)
+        #expect(measured.metrics.rowsEvaluated == rowCount)
+        #expect(measured.metrics.matchesFound == 0)
+        #expect(measured.metrics.stopReason == .exhausted)
+
+        // An indexed negative request remains useful, but cannot masquerade
+        // as the separately requested full-candidate measurement.
+        let indexed = await history.measureSearch(admissionExactSearchRequest())
+        _ = try validateAdmissionNoHitSearch(indexed)
+        #expect(throws: AdmissionError.unexpectedPage) {
+            try validateAdmissionNoHitSearch(indexed, expectedScannedRows: rowCount)
+        }
+    }
+
+    @Test func admissionCaptureUsesProfileBoundAndUniqueEdgeMarkers() throws {
+        let profile = AdmissionProfile(
+            retainedRows: 2,
+            searchBodyBytes: 128,
+            sampleCount: 0,
+            warmupCount: 0,
+            pageLimit: 1
+        )
+        let first = admissionCapture(index: 7, profile: profile)
+        let second = admissionCapture(index: 8, profile: profile)
+        let firstBytes = try #require(first.representations.first?.bytes)
+        let secondBytes = try #require(second.representations.first?.bytes)
+
+        #expect(firstBytes.count == 128)
+        #expect(secondBytes.count == 128)
+        #expect(firstBytes != secondBytes)
+        #expect(firstBytes.starts(with: Data("admission-row-7-".utf8)))
+        let expectedSuffix = Data("-tail-7".utf8)
+        #expect(Data(firstBytes.suffix(expectedSuffix.count)) == expectedSuffix)
+    }
+
+    @Test func pngCRC32MatchesPublishedCheckAndIHDRVectors() {
+        // CRC-32/ISO-HDLC's published ASCII check vector.
+        #expect(pngCRC32(Data("123456789".utf8)) == 0xCBF4_3926)
+
+        // PNG 1×1, 8-bit truecolor IHDR: type bytes followed by its 13-byte
+        // payload. The expected CRC is the widely published minimal-PNG
+        // chunk value, independent from makeNoisePNG's construction.
+        let ihdrTypeAndPayload = Data([
+            0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02, 0x00, 0x00, 0x00,
+        ])
+        #expect(pngCRC32(ihdrTypeAndPayload) == 0x9077_53DE)
+    }
+
+    @Test func xorshift32MatchesFixedStateAndProductionByteVectors() {
+        // Marsaglia xorshift32 with shifts 13, 17, 5 and seed 1.
+        var stateGenerator = XorShift32(seed: 1)
+        var states: [UInt32] = []
+        for _ in 0..<5 {
+            states.append(stateGenerator.next())
+        }
+        #expect(states == [
+            0x0004_2021,
+            0x0408_0601,
+            0x9DCC_A8C5,
+            0x1255_994F,
+            0x8EF9_17D1,
+        ])
+
+        var byteGenerator = XorShift32(seed: 0x9E37_79B9)
+        var bytes: [UInt8] = []
+        for _ in 0..<8 {
+            bytes.append(byteGenerator.nextByte())
+        }
+        #expect(bytes == [
+            0x19, 0x3E, 0x3A, 0xB5, 0x1F, 0x37, 0xD0, 0xBF,
+        ])
+    }
+
+    internal static func isCompletedWarmup(
+        _ event: AdmissionProgressEvent,
+        index: Int,
+        total: Int
+    ) -> Bool {
+        guard case let .warmupCompleted(
+            actualIndex,
+            actualTotal,
+            elapsedMs
+        ) = event else {
+            return false
+        }
+        return actualIndex == index && actualTotal == total && elapsedMs >= 0
+    }
+
+    internal static func isCompletedSample(
+        _ event: AdmissionProgressEvent,
+        index: Int,
+        total: Int
+    ) -> Bool {
+        guard case let .sampleCompleted(
+            actualIndex,
+            actualTotal,
+            elapsedMs
+        ) = event else {
+            return false
+        }
+        return actualIndex == index && actualTotal == total && elapsedMs >= 0
+    }
+
+}

@@ -18,17 +18,17 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        defer { pasteboard.clearContents() }
+        addTeardownBlock { @MainActor () async in pasteboard.clearContents() }
         XCTAssertTrue(pasteboard.setString("clipy-rtl-preview-geometry", forType: .string))
 
         let app = XCUIApplication()
         // Apple's documented Mac RTL test arguments work without adding an
         // Arabic localization or a product-only layout-direction switch.
         app.launchArguments += [
-            "-AppleLanguages", "(en)", "-AppleLocale", "en_US",
+            "-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
             "-NSForceRightToLeftWritingDirection", "YES", "-AppleTextDirection", "YES",
             "-panelPosition", "cursor",
             "-clipy.appearance.previewAutoOpen", "YES",
@@ -39,8 +39,8 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = "allowed"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store").path
+        addTeardownBlock { @MainActor () async in app.terminate() }
         app.launch()
-        defer { app.terminate() }
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
@@ -100,7 +100,8 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
                 && abs(pane.frame.width - paneWidth) <= 3
                 && abs(pane.frame.minX - panel.frame.maxX - gap) <= 3
                 && abs(pane.frame.minY - panel.frame.minY) <= 3
-                && pane.frame.height > 0 && pane.frame.height < 140
+                && pane.frame.height > 0
+                && abs(pane.frame.height - panel.frame.height) <= 3
         }, "trailing floating pane under RTL.\n\(app.debugDescription)")
 
         // One Escape retires both ordinary browsing and its passive preview.
@@ -132,6 +133,8 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
                 && abs(pane.frame.width - paneWidth) <= 3
                 && abs(pane.frame.maxX + gap - panel.frame.minX) <= 3
                 && abs(pane.frame.minY - panel.frame.minY) <= 3
+                && pane.frame.height > 0
+                && abs(pane.frame.height - panel.frame.height) <= 3
         }, "leading floating pane at the screen's right edge under RTL.\n\(app.debugDescription)")
     }
 

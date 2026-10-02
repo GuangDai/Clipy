@@ -4,8 +4,7 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 
-// MARK: - Workload 1: capture scales with incoming bytes, not commit shape
-//   (§9 bullets 1-2)
+// MARK: - Workload 1: capture timing by retained count and incoming bytes
 
 func workloadCaptureScaling() async -> [WorkloadFixture] {
     let bullet = "1-2"
@@ -17,16 +16,9 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
         retainedEnvelope.measurementScales.count - 1
     ]
 
-    // 1a: Retained-count envelope — a single capture's candidate generation
-    // is proportional to incoming bytes + posting-set/candidate confirmation
-    // work, not all Canonical blobs (§9 bullet 2). Capture ALSO performs the
-    // sanctioned O(retained scalar) retention-inventory load (05 §7.1 step 5:
-    // scalar summaries only, no blob decode), so the ratio sits AT the size
-    // span asymptotically; the bound is span × 1.2 so only a super-linear
-    // regression (per-item blob decode, O(n²)) breaks the envelope. Capture
-    // commit interval excludes fingerprinting (§9 bullet 1); this end-to-end
-    // timer includes it, while its exclusion from the serialized interval is
-    // proven structurally by the separate preparation actor (05 §6.1).
+    // 1a: time public capture after independently populating each store.
+    // Preparation/fingerprinting and commit all contribute to elapsed time;
+    // this measurement does not isolate a serialized commit interval.
     do {
         let smallStore = try await openMemoryStore()
         try await populateItems(smallStore, count: smallRetainedCount)
@@ -58,7 +50,7 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Envelope: ratio ≤ \(retainedEnvelope.headroomFactor)× the \(retainedEnvelope.scaleSpan)× span. Candidate generation ∝ incoming bytes + posting-set work, not all Canonical blobs (§9 bullet 2); the sanctioned O(retained scalar) retention-inventory load (05 §7.1 step 5) puts the ratio AT the span asymptotically, so only a super-linear regression breaks the envelope. Preparation/fingerprinting off-Authority (05 §6.1)."
+            note: "Public capture timing over short distinct text after populating each retained-row scale. One warmup and five timed inserts include preparation, fingerprinting and commit; each insert must return a new item reference. The \(retainedEnvelope.bound)× bound checks the observed median ratio over the \(retainedEnvelope.scaleSpan)× retained-row span. No internal candidate/retention work or commit-only interval is measured, and the ratio does not establish asymptotic complexity."
         ))
         printResult(retainedKey, bullet, ratio, bound, passed)
     } catch {
@@ -69,8 +61,7 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
         ))
     }
 
-    // 1b: Body-size scaling — RECORDS byte-proportional scaling (no bound;
-    // the expected behavior is linear-in-incoming-bytes per §9 bullet 2).
+    // 1b: record capture timings at two prebuilt body sizes without a bound.
     do {
         let store = try await openMemoryStore()
         try await populateItems(store, count: 200)
@@ -106,7 +97,7 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: nil,
             pass: true,
-            note: "End-to-end History capture work scales with incoming bytes (§9 bullet 2). Capture fixtures are prebuilt outside the timer, so the measurement covers History preparation/fingerprint/commit rather than harness String/Data construction. Record-only: byte-proportional scaling is expected."
+            note: "Public capture timing for prebuilt 1 KiB and 256 KiB text values. The timer includes History preparation/fingerprint/commit and excludes fixture String/Data construction. Each size has one warmup and five timed inserts. The observed ratio is record-only and does not establish byte-proportional scaling."
         ))
         printResult("captureScalesWithIncomingBytes", bullet, ratio, nil, true)
     } catch {
@@ -116,7 +107,7 @@ func workloadCaptureScaling() async -> [WorkloadFixture] {
     return fixtures
 }
 
-// MARK: - Workload 2: warm persistent-store open scales with retained metadata
+// MARK: - Workload 2: warm persistent-store open timing by retained count
 //   (§9 bullet 3)
 
 func workloadPersistentStoreOpenScaling() async -> [WorkloadFixture] {
@@ -166,7 +157,7 @@ func workloadPersistentStoreOpenScaling() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Warm persistent-store opens over retained metadata run in fresh child processes; each child reports only its internal public SQLiteHistory.open duration, excluding launch and teardown. The sample includes SQLite/blob-store open and current singleton validation; startup does not rebuild a full signature index (V2-09 §4). This is not a cold-start or absolute-latency proof. \(envelope.scaleSpan)× items, \(bound)× bound = a \(envelope.headroomFactor)× bound over the measured span, rejecting quadratic scaling.",
+            note: "Persistent-store opens run in fresh child processes after a separate population child exits. Each child reports only its internal public SQLiteHistory.open duration, excluding process launch and teardown. One discarded warmup and five samples are recorded at each scale. The \(bound)× bound checks the observed median ratio over a \(envelope.scaleSpan)× retained-row span. OS page caches remain warm; these timings establish neither cold-start latency nor asymptotic complexity.",
             medium: ".persistent"
         )
         printResult(key, bullet, ratio, bound, passed)
@@ -180,7 +171,7 @@ func workloadPersistentStoreOpenScaling() async -> [WorkloadFixture] {
     }
 }
 
-// MARK: - Workload 3: pin reorder linear in pinned count (§9 bullet 4)
+// MARK: - Workload 3: pin reorder timing by pinned count
 
 func workloadPinReorder() async -> [WorkloadFixture] {
     let bullet = "4"
@@ -203,7 +194,6 @@ func workloadPinReorder() async -> [WorkloadFixture] {
 
             // Measure: move a different item to .first each iteration (always
             // a real reorder — item[0] stays at .first after first pin). The
-            // placePinned action reorders O(pinned count) ordinals (§9 bullet 4).
             var idx = 1
             let medianMs = try await measureMedian {
                 if idx >= refs.count { idx = 1 }
@@ -223,7 +213,7 @@ func workloadPinReorder() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Pin reorder O(pinned count), bounded by retained count (§9 bullet 4). \(envelope.scaleSpan)× pinned, \(bound)× bound = a \(envelope.headroomFactor)× bound over the measured span, rejecting quadratic scaling."
+            note: "Move a different pinned item to first on each invocation, after creating and pinning the selected population. One warmup and five samples are recorded per pinned-row scale. The \(bound)× bound checks the observed median ratio over a \(envelope.scaleSpan)× pinned-row span; this does not establish an asymptotic pin-reorder complexity."
         )
         printResult(key, bullet, ratio, bound, passed)
         return [fixture]
@@ -232,7 +222,7 @@ func workloadPinReorder() async -> [WorkloadFixture] {
     }
 }
 
-// MARK: - Workload 4: retention and clear linear in retained scalar (§9 bullet 5)
+// MARK: - Workload 4: mass retention and clear timing by retained count
 
 func workloadRetentionAndClear() async -> [WorkloadFixture] {
     let bullet = "5"
@@ -240,13 +230,11 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
     let retentionEnvelope = complexityEnvelope(for: retentionKey)
     let clearKey = "clearUnpinned"
     let clearEnvelope = complexityEnvelope(for: clearKey)
-    // Five timed samples remove the old max-of-two noise rationale. A 6×
-    // envelope over a 3× corpus still leaves a 2× bound over the span while
-    // failing the 9× ratio expected from an accidental quadratic path.
+    // Every sample gets a fresh corpus; one warmup and five timed operations
+    // use the existing observed-ratio bounds.
     var fixtures: [WorkloadFixture] = []
 
     // --- Retention: setRetentionPolicy(1) mass eviction ---
-    // §9 bullet 5: O(retained scalar metadata), bounded by retained count.
     do {
         var medians: [(Int, Double)] = []
         for count in retentionEnvelope.measurementScales {
@@ -274,7 +262,7 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: retentionEnvelope.bound,
             pass: passed,
-            note: "Retention sweeps retained scalar metadata and sorts for eviction order — O(N log N) in retained count (§9 bullet 5). Five timed samples; \(retentionEnvelope.scaleSpan)× retained and \(retentionEnvelope.bound)× bound leave a \(retentionEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof."
+            note: "Set maximumUnpinnedItems to one on a freshly populated unpinned store for each invocation. One warmup and five timed operations are recorded per retained-row scale. The \(retentionEnvelope.bound)× bound checks the observed median ratio over a \(retentionEnvelope.scaleSpan)× span. No internal sweep/sort work is measured, so this ratio does not establish an asymptotic retention complexity."
         ))
         printResult(
             retentionKey,
@@ -319,7 +307,7 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: clearEnvelope.bound,
             pass: passed,
-            note: "Clear sweeps retained scalar metadata and sorts for its pass order — O(N log N) in retained count (§9 bullet 5). Five timed samples; \(clearEnvelope.scaleSpan)× retained and \(clearEnvelope.bound)× bound leave a \(clearEnvelope.headroomFactor)× bound over the measured span while rejecting quadratic scaling — no-quadratic-observed, not a linear proof."
+            note: "Clear all unpinned items from a freshly populated store for each invocation. One warmup and five timed operations are recorded per retained-row scale. The \(clearEnvelope.bound)× bound checks the observed median ratio over a \(clearEnvelope.scaleSpan)× span. No internal sweep/sort work is measured, so this ratio does not establish an asymptotic clear complexity."
         ))
         printResult(clearKey, bullet, ratio, clearEnvelope.bound, passed)
     } catch {
@@ -333,7 +321,7 @@ func workloadRetentionAndClear() async -> [WorkloadFixture] {
     return fixtures
 }
 
-// MARK: - Workload 5: recent browse independent of retained count (§9 bullet 6)
+// MARK: - Workload 5: first-page browse timing by retained count
 
 func workloadRecentBrowse() async -> [WorkloadFixture] {
     let bullet = "6"
@@ -346,8 +334,7 @@ func workloadRecentBrowse() async -> [WorkloadFixture] {
         for count in envelope.measurementScales {
             let store = try await openMemoryStore()
             try await populateItems(store, count: count)
-            // §9 bullet 6: recent browse materializes at most limit+1 scalar
-            // rows after the storage query/order strategy is proved.
+            // Time the first recent page at a fixed returned-row limit.
             let medianMs = try await measureMedian {
                 _ = try await store.browse(
                     HistoryBrowseRequest(kind: .recent, limit: 50)
@@ -365,7 +352,7 @@ func workloadRecentBrowse() async -> [WorkloadFixture] {
             ratio: ratio,
             bound: bound,
             pass: passed,
-            note: "Recent browse materializes ≤ limit+1 scalar rows (§9 bullet 6). \(envelope.scaleSpan)× retained, theoretical ratio \(envelope.theoreticalRatio)×, \(bound)× bound = \(envelope.headroomFactor)× headroom for retained-count independence."
+            note: "Time the first recent page with limit 50 after populating each retained-row scale. One warmup and five samples are recorded per scale. The \(bound)× bound checks the observed median ratio over a \(envelope.scaleSpan)× retained-row span. No internal decoded-row count is recorded; these timings do not establish retained-count independence for arbitrary stores."
         )
         printResult(key, bullet, ratio, bound, passed)
         return [fixture]

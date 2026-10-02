@@ -163,7 +163,8 @@ private extension HCRStore {
 
     static func loadPrefixRows(
         in database: SQLiteDatabase,
-        limit: Int
+        limit: Int,
+        limits: JournalLimits
     ) throws -> [PrefixRow] {
         let statement = try database.prepare("""
             SELECT sequence, changePositionRaw, changeKindRaw,
@@ -177,9 +178,11 @@ private extension HCRStore {
             // rejection instead of silently treating corrupt text as bytes.
             guard try statement.blobByteCount(at: 0) == 8,
                   try statement.blobByteCount(at: 1) == 8,
-                  Int16(exactly: try statement.integer(at: 2)) != nil,
+                  let rawKind = Int16(exactly: try statement.integer(at: 2)),
+                  HistoryChangeKindRawV1(rawValue: rawKind) != nil,
                   try statement.text(at: 3) == "blob",
-                  let bytes = UInt64(exactly: try statement.integer(at: 4)) else {
+                  let bytes = UInt64(exactly: try statement.integer(at: 4)),
+                  bytes <= UInt64(AffectedItemsBlobCodec.maximumBlobBytes(limits: limits)) else {
                 throw HistoryFailure.persistence(.corruptStoredValue)
             }
             rows.append(PrefixRow(
@@ -242,7 +245,7 @@ private extension HCRStore {
         }
         let rows: [PrefixRow]
         do {
-            rows = try loadPrefixRows(in: database, limit: fetchLimit)
+            rows = try loadPrefixRows(in: database, limit: fetchLimit, limits: limits)
         } catch let failure as HistoryFailure {
             throw failure
         } catch {

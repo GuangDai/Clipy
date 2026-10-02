@@ -1,10 +1,10 @@
 /// Receipts and History Commit outcomes — the caller-visible result of every
 /// mutating History Action.
-/// Owning spec: docs/03a-instruction-set.md §6. Foundation-only.
+/// Owning spec: docs/architecture.md Foundation-only.
 import Foundation
 
 /// Result of a mutating History Action.
-/// docs/03a-instruction-set.md §6.
+/// docs/architecture.md
 ///
 /// `unchanged` means there was no durable mutation: it has no position,
 /// publishes no invalidation, and is not a History Commit.
@@ -15,7 +15,7 @@ public enum HistoryReceipt: Sendable {
 
 /// A durable mutation receipt: the coherence position of the commit plus its
 /// outcome. Only `committed` receipts carry one.
-/// docs/03a-instruction-set.md §6.
+/// docs/architecture.md
 public struct HistoryCommit: Sendable {
     public let position: ChangePosition
     public let outcome: HistoryCommitOutcome
@@ -46,7 +46,7 @@ public struct HistoryCommit: Sendable {
 }
 
 /// The kind of durable mutation a History Commit recorded.
-/// docs/03a-instruction-set.md §6.
+/// docs/architecture.md
 ///
 /// A committed capture returns the stable winner/new item reference.
 /// Metadata-only outcomes (`placedPinned`, `unpinned`, `retentionPolicySet`,

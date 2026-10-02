@@ -167,6 +167,15 @@ measure_exact_search() {
     2>&1 | tee "$log_dir/exact-search.log"
 }
 
+measure_exact_scan() {
+  local release_runner
+  release_runner="$(release_runner_path)"
+  /usr/bin/time -l -o "$log_dir/exact-scan.time" \
+    "$release_runner" --admission exact-scan \
+    "$store_url" "$log_dir/exact-scan.json" \
+    2>&1 | tee "$log_dir/exact-scan.log"
+}
+
 measure_warm_open() {
   local release_runner
   release_runner="$(release_runner_path)"
@@ -193,7 +202,7 @@ summarize_evidence() {
     printf '%s\n\n' "## Performance admission"
     printf '%s\n' "Raw latency samples and machine metadata are in the artifacts."
     local mode
-    for mode in seed-smoke prepare-smoke seed prepare browse-ties exact-search-probe exact-search; do
+    for mode in seed-smoke prepare-smoke seed prepare browse-ties exact-search-probe exact-search exact-scan; do
       local time_file="$log_dir/$mode.time"
       [[ -f "$time_file" ]] || continue
       local rss
@@ -233,12 +242,29 @@ finalize_evidence() {
     and .percentiles.p99Ms > 0
   ' "$log_dir/browse-ties.json" >/dev/null
   jq -e '
-    .mode == "exact-search"
+    .schemaVersion == 3
+    and .mode == "exact-search"
     and (.rawSamplesMs | length) == 11
+    and (.searchWork | length) == (.rawSamplesMs | length)
+    and all(.searchWork[]; .matchesFound == 0)
     and .percentiles.p50Ms > 0
     and .percentiles.p95Ms == null
     and .percentiles.p99Ms == null
   ' "$log_dir/exact-search.json" >/dev/null
+  jq -e '
+    .schemaVersion == 3
+    and .mode == "exact-scan"
+    and (.rawSamplesMs | length) == 11
+    and (.searchWork | length) == (.rawSamplesMs | length)
+    and .validation.rowsDecoded == "5000"
+    and .validation.rowsEvaluated == "5000"
+    and all(.searchWork[];
+      .rowsDecoded == 5000 and .rowsEvaluated == 5000
+      and .matchesFound == 0 and .batchCount > 0 and .stopReason == "exhausted")
+    and .percentiles.p50Ms > 0
+    and .percentiles.p95Ms == null
+    and .percentiles.p99Ms == null
+  ' "$log_dir/exact-scan.json" >/dev/null
   jq -e '
     .mode == "warm-open"
     and (.rawSamplesMs | length) == 101
@@ -248,7 +274,7 @@ finalize_evidence() {
   ' "$log_dir/warm-open.json" >/dev/null
 
   local mode
-  for mode in seed-smoke prepare-smoke seed prepare browse-ties exact-search-probe exact-search; do
+  for mode in seed-smoke prepare-smoke seed prepare browse-ties exact-search-probe exact-search exact-scan; do
     [[ -s "$log_dir/$mode.time" ]]
   done
   shopt -s nullglob
@@ -271,6 +297,7 @@ run_all() {
   run_exact_search_probe
   validate_exact_search_probe
   measure_exact_search
+  measure_exact_scan
   measure_warm_open
   summarize_evidence
   scan_evidence_logs
@@ -287,6 +314,7 @@ case "$phase" in
   exact-search-probe) run_exact_search_probe ;;
   validate-exact-search-probe) validate_exact_search_probe ;;
   exact-search) measure_exact_search ;;
+  exact-scan) measure_exact_scan ;;
   warm-open) measure_warm_open ;;
   summarize) summarize_evidence ;;
   scan) scan_evidence_logs ;;
@@ -295,7 +323,7 @@ case "$phase" in
   *)
     printf '%s\n' \
       "unknown performance-admission phase: $phase" \
-      "expected build|prepare-smoke|validate-smoke|prepare|validate-prepare|browse-ties|exact-search-probe|validate-exact-search-probe|exact-search|warm-open|summarize|scan|finalize|all" \
+      "expected build|prepare-smoke|validate-smoke|prepare|validate-prepare|browse-ties|exact-search-probe|validate-exact-search-probe|exact-search|exact-scan|warm-open|summarize|scan|finalize|all" \
       >&2
     exit 2
     ;;

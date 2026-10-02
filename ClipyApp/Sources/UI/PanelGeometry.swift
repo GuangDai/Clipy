@@ -23,9 +23,41 @@ enum PanelGeometry {
 
     // MARK: Floating preview
 
-    /// The floating preview panel's fixed width (the redesign's transient
-    /// side pane; it never resizes the main panel).
+    /// The floating preview panel's default width. A custom preference and
+    /// the SwiftUI resize handle change only this independent window.
     static let floatingPreviewWidth: CGFloat = 340
+    static let floatingPreviewWidthDefaultsKey = "clipy.preview.panelWidth"
+    static let usesCustomFloatingPreviewWidthDefaultsKey = "clipy.preview.usesCustomWidth"
+
+    /// Enough saved width for three 24 pt footer actions, their spacing,
+    /// a source icon, horizontal padding, and the 14 pt resize handle.
+    /// Screen fitting can temporarily use less space without saving it.
+    static let minimumPersistedFloatingPreviewWidth: CGFloat = 154
+
+    static func preferredFloatingPreviewWidth(
+        _ width: CGFloat, usesCustomWidth: Bool
+    ) -> CGFloat {
+        guard usesCustomWidth, width.isFinite,
+              width >= minimumPersistedFloatingPreviewWidth else { return floatingPreviewWidth }
+        return width
+    }
+
+    static func persistedFloatingPreviewWidth(from defaults: UserDefaults) -> CGFloat {
+        let usesCustomWidth = defaults.object(
+            forKey: usesCustomFloatingPreviewWidthDefaultsKey
+        ) as? Bool ?? false
+        let width = persistedDimension(forKey: floatingPreviewWidthDefaultsKey, in: defaults,
+            fallback: floatingPreviewWidth, minimum: 0)
+        return preferredFloatingPreviewWidth(width, usesCustomWidth: usesCustomWidth)
+    }
+
+    /// A completed drag enables custom width. Invalid or collapsed input
+    /// leaves both the previous preference and its enabled state intact.
+    static func persistFloatingPreviewWidth(_ width: CGFloat, to defaults: UserDefaults) {
+        guard width.isFinite, width >= minimumPersistedFloatingPreviewWidth else { return }
+        defaults.set(Double(width), forKey: floatingPreviewWidthDefaultsKey)
+        defaults.set(true, forKey: usesCustomFloatingPreviewWidthDefaultsKey)
+    }
 
     /// Preferred gap, in points, between the main panel and preview. The
     /// default keeps the surfaces close; zero joins their visible edges.
@@ -44,14 +76,14 @@ enum PanelGeometry {
     /// The narrowest browsing column the user can resize to.
     static let minimumContentWidth: CGFloat = 0
 
-    /// No aesthetic size floor. Content determines the fitted height, and
-    /// the user's saved size is only a ceiling (V2-11).
-    static let minimumHeight: CGFloat = 0
+    /// The browsing panel keeps five compact rows beneath the toolbar.
+    /// Native screen fitting can temporarily use less space on a short display.
+    static let minimumHeight: CGFloat = PanelContentFit.minimumHeight
 
     /// A saved browsing width must retain space for the search field and
     /// its two adjacent controls. A saved ceiling must show the toolbar.
-    /// These validate preferences only: content-fit measurements retain the
-    /// zero floor above, including short transient content (V2-11, PAN-1).
+    /// These validate saved preferences only. Keep older usable ceilings
+    /// intact in UserDefaults; live fitting applies the five-row floor.
     static var minimumPersistedContentWidth: CGFloat {
         3 * PanelContentFit.searchFieldHeight
             + 2 * PanelTheme.spacingXSmall
@@ -101,7 +133,7 @@ enum PanelGeometry {
                 forKey: panelHeightDefaultsKey,
                 in: defaults,
                 fallback: height,
-                minimum: minimumHeight
+                minimum: 0
             ), fallback: height)
         )
     }

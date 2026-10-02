@@ -24,6 +24,7 @@ import SwiftUI
 /// lightweight toolbar keeps Close clear of the document; Close, Esc, and
 /// Space dismiss through `onDismiss`. The preview fills the current window.
 struct HistoryQuickLookOverlay: View {
+    @Environment(\.locale) private var locale
     @AppStorage(PanelShortcutSettings.defaultsKey) private var shortcutData = Data()
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
@@ -46,6 +47,7 @@ struct HistoryQuickLookOverlay: View {
     }
 
     var body: some View {
+        let _ = locale
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 // The overlay covers the selected history row. Retain that

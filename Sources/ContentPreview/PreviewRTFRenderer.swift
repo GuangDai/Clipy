@@ -7,13 +7,16 @@ import Foundation
 
 internal enum PreviewRTFRenderer {
     internal static func render(_ bytes: Data, textConfiguration: PreviewTextConfiguration = .init()) -> PreviewOutcome {
-        guard bytes.count <= 1_048_576 else { return .failed(.resourceLimit) }
+        guard bytes.count <= PreviewResourceLimits.richTextInputBytes else { return .failed(.resourceLimit) }
         do {
             var parser = Parser(bytes: Array(bytes))
             let decoded = try parser.parse()
-            return .content(.text(PreviewText(
-                text: decoded, wasTruncated: false, configuration: textConfiguration
+            return .content(.text(try PreviewText(
+                text: decoded, wasTruncated: false, configuration: textConfiguration,
+                checkCancellation: { try Task.checkCancellation() }
             )))
+        } catch is CancellationError {
+            return .failed(.cancelled)
         } catch let failure as ParseFailure {
             switch failure {
             case .malformed: return .failed(.malformedRepresentation)
@@ -45,6 +48,10 @@ private struct Parser {
 
     private struct State {
         var skipped = false
+        // Known font tables skip their text but still declare encodings.
+        // Opaque destinations and the unused ANSI alternative skip controls
+        // as well, so they cannot change the document's global font facts.
+        var ignoresControls = false
         var hidden = false
         var deleted = false
         var ignorableDestination = false
@@ -86,6 +93,7 @@ private struct Parser {
                     guard state.alternativeChildren <= 2 else { throw ParseFailure.malformed }
                     stack.append(state)
                     state.skipped = state.skipped || state.alternativeChildren == 1
+                    state.ignoresControls = state.ignoresControls || state.alternativeChildren == 1
                     state.expectsUnicodeDestination = state.alternativeChildren == 2
                     state.unicodeAlternative = false
                     state.alternativeChildren = 0
@@ -141,10 +149,10 @@ private struct Parser {
             if fallbackRemaining > 0 { fallbackRemaining -= 1; return }
             switch first {
             case 42: state.ignorableDestination = true
-            case 126: try appendUnits([0x00A0])
-            case 95: try appendUnits([0x2011])
-            case 45: try appendUnits([0x00AD])
-            case 10, 13: try appendUnits([10])
+            case 126: try appendUnit(0x00A0)
+            case 95: try appendUnit(0x2011)
+            case 45: try appendUnit(0x00AD)
+            case 10, 13: try appendUnit(10)
             default: break
             }
             return
@@ -159,7 +167,7 @@ private struct Parser {
         var number = 0
         while offset < bytes.count, (48...57).contains(bytes[offset]) {
             number = number * 10 + Int(bytes[offset] - 48)
-            guard number <= 2_147_483_648 else { throw ParseFailure.malformed }
+            guard number <= Int(Int32.max) + 1 else { throw ParseFailure.malformed }
             offset += 1
         }
         guard !negative || offset != numberStart else { throw ParseFailure.malformed }
@@ -179,6 +187,7 @@ private struct Parser {
     }
 
     private mutating func apply(_ word: String, _ value: Int?) throws {
+        guard !state.ignoresControls else { return }
         if state.expectsUnicodeDestination {
             guard word == "ud", state.ignorableDestination else { throw ParseFailure.malformed }
             state.expectsUnicodeDestination = false
@@ -202,13 +211,19 @@ private struct Parser {
                 stack[stack.count - 1].nextGraphicMarker = true
             }
             state.skipped = true
+            state.ignoresControls = true
         }
         if state.ignorableDestination {
             state.skipped = true
             state.ignorableDestination = false
+            if word != "fonttbl" { state.ignoresControls = true }
         }
         if word == "fonttbl" { state.fontTable = true }
-        if Self.skippedDestinations.contains(word) { state.skipped = true }
+        if Self.skippedDestinations.contains(word) {
+            state.skipped = true
+            if word != "fonttbl" { state.ignoresControls = true }
+        }
+        guard !state.ignoresControls else { return }
         switch word {
         case "rtf":
             guard !sawHeader, stack.count == 1, value == 1 else { throw ParseFailure.malformed }
@@ -241,20 +256,20 @@ private struct Parser {
             state.unicodeFallbackCount = value
         case "u":
             guard let value, (-32768...32767).contains(value) else { throw ParseFailure.malformed }
-            try appendUnits([UInt16(bitPattern: Int16(value))])
+            try appendUnit(UInt16(bitPattern: Int16(value)))
             fallbackRemaining = state.unicodeFallbackCount
-        case "par", "line", "page", "sect", "row": try appendUnits([10])
-        case "tab", "cell": try appendUnits([9])
-        case "emdash": try appendUnits([0x2014])
-        case "endash": try appendUnits([0x2013])
-        case "bullet": try appendUnits([0x2022])
-        case "lquote": try appendUnits([0x2018])
-        case "rquote": try appendUnits([0x2019])
-        case "ldblquote": try appendUnits([0x201C])
-        case "rdblquote": try appendUnits([0x201D])
-        case "enspace": try appendUnits([0x2002])
-        case "emspace": try appendUnits([0x2003])
-        case "qmspace": try appendUnits([0x2005])
+        case "par", "line", "page", "sect", "row": try appendUnit(10)
+        case "tab", "cell": try appendUnit(9)
+        case "emdash": try appendUnit(0x2014)
+        case "endash": try appendUnit(0x2013)
+        case "bullet": try appendUnit(0x2022)
+        case "lquote": try appendUnit(0x2018)
+        case "rquote": try appendUnit(0x2019)
+        case "ldblquote": try appendUnit(0x201C)
+        case "rdblquote": try appendUnit(0x201D)
+        case "enspace": try appendUnit(0x2002)
+        case "emspace": try appendUnit(0x2003)
+        case "qmspace": try appendUnit(0x2005)
         case "upr" where !state.skipped:
             // The first child is the ANSI fallback, the second is \*\ud.
             // Only the Unicode branch contributes to the displayed body.
@@ -283,7 +298,7 @@ private struct Parser {
         // bytes. Do not mislabel a glyph as its unrelated Latin character.
         guard codePage != -2 else { throw ParseFailure.unsupported }
         if encodedRun.allSatisfy({ $0 < 128 }) {
-            try appendUnits(encodedRun.map(UInt16.init))
+            try appendUnits(encodedRun.lazy.map(UInt16.init))
             return
         }
         guard let encoding = Self.encoding(for: codePage) else { throw ParseFailure.unsupported }
@@ -293,14 +308,21 @@ private struct Parser {
             ? String(validating: encodedRun, as: UTF8.self)
             : String(bytes: encodedRun, encoding: encoding)
         guard let string = decoded else { throw ParseFailure.malformed }
-        try appendUnits(Array(string.utf16))
+        try appendUnits(string.utf16)
     }
 
-    private mutating func appendUnits(_ units: [UInt16]) throws {
+    private mutating func appendUnits<Units: Collection>(_ units: Units) throws where Units.Element == UInt16 {
         guard state.isVisible else { return }
         state.nextGraphicMarker = false
         guard units.count <= 1_048_576 - output.count else { throw ParseFailure.resource }
         output.append(contentsOf: units)
+    }
+
+    private mutating func appendUnit(_ unit: UInt16) throws {
+        guard state.isVisible else { return }
+        state.nextGraphicMarker = false
+        guard output.count < 1_048_576 else { throw ParseFailure.resource }
+        output.append(unit)
     }
 
     private func isLetter(_ byte: UInt8) -> Bool { (65...90).contains(byte) || (97...122).contains(byte) }

@@ -1,6 +1,6 @@
 /// WS-read-closure A — Step-7 closure of the DEFERRED public-read / observation
 /// / no-emission clauses of WS1, WS2, WS5, WS6, WS7, WS8
-/// (docs/06-cross-cutting.md §8; phasing note docs/roadmap/README.md §3:
+/// (docs/testing.md; phasing note docs/testing.md:
 /// "Several also carry public-read / observation / no-emission clauses checkable
 /// only at step 7 (reads + observation)").
 ///
@@ -31,7 +31,7 @@ import Testing
 
 struct WSReadClosureATests {
 
-/// A `.replace` revision request (docs/03a-instruction-set.md §5) substituting
+/// A `.replace` revision request (docs/architecture.md) substituting
 /// `bytes` for the item's single `public.utf8-plain-text` representation, based
 /// on the OCC token `expected`.
 private static func replaceTextRequest(
@@ -54,7 +54,7 @@ private static func replaceTextRequest(
 /// A `.replace` revision request whose only decision carries the Canonical
 /// representation into Effective unchanged — byte-equal to the current
 /// Effective Content of a Canonical-state item, so §11 step 5 turns it into a
-/// no-op (docs/02-domain.md §2.5 rule 7).
+/// no-op (docs/architecture.md rule 7).
 private static func inheritCanonicalRequest(
     itemID: HistoryItemID,
     expected: ContentVersion
@@ -71,7 +71,7 @@ private static func inheritCanonicalRequest(
     )
 }
 
-/// WS1 read clause (docs/06-cross-cutting.md §8 WS1): after a raw text capture
+/// WS1 read clause (docs/testing.md WS1): after a raw text capture
 /// on an empty store, `observe(.recent)` yields a first page containing the
 /// same reference (the step-7 observation clause deferred from
 /// `WS1CaptureInsertTests`). The stream is drained to exactly one page and
@@ -99,7 +99,7 @@ private static func inheritCanonicalRequest(
     }
 
     // Act: observe the recent lane. Registration completes inside `observe`
-    // before the stream is returned (docs/04-coherence.md §5 step 1).
+    // before the stream is returned (docs/storage.md step 1).
     let stream = await history.observe(HistoryObservationRequest(kind: .recent, limit: 10))
 
     // WS1: "an observed page containing the same reference" — the first page
@@ -123,7 +123,7 @@ private static func inheritCanonicalRequest(
     }
 }
 
-/// WS2 read clause (docs/06-cross-cutting.md §8 WS2): after coalescing a repeat
+/// WS2 read clause (docs/testing.md WS2): after coalescing a repeat
 /// capture, `browse(.recent)` shows ONE row carrying the winner reference (the
 /// step-7 public-read occurrence-count / no-second-row clause deferred from
 /// `WS2CopyCoalescingTests`).
@@ -191,12 +191,12 @@ private static func inheritCanonicalRequest(
     )
 }
 
-/// WS5 read clause (docs/06-cross-cutting.md §8 WS5): no public emission on
+/// WS5 read clause (docs/testing.md WS5): no public emission on
 /// failure — a FAILED public action (`.remove` on an absent id) followed by an
 /// `observe(.recent)` stream yields only the pre-existing first page and
 /// nothing else within a bounded drain. The observe loop yields only on
-/// invalidation (docs/04-coherence.md §5 steps 6–8), and a failed action
-/// publishes none (docs/04-coherence.md §4: "no invalidation for a failed
+/// invalidation (docs/storage.md steps 6–8), and a failed action
+/// publishes none (docs/storage.md: "no invalidation for a failed
 /// commit"), so no second page can arrive before the `break` terminates the
 /// stream. (The direct-Authority over-bound WS5 store is a storage-side proof
 /// already closed in `WS5DedupIndexUnavailableTests`; this is its public
@@ -223,13 +223,13 @@ private static func inheritCanonicalRequest(
     // An absent ID (freshly minted, never captured) for the failed action.
     let absentID = HistoryItemID(rawValue: UUID())
 
-    // Register the observer BEFORE the failed action (docs/04-coherence.md §5
+    // Register the observer BEFORE the failed action (docs/storage.md
     // step 1: subscribe before query). Registration completes inside `observe`.
     let stream = await history.observe(HistoryObservationRequest(kind: .recent, limit: 10))
 
     // Act: the failed public action — `.remove` on an absent id throws
-    // `.notFound` (docs/02-domain.md §6). No commit, no invalidation
-    // (docs/04-coherence.md §4).
+    // `.notFound` (docs/architecture.md). No commit, no invalidation
+    // (docs/storage.md).
     await #expect(throws: HistoryFailure.notFound(absentID)) {
         try await history.perform(.remove(absentID))
     }
@@ -264,7 +264,7 @@ private static func inheritCanonicalRequest(
     )
 }
 
-/// WS6 read clause (docs/06-cross-cutting.md §8 WS6): after a byte-changing
+/// WS6 read clause (docs/testing.md WS6): after a byte-changing
 /// revision, `pastePayload(for:)` returns the NEW Effective bytes (the "paste
 /// updated" clause) and `details(for:)` reflects the revised content (active
 /// revision title + effective bytes). These are the step-7 read clauses
@@ -356,12 +356,12 @@ private static func inheritCanonicalRequest(
     )
 }
 
-/// WS7 read clause (docs/06-cross-cutting.md §8 WS7): "no observation emission"
+/// WS7 read clause (docs/testing.md WS7): "no observation emission"
 /// — after a same-content `.unchanged` revision, an `observe` stream registered
 /// BEFORE the no-op yields only the first page and nothing more. The observe
 /// loop yields only on invalidation (§5 steps 6–8), and `.unchanged` is not a
-/// History Commit so it publishes no invalidation (docs/02-domain.md §13;
-/// docs/04-coherence.md §4), so no second page can arrive before the `break`.
+/// History Commit so it publishes no invalidation (docs/architecture.md;
+/// docs/storage.md), so no second page can arrive before the `break`.
 @Test func sameContentRevisionNoOpYieldsNoObservationEmissionBeyondFirstPage() async throws {
     let storeURL = WSSupport.tempStoreURL("ws7-read-ws7-no-emission")
     defer { WSSupport.removeStore(storeURL) }
@@ -381,12 +381,12 @@ private static func inheritCanonicalRequest(
     }
     let preNoOpPosition = captureCommit.position
 
-    // Register the observer BEFORE the no-op (docs/04-coherence.md §5 step 1).
+    // Register the observer BEFORE the no-op (docs/storage.md step 1).
     let stream = await history.observe(HistoryObservationRequest(kind: .recent, limit: 10))
 
     // Act: a `.replace` draft whose only decision is `.inheritCanonical` on a
     // Canonical-state item — byte-equal to the current Effective Content, so
-    // §11 step 5 turns it into a no-op (docs/02-domain.md §2.5 rule 7).
+    // §11 step 5 turns it into a no-op (docs/architecture.md rule 7).
     let receipt = try await history.perform(.revise(
         Self.inheritCanonicalRequest(itemID: reference.id, expected: reference.contentVersion)
     ))
@@ -423,7 +423,7 @@ private static func inheritCanonicalRequest(
     )
 }
 
-/// WS8 read clause (docs/06-cross-cutting.md §8 WS8): "assert public order" —
+/// WS8 read clause (docs/testing.md WS8): "assert public order" —
 /// after pinning three items, moving the last before the first, and unpinning
 /// the middle, `browse(.recent)` row order equals the pinned-lane order (by
 /// ordinal) then unpinned recency, with the exact expected `pinnedPosition`
@@ -496,7 +496,7 @@ private static func inheritCanonicalRequest(
         "WS8 (§8): pinnedPosition values are [0, 1, nil] for the pinned-then-unpinned order"
     )
     // WS8: "Content Versions remain unchanged" — pin/reorder/unpin never
-    // advances Content Version (docs/02-domain.md §13: `.assignPin` preserves).
+    // advances Content Version (docs/architecture.md: `.assignPin` preserves).
     #expect(
         page.rows.map(\.item.contentVersion.rawValue) == [1, 1, 1],
         "WS8 (§8): all three rows remain at Content Version 1"

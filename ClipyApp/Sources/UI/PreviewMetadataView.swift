@@ -158,22 +158,27 @@ private struct CopySourcesView: View {
             }
         }
         .task(id: Request(offset: offset, retry: retry)) {
+            let request = Request(offset: offset, retry: retry)
             failed = false
             do {
                 let value = try await history.copySources(
-                    for: row.item.id, expectedCopyCount: row.copyCount, offset: offset
+                    for: row.item.id, expectedCopyCount: row.copyCount, offset: request.offset
                 )
                 try Task.checkCancellation()
+                // State can change before SwiftUI cancels the older task.
+                // Never label an old page with the new navigation offset.
+                guard Request(offset: offset, retry: retry) == request else { return }
                 guard value.item == row.item else {
                     failed = true
                     return
                 }
                 page = value
-                loadedOffset = offset
+                loadedOffset = request.offset
             } catch is CancellationError {
                 return
             } catch {
-                guard !Task.isCancelled else { return }
+                guard !Task.isCancelled,
+                      Request(offset: offset, retry: retry) == request else { return }
                 failed = true
             }
         }
