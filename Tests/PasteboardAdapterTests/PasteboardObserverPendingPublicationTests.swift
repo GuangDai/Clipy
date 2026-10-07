@@ -8,6 +8,7 @@ import Testing
 @MainActor
 private final class PendingPublicationAccess {
     var behavior = PasteboardAccessBehavior.allowed
+    var revokeInAccessCallback = true
 }
 
 @Suite("Pasteboard incomplete publication recovery")
@@ -26,11 +27,10 @@ struct PasteboardObserverPendingPublicationTests {
         observer.setAccessBehaviorProviderForTesting { access.behavior }
         defer { observer.stop() }
         var received: [CaptureOutcome] = []
-        var revokeInAccessCallback = true
         observer.start(
             captureCurrent: false,
             onAccessBehaviorChanged: { behavior in
-                guard behavior == .allowed, revokeInAccessCallback else { return }
+                guard behavior == .allowed, access.revokeInAccessCallback else { return }
                 access.behavior = .denied
                 // The application can retry access synchronously from this
                 // callback. Observation keeps the same timer during denial.
@@ -46,7 +46,7 @@ struct PasteboardObserverPendingPublicationTests {
         #expect(reads == 0)
         #expect(received.isEmpty)
 
-        revokeInAccessCallback = false
+        access.revokeInAccessCallback = false
         access.behavior = .allowed
         observer.pollForTesting()
         guard case let .complete(complete) = try #require(received.first) else {
