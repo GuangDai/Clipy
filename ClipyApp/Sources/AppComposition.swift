@@ -86,8 +86,8 @@ enum ClipyCaptureFailure: Sendable, Equatable {
 }
 
 /// Content-free instrumentation for REVIEW Card 6's capture owner. Counts
-/// describe the fixed capacity (zero-or-one active History commit plus
-/// zero-or-one replaceable latest pending capture); no UTI or clipboard bytes
+/// describe one active History commit and the bounded FIFO waiting behind it;
+/// no UTI or clipboard bytes
 /// escape through this app-internal seam. Byte counts expose capacity only,
 /// never payload. `lastFailure` retains the unresolved
 /// sanitized rejection category that was not the expected privacy exclusion;
@@ -98,7 +98,7 @@ struct ClipyCaptureHealth: Sendable, Equatable {
     let activeCaptureBytes: Int
     let pendingCaptureCount: Int
     let pendingCaptureBytes: Int
-    let replacedCaptureCount: Int
+    let droppedCaptureCount: Int
     let failedCaptureCount: Int
     let lastFailure: ClipyCaptureFailure?
 
@@ -107,7 +107,7 @@ struct ClipyCaptureHealth: Sendable, Equatable {
         activeCaptureBytes: 0,
         pendingCaptureCount: 0,
         pendingCaptureBytes: 0,
-        replacedCaptureCount: 0,
+        droppedCaptureCount: 0,
         failedCaptureCount: 0,
         lastFailure: nil
     )
@@ -249,25 +249,27 @@ final class AppComposition {
         (@MainActor @Sendable (Duration) async throws -> Void)?
 #endif
 
-    /// REVIEW Card 6 capture ownership. The active task is the sole caller of
-    /// `history.perform(.capture)`; while it is suspended, one immutable
-    /// latest capture may wait. A third observation replaces that pending
-    /// value rather than allocating another task or retaining an unbounded
-    /// byte queue.
+    /// The active task is the sole caller of `history.perform(.capture)`.
+    /// Complete observations wait in FIFO order with independent item and byte
+    /// bounds. The fixed ring releases dequeued bytes without shifting values.
+    static let maximumPendingCaptures = 64
     private var captureTask: Task<Void, Never>?
     private var activeCaptureBytes = 0
-    private var pendingCapture: AdmittedCapture?
+    private var pendingCaptures: [AdmittedCapture?] = Array(
+        repeating: nil, count: AppComposition.maximumPendingCaptures
+    )
+    private var pendingCaptureHead = 0
+    private var pendingCaptureCount = 0
+    private var pendingCaptureBytes = 0
     private(set) var workflowRunner = BuiltInAutomationAutomaticRunner()
-    private var isStartingCaptureObservation = false
-    private var replacedCaptureCount = 0
+    private var droppedCaptureCount = 0
     private var failedCaptureCount = 0
     private var lastCaptureFailure: ClipyCaptureFailure?
     private var acceptsCaptures = false
     private var isStarted = false
-    /// Sleep stops new observation/admission but does not erase a complete
-    /// value that crossed the admission boundary before willSleep. This bit
-    /// exists only while a pre-inactivity active slot still has one pending
-    /// value to drain.
+    /// Sleep stops new observation/admission but does not erase complete
+    /// values that crossed the admission boundary before willSleep. This bit
+    /// remains set until the complete pre-inactivity FIFO has drained.
     private var drainsPreInactivityPendingCapture = false
     /// Snapshot pushed by the sole AppDelegate workspace owner. It is
     /// environmental state, not a user Pause and not terminal composition
@@ -289,7 +291,7 @@ final class AppComposition {
 
     /// One value admitted through the composition owner's memory boundary.
     /// The stored byte count was computed with checked arithmetic before the
-    /// value could occupy either lane slot.
+    /// value could occupy the active slot or pending FIFO.
     private struct AdmittedCapture: Sendable {
         let capture: ClipboardCapture
         let byteCount: Int
@@ -298,14 +300,14 @@ final class AppComposition {
     }
 
     /// App-internal, content-free trace of capture capacity and failure state.
-    /// The computed shape cannot drift from the two owned slots.
+    /// The computed shape follows the active task and owned queue accounting.
     var captureHealth: ClipyCaptureHealth {
         ClipyCaptureHealth(
             activeCommitCount: captureTask == nil ? 0 : 1,
             activeCaptureBytes: activeCaptureBytes,
-            pendingCaptureCount: pendingCapture == nil ? 0 : 1,
-            pendingCaptureBytes: pendingCapture?.byteCount ?? 0,
-            replacedCaptureCount: replacedCaptureCount,
+            pendingCaptureCount: pendingCaptureCount,
+            pendingCaptureBytes: pendingCaptureBytes,
+            droppedCaptureCount: droppedCaptureCount,
             failedCaptureCount: failedCaptureCount,
             lastFailure: lastCaptureFailure
         )
@@ -363,7 +365,7 @@ final class AppComposition {
         history: any ClipboardHistory,
         appIntentsHistoryFacade: ExternalHistoryFacade?,
         adapter: PasteboardAdapter,
-        observerPollInterval: TimeInterval = 0.5,
+        observerPollInterval: TimeInterval = 0.1,
         captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes,
         initialCaptureAccessBehavior: PasteboardAccessBehavior? = nil,
         capturePauseDuration: Duration = CapturePausePolicy.standardDuration
@@ -633,9 +635,9 @@ final class AppComposition {
 
         // Capture loop (01 §5.1; 03a §4; REVIEW Card 6): one COMPLETE capture
         // per distinct pasteboard changeCount is admitted to this owner's
-        // fixed active+latest lane. Only the active slot owns a task; while
-        // History is suspended, newer observations replace the one pending
-        // value instead of growing an unbounded task/byte backlog.
+        // bounded FIFO. Only the active slot owns a task; while History is
+        // suspended, observations retain their order within fixed item and
+        // byte limits. An overloaded queue refuses the new observation.
         // A PARTIAL freeze — the item declared a representation whose bytes
         // were unavailable at a stable generation, or the start/end
         // `changeCount` fence observed a newer generation — is rejected HERE
@@ -652,7 +654,7 @@ final class AppComposition {
         // this loop and coalesce via the lineage hint (WS4; 03b §9); they
         // must not be suppressed. The observer callback stays synchronous
         // and MainActor-owned, so slot
-        // replacement is atomic with respect to later poll deliveries.
+        // admission is atomic with respect to later poll deliveries.
         reconcileCaptureObservation()
     }
 
@@ -681,7 +683,7 @@ final class AppComposition {
         historyWorkspaceViewState.filePreviewSettings = nil
         historyWorkspaceViewState.onExportRepresentation = { _ in .failure(.unavailable) }
         historyWorkspaceViewState.onCommittedSurfacePurge = { _, _ in }
-        pendingCapture = nil
+        discardPendingCaptures()
         drainsPreInactivityPendingCapture = false
         captureTask?.cancel()
         captureTask = nil
@@ -736,7 +738,7 @@ final class AppComposition {
            !activity.permitsProductActivity {
             drainsPreInactivityPendingCapture =
                 drainsPreInactivityPendingCapture
-                || (acceptsCaptures && pendingCapture != nil)
+                || (acceptsCaptures && pendingCaptureCount > 0)
         }
         workspaceActivity = activity
         captureCurrentOnNextObserverStart = false
@@ -749,6 +751,7 @@ final class AppComposition {
     func pauseCapture() {
         guard isStarted, captureAccessState == .allowed else { return }
         capturePauseTask?.cancel()
+        drainsPreInactivityPendingCapture = false
         captureAccessReducer.pause()
 
         let duration = capturePauseDuration
@@ -879,7 +882,7 @@ final class AppComposition {
     }
 
     /// Deterministic Debug entry for the same admission path used by the
-    /// observer. Tests supply already-frozen values so active/latest ordering
+    /// observer. Tests supply already-frozen values so FIFO ordering
     /// needs no timer or pasteboard-content race.
     func submitCaptureForTesting(_ capture: ClipboardCapture) {
         admitCapture(capture)
@@ -887,7 +890,7 @@ final class AppComposition {
 #endif
 
     /// Synchronously admits an already-frozen value. There is exactly one
-    /// active operation and one replaceable pending capture; no observation
+    /// active operation and one bounded FIFO; no observation
     /// creates an independent task (REVIEW Card 6).
     private func admitCapture(_ capture: ClipboardCapture, runAutomaticWorkflows: Bool = true) {
         guard isStarted, acceptsCaptures,
@@ -908,14 +911,43 @@ final class AppComposition {
         }
         admitted.runsAutomaticWorkflows = runAutomaticWorkflows
         guard captureTask == nil else {
-            if pendingCapture != nil {
-                replacedCaptureCount += 1
+            if !enqueueCapture(admitted) {
+                droppedCaptureCount += 1
             }
-            pendingCapture = admitted
             publishCaptureHealthIfChanged()
             return
         }
         startCapture(admitted)
+    }
+
+    /// Pending payloads share one capture-sized budget, so adding small text
+    /// copies does not multiply the former active-plus-pending byte bound.
+    private func enqueueCapture(_ capture: AdmittedCapture) -> Bool {
+        guard pendingCaptureCount < Self.maximumPendingCaptures,
+              capture.byteCount <= captureByteLimit - pendingCaptureBytes
+        else { return false }
+        let tail = (pendingCaptureHead + pendingCaptureCount)
+            % Self.maximumPendingCaptures
+        pendingCaptures[tail] = capture
+        pendingCaptureCount += 1
+        pendingCaptureBytes += capture.byteCount
+        return true
+    }
+
+    private func dequeueCapture() -> AdmittedCapture? {
+        guard pendingCaptureCount > 0 else { return nil }
+        let capture = pendingCaptures[pendingCaptureHead]!
+        pendingCaptures[pendingCaptureHead] = nil
+        pendingCaptureHead = (pendingCaptureHead + 1)
+            % Self.maximumPendingCaptures
+        pendingCaptureCount -= 1
+        pendingCaptureBytes -= capture.byteCount
+        if pendingCaptureCount == 0 { pendingCaptureHead = 0 }
+        return capture
+    }
+
+    private func discardPendingCaptures() {
+        while dequeueCapture() != nil {}
     }
 
     private func startCapture(_ admitted: AdmittedCapture) {
@@ -974,11 +1006,12 @@ final class AppComposition {
         failureCountAtAdmission: Int
     ) {
         // Keep the finishing task's slot reserved through synchronous receipt
-        // and health callbacks. A reentrant observation then replaces the
-        // pending value instead of starting a second task before this drain.
+        // and health callbacks. A reentrant observation joins the FIFO before
+        // this drain starts the next task.
         switch outcome {
         case .completed(let receipt):
             viewState.acceptCaptureReceipt(receipt)
+            guard !Task.isCancelled else { return }
             if let capture, acceptsCaptures { workflowRunner.submit(capture) }
             if failureCountAtAdmission == failedCaptureCount {
                 lastCaptureFailure = nil
@@ -998,23 +1031,23 @@ final class AppComposition {
                 // active. Drop that value before publishing the episode; a
                 // later pasteboard observation is the only v1 retry signal
                 // (REVIEW Card 6B; 05 §16).
-                pendingCapture = nil
+                discardPendingCaptures()
             }
         }
         publishCaptureHealthIfChanged()
+        guard !Task.isCancelled else { return }
 
         guard (acceptsCaptures || drainsPreInactivityPendingCapture),
-              let next = pendingCapture
+              let next = dequeueCapture()
         else {
-            pendingCapture = nil
+            discardPendingCaptures()
             drainsPreInactivityPendingCapture = false
             captureTask = nil
             activeCaptureBytes = 0
             publishCaptureHealthIfChanged()
             return
         }
-        pendingCapture = nil
-        drainsPreInactivityPendingCapture = false
+        if pendingCaptureCount == 0 { drainsPreInactivityPendingCapture = false }
         captureTask = nil
         activeCaptureBytes = 0
         // Reserve the next task before publishing its health. There is no
@@ -1025,7 +1058,7 @@ final class AppComposition {
     /// Interprets the adapter's exhaustive freeze record at the app boundary.
     /// Structural and unavailable outcomes become content-free episodes, while
     /// concealed content stays the one intentional quiet decision. Only a
-    /// complete freeze may enter the active/latest lane.
+    /// complete freeze may enter the active slot or FIFO.
     private func receiveCaptureOutcome(_ outcome: CaptureOutcome) {
 #if DEBUG
         if let failure = nextCaptureFailureForTesting {
@@ -1036,7 +1069,7 @@ final class AppComposition {
 #endif
         switch outcome {
         case let .complete(complete):
-            admitCapture(complete.capture, runAutomaticWorkflows: !isStartingCaptureObservation)
+            admitCapture(complete.capture, runAutomaticWorkflows: !observer.isDeliveringInitialCapture)
         case .concealed:
             return
         case .unsupportedMultiItem:
@@ -1048,8 +1081,8 @@ final class AppComposition {
     }
 
     /// Checked representation-byte admission for one already-frozen capture.
-    /// Storage remains the authoritative full input validator. The two stable
-    /// owner slots expose their individual byte facts, but this check neither
+    /// Storage remains the authoritative full input validator. The active slot
+    /// and pending FIFO expose their byte facts, but this check neither
     /// sums acquisition-time overlap nor establishes a process-RSS bound
     /// (Part VI §2 / Card 6 / DEC-CAPTURE-OVERLOAD).
     private func admittedCapture(_ capture: ClipboardCapture) -> AdmittedCapture? {
@@ -1075,7 +1108,7 @@ final class AppComposition {
     }
 
     /// Coalesces assignments that do not change the immutable snapshot while
-    /// preserving every real active/pending/replacement/failure transition.
+    /// preserving every real active/pending/drop/failure transition.
     private func publishCaptureHealthIfChanged() {
         let health = captureHealth
         guard health != lastPublishedCaptureHealth else { return }
@@ -1083,18 +1116,31 @@ final class AppComposition {
         onCaptureHealthChanged?(health)
     }
 
-    /// Owns the only observer start/stop decision. `PasteboardObserver.start`
-    /// is idempotent while running, so repeated allowed refreshes replace the
-    /// same handler without re-freezing or installing another Timer.
+    /// Owns the only observer start/stop decision. The same timer keeps
+    /// checking access while permission is blocked; payload reads and capture
+    /// admission still require an authoritative allow. Pause and workspace
+    /// inactivity stop the entire observer.
     private func reconcileCaptureObservation() {
-        let shouldObserve = isStarted
+        acceptsCaptures = isStarted
             && workspaceActivity.permitsProductActivity
             && captureAccessState.permitsBackgroundPolling
-        acceptsCaptures = shouldObserve
+        if !acceptsCaptures {
+            workflowRunner.stop()
+            if !isStarted || (!captureAccessState.permitsBackgroundPolling
+                && !drainsPreInactivityPendingCapture) {
+                discardPendingCaptures()
+                drainsPreInactivityPendingCapture = false
+                publishCaptureHealthIfChanged()
+            }
+        }
+        // A health callback can synchronously Pause, Resume, or stop. Read
+        // the lifecycle again before deciding whether its timer may run.
+        let shouldObserve = isStarted
+            && workspaceActivity.permitsProductActivity
+            && captureAccessState != .userPaused
         if shouldObserve {
             let captureCurrent = captureCurrentOnNextObserverStart
             captureCurrentOnNextObserverStart = true
-            isStartingCaptureObservation = true
             observer.start(
                 captureCurrent: captureCurrent,
                 onAccessBehaviorChanged: { [weak self] behavior in
@@ -1104,10 +1150,8 @@ final class AppComposition {
                     self?.receiveCaptureOutcome(outcome)
                 }
             )
-            isStartingCaptureObservation = false
         } else {
             observer.stop()
-            workflowRunner.stop()
         }
     }
 
@@ -1118,17 +1162,18 @@ final class AppComposition {
         onCaptureAccessStateChanged?(state)
     }
 
-    /// Every observer cycle reports the neutral AppKit value before touching
-    /// items. A live revoke therefore updates presentation and synchronously
-    /// stops the timer before the cycle can freeze clipboard content.
+    /// Access observations precede every payload read. A revoke closes
+    /// admission immediately while the same timer watches for restoration.
+    /// A successful metadata read also clears a previous unavailable result.
     private func receiveCaptureAccessBehavior(
         _ behavior: PasteboardAccessBehavior
     ) {
-        captureAccessReducer.updateSystemBehavior(behavior)
-        publishCaptureAccessStateIfChanged()
-        if !captureAccessState.permitsBackgroundPolling {
+        let previousState = captureAccessState
+        captureAccessReducer.retry(systemBehavior: behavior)
+        if captureAccessState != previousState {
             reconcileCaptureObservation()
         }
+        publishCaptureAccessStateIfChanged()
     }
 
     private func currentCaptureAccessBehavior() -> PasteboardAccessBehavior {

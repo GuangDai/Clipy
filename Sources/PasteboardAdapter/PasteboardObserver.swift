@@ -17,10 +17,10 @@ import HistoryCore
 
 /// changeCount-polled observation (01 §5.1; roadmap 04). Main-actor
 /// confined; polls the pasteboard's `changeCount` on a main-`RunLoop`
-/// `Timer` and freezes each nonempty ownership generation once. An empty
-/// generation remains eligible until its owner publishes declarations. A
-/// freeze whose start/end generations differ receives exactly one immediate
-/// retry before delivery (REVIEW Card 5B).
+/// `Timer` and freezes each complete ownership generation once. Empty or
+/// incomplete publication remains eligible until its owner publishes bytes.
+/// A freeze whose start/end generations differ receives one immediate retry;
+/// another race leaves the unread latest generation for a later poll.
 @MainActor
 public final class PasteboardObserver {
     private let adapter: PasteboardAdapter
@@ -28,6 +28,18 @@ public final class PasteboardObserver {
     private var timer: Timer?
     private var lastChangeCount: Int
     private var awaitingDeclarationsChangeCount: Int?
+    private struct PendingCapture {
+        let changeCount: Int
+        let retryDelay: TimeInterval
+        var remainingDelay: TimeInterval
+        var failureWasDelivered: Bool
+    }
+    private var pendingCapture: PendingCapture?
+    private var isReading = false
+    private var initialCaptureChangeCount: Int?
+    /// Whether the current callback is importing the generation already
+    /// present at startup, including publication delayed until access allows.
+    public private(set) var isDeliveringInitialCapture = false
     private var handler: (@MainActor (CaptureOutcome) -> Void)?
     private var accessBehaviorHandler:
         (@MainActor (PasteboardAccessBehavior) -> Void)?
@@ -36,13 +48,14 @@ public final class PasteboardObserver {
         @MainActor () -> PasteboardAccessBehavior
 
     /// Creates an observer over `adapter`'s pasteboard. `pollInterval` is
-    /// the polling cadence in seconds (0.5 s in production; tests tighten
+    /// the polling cadence in seconds (0.1 s in production; tests tighten
     /// it).
-    public init(adapter: PasteboardAdapter, pollInterval: TimeInterval = 0.5) {
+    public init(adapter: PasteboardAdapter, pollInterval: TimeInterval = 0.1) {
         self.adapter = adapter
         self.pollInterval = pollInterval
         self.lastChangeCount = adapter.pasteboard.changeCount
         self.awaitingDeclarationsChangeCount = nil
+        self.pendingCapture = nil
         self.timer = nil
         self.handler = nil
         self.accessBehaviorHandler = nil
@@ -73,8 +86,8 @@ public final class PasteboardObserver {
     /// explicitly resumes after a pause, so values copied while paused stay
     /// excluded. The handler runs on the main actor for each non-nil freeze
     /// outcome. An empty ownership generation is checked for later declarations
-    /// without accessing payloads; values with nothing retainable are not
-    /// delivered. A PARTIAL freeze — a
+    /// without accessing payloads. Declared but unavailable or empty payloads
+    /// are retried with a capped delay; nothing retainable is delivered. A PARTIAL freeze — a
     /// declared representation's bytes unavailable — IS delivered, marked
     /// by `CaptureOutcome.declaredUnavailable`, for the handler owner to
     /// judge. Calling `start` again while running replaces the handler
@@ -91,14 +104,12 @@ public final class PasteboardObserver {
 
         let accessBehavior = accessBehaviorProvider()
         lastAccessBehavior = accessBehavior
-        guard accessBehavior == .allowed else {
-            onAccessBehaviorChanged?(accessBehavior)
-            return
-        }
 
         let initialChangeCount = adapter.pasteboard.changeCount
         lastChangeCount = initialChangeCount
         awaitingDeclarationsChangeCount = nil
+        pendingCapture = nil
+        initialCaptureChangeCount = captureCurrent ? initialChangeCount : nil
 
         // The timer is added to the main run loop's common modes explicitly
         // rather than via `Timer.scheduledTimer` (which would silently bind
@@ -115,6 +126,7 @@ public final class PasteboardObserver {
                 self?.poll()
             }
         }
+        timer.tolerance = min(0.01, pollInterval / 10)
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
 
@@ -127,7 +139,14 @@ public final class PasteboardObserver {
         // Its newer generation has already been consumed; do not duplicate
         // that delivery with a second initial read after the callback returns.
         if captureCurrent, lastChangeCount == initialChangeCount {
-            deliverCurrentOutcome()
+            if isReading || accessBehavior != .allowed {
+                // A provider may synchronously replace this session. The old
+                // read will retire when it returns; keep the new session's
+                // current value eligible without nesting another provider.
+                scheduleRetry(changeCount: initialChangeCount, after: nil, immediately: true)
+            } else {
+                deliverCurrentOutcome()
+            }
         }
     }
 
@@ -137,13 +156,15 @@ public final class PasteboardObserver {
         timer?.invalidate()
         timer = nil
         awaitingDeclarationsChangeCount = nil
+        pendingCapture = nil
+        initialCaptureChangeCount = nil
         handler = nil
         accessBehaviorHandler = nil
     }
 
-    /// One poll tick: a changed ownership generation is frozen once. If that
-    /// generation was empty, inspect declarations until its owner publishes
-    /// items; writeObjects can add them without changing ownership again.
+    /// One poll tick. New ownership always bypasses an older retry delay.
+    /// Empty ownership waits through metadata reads only; incomplete declared
+    /// payloads use the same timer with an exponential delay capped at 1 s.
     private func poll() {
         guard let activeTimer = timer else { return }
         let accessBehavior = accessBehaviorProvider()
@@ -152,17 +173,33 @@ public final class PasteboardObserver {
             accessBehaviorHandler?(accessBehavior)
         }
         guard self.timer === activeTimer, accessBehavior == .allowed else { return }
+        // A promised-data provider can pump the main run loop. A nested tick
+        // still checks access above, but cannot recursively read providers or
+        // consume a generation which the outer freeze has not completed.
+        guard !isReading else { return }
 
         let changeCount = adapter.pasteboard.changeCount
         if changeCount == lastChangeCount {
-            guard awaitingDeclarationsChangeCount == changeCount else { return }
-            // An intentional permanent clear only incurs this metadata read.
-            // No payload accessor, extra timer, task, or queued capture exists.
-            let types = adapter.pasteboard.types
-            guard self.timer === activeTimer,
-                  lastChangeCount == changeCount,
-                  awaitingDeclarationsChangeCount == changeCount,
-                  types?.isEmpty == false else { return }
+            if awaitingDeclarationsChangeCount == changeCount {
+                // An intentional permanent clear only incurs this metadata
+                // read. No payload accessor, extra timer, or task exists.
+                let types = adapter.pasteboard.types
+                guard self.timer === activeTimer,
+                      lastChangeCount == changeCount,
+                      awaitingDeclarationsChangeCount == changeCount,
+                      types?.contains(where: {
+                          $0.rawValue != PasteboardLineageHint.typeIdentifier
+                      }) == true else { return }
+            } else if var pending = pendingCapture, pending.changeCount == changeCount {
+                pending.remainingDelay -= pollInterval
+                pendingCapture = pending
+                guard pending.remainingDelay <= 0 else { return }
+            } else {
+                return
+            }
+        } else {
+            pendingCapture = nil
+            initialCaptureChangeCount = nil
         }
         lastChangeCount = changeCount
         awaitingDeclarationsChangeCount = nil
@@ -178,54 +215,114 @@ public final class PasteboardObserver {
     }
 #endif
 
-    /// Freezes one observed generation for delivery. Ownership movement
-    /// during that freeze gets one synchronous retry: a stable complete retry
-    /// replaces the superseded first attempt, while another unstable or
-    /// otherwise incomplete attempt leaves one content-free generation-race
-    /// outcome for the owner. There is no delay, task, or retry loop.
+    private struct CaptureAttempt {
+        let outcome: CaptureOutcome?
+        let sampledChangeCount: Int
+        let emptyChangeCount: Int?
+        let noRetainableChangeCount: Int?
+    }
+
+    /// A poll retains only its retry counters, never partial payload bytes.
+    /// Providers run serially, with at most one immediate ownership retry.
+    /// Later polls recover incomplete publication instead of consuming it.
     private func deliverCurrentOutcome() {
-        guard let activeTimer = timer else { return }
+        guard let activeTimer = timer, !isReading else { return }
         let observedChangeCount = lastChangeCount
-        guard let outcome = captureOutcomeWithOneOwnershipRetry(
+        let previousPending = pendingCapture
+        isReading = true
+        let attempt = captureOutcomeWithOneOwnershipRetry(
             observing: activeTimer,
             observedChangeCount: observedChangeCount
-        ) else {
-            // Keep the generation sampled before this read. Another process
-            // may write after the adapter found a stable empty pasteboard;
-            // resampling here would mark that unread value as already seen.
-            return
-        }
+        )
+        isReading = false
         // A promised-data accessor may reenter the main run loop. A stop or
         // restart during that read owns a different timer/baseline, so this
         // old read must neither advance it nor call a retired handler. A
         // same-session start only replaces the handler and uses this result.
-        // A nested poll can also consume a newer pasteboard generation while
-        // retaining the same timer; its delivery supersedes this outer read.
         guard self.timer === activeTimer,
-              lastChangeCount == observedChangeCount,
-              let handler else { return }
+              lastChangeCount == observedChangeCount else { return }
+
+        guard let attempt else {
+            // Access may have been revoked without changing ownership. That
+            // unread generation stays eligible when access becomes allowed.
+            scheduleRetry(changeCount: observedChangeCount, after: previousPending)
+            return
+        }
+        if let emptyChangeCount = attempt.emptyChangeCount {
+            lastChangeCount = emptyChangeCount
+            awaitingDeclarationsChangeCount = emptyChangeCount
+            pendingCapture = nil
+            return
+        }
+        if let noRetainableChangeCount = attempt.noRetainableChangeCount {
+            lastChangeCount = noRetainableChangeCount
+            scheduleRetry(changeCount: noRetainableChangeCount, after: previousPending)
+            return
+        }
+        guard let outcome = attempt.outcome else {
+            // A stable metadata-only generation has no content to await.
+            // Do not resample after the read: a newly written value has not
+            // been inspected and must remain eligible on the next tick.
+            lastChangeCount = attempt.sampledChangeCount
+            pendingCapture = nil
+            return
+        }
+        awaitingDeclarationsChangeCount = nil
         switch outcome {
         case let .complete(value):
             lastChangeCount = value.changeCount
+            pendingCapture = nil
         case let .declaredUnavailable(value):
             lastChangeCount = value.changeCount
+            scheduleRetry(changeCount: value.changeCount, after: previousPending)
         case let .concealed(value):
             lastChangeCount = value.changeCount
+            pendingCapture = nil
         case let .unsupportedMultiItem(value):
             lastChangeCount = value.changeCount
+            pendingCapture = nil
         case let .changedDuringRead(value):
             lastChangeCount = value.endChangeCount
+            scheduleRetry(changeCount: value.endChangeCount, after: previousPending, immediately: true)
         }
-        handler(outcome)
+        if var pending = pendingCapture {
+            // Report unavailable/racing publication once while waiting for
+            // this generation. Its eventual complete value still delivers.
+            guard !pending.failureWasDelivered else { return }
+            pending.failureWasDelivered = true
+            pendingCapture = pending
+        }
+        let previousInitialDelivery = isDeliveringInitialCapture
+        isDeliveringInitialCapture = initialCaptureChangeCount == lastChangeCount
+        defer { isDeliveringInitialCapture = previousInitialDelivery }
+        if pendingCapture == nil { initialCaptureChangeCount = nil }
+        handler?(outcome)
     }
 
-    /// Card 5B's bounded retry is deliberately one additional freeze, not a
-    /// general retry policy. Partial bytes from the retry cannot replace the
-    /// first content-free ownership-race result.
+    private func scheduleRetry(
+        changeCount: Int,
+        after previousPending: PendingCapture?,
+        immediately: Bool = false
+    ) {
+        let previous = previousPending.flatMap {
+            $0.changeCount == changeCount ? $0 : nil
+        }
+        let initialDelay = min(pollInterval, 1)
+        let retryDelay = previous.map { min($0.retryDelay * 2, 1) } ?? initialDelay
+        pendingCapture = PendingCapture(
+            changeCount: changeCount,
+            retryDelay: retryDelay,
+            remainingDelay: immediately ? 0 : retryDelay,
+            failureWasDelivered: previous?.failureWasDelivered ?? false
+        )
+    }
+
+    /// One additional freeze per poll is the complete synchronous retry
+    /// budget. Its actual latest-generation facts replace the older race.
     private func captureOutcomeWithOneOwnershipRetry(
         observing activeTimer: Timer,
         observedChangeCount: Int
-    ) -> CaptureOutcome? {
+    ) -> CaptureAttempt? {
         let shouldContinue: @MainActor () -> Bool = {
             guard self.timer === activeTimer,
                   self.lastChangeCount == observedChangeCount else { return false }
@@ -242,33 +339,25 @@ public final class PasteboardObserver {
                 && self.lastChangeCount == observedChangeCount
                 && accessBehavior == .allowed
         }
-        let didObserveEmptyPasteboard: @MainActor (Int) -> Void = { generation in
-            guard self.timer === activeTimer,
-                  self.lastChangeCount == observedChangeCount else { return }
-            self.awaitingDeclarationsChangeCount = generation
-        }
-        guard let firstOutcome = adapter.captureOutcome(
-            shouldContinue: shouldContinue,
-            didObserveEmptyPasteboard: didObserveEmptyPasteboard
-        ) else { return nil }
-        guard shouldContinue() else { return nil }
-        guard case .changedDuringRead = firstOutcome else {
-            return firstOutcome
-        }
-
-        guard let retryOutcome = adapter.captureOutcome(
-            shouldContinue: shouldContinue,
-            didObserveEmptyPasteboard: didObserveEmptyPasteboard
-        ) else {
+        let read: @MainActor () -> CaptureAttempt? = {
+            let sampledChangeCount = self.adapter.pasteboard.changeCount
+            var emptyChangeCount: Int?
+            var noRetainableChangeCount: Int?
+            let outcome = self.adapter.captureOutcome(
+                shouldContinue: shouldContinue,
+                didObserveEmptyPasteboard: { emptyChangeCount = $0 },
+                didObserveNoRetainableContent: { noRetainableChangeCount = $0 }
+            )
             guard shouldContinue() else { return nil }
-            return firstOutcome
+            return CaptureAttempt(
+                outcome: outcome,
+                sampledChangeCount: sampledChangeCount,
+                emptyChangeCount: emptyChangeCount,
+                noRetainableChangeCount: noRetainableChangeCount
+            )
         }
-        guard shouldContinue() else { return nil }
-        switch retryOutcome {
-        case .complete, .changedDuringRead:
-            return retryOutcome
-        case .declaredUnavailable, .concealed, .unsupportedMultiItem:
-            return firstOutcome
-        }
+        guard let firstAttempt = read() else { return nil }
+        guard case .changedDuringRead? = firstAttempt.outcome else { return firstAttempt }
+        return read()
     }
 }

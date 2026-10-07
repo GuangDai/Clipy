@@ -3,6 +3,7 @@ import Foundation
 import HistoryCore
 import HistoryStorage
 import PasteboardAdapter
+import Synchronization
 import Testing
 @testable import ClipyApp
 
@@ -11,6 +12,50 @@ import Testing
 @Suite("Conditional workflow capture integration", .serialized)
 @MainActor
 struct BuiltInAutomationCaptureHostedTests {
+    @Test(arguments: [false, true])
+    func delayedPermissionKeepsStartupInertAndRunsANewerCopy(
+        copiedWhileBlocked: Bool
+    ) async throws {
+        let suite = "WorkflowAccessTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let workflow = BuiltInAutomationWorkflow(name: "TODO detected", steps: [
+            .init(operation: .containsText, find: "TODO"), .init(operation: .notify)
+        ], trigger: .newCopies)
+        try BuiltInAutomationLibrary(defaults: defaults).save(workflow)
+        let notifications = CapturedWorkflowNotifications()
+        let runner = BuiltInAutomationAutomaticRunner(defaults: defaults) {
+            await notifications.record($0)
+        }
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let pasteboard = NSPasteboard(name: .init(suite))
+        defer { pasteboard.releaseGlobally() }
+        try #require(pasteboard.setString("TODO startup value", forType: .string))
+        let access = Mutex(PasteboardAccessBehavior.denied)
+        let composition = AppComposition.makeForTesting(
+            history: history, adapter: PasteboardAdapter(pasteboard: pasteboard),
+            observerPollInterval: 0.02,
+            captureAccessBehaviorProvider: { access.withLock { $0 } },
+            workflowRunner: runner
+        )
+        defer { composition.stop() }
+        #expect(try await history.browse(.init(kind: .recent, limit: 10)).rows.isEmpty)
+
+        if copiedWhileBlocked {
+            pasteboard.clearContents()
+            try #require(pasteboard.setString("TODO newly copied while blocked", forType: .string))
+        }
+        access.withLock { $0 = .allowed }
+        try #require(await ComposedSupport.waitFor {
+            composition.captureAccessState == .allowed
+        })
+        try await settleCapture(composition)
+        let page = try await history.browse(.init(kind: .recent, limit: 10))
+        #expect(page.rows.map(\.title) == [copiedWhileBlocked
+            ? "TODO newly copied while blocked" : "TODO startup value"])
+        #expect(await notifications.names == (copiedWhileBlocked ? ["TODO detected"] : []))
+    }
+
     @Test func startupIsInertButNewCopiesAndRepeatCopiesMatch() async throws {
         let suite = "WorkflowCaptureTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

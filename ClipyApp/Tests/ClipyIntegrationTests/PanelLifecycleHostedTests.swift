@@ -564,9 +564,9 @@ struct PanelLifecycleHostedTests {
     }
 
     /// Stopping observation is not permission to erase values already frozen
-    /// and admitted before willSleep. The existing active+latest owner drains
-    /// both slots while refusing any new sleep-period admission.
-    @Test("workspace sleep drains an already admitted active and pending pair")
+    /// and admitted before willSleep. The active owner drains the whole FIFO
+    /// while refusing any new sleep-period admission.
+    @Test("workspace sleep drains the complete pre-sleep capture queue")
     func workspaceSleepPreservesThePreSleepCaptureBacklog() async throws {
         let base = try await ComposedSupport.openMemoryHistory()
         let history = FirstCaptureSuspendingHistory(base: base)
@@ -603,15 +603,21 @@ struct PanelLifecycleHostedTests {
                 observedAt: Date(timeIntervalSinceReferenceDate: 3)
             )
         )
+        composition.submitCaptureForTesting(
+            ComposedSupport.textCapture(
+                "second-pending-before-sleep",
+                observedAt: Date(timeIntervalSinceReferenceDate: 4)
+            )
+        )
         #expect(composition.captureHealth.activeCommitCount == 1)
-        #expect(composition.captureHealth.pendingCaptureCount == 1)
+        #expect(composition.captureHealth.pendingCaptureCount == 2)
 
         NSWorkspace.shared.notificationCenter.post(
             name: NSWorkspace.willSleepNotification,
             object: NSWorkspace.shared
         )
         #expect(!composition.isCaptureObservationActiveForTesting)
-        #expect(composition.captureHealth.pendingCaptureCount == 1)
+        #expect(composition.captureHealth.pendingCaptureCount == 2)
 
         accessBehavior.withLock { $0 = .denied }
         NSWorkspace.shared.notificationCenter.post(
@@ -620,7 +626,7 @@ struct PanelLifecycleHostedTests {
         )
         #expect(composition.captureAccessState == .denied)
         #expect(!composition.isCaptureObservationActiveForTesting)
-        #expect(composition.captureHealth.pendingCaptureCount == 1)
+        #expect(composition.captureHealth.pendingCaptureCount == 2)
 
         await history.resumeFirstCapture()
         let drained = await ComposedSupport.waitFor {
@@ -632,6 +638,7 @@ struct PanelLifecycleHostedTests {
             HistoryBrowseRequest(kind: .recent, limit: 10)
         )
         #expect(page.rows.map(\.title) == [
+            "second-pending-before-sleep",
             "pending-before-sleep",
             "active-before-sleep",
         ])

@@ -14,21 +14,19 @@ enum CaptureNoticePresentation {
         locale: Locale = .current
     ) -> String {
         switch notice {
-        case .replacedCapture(let totalReplaced):
-            if totalReplaced == 1 {
-                return AppCaptureCopy.text("Clipy replaced 1 pending clipboard change with a newer "
-                    + "one, so it wasn't saved. To try again, copy the older "
-                    + "content again.", bundle: bundle)
+        case .droppedCapture(let totalDropped):
+            if totalDropped == 1 {
+                return AppCaptureCopy.text("The clipboard capture queue was full, so 1 change "
+                    + "wasn't saved. Copy that content again to save it.", bundle: bundle)
             }
-            let format = AppCaptureCopy.text("Clipy replaced %@ pending clipboard changes "
-                + "with newer ones, so they weren't saved. To try again, copy "
-                + "the older content again.", bundle: bundle)
+            let format = AppCaptureCopy.text("The clipboard capture queue was full, so %@ changes "
+                + "weren't saved. Copy that content again to save it.", bundle: bundle)
             return String(format: format, locale: locale,
-                          totalReplaced.formatted(.number.locale(locale)))
+                          totalDropped.formatted(.number.locale(locale)))
         case .failed(.unsupportedClipboardShape):
             return AppCaptureCopy.text("Clipy couldn't save this clipboard change because its size or structure isn't supported.", bundle: bundle)
         case .failed(.declaredContentUnavailable):
-            return AppCaptureCopy.text("Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt.", bundle: bundle)
+            return AppCaptureCopy.text("The clipboard data is not fully available yet. Clipy will retry automatically.", bundle: bundle)
         case .failed:
             return AppCaptureCopy.text("A clipboard change wasn't saved. Clipy can't retry it "
                 + "automatically; copy the content again to make a new attempt.", bundle: bundle)

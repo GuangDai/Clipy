@@ -11,8 +11,8 @@
 "Clipy, clipboard monitoring paused" = "Clipy, clipboard monitoring paused";
 "Dismiss capture warning" = "Dismiss capture warning";
 "Clipboard Monitoring Unavailable" = "Clipboard Monitoring Unavailable";
-"Clipy replaced 1 pending clipboard change with a newer one, so it wasn't saved. To try again, copy the older content again." = "Clipy replaced 1 pending clipboard change with a newer one, so it wasn't saved. To try again, copy the older content again.";
-"Clipy replaced %@ pending clipboard changes with newer ones, so they weren't saved. To try again, copy the older content again." = "Clipy replaced %@ pending clipboard changes with newer ones, so they weren't saved. To try again, copy the older content again.";
+"The clipboard capture queue was full, so 1 change wasn't saved. Copy that content again to save it." = "The clipboard capture queue was full, so 1 change wasn't saved. Copy that content again to save it.";
+"The clipboard capture queue was full, so %@ changes weren't saved. Copy that content again to save it." = "The clipboard capture queue was full, so %@ changes weren't saved. Copy that content again to save it.";
 "Clipy couldn't save this clipboard change because its size or structure isn't supported." = "Clipy couldn't save this clipboard change because its size or structure isn't supported.";
-"Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt." = "Clipy couldn't read the complete clipboard change. Copy the content again to make a new attempt.";
+"The clipboard data is not fully available yet. Clipy will retry automatically." = "The clipboard data is not fully available yet. Clipy will retry automatically.";
 "A clipboard change wasn't saved. Clipy can't retry it automatically; copy the content again to make a new attempt." = "A clipboard change wasn't saved. Clipy can't retry it automatically; copy the content again to make a new attempt.";

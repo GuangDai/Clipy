@@ -169,14 +169,15 @@ struct AppCaptureAccessTests {
 
     }
 
-    @Test("remaining non-allowed postures stay stopped until an allowed Retry")
+    @Test("blocked capture recovers automatically when system access is allowed")
     @MainActor
-    func remainingAccessMatrixIsFailClosedAndRecoveryIsExact() async throws {
+    func accessRestorationRecoversEveryBlockedPostureWithoutRetry() async throws {
         let cases: [(
             behavior: PasteboardAccessBehavior,
             state: CaptureAccessState,
             label: String
         )] = [
+            (.denied, .denied, "denied"),
             (.systemDefault, .systemDefault, "system-default"),
             (.ask, .ask, "ask"),
             (.unavailable, .readFailure, "read-failure"),
@@ -185,6 +186,7 @@ struct AppCaptureAccessTests {
         for testCase in cases {
             let history = try await ComposedSupport.openMemoryHistory()
             let pasteboard = ComposedSupport.makePasteboard()
+            defer { pasteboard.releaseGlobally() }
             pasteboard.clearContents()
             pasteboard.setString(
                 "must-not-capture-\(testCase.label)",
@@ -216,11 +218,12 @@ struct AppCaptureAccessTests {
             )
             #expect(page.rows.isEmpty)
 
+            // The background observer must discover the system change itself.
+            // The pasteboard's generation is unchanged from denied startup.
             accessBehavior.withLock { $0 = .allowed }
-            composition.retryCaptureAccess()
+            try #require(await Self.waitForRows(1, in: history))
             #expect(composition.captureAccessState == .allowed)
             #expect(composition.isCaptureObservationActiveForTesting)
-            #expect(await Self.waitForRows(1, in: history))
             page = try await history.browse(
                 HistoryBrowseRequest(kind: .recent, limit: 10)
             )
@@ -228,6 +231,10 @@ struct AppCaptureAccessTests {
                 page.rows.map(\.title)
                     == ["must-not-capture-\(testCase.label)"]
             )
+            let row = try #require(page.rows.first)
+            let payload = try await history.pastePayload(for: row.item.id)
+            #expect(payload.representations.map(\.bytes) == [Data(row.title.utf8)])
+            #expect(row.copyCount == 1)
             composition.stop()
         }
     }
@@ -572,11 +579,12 @@ struct AppCaptureAccessTests {
         )
     }
 
-    @Test("live revocation stops the composed observer")
+    @Test("live revocation blocks payload capture and permission restoration resumes it")
     @MainActor
-    func liveRevocationStopsObservation() async throws {
+    func liveRevocationAndRestorationDoNotNeedManualRetry() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         let pasteboard = ComposedSupport.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
         pasteboard.setString("before-revoke", forType: .string)
         let accessBehavior = Mutex(PasteboardAccessBehavior.allowed)
@@ -591,20 +599,72 @@ struct AppCaptureAccessTests {
         defer { composition.stop() }
         let appDelegate = AppDelegate()
         appDelegate.installCompositionForTesting(composition)
-        let initiallyCaptured = await Self.waitForRows(1, in: history)
-        #expect(initiallyCaptured)
+        try #require(await Self.waitForRows(1, in: history))
 
         accessBehavior.withLock { $0 = .denied }
         pasteboard.clearContents()
         pasteboard.setString("must-not-be-read", forType: .string)
-        let revoked = await ComposedSupport.waitFor {
+        try #require(await ComposedSupport.waitFor {
             appDelegate.captureAccessState == .denied
-        }
-        #expect(revoked)
+        })
         let afterRevoke = try await history.browse(
             HistoryBrowseRequest(kind: .recent, limit: 10)
         )
         #expect(afterRevoke.rows.count == 1)
+
+        accessBehavior.withLock { $0 = .allowed }
+        try #require(await Self.waitForRows(2, in: history))
+        #expect(appDelegate.captureAccessState == .allowed)
+        let restored = try await history.browse(
+            HistoryBrowseRequest(kind: .recent, limit: 10)
+        )
+        #expect(restored.rows.map(\.title) == ["must-not-be-read", "before-revoke"])
+        #expect(restored.rows.allSatisfy { $0.copyCount == 1 })
+    }
+
+    @Test(arguments: [PasteboardAccessBehavior.denied, .unavailable])
+    @MainActor
+    func resumingWhileAccessIsBlockedStillExcludesPausedClipboard(
+        blockedBehavior: PasteboardAccessBehavior
+    ) async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let pasteboard = ComposedSupport.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        pasteboard.clearContents()
+        try #require(pasteboard.setString("before-blocked-resume", forType: .string))
+        let accessBehavior = Mutex(PasteboardAccessBehavior.allowed)
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            observerPollInterval: 0.02,
+            captureAccessBehaviorProvider: { accessBehavior.withLock { $0 } }
+        )
+        defer { composition.stop() }
+        try #require(await Self.waitForRows(1, in: history))
+        composition.pauseCapture()
+        accessBehavior.withLock { $0 = blockedBehavior }
+        pasteboard.clearContents()
+        try #require(pasteboard.setString("excluded-paused-value", forType: .string))
+        composition.resumeCapture()
+        #expect(!composition.isCaptureObservationActiveForTesting)
+
+        var admittedPausedValue = false
+        composition.onCaptureHealthChanged = { health in
+            if health.activeCommitCount > 0 { admittedPausedValue = true }
+        }
+        accessBehavior.withLock { $0 = .allowed }
+        try #require(await ComposedSupport.waitFor {
+            composition.captureAccessState == .allowed
+        })
+        #expect(!admittedPausedValue)
+        let afterRecovery = try await history.browse(.init(kind: .recent, limit: 10))
+        #expect(afterRecovery.rows.map(\.title) == ["before-blocked-resume"])
+
+        pasteboard.clearContents()
+        try #require(pasteboard.setString("after-blocked-resume", forType: .string))
+        try #require(await Self.waitForRows(2, in: history))
+        let finalPage = try await history.browse(.init(kind: .recent, limit: 10))
+        #expect(finalPage.rows.map(\.title) == ["after-blocked-resume", "before-blocked-resume"])
     }
 
     @MainActor

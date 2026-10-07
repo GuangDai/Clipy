@@ -34,10 +34,20 @@ final class CaptureAccessJourneyUITests: XCTestCase {
         )
     }
 
-    /// The ask posture has its own explanation and can leave that surface
-    /// only after the configured boundary reports allowed on explicit Retry.
     @MainActor
-    func testAskIsDistinctAndRetryTransitionsOnlyToAllowed() throws {
+    func testAskIsDistinctAndRetryStaysFailClosed() throws {
+        try assertFixedFailClosedPosture(
+            captureAccess: "ask",
+            pasteboardValue: "clipy-ui-ask-must-not-capture",
+            expectedMessage:
+                "Clipboard access needs your approval before monitoring can continue."
+        )
+    }
+
+    /// A restored authoritative allow resumes monitoring without requiring
+    /// the user to activate the recovery control.
+    @MainActor
+    func testAskRestorationCapturesWithoutManualRetry() throws {
         let captured = "clipy-ui-ask-recovery"
         let app = try launchApp(
             storeURL: try makeStoreURL(),
@@ -45,14 +55,6 @@ final class CaptureAccessJourneyUITests: XCTestCase {
             pasteboardValue: captured
         )
         defer { app.terminate() }
-
-        guard assertFailClosedSurface(
-            in: app,
-            expectedMessage:
-                "Clipboard access needs your approval before monitoring can continue."
-        ) else { return }
-        let retry = app.buttons["clipy.capture.access.recovery"]
-        retry.click()
 
         let rows = historyRows(in: app)
         guard assertEventually(
@@ -63,7 +65,7 @@ final class CaptureAccessJourneyUITests: XCTestCase {
             },
             in: app,
             timeout: 10,
-            message: "Ask Retry did not require the configured allowed fact."
+            message: "Restored Ask access did not automatically resume capture."
         ) else { return }
         assertCondition(
             rows.element(boundBy: 0).label.contains(captured),
@@ -161,11 +163,10 @@ final class CaptureAccessJourneyUITests: XCTestCase {
         )
     }
 
-    /// The recovery action is not a disconnected control: it re-reads the
-    /// configured system boundary, leaves the denied surface only after that
-    /// boundary reports allowed, and then starts the production capture lane.
+    /// A blocked startup discovers restored system permission through its
+    /// existing background observer and imports the staged current value.
     @MainActor
-    func testTryAgainRechecksAccessBeforeStartingCapture() throws {
+    func testDeniedRestorationStartsCaptureWithoutManualRetry() throws {
         let recovered = "clipy-ui-retry-recovered"
         let app = try launchApp(
             storeURL: try makeStoreURL(),
@@ -177,26 +178,12 @@ final class CaptureAccessJourneyUITests: XCTestCase {
         let deniedState = app.descendants(matching: .any)[
             "clipy.capture.access.empty"
         ]
-        guard assertEventually(
-            { deniedState.exists },
-            in: app,
-            message: "Recovery scenario did not begin in denied state."
-        ) else { return }
-
-        let retry = app.buttons["clipy.capture.access.recovery"]
-        guard assertCondition(
-            retry.exists && retry.isHittable,
-            in: app,
-            message: "Recovery scenario did not expose Try Again."
-        ) else { return }
-        retry.click()
-
         let rows = historyRows(in: app)
         guard assertEventually(
             { !deniedState.exists && rows.count == 1 },
             in: app,
             timeout: 10,
-            message: "Try Again did not adopt allowed access and start capture."
+            message: "Restored permission did not automatically resume capture."
         ) else { return }
         assertCondition(
             rows.element(boundBy: 0).label.contains(recovered),

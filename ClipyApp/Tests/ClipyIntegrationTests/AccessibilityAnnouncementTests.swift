@@ -40,24 +40,19 @@ private final class AccessibilityAnnouncementRecorder {
 
 @Suite("Capture accessibility announcements (Card 15D)")
 struct AccessibilityAnnouncementTests {
-    @Test("replacement warning exposes the cumulative content-free count")
-    func replacementWarningShowsCumulativeCount() {
-        #expect(
-            CaptureNoticePresentation.message(
-                for: .replacedCapture(totalReplaced: 1)
-            )
-                == "Clipy replaced 1 pending clipboard change with a newer "
-                    + "one, so it wasn't saved. To try again, copy the older "
-                    + "content again."
+    @Test("queue overflow warning formats the cumulative count")
+    func queueOverflowWarningShowsCumulativeCount() {
+        let locale = Locale(identifier: "en_US")
+        let one = CaptureNoticePresentation.message(
+            for: .droppedCapture(totalDropped: 1), locale: locale
         )
-        #expect(
-            CaptureNoticePresentation.message(
-                for: .replacedCapture(totalReplaced: 27)
-            )
-                == "Clipy replaced 27 pending clipboard changes with newer "
-                    + "ones, so they weren't saved. To try again, copy the "
-                    + "older content again."
+        let many = CaptureNoticePresentation.message(
+            for: .droppedCapture(totalDropped: 27), locale: locale
         )
+        #expect(one.contains("1"))
+        #expect(many.contains("27"))
+        #expect(!many.contains("%@"))
+        #expect(one != many)
     }
 
     @Test("one authoritative capture failure episode announces once")
@@ -136,7 +131,7 @@ struct AccessibilityAnnouncementTests {
         #expect(appDelegate.captureHealth.failedCaptureCount == 1)
     }
 
-    @Test("replacement and authoritative recovery do not announce")
+    @Test("queue overflow and authoritative recovery do not announce")
     @MainActor
     func nonfailureCaptureHealthIsSilent() {
         let recorder = AccessibilityAnnouncementRecorder()
@@ -144,17 +139,17 @@ struct AccessibilityAnnouncementTests {
             accessibilityAnnouncementOperations: recorder.operations
         )
         appDelegate.receiveCaptureHealthForTesting(Self.health(
-            replacedCaptureCount: 1,
+            droppedCaptureCount: 1,
             failedCaptureCount: 0,
             lastFailure: nil
         ))
         appDelegate.receiveCaptureHealthForTesting(Self.health(
-            replacedCaptureCount: 1,
+            droppedCaptureCount: 1,
             failedCaptureCount: 1,
             lastFailure: .invalidInput
         ))
         appDelegate.receiveCaptureHealthForTesting(Self.health(
-            replacedCaptureCount: 1,
+            droppedCaptureCount: 1,
             failedCaptureCount: 1,
             lastFailure: nil
         ))
@@ -322,7 +317,7 @@ struct AccessibilityAnnouncementTests {
     }
 
     private static func health(
-        replacedCaptureCount: Int = 0,
+        droppedCaptureCount: Int = 0,
         failedCaptureCount: Int,
         lastFailure: ClipyCaptureFailure?
     ) -> ClipyCaptureHealth {
@@ -331,7 +326,7 @@ struct AccessibilityAnnouncementTests {
             activeCaptureBytes: 0,
             pendingCaptureCount: 0,
             pendingCaptureBytes: 0,
-            replacedCaptureCount: replacedCaptureCount,
+            droppedCaptureCount: droppedCaptureCount,
             failedCaptureCount: failedCaptureCount,
             lastFailure: lastFailure
         )

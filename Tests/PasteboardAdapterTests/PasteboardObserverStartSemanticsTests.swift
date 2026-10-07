@@ -12,6 +12,33 @@ import Testing
 #if DEBUG
 @Suite("Pasteboard observer start semantics (DEC-OBSERVER-START)")
 struct PasteboardObserverStartSemanticsTests {
+    @Test("nested delivery restores the initial-capture fact of its outer callback")
+    @MainActor
+    func nestedDeliveryRestoresTheOuterInitialCaptureFlag() throws {
+        let pasteboard = Self.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        Self.replaceString("initial-generation", on: pasteboard)
+        let observer = PasteboardObserver(
+            adapter: PasteboardAdapter(pasteboard: pasteboard), pollInterval: 60
+        )
+        defer { observer.stop() }
+        var received: [String] = []
+        var initialFlags: [Bool] = []
+        observer.start { outcome in
+            guard let text = Self.completeText(in: outcome) else { return }
+            received.append(text)
+            initialFlags.append(observer.isDeliveringInitialCapture)
+            if text == "initial-generation" {
+                Self.replaceString("nested-new-generation", on: pasteboard)
+                observer.pollForTesting()
+                initialFlags.append(observer.isDeliveringInitialCapture)
+            }
+        }
+        #expect(received == ["initial-generation", "nested-new-generation"])
+        #expect(initialFlags == [true, false, true])
+        #expect(!observer.isDeliveringInitialCapture)
+    }
+
     @Test("access callback writes are captured once with or without a nested poll",
           arguments: [false, true])
     @MainActor
