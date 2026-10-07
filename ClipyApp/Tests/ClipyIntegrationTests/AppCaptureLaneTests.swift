@@ -49,7 +49,7 @@ struct AppCaptureLaneTests {
         let page = try await base.browse(HistoryBrowseRequest(kind: .recent, limit: 10))
         #expect(page.rows.map(\.title) == ["C", "B", "A"])
         #expect(await history.captureAttemptCount == 3)
-        #expect(composition.captureHealth.replacedCaptureCount == 0)
+        #expect(composition.captureHealth.droppedCaptureCount == 0)
     }
 
     @Test @MainActor
@@ -76,136 +76,158 @@ struct AppCaptureLaneTests {
         #expect(composition.captureHealth.activeCommitCount == 0)
     }
 
-    /// Card 6 discriminator: with A active, B occupies the one pending slot,
-    /// and C replaces B. After dismissing that episode, D replaces C and must
-    /// surface again. Resuming the real History commit therefore retains
-    /// literal A then literal D while proving the task backlog stayed 1 + 1.
+    /// Every complete observation waits for the preceding commit. The real
+    /// receipt order distinguishes FIFO delivery from timestamp-sorted reads.
     @Test @MainActor
-    func activeCaptureKeepsOnlyTheLatestPendingValue() async throws {
+    func suspendedCapturePreservesAllPendingValuesInOrder() async throws {
         let base = try await ComposedSupport.openMemoryHistory()
         let history = FirstCaptureSuspendingHistory(base: base)
         let pasteboard = ComposedSupport.makePasteboard()
         pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
         let composition = AppComposition.makeForTesting(
             history: history,
             adapter: PasteboardAdapter(pasteboard: pasteboard)
         )
         let appDelegate = AppDelegate()
         appDelegate.installCompositionForTesting(composition)
+        let healthProbe = CaptureHealthProbe()
+        let shellHealthSink = composition.onCaptureHealthChanged
+        composition.onCaptureHealthChanged = { health in
+            shellHealthSink?(health)
+            healthProbe.receive(health)
+        }
         defer { composition.stop() }
 
         composition.submitCaptureForTesting(Self.capture("A", at: 1))
         await history.waitUntilFirstCaptureIsSuspended()
-        #expect(composition.captureHealth.activeCommitCount == 1)
-        #expect(composition.captureHealth.activeCaptureBytes == 1)
-        #expect(composition.captureHealth.pendingCaptureCount == 0)
-        #expect(composition.captureHealth.pendingCaptureBytes == 0)
-        #expect(appDelegate.captureHealth.activeCommitCount == 1)
-        #expect(appDelegate.captureHealth.activeCaptureBytes == 1)
-        #expect(appDelegate.captureHealth.pendingCaptureCount == 0)
-
-        composition.submitCaptureForTesting(Self.capture("B", at: 2))
-        #expect(composition.captureHealth.activeCommitCount == 1)
-        #expect(composition.captureHealth.pendingCaptureCount == 1)
-        #expect(composition.captureHealth.pendingCaptureBytes == 1)
-        #expect(composition.captureHealth.replacedCaptureCount == 0)
-        #expect(appDelegate.captureHealth.pendingCaptureCount == 1)
-        #expect(appDelegate.captureHealth.pendingCaptureBytes == 1)
-        #expect(appDelegate.captureHealth.replacedCaptureCount == 0)
-
-        composition.submitCaptureForTesting(Self.capture("C", at: 3))
-        #expect(composition.captureHealth.activeCommitCount == 1)
-        #expect(composition.captureHealth.pendingCaptureCount == 1)
-        #expect(composition.captureHealth.pendingCaptureBytes == 1)
-        #expect(composition.captureHealth.replacedCaptureCount == 1)
-        #expect(appDelegate.captureHealth.pendingCaptureCount == 1)
-        #expect(appDelegate.captureHealth.replacedCaptureCount == 1)
-        #expect(
-            appDelegate.captureNotice == .replacedCapture(totalReplaced: 1)
-        )
-
-        appDelegate.dismissCaptureNotice()
+        for (index, text) in ["B", "C", "D"].enumerated() {
+            composition.submitCaptureForTesting(
+                Self.capture(text, at: TimeInterval(index + 2))
+            )
+            #expect(composition.captureHealth.activeCommitCount == 1)
+            #expect(composition.captureHealth.pendingCaptureCount == index + 1)
+            #expect(composition.captureHealth.pendingCaptureBytes == index + 1)
+            #expect(composition.captureHealth.droppedCaptureCount == 0)
+        }
+        #expect(appDelegate.captureHealth.pendingCaptureCount == 3)
         #expect(appDelegate.captureNotice == nil)
 
-        composition.submitCaptureForTesting(Self.capture("D", at: 4))
-        #expect(composition.captureHealth.replacedCaptureCount == 2)
-        #expect(appDelegate.captureHealth.replacedCaptureCount == 2)
-        #expect(
-            appDelegate.captureNotice == .replacedCapture(totalReplaced: 2),
-            "a later replacement is a new visible episode after dismiss"
-        )
-        let replacementNotice = try #require(appDelegate.captureNotice)
-        #expect(
-            CaptureNoticePresentation.message(for: replacementNotice)
-                == "Clipy replaced 2 pending clipboard changes with newer "
-                    + "ones, so they weren't saved. To try again, copy the "
-                    + "older content again."
-        )
-
         await history.resumeFirstCapture()
-        let drained = await ComposedSupport.waitFor {
-            composition.captureHealth.activeCommitCount == 0
-                && composition.captureHealth.pendingCaptureCount == 0
+        await healthProbe.waitForIdle(failedCaptureCount: 0, lastFailure: nil)
+        let page = try await base.browse(.init(kind: .recent, limit: 10))
+        #expect(page.rows.map(\.title) == ["D", "C", "B", "A"])
+        #expect(await history.committedCaptureIDs == page.rows.reversed().map(\.item.id))
+        for row in page.rows {
+            let payload = try await base.pastePayload(for: row.item.id)
+            #expect(payload.representations.map(\.bytes) == [Data(row.title.utf8)])
         }
-        #expect(drained, "Card 6: the bounded lane drains A then latest D")
-        #expect(composition.captureHealth.lastFailure == nil)
-
-        let page = try await base.browse(
-            HistoryBrowseRequest(kind: .recent, limit: 10)
-        )
-        #expect(page.rows.map(\.title) == ["D", "A"])
-        #expect(!page.rows.map(\.title).contains("B"))
-        #expect(!page.rows.map(\.title).contains("C"))
+        #expect(appDelegate.captureHealth.pendingCaptureBytes == 0)
     }
 
-    /// DEC-CAPTURE-OVERLOAD stress: after A occupies the active slot, one
-    /// thousand already-frozen values pass synchronously through the same
-    /// production admission method. At every stable callback boundary the
-    /// owner retains only A plus the latest pending value and exact byte
-    /// accounting stays at two four-byte values. This is deliberately not an
-    /// acquisition-peak or process-RSS claim: the incoming value already
-    /// exists when this seam receives it (03 target direction §5.1).
+    /// A thousand observations cannot grow the entry count or replace an
+    /// accepted capture. Only the first bounded window becomes History.
     @Test @MainActor
-    func thousandCaptureBurstKeepsOnlyActiveAndLatestPendingBytes() async throws {
+    func thousandCaptureBurstPreservesAcceptedFIFOWithinTheItemBound() async throws {
         let base = try await ComposedSupport.openMemoryHistory()
         let history = FirstCaptureSuspendingHistory(base: base)
         let pasteboard = ComposedSupport.makePasteboard()
         pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            captureByteLimit: 1_024
+        )
+        let appDelegate = AppDelegate()
+        appDelegate.installCompositionForTesting(composition)
+        let healthProbe = CaptureHealthProbe()
+        let shellHealthSink = composition.onCaptureHealthChanged
+        var mayRefillDequeuedSlot = false
+        var refilledDequeuedSlot = false
+        composition.onCaptureHealthChanged = { health in
+            shellHealthSink?(health)
+            healthProbe.receive(health)
+            guard mayRefillDequeuedSlot,
+                  health.activeCommitCount == 1,
+                  health.pendingCaptureCount == AppComposition.maximumPendingCaptures - 1
+            else { return }
+            mayRefillDequeuedSlot = false
+            refilledDequeuedSlot = true
+            composition.submitCaptureForTesting(Self.capture("wrap", at: 1_002))
+        }
+        defer { composition.stop() }
+
+        composition.submitCaptureForTesting(Self.capture("A000", at: 1))
+        await history.waitUntilFirstCaptureIsSuspended()
+        let limit = AppComposition.maximumPendingCaptures
+        for index in 0..<1_000 {
+            composition.submitCaptureForTesting(Self.capture(
+                String(format: "%04d", index), at: TimeInterval(index + 2)
+            ))
+            let retained = min(index + 1, limit)
+            let health = composition.captureHealth
+            #expect(health.activeCommitCount == 1)
+            #expect(health.pendingCaptureCount == retained)
+            #expect(health.activeCaptureBytes == 4)
+            #expect(health.pendingCaptureBytes == retained * 4)
+            #expect(health.droppedCaptureCount == max(0, index + 1 - limit))
+            if index == limit {
+                #expect(appDelegate.captureNotice == .droppedCapture(totalDropped: 1))
+                appDelegate.dismissCaptureNotice()
+            } else if index == limit + 1 {
+                #expect(appDelegate.captureNotice == .droppedCapture(totalDropped: 2))
+            }
+        }
+
+        mayRefillDequeuedSlot = true
+        await history.resumeFirstCapture()
+        await healthProbe.waitForIdle(failedCaptureCount: 0, lastFailure: nil)
+        let page = try await base.browse(.init(kind: .recent, limit: 100))
+        #expect(refilledDequeuedSlot)
+        let acceptedTitles = ["A000"] + (0..<limit).map { String(format: "%04d", $0) } + ["wrap"]
+        #expect(page.rows.map(\.title) == Array(acceptedTitles.reversed()))
+        #expect(await history.committedCaptureIDs == page.rows.reversed().map(\.item.id))
+        #expect(composition.captureHealth.droppedCaptureCount == 1_000 - limit)
+        #expect(composition.captureHealth.pendingCaptureBytes == 0)
+    }
+
+    /// The byte budget can be reached before the entry count. An oversized
+    /// new entry is refused; a later smaller entry may still use free space.
+    @Test @MainActor
+    func pendingByteBudgetPreservesEarlierCapturesAndAcceptsASmallerLaterCopy() async throws {
+        let base = try await ComposedSupport.openMemoryHistory()
+        let history = FirstCaptureSuspendingHistory(base: base)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
         let composition = AppComposition.makeForTesting(
             history: history,
             adapter: PasteboardAdapter(pasteboard: pasteboard),
             captureByteLimit: 4
         )
+        let healthProbe = CaptureHealthProbe()
+        composition.onCaptureHealthChanged = { healthProbe.receive($0) }
         defer { composition.stop() }
 
-        composition.submitCaptureForTesting(Self.capture("A000", at: 1))
+        composition.submitCaptureForTesting(Self.capture("A", at: 1))
         await history.waitUntilFirstCaptureIsSuspended()
-
-        for index in 0..<1_000 {
-            let text = String(format: "%04d", index)
-            composition.submitCaptureForTesting(
-                Self.capture(text, at: TimeInterval(index + 2))
-            )
-
-            let health = composition.captureHealth
-            #expect(health.activeCommitCount == 1)
-            #expect(health.pendingCaptureCount == 1)
-            #expect(health.activeCaptureBytes == 4)
-            #expect(health.pendingCaptureBytes == 4)
-            #expect(
-                health.activeCaptureBytes + health.pendingCaptureBytes == 8
-            )
-            #expect(health.replacedCaptureCount == index)
-        }
+        composition.submitCaptureForTesting(Self.capture("B", at: 2))
+        composition.submitCaptureForTesting(Self.capture("CC", at: 3))
+        composition.submitCaptureForTesting(Self.capture("DD", at: 4))
+        #expect(composition.captureHealth.pendingCaptureCount == 2)
+        #expect(composition.captureHealth.pendingCaptureBytes == 3)
+        #expect(composition.captureHealth.droppedCaptureCount == 1)
+        composition.submitCaptureForTesting(Self.capture("E", at: 5))
+        #expect(composition.captureHealth.pendingCaptureCount == 3)
+        #expect(composition.captureHealth.pendingCaptureBytes == 4)
+        #expect(composition.captureHealth.activeCaptureBytes + composition.captureHealth.pendingCaptureBytes <= 8)
 
         await history.resumeFirstCapture()
-        await history.waitUntilSecondCaptureCompletes()
-
-        #expect(composition.captureHealth.replacedCaptureCount == 999)
-        let page = try await base.browse(
-            HistoryBrowseRequest(kind: .recent, limit: 10)
-        )
-        #expect(page.rows.map(\.title) == ["0999", "A000"])
+        await healthProbe.waitForIdle(failedCaptureCount: 0, lastFailure: nil)
+        let page = try await base.browse(.init(kind: .recent, limit: 10))
+        #expect(page.rows.map(\.title) == ["E", "CC", "B", "A"])
+        #expect(await history.committedCaptureIDs == page.rows.reversed().map(\.item.id))
     }
 
     /// A capture receipt carries same-commit retention effects back through
@@ -268,7 +290,8 @@ struct AppCaptureLaneTests {
         composition.submitCaptureForTesting(Self.capture("A", at: 10))
         await history.waitUntilFirstCaptureIsSuspended()
         composition.submitCaptureForTesting(Self.capture("B", at: 11))
-        #expect(composition.captureHealth.pendingCaptureCount == 1)
+        composition.submitCaptureForTesting(Self.capture("C", at: 12))
+        #expect(composition.captureHealth.pendingCaptureCount == 2)
 
         composition.stop()
         #expect(composition.captureHealth.activeCommitCount == 0)
@@ -290,6 +313,72 @@ struct AppCaptureLaneTests {
         #expect(page.rows.map(\.title) == ["A"])
         #expect(composition.captureHealth.activeCommitCount == 0)
         #expect(composition.captureHealth.pendingCaptureCount == 0)
+    }
+
+    @Test @MainActor
+    func pauseReleasesTheWholePendingQueueWhileAnAdmittedCommitFinishes() async throws {
+        let base = try await ComposedSupport.openMemoryHistory()
+        let history = FirstCaptureSuspendingHistory(base: base)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history, adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        let healthProbe = CaptureHealthProbe()
+        composition.onCaptureHealthChanged = { healthProbe.receive($0) }
+        defer { composition.stop() }
+
+        composition.submitCaptureForTesting(Self.capture("A", at: 1))
+        await history.waitUntilFirstCaptureIsSuspended()
+        composition.submitCaptureForTesting(Self.capture("B", at: 2))
+        composition.submitCaptureForTesting(Self.capture("C", at: 3))
+        composition.pauseCapture()
+        #expect(composition.captureAccessState == .userPaused)
+        #expect(composition.captureHealth.pendingCaptureCount == 0)
+        #expect(composition.captureHealth.pendingCaptureBytes == 0)
+
+        await history.resumeFirstCapture()
+        await healthProbe.waitForIdle(failedCaptureCount: 0, lastFailure: nil)
+        let page = try await base.browse(.init(kind: .recent, limit: 10))
+        #expect(page.rows.map(\.title) == ["A"])
+        #expect(await history.captureAttemptCount == 1)
+    }
+
+    @Test @MainActor
+    func stoppingFromFailureHealthDoesNotAdmitAnotherCapture() async throws {
+        let base = try await ComposedSupport.openMemoryHistory()
+        let history = FirstCaptureLowDiskFailingHistory(base: base)
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history, adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        var stopped = false
+        composition.onCaptureHealthChanged = { health in
+            guard !stopped, health.failedCaptureCount == 1 else { return }
+            stopped = true
+            composition.stop()
+            composition.submitCaptureForTesting(Self.capture("after stop", at: 4))
+        }
+        defer { composition.stop() }
+
+        composition.submitCaptureForTesting(Self.capture("fails before stop", at: 1))
+        await history.waitUntilFirstCaptureIsSuspended()
+        composition.submitCaptureForTesting(Self.capture("queued B", at: 2))
+        composition.submitCaptureForTesting(Self.capture("queued C", at: 3))
+        let oldTask = try #require(composition.activeCaptureForTesting)
+        await history.failFirstCaptureWithLowDisk()
+        await oldTask.value
+
+        #expect(stopped)
+        #expect(composition.captureHealth.activeCommitCount == 0)
+        #expect(composition.captureHealth.pendingCaptureCount == 0)
+        #expect(composition.captureHealth.pendingCaptureBytes == 0)
+        #expect(composition.captureHealth.lastFailure == .temporarilyUnavailable(.insufficientDiskSpace))
+        #expect(try await base.browse(.init(kind: .recent, limit: 10)).rows.isEmpty)
+        #expect(await history.captureAttemptCount == 1)
     }
 
     /// Capacity failures from the real storage path are retained as a typed,
@@ -378,7 +467,8 @@ struct AppCaptureLaneTests {
         composition.submitCaptureForTesting(Self.capture("A", at: 20))
         await history.waitUntilFirstCaptureIsSuspended()
         composition.submitCaptureForTesting(Self.capture("B", at: 21))
-        #expect(composition.captureHealth.pendingCaptureCount == 1)
+        composition.submitCaptureForTesting(Self.capture("discarded second pending", at: 21.5))
+        #expect(composition.captureHealth.pendingCaptureCount == 2)
 
         await history.failFirstCaptureWithLowDisk()
         await healthProbe.waitForIdle(
@@ -882,10 +972,9 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
     private let base: SQLiteHistory
     private let suspendsFirstCapture: Bool
     private var captureCount = 0
-    private var didCompleteSecondCapture = false
+    private(set) var committedCaptureIDs: [HistoryItemID] = []
     private var firstCaptureContinuation: CheckedContinuation<Void, Never>?
     private var firstCaptureWaiters: [CheckedContinuation<Void, Never>] = []
-    private var secondCaptureWaiters: [CheckedContinuation<Void, Never>] = []
 
     init(base: SQLiteHistory, suspendsFirstCapture: Bool = true) {
         self.base = base
@@ -903,14 +992,7 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
         let captureOrdinal = captureCount
         guard captureOrdinal == 1, suspendsFirstCapture else {
             let receipt = try await base.perform(action)
-            if captureOrdinal == 2 {
-                didCompleteSecondCapture = true
-                let waiters = secondCaptureWaiters
-                secondCaptureWaiters.removeAll()
-                for waiter in waiters {
-                    waiter.resume()
-                }
-            }
+            recordCommittedCapture(receipt)
             return receipt
         }
 
@@ -924,9 +1006,21 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
         }
 
         let base = self.base
-        return try await Task.detached {
+        let receipt = try await Task.detached {
             try await base.perform(action)
         }.value
+        recordCommittedCapture(receipt)
+        return receipt
+    }
+
+    private func recordCommittedCapture(_ receipt: HistoryReceipt) {
+        guard case .committed(let commit) = receipt else { return }
+        switch commit.outcome {
+        case .inserted(let item), .coalesced(let item):
+            committedCaptureIDs.append(item.id)
+        default:
+            break
+        }
     }
 
     func waitUntilFirstCaptureIsSuspended() async {
@@ -940,13 +1034,6 @@ actor FirstCaptureSuspendingHistory: ClipboardHistory {
         let continuation = firstCaptureContinuation
         firstCaptureContinuation = nil
         continuation?.resume()
-    }
-
-    func waitUntilSecondCaptureCompletes() async {
-        guard !didCompleteSecondCapture else { return }
-        await withCheckedContinuation { continuation in
-            secondCaptureWaiters.append(continuation)
-        }
     }
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {

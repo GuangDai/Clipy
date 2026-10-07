@@ -149,10 +149,10 @@ struct RunningUITestConfiguration {
 #endif
 
 /// The only two capture-health episodes that need panel presentation. Both
-/// are content-free: replacement exposes a cumulative count, and failure
+/// are content-free: queue overflow exposes a cumulative count, and failure
 /// exposes History's typed rejection rather than the clipboard value.
 enum ClipyCaptureNotice: Sendable, Equatable {
-    case replacedCapture(totalReplaced: Int)
+    case droppedCapture(totalDropped: Int)
     case failed(ClipyCaptureFailure)
 }
 
@@ -1289,7 +1289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A late snapshot from an older admission may change lane occupancy,
         // but it cannot authoritatively recover or replace a newer episode.
         guard health.failedCaptureCount >= previous.failedCaptureCount,
-              health.replacedCaptureCount >= previous.replacedCaptureCount
+              health.droppedCaptureCount >= previous.droppedCaptureCount
         else { return }
         captureHealth = health
 
@@ -1297,14 +1297,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            let failure = health.lastFailure {
             captureNotice = .failed(failure)
             accessibilityAnnouncement.announceCaptureFailure(failure)
-        } else if health.replacedCaptureCount > previous.replacedCaptureCount {
-            captureNotice = .replacedCapture(
-                totalReplaced: health.replacedCaptureCount
+        } else if health.droppedCaptureCount > previous.droppedCaptureCount {
+            captureNotice = .droppedCapture(
+                totalDropped: health.droppedCaptureCount
             )
         } else if health.lastFailure == nil,
                   case .failed? = captureNotice {
             // A later successful capture is authoritative recovery for the
-            // failed episode. Replacement notices remain until dismissed.
+            // failed episode. Queue overflow notices remain until dismissed.
             captureNotice = nil
         }
     }

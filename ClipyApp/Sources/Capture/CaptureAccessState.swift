@@ -28,9 +28,8 @@ enum CaptureAccessState: Sendable, Equatable {
     case readFailure
     case userPaused
 
-    /// Card 5A's deny-by-default polling decision. Recovery only re-reads the
-    /// system posture; an authoritative `.alwaysAllow` projection is still
-    /// required before the observer loop may read an item.
+    /// Item reads require an authoritative `.alwaysAllow` projection. The
+    /// observer may still inspect access metadata to discover restoration.
     var permitsBackgroundPolling: Bool {
         self == .allowed
     }
@@ -53,9 +52,8 @@ enum CaptureAccessRecovery: Sendable, Equatable {
 }
 
 /// Pure reducer that preserves user-pause precedence while retaining the most
-/// recent system/read state underneath it. A retry is an explicit recovery
-/// generation: it clears a prior read failure and consumes a newly read system
-/// behavior instead of guessing that access changed.
+/// recent system/read state underneath it. A successful access refresh clears
+/// a prior read failure and consumes the newly read system behavior.
 struct CaptureAccessReducer: Sendable, Equatable {
     private var systemBehavior: PasteboardAccessBehavior
     private var hasReadFailure: Bool

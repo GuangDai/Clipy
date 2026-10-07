@@ -149,8 +149,9 @@ public struct PasteboardAdapter {
     ///   Concealed and unsupported-shape outcomes are likewise intentionally
     ///   empty and cannot masquerade as admissible content.
     /// - The pasteboard `changeCount` is recorded before metadata access and
-    ///   checked after each payload read. A mismatch stops further reads of
-    ///   the superseded item and produces an explicit
+    ///   checked after each payload read. The item/type declarations are also
+    ///   checked again after payloads, since their owner can publish more
+    ///   declarations without changing ownership. Either mismatch produces a
     ///   changed-during-read outcome containing no representations. It is a
     ///   retry signal, not an unavailable-type diagnosis.
     public func captureOutcome(observedAt: Date = Date()) -> CaptureOutcome? {
@@ -160,13 +161,16 @@ public struct PasteboardAdapter {
     /// The observer may be stopped/restarted while a promised-data provider
     /// spins the main run loop. Its existing session identity decides whether
     /// another accessor is still wanted; abandoning a read publishes no bytes.
-    /// A stable empty item list reports its generation separately. Ownership
-    /// can be declared by clearContents before writeObjects adds its items,
-    /// without advancing that generation again.
+    /// Stable declarations without content types and declarations with empty
+    /// constituent content report their generation separately. Ownership can
+    /// be declared before items, types, or bytes are published, without
+    /// advancing that generation again. Optional lineage metadata alone waits
+    /// for content declarations and never requests payload retries.
     internal func captureOutcome(
         observedAt: Date = Date(),
         shouldContinue: @MainActor () -> Bool,
-        didObserveEmptyPasteboard: @MainActor (Int) -> Void = { _ in }
+        didObserveEmptyPasteboard: @MainActor (Int) -> Void = { _ in },
+        didObserveNoRetainableContent: @MainActor (Int) -> Void = { _ in }
     ) -> CaptureOutcome? {
         guard shouldContinue() else { return nil }
         let startChangeCount = pasteboard.changeCount
@@ -311,10 +315,51 @@ public struct PasteboardAdapter {
                 endChangeCount: endChangeCount
             )
         }
-        if items.count > 1, unavailableTypeIdentifiers.isEmpty,
+        // Ownership alone does not freeze a gesture: addTypes and writeObjects
+        // can append declarations in the same generation, including privacy
+        // markers or constituent items. Compare the bounded declaration
+        // snapshot after materialization before any captured bytes escape.
+        guard shouldContinue() else { return nil }
+        let currentItems = pasteboard.pasteboardItems
+        guard shouldContinue() else { return nil }
+        guard let currentItems, currentItems.count == items.count else {
+            return changedDuringReadOutcome(
+                startChangeCount: startChangeCount,
+                endChangeCount: pasteboard.changeCount
+            )
+        }
+        for (index, currentItem) in currentItems.enumerated() {
+            guard shouldContinue() else { return nil }
+            let currentTypes = currentItem.types
+            guard shouldContinue() else { return nil }
+            let currentChangeCount = pasteboard.changeCount
+            guard currentChangeCount == startChangeCount,
+                  currentTypes.count == itemTypeIdentifiers[index].count,
+                  zip(currentTypes, itemTypeIdentifiers[index]).allSatisfy({ type, identifier in
+                      type.rawValue.utf8.elementsEqual(identifier.utf8)
+                  }) else {
+                return changedDuringReadOutcome(
+                    startChangeCount: startChangeCount,
+                    endChangeCount: currentChangeCount
+                )
+            }
+        }
+        guard shouldContinue() else { return nil }
+        let validatedChangeCount = pasteboard.changeCount
+        guard validatedChangeCount == startChangeCount else {
+            return changedDuringReadOutcome(
+                startChangeCount: startChangeCount,
+                endChangeCount: validatedChangeCount
+            )
+        }
+        if items.count > 1, !representations.isEmpty,
+           unavailableTypeIdentifiers.isEmpty,
            Set(representations.map(\.pasteboardItemIndex)).count != items.count {
             // Empty constituent items cannot be represented by the indexed
-            // payload model. Never silently drop one from the gesture.
+            // payload model. Never silently drop one from the gesture, but
+            // allow its owner to finish publication in this same generation.
+            guard shouldContinue() else { return nil }
+            didObserveNoRetainableContent(startChangeCount)
             return .unsupportedMultiItem(.init(
                 itemCount: items.count, changeCount: startChangeCount
             ))
@@ -330,7 +375,15 @@ public struct PasteboardAdapter {
             isConcealed: false
         )
         guard !representations.isEmpty else {
-            guard !unavailableTypeIdentifiers.isEmpty else { return nil }
+            guard !unavailableTypeIdentifiers.isEmpty else {
+                guard shouldContinue() else { return nil }
+                if declaredRepresentationCount > 0 {
+                    didObserveNoRetainableContent(startChangeCount)
+                } else {
+                    didObserveEmptyPasteboard(startChangeCount)
+                }
+                return nil
+            }
             return .declaredUnavailable(.init(
                 partialCapture: capture,
                 unavailableTypeIdentifiers: unavailableTypeIdentifiers,
@@ -363,9 +416,10 @@ public struct PasteboardAdapter {
         return .unsupportedMultiItem(.init(itemCount: itemCount, changeCount: startChangeCount))
     }
 
-    /// Builds the one content-free retry outcome for an ownership change
-    /// observed by the freeze fence (REVIEW Card 5B). Bytes read before the
-    /// mismatch are intentionally discarded rather than partially admitted.
+    /// Builds the content-free retry outcome for an ownership or declaration
+    /// change observed by the freeze fence. A declaration change can have
+    /// equal start/end generations. Bytes read before either mismatch are
+    /// discarded rather than partially admitted.
     private func changedDuringReadOutcome(
         startChangeCount: Int,
         endChangeCount: Int
@@ -504,9 +558,10 @@ public enum CaptureOutcome: Sendable, Equatable {
     /// No partial capture is exposed.
     case unsupportedMultiItem(UnsupportedMultiItem)
 
-    /// Ownership/content changed while the freeze was read. Bytes from the
-    /// superseded generation are discarded; this content-free case asks the
-    /// observer to retry without diagnosing unavailable content.
+    /// Ownership or declarations changed while the freeze was read. Bytes
+    /// from the incomplete gesture are discarded; this content-free case asks
+    /// the observer to retry without diagnosing unavailable content. Publishing
+    /// declarations within the same generation leaves its two counts equal.
     case changedDuringRead(ChangedDuringRead)
 
     /// Facts of a stable, complete freeze. Only the adapter can create this
@@ -563,8 +618,9 @@ public enum CaptureOutcome: Sendable, Equatable {
         }
     }
 
-    /// The two generations around an unstable read. There is intentionally
-    /// no capture, unavailable-type, or provider-reason field.
+    /// The generations around an unstable read. They may be equal when the
+    /// declaration list changed without changing ownership. There is no
+    /// capture, unavailable-type, or provider-reason field.
     public struct ChangedDuringRead: Sendable, Equatable {
         public let startChangeCount: Int
         public let endChangeCount: Int

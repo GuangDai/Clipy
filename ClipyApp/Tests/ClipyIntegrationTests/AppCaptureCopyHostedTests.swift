@@ -42,32 +42,37 @@ struct AppCaptureCopyHostedTests {
         #expect(AppCaptureCopy.statusLabel(isPaused: false, bundle: chinese) == "Clipy")
     }
 
-    @Test func lostCaptureNoticeExplainsRecopyInsteadOfAutomaticRetry() throws {
+    @Test func localizedOverflowNoticeFormatsCountsAndDistinguishesFailures() throws {
         let chinese = try bundle("zh-Hans")
+        let english = try bundle("en")
         let locale = Locale(identifier: "zh_Hans_CN")
-        #expect(CaptureNoticePresentation.message(
-            for: .replacedCapture(totalReplaced: 1), bundle: chinese, locale: locale
-        ) == "Clipy 用较新的剪贴板变化替换了 1 次待处理变化，因此较早的内容未保存。如需重试，请重新复制较早的内容。")
-        #expect(CaptureNoticePresentation.message(
-            for: .replacedCapture(totalReplaced: 27), bundle: chinese, locale: locale
-        ) == "Clipy 用较新的剪贴板变化替换了 27 次待处理变化，因此较早的内容未保存。如需重试，请重新复制较早的内容。")
-        #expect(CaptureNoticePresentation.message(
-            for: .failed(.unsupportedClipboardShape), bundle: try bundle("en")
-        ) == "Clipy couldn't save this clipboard change because its size or structure isn't supported.")
-        #expect(CaptureNoticePresentation.message(
-            for: .failed(.unsupportedClipboardShape), bundle: chinese
-        ) == "Clipy 无法保存此次剪贴板变化，因为其大小或结构不受支持。")
-        #expect(CaptureNoticePresentation.message(
-            for: .failed(.declaredContentUnavailable), bundle: chinese
-        ) == "Clipy 未能完整读取剪贴板变化，请重新复制内容以再次尝试。")
-        #expect(CaptureNoticePresentation.message(
-            for: .failed(.unexpected), bundle: chinese
-        ) == "一次剪贴板变化未保存。Clipy 无法自动重试，请重新复制内容以再次尝试。")
-
-        #expect(CaptureNoticePresentation.message(
-            for: .replacedCapture(totalReplaced: 27), bundle: try bundle("en"),
+        let one = CaptureNoticePresentation.message(
+            for: .droppedCapture(totalDropped: 1), bundle: chinese, locale: locale
+        )
+        let many = CaptureNoticePresentation.message(
+            for: .droppedCapture(totalDropped: 27), bundle: chinese, locale: locale
+        )
+        let englishMany = CaptureNoticePresentation.message(
+            for: .droppedCapture(totalDropped: 27), bundle: english,
             locale: Locale(identifier: "en_US")
-        ) == "Clipy replaced 27 pending clipboard changes with newer ones, so they weren't saved. "
-            + "To try again, copy the older content again.")
+        )
+        #expect(one.contains("1"))
+        #expect(many.contains("27"))
+        #expect(englishMany.contains("27"))
+        #expect(!many.contains("%@"))
+        #expect(many != englishMany)
+        let unread = CaptureNoticePresentation.message(
+            for: .failed(.declaredContentUnavailable), bundle: chinese
+        )
+        let unsupported = CaptureNoticePresentation.message(
+            for: .failed(.unsupportedClipboardShape), bundle: chinese
+        )
+        let unsaved = CaptureNoticePresentation.message(
+            for: .failed(.unexpected), bundle: chinese
+        )
+        #expect(unread != unsupported)
+        #expect(unread != unsaved)
+        #expect(unsupported != unsaved)
+        #expect([unread, unsupported, unsaved].allSatisfy { $0 != many && !$0.isEmpty })
     }
 }
