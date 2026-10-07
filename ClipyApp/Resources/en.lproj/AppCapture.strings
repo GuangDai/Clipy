@@ -14,5 +14,5 @@
 "The clipboard capture queue was full, so 1 change wasn't saved. Copy that content again to save it." = "The clipboard capture queue was full, so 1 change wasn't saved. Copy that content again to save it.";
 "The clipboard capture queue was full, so %@ changes weren't saved. Copy that content again to save it." = "The clipboard capture queue was full, so %@ changes weren't saved. Copy that content again to save it.";
 "Clipy couldn't save this clipboard change because its size or structure isn't supported." = "Clipy couldn't save this clipboard change because its size or structure isn't supported.";
-"The clipboard data is not fully available yet. Clipy will retry automatically." = "The clipboard data is not fully available yet. Clipy will retry automatically.";
+"The clipboard data is not fully available yet. Clipy will retry while it remains on the clipboard." = "The clipboard data is not fully available yet. Clipy will retry while it remains on the clipboard.";
 "A clipboard change wasn't saved. Clipy can't retry it automatically; copy the content again to make a new attempt." = "A clipboard change wasn't saved. Clipy can't retry it automatically; copy the content again to make a new attempt.";

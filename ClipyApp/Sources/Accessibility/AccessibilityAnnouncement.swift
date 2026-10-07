@@ -26,7 +26,7 @@ enum CaptureNoticePresentation {
         case .failed(.unsupportedClipboardShape):
             return AppCaptureCopy.text("Clipy couldn't save this clipboard change because its size or structure isn't supported.", bundle: bundle)
         case .failed(.declaredContentUnavailable):
-            return AppCaptureCopy.text("The clipboard data is not fully available yet. Clipy will retry automatically.", bundle: bundle)
+            return AppCaptureCopy.text("The clipboard data is not fully available yet. Clipy will retry while it remains on the clipboard.", bundle: bundle)
         case .failed:
             return AppCaptureCopy.text("A clipboard change wasn't saved. Clipy can't retry it "
                 + "automatically; copy the content again to make a new attempt.", bundle: bundle)

@@ -171,6 +171,12 @@ public final class PasteboardObserver {
         if accessBehavior != lastAccessBehavior {
             lastAccessBehavior = accessBehavior
             accessBehaviorHandler?(accessBehavior)
+            guard self.timer === activeTimer, accessBehavior == .allowed else { return }
+            // The callback can synchronously reenter and revoke access while
+            // retaining this timer. Its earlier allowed value is no longer
+            // sufficient to authorize even this tick's declaration reads.
+            guard accessBehaviorProvider() == .allowed,
+                  lastAccessBehavior == .allowed else { return }
         }
         guard self.timer === activeTimer, accessBehavior == .allowed else { return }
         // A promised-data provider can pump the main run loop. A nested tick
@@ -323,8 +329,10 @@ public final class PasteboardObserver {
         observing activeTimer: Timer,
         observedChangeCount: Int
     ) -> CaptureAttempt? {
+        var didAbortRead = false
         let shouldContinue: @MainActor () -> Bool = {
-            guard self.timer === activeTimer,
+            guard !didAbortRead,
+                  self.timer === activeTimer,
                   self.lastChangeCount == observedChangeCount else { return false }
             // A promised-data provider can spin the run loop without changing
             // clipboard ownership. Recheck access at each payload boundary so
@@ -334,10 +342,28 @@ public final class PasteboardObserver {
             if accessBehavior != self.lastAccessBehavior {
                 self.lastAccessBehavior = accessBehavior
                 self.accessBehaviorHandler?(accessBehavior)
+                guard self.timer === activeTimer,
+                      self.lastChangeCount == observedChangeCount else { return false }
+                guard accessBehavior == .allowed else {
+                    didAbortRead = true
+                    return false
+                }
+                // Owner callbacks may reenter without stopping observation.
+                // Read the permission once more, without a callback loop,
+                // before admitting this payload boundary.
+                guard self.accessBehaviorProvider() == .allowed,
+                      self.lastAccessBehavior == .allowed else {
+                    didAbortRead = true
+                    return false
+                }
+            }
+            guard accessBehavior == .allowed else {
+                didAbortRead = true
+                return false
             }
             return self.timer === activeTimer
                 && self.lastChangeCount == observedChangeCount
-                && accessBehavior == .allowed
+                && !didAbortRead
         }
         let read: @MainActor () -> CaptureAttempt? = {
             let sampledChangeCount = self.adapter.pasteboard.changeCount

@@ -13,6 +13,139 @@ private final class PendingPublicationAccess {
 @Suite("Pasteboard incomplete publication recovery")
 @MainActor
 struct PasteboardObserverPendingPublicationTests {
+    @Test(arguments: [false, true])
+    func accessCallbackReentryCannotAuthorizePayloadsAfterRevocation(nestedPoll: Bool) throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let access = PendingPublicationAccess()
+        access.behavior = .denied
+        var reads = 0
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadObserver = { _ in reads += 1 }
+        let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+        observer.setAccessBehaviorProviderForTesting { access.behavior }
+        defer { observer.stop() }
+        var received: [CaptureOutcome] = []
+        var revokeInAccessCallback = true
+        observer.start(
+            captureCurrent: false,
+            onAccessBehaviorChanged: { behavior in
+                guard behavior == .allowed, revokeInAccessCallback else { return }
+                access.behavior = .denied
+                // The application can retry access synchronously from this
+                // callback. Observation keeps the same timer during denial.
+                if nestedPoll { observer.pollForTesting() }
+            },
+            handler: { received.append($0) }
+        )
+        let bytes = Data("copied while access was changing".utf8)
+        pasteboard.clearContents()
+        try #require(pasteboard.setData(bytes, forType: .string))
+        access.behavior = .allowed
+        observer.pollForTesting()
+        #expect(reads == 0)
+        #expect(received.isEmpty)
+
+        revokeInAccessCallback = false
+        access.behavior = .allowed
+        observer.pollForTesting()
+        guard case let .complete(complete) = try #require(received.first) else {
+            Issue.record("a later stable permission grant must recover the unread value")
+            return
+        }
+        #expect(complete.capture.representations == [CapturedRepresentation(
+            typeIdentifier: NSPasteboard.PasteboardType.string.rawValue,
+            bytes: bytes
+        )])
+        observer.pollForTesting()
+        #expect(reads == 1)
+        #expect(received.count == 1)
+    }
+
+    @Test
+    func accessCallbackGrantAfterDenialLeavesTheGenerationUnreadUntilTheNextTick() throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let access = PendingPublicationAccess()
+        var reads = 0
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadObserver = { _ in reads += 1 }
+        let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+        observer.setAccessBehaviorProviderForTesting { access.behavior }
+        defer { observer.stop() }
+        var admissionAllowed = true
+        var received: [CaptureOutcome] = []
+        observer.start(
+            captureCurrent: false,
+            onAccessBehaviorChanged: { behavior in
+                admissionAllowed = behavior == .allowed
+                if behavior == .denied { access.behavior = .allowed }
+            },
+            handler: { outcome in
+                if admissionAllowed { received.append(outcome) }
+            }
+        )
+        let bytes = Data("new value requires a confirmed allowed callback".utf8)
+        pasteboard.clearContents()
+        try #require(pasteboard.setData(bytes, forType: .string))
+        access.behavior = .denied
+        observer.pollForTesting()
+        #expect(reads == 0)
+        #expect(received.isEmpty)
+        observer.pollForTesting()
+        guard case let .complete(complete) = try #require(received.first) else {
+            Issue.record("permission callback recovery must not consume an unread generation")
+            return
+        }
+        #expect(complete.capture.representations == [CapturedRepresentation(
+            typeIdentifier: NSPasteboard.PasteboardType.string.rawValue,
+            bytes: bytes
+        )])
+        observer.pollForTesting()
+        #expect(reads == 1)
+        #expect(received.count == 1)
+    }
+
+    @Test
+    func aGrantDuringTheRevocationCallbackCannotTurnAnAbortedFreezeIntoMetadataOnly() throws {
+        let pasteboard = makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let bytes = Data("recover the aborted freeze on a later tick".utf8)
+        pasteboard.clearContents()
+        try #require(pasteboard.setData(bytes, forType: .string))
+        let access = PendingPublicationAccess()
+        var reads = 0
+        var adapter = PasteboardAdapter(pasteboard: pasteboard)
+        adapter.payloadReadCompletionHook = { _ in
+            reads += 1
+            if reads == 1 { access.behavior = .denied }
+        }
+        let observer = PasteboardObserver(adapter: adapter, pollInterval: 60)
+        observer.setAccessBehaviorProviderForTesting { access.behavior }
+        defer { observer.stop() }
+        var received: [CaptureOutcome] = []
+        observer.start(
+            onAccessBehaviorChanged: { behavior in
+                if behavior == .denied { access.behavior = .allowed }
+            },
+            handler: { received.append($0) }
+        )
+        try #require(reads == 1)
+        #expect(received.isEmpty)
+        observer.pollForTesting()
+        guard case let .complete(complete) = try #require(received.first) else {
+            Issue.record("an access-aborted nil result must stay eligible after callback recovery")
+            return
+        }
+        #expect(complete.capture.representations == [CapturedRepresentation(
+            typeIdentifier: NSPasteboard.PasteboardType.string.rawValue,
+            bytes: bytes
+        )])
+        observer.pollForTesting()
+        #expect(reads == 2)
+        #expect(received.count == 1)
+    }
+
     @Test
     func longUnavailablePublicationHasBoundedReadsAndRecoversInTheSameGeneration() throws {
         let pasteboard = makePasteboard()
