@@ -346,7 +346,7 @@ struct AppCaptureLaneTests {
     }
 
     @Test @MainActor
-    func restartingFromFailureHealthDoesNotLetTheOldCompletionClearTheNewTask() async throws {
+    func stoppingFromFailureHealthDoesNotAdmitAnotherCapture() async throws {
         let base = try await ComposedSupport.openMemoryHistory()
         let history = FirstCaptureLowDiskFailingHistory(base: base)
         let pasteboard = ComposedSupport.makePasteboard()
@@ -355,29 +355,30 @@ struct AppCaptureLaneTests {
         let composition = AppComposition.makeForTesting(
             history: history, adapter: PasteboardAdapter(pasteboard: pasteboard)
         )
-        let healthProbe = CaptureHealthProbe()
-        var restarted = false
+        var stopped = false
         composition.onCaptureHealthChanged = { health in
-            healthProbe.receive(health)
-            guard !restarted, health.failedCaptureCount == 1 else { return }
-            restarted = true
+            guard !stopped, health.failedCaptureCount == 1 else { return }
+            stopped = true
             composition.stop()
-            composition.start()
-            composition.submitCaptureForTesting(Self.capture("after restart", at: 2))
+            composition.submitCaptureForTesting(Self.capture("after stop", at: 4))
         }
         defer { composition.stop() }
 
-        composition.submitCaptureForTesting(Self.capture("fails before restart", at: 1))
+        composition.submitCaptureForTesting(Self.capture("fails before stop", at: 1))
         await history.waitUntilFirstCaptureIsSuspended()
+        composition.submitCaptureForTesting(Self.capture("queued B", at: 2))
+        composition.submitCaptureForTesting(Self.capture("queued C", at: 3))
         let oldTask = try #require(composition.activeCaptureForTesting)
         await history.failFirstCaptureWithLowDisk()
         await oldTask.value
-        await healthProbe.waitForIdle(failedCaptureCount: 1, lastFailure: nil)
 
-        #expect(restarted)
-        let page = try await base.browse(.init(kind: .recent, limit: 10))
-        #expect(page.rows.map(\.title) == ["after restart"])
-        #expect(await history.captureAttemptCount == 2)
+        #expect(stopped)
+        #expect(composition.captureHealth.activeCommitCount == 0)
+        #expect(composition.captureHealth.pendingCaptureCount == 0)
+        #expect(composition.captureHealth.pendingCaptureBytes == 0)
+        #expect(composition.captureHealth.lastFailure == .temporarilyUnavailable(.insufficientDiskSpace))
+        #expect(try await base.browse(.init(kind: .recent, limit: 10)).rows.isEmpty)
+        #expect(await history.captureAttemptCount == 1)
     }
 
     /// Capacity failures from the real storage path are retained as a typed,
