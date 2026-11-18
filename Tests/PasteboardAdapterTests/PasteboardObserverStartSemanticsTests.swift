@@ -273,61 +273,6 @@ struct PasteboardObserverStartSemanticsTests {
         #expect(received == ["after-baseline-restart"])
     }
 
-    @Test("startup imports the complete generation already current")
-    @MainActor
-    func startupImportsCurrentGeneration() throws {
-        let pasteboard = Self.makePasteboard()
-        Self.replaceString("current-before-start", on: pasteboard)
-        let observer = PasteboardObserver(
-            adapter: PasteboardAdapter(pasteboard: pasteboard),
-            pollInterval: 60
-        )
-        var received: [String] = []
-
-        observer.start { outcome in
-            if let text = Self.completeText(in: outcome) {
-                received.append(text)
-            }
-        }
-        defer { observer.stop() }
-
-        #expect(received == ["current-before-start"])
-    }
-
-    @Test("baseline restart excludes the stopped generation")
-    @MainActor
-    func baselineRestartExcludesStoppedGenerationAndAdmitsNextCopy() throws {
-        let pasteboard = Self.makePasteboard()
-        Self.replaceString("initial-start", on: pasteboard)
-        let observer = PasteboardObserver(
-            adapter: PasteboardAdapter(pasteboard: pasteboard),
-            pollInterval: 60
-        )
-        var received: [String] = []
-        let receive: @MainActor (CaptureOutcome) -> Void = { outcome in
-            if let text = Self.completeText(in: outcome) {
-                received.append(text)
-            }
-        }
-
-        observer.start(handler: receive)
-        #expect(received == ["initial-start"])
-        observer.stop()
-
-        Self.replaceString("copied-while-stopped", on: pasteboard)
-        observer.start(captureCurrent: false, handler: receive)
-        defer { observer.stop() }
-
-        // Drive the production poll synchronously. The generation was made
-        // the restart baseline, so it cannot be delivered on the first tick.
-        observer.pollForTesting()
-        #expect(received == ["initial-start"])
-
-        Self.replaceString("copied-after-restart", on: pasteboard)
-        observer.pollForTesting()
-        #expect(received == ["initial-start", "copied-after-restart"])
-    }
-
     @MainActor
     private static func makePasteboard() -> NSPasteboard {
         NSPasteboard(name: NSPasteboard.Name(

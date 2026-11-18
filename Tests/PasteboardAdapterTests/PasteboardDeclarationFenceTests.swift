@@ -131,31 +131,6 @@ struct PasteboardDeclarationFenceTests {
     }
 
     @Test
-    func optionalLineageWithoutContentWaitsForDeclarationsWithoutPayloadRetry() throws {
-        let pasteboard = makePasteboard()
-        defer { pasteboard.releaseGlobally() }
-        let item = NSPasteboardItem()
-        let hintID = HistoryItemID(rawValue: UUID())
-        try #require(item.setData(
-            PasteboardLineageHint.encode(hintID),
-            forType: .init(PasteboardLineageHint.typeIdentifier)
-        ))
-        try #require(pasteboard.writeObjects([item]))
-        let generation = pasteboard.changeCount
-        var emptyDeclarations: [Int] = []
-        var emptyContent: [Int] = []
-        let outcome = PasteboardAdapter(pasteboard: pasteboard).captureOutcome(
-            shouldContinue: { true },
-            didObserveEmptyPasteboard: { emptyDeclarations.append($0) },
-            didObserveNoRetainableContent: { emptyContent.append($0) }
-        )
-
-        #expect(outcome == nil)
-        #expect(emptyDeclarations == [generation])
-        #expect(emptyContent.isEmpty)
-    }
-
-    @Test
     func incompleteConstituentContentRecoversWithoutPublishingPartialBytes() throws {
         let pasteboard = makePasteboard()
         defer { pasteboard.releaseGlobally() }

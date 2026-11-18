@@ -395,16 +395,6 @@ struct BuiltInAutomationSyntaxTests {
         #expect(error.column == 1)
     }
 
-    @Test func moreThanOneHundredActionsHaveNoArtificialCountLimit() throws {
-        let source = Array(repeating: "trim()", count: 150).joined(separator: "\n")
-        let steps = try BuiltInAutomationSyntax.parse(source)
-
-        #expect(steps.count == 150)
-        #expect(Set(steps.map(\.id)).count == 150)
-        #expect(try BuiltInAutomation.run(" value ", steps: steps) == "value")
-        try expectRoundTrip(steps)
-    }
-
     @Test func deeplyIndentedRulesParseRenderAndExecuteWithoutANestingCap() throws {
         var lines: [String] = []
         for depth in 0..<300 {

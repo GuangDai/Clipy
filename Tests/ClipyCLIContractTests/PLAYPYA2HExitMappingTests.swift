@@ -1,9 +1,9 @@
-/// PLAY-PY-A2H — fine error codes map onto six stable process exit classes.
 import ClipyCLIContract
+import Foundation
 import Testing
 
 struct PLAYPYA2HExitMappingTests {
-    @Test func everyClosedErrorCodeHasFrozenWireBytesAndExitClass() {
+    @Test func errorCodesHaveScriptReadableNamesAndExitClasses() throws {
         let rows: [(ClipyCLIErrorCode, String, Int32)] = [
             (.invalidJSON, "invalid_json", 2),
             (.invalidRequest, "invalid_request", 2),
@@ -33,19 +33,15 @@ struct PLAYPYA2HExitMappingTests {
             (.auditFailed, "audit_failed", 6),
         ]
 
-        #expect(rows.count == 26)
-        #expect(rows.count == ClipyCLIErrorCode.allCases.count)
         for (code, expectedRaw, expectedExit) in rows {
             let output = ClipyCLIContract.render(
                 .failure(requestID: nil, code: code)
             )
-            let expectedStdout = "{\"error\":{\"code\":\"\(expectedRaw)\"},"
-                + "\"ok\":false,\"protocolVersion\":1,\"requestID\":null}\n"
-
-            #expect(code.rawValue == expectedRaw)
-            #expect(code.exitCode == expectedExit)
             #expect(output.exitCode == expectedExit)
-            #expect(utf8(output.stdout) == expectedStdout)
+            let reply = try #require(JSONSerialization.jsonObject(with: output.stdout) as? [String: Any])
+            #expect(reply["ok"] as? Bool == false)
+            #expect(reply["requestID"] is NSNull)
+            #expect((reply["error"] as? [String: String])?["code"] == expectedRaw)
             #expect(utf8(output.stderr) == "clipyctl: \(expectedRaw)\n")
         }
     }

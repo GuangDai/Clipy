@@ -15,7 +15,7 @@ struct BuiltInAutomationStepPresentationTests {
         let condition = BuiltInAutomationStep(operation: .conditional, condition: .containsText,
                                               thenSteps: [.init(operation: .uppercase)],
                                               otherwiseSteps: [.init(operation: .lowercase)])
-        #expect(condition.parameterIssues().count == 1)
+        #expect(condition.parameterIssues().contains { $0.field == .find && !$0.isError })
         #expect(condition.parameterIssues().allSatisfy { !$0.isError })
         #expect(try BuiltInAutomation.run("MiXeD", steps: [condition]) == "mixed")
         let oldGuard = BuiltInAutomationStep(operation: .containsText)
@@ -43,7 +43,9 @@ struct BuiltInAutomationStepPresentationTests {
         #expect(step.parameterIssues().isEmpty)
         step.find += "a"
         step.replacement += "a"
-        #expect(step.parameterIssues().filter(\.isError).count == 2)
+        let issues = step.parameterIssues()
+        #expect(issues.contains { $0.field == .find && $0.isError })
+        #expect(issues.contains { $0.field == .replacement && $0.isError })
         #expect(step.parameterIssues(ancestorsEnabled: false).isEmpty)
     }
 

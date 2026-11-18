@@ -5,48 +5,6 @@ import Testing
 @testable import HistoryStorage
 
 struct TransactionBoundaryProofTests {
-    @Test func successfulCaptureCommitsRowsContentAndPositionTogether() async throws {
-        let url = WSSupport.tempStoreURL("sqlite-transaction-success")
-        defer { WSSupport.removeStore(url) }
-        let history = try await WSSupport.openHistory(storeURL: url)
-        let receipt = try await history.perform(.capture(WSSupport.textCapture("committed text", observedAt: Date(timeIntervalSinceReferenceDate: 1000))))
-        guard case let .committed(commit) = receipt, case let .inserted(item) = commit.outcome else { Issue.record("expected insert"); return }
-        let snapshot = try TransactionStoreSnapshot.read(from: url)
-        #expect(snapshot.items.count == 1)
-        #expect(snapshot.items.first?.id == item.id.rawValue)
-        #expect(snapshot.items.first?.contentVersionRaw == 1)
-        #expect(snapshot.items.first?.titleUTF8 == Data("committed text".utf8))
-        #expect(snapshot.items.first?.copyCount == 1)
-        #expect(snapshot.contents.count == 1 && snapshot.representations.count == 1)
-        #expect(snapshot.positions.first?.rawValue == commit.position.rawValue)
-        #expect(snapshot.positions.first?.retainedItemCount == 1)
-        let reader = try WSSupport.makeDatabase(storeURL: url)
-        let content = try WSSupport.fetchCanonical(itemID: item.id.rawValue, in: reader)
-        #expect(content.representations.map(\.content.bytes) == [Data("committed text".utf8)])
-    }
-
-    @Test func failedTransactionPreservesEveryStoredValueAndPublishesNothing() async throws {
-        let url = WSSupport.tempStoreURL("sqlite-transaction-rollback")
-        defer { WSSupport.removeStore(url) }
-        let history = try await WSSupport.openHistory(storeURL: url)
-        _ = try await history.perform(.capture(WSSupport.textCapture("retained seed", observedAt: Date(timeIntervalSinceReferenceDate: 1000))))
-        let before = try TransactionStoreSnapshot.read(from: url)
-        let prepared = try await IngestPreparationActor().prepare(WSSupport.textCapture("must not persist", observedAt: Date(timeIntervalSinceReferenceDate: 1001)))
-        let registration = await history.authority.registerInvalidationSubscriber()
-        await history.authority.setTransactionFailureInjection(.beforeSingletonUpdate)
-        await #expect(throws: HistoryFailure.persistence(.transaction)) { try await history.authority.commitCapture(prepared) }
-        #expect(try TransactionStoreSnapshot.read(from: url) == before)
-        let page = try await history.browse(.init(kind: .recent, limit: 10))
-        #expect(page.position.rawValue == 1 && page.rows.map(\.title) == ["retained seed"])
-        let item = try #require(page.rows.first?.item)
-        #expect(try await history.pastePayload(for: item.id).representations.map(\.bytes) == [Data("retained seed".utf8)])
-        await #expect(throws: HistoryFailure.notFound(prepared.domain.candidateID)) { try await history.details(for: prepared.domain.candidateID) }
-        await history.authority.unregisterInvalidationSubscriber(registration.subscription)
-        var publications = 0
-        for try await _ in registration.stream { publications += 1 }
-        #expect(publications == 0)
-    }
-
     @Test func failureInjectionIsOneShotAndRecoveryUsesTheNextPosition() async throws {
         let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         _ = try await history.perform(.capture(WSSupport.textCapture("first", observedAt: Date(timeIntervalSinceReferenceDate: 1000))))

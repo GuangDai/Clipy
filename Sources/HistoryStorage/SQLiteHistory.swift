@@ -393,19 +393,12 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
     /// Observes the current first page for one query
     /// (docs/storage.md; docs/storage.md).
     ///
-    /// The facade owns the Part IV §5 subscribe-before-query algorithm: the
-    /// invalidation continuation is registered with the Authority BEFORE any
-    /// query (§5 step 1); the first page is yielded only after the
-    /// race-closing recheck shows the durable position still equals the
-    /// page's (§5 steps 2–5); and each later invalidation newer than the
-    /// last yielded page produces exactly one replacement page, with the
-    /// subscriber's `.bufferingNewest(1)` buffer coalescing bursts (§5 steps
-    /// 6–8; §4). The public stream independently keeps only its newest page:
-    /// snapshots are replaceable state, so a paused consumer resumes at the
-    /// latest page rather than replaying superseded pages. The loop also owns
-    /// the search evaluation: a `.search` observation runs its `SearchWorker`
-    /// evaluation as a plain await inside the producer task (§14.4), so
-    /// cancelling the producer abandons the in-flight evaluation with it.
+    /// The observer registers for invalidations before the first query. An
+    /// intervening commit triggers at most one fresh read per publication.
+    /// If another commit overlaps that read, the page still represents its
+    /// complete snapshot and a buffered invalidation triggers the next read.
+    /// Both streams keep only their newest buffered value. Search evaluation
+    /// runs in the producer task and checks that task's cancellation.
     ///
     /// Cancellation unregisters the continuation and releases query/search
     /// tasks (§5): terminating the stream cancels the producer task and hops
@@ -433,11 +426,7 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
         return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
             let task = Task {
                 do {
-                    // §5 steps 2–4: query and recheck before publication.
-                    // The same freshness rule applies to replacement search
-                    // pages when a commit lands during evaluation (04 §7).
                     var page = try await firstPage(for: request)
-                    // §5 step 5.
 #if DEBUG
                     await ObservationDebugInstrumentation.pageWillYield?(page)
 #endif
@@ -447,12 +436,8 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
                     await ObservationDebugInstrumentation.pageDidYield?(page)
 #endif
 
-                    // §5 steps 6–8: an invalidation at or behind the last
-                    // yielded page is a buffered wake-up the page already
-                    // covers (bufferingNewest(1) has also coalesced any
-                    // burst); a newer one produces ONE replacement page.
-                    // Recheck that page too: a later commit can supersede
-                    // its snapshot while SearchWorker evaluates off-actor.
+                    // An invalidation at or behind the last yielded page has
+                    // already been incorporated into the observer's snapshot.
                     for try await invalidation in registration.stream {
                         guard invalidation.latestPosition > page.position else {
                             continue
@@ -638,28 +623,19 @@ public struct SQLiteHistory: ClipboardHistory, Sendable {
 
     // MARK: Observation first page (docs/storage.md)
 
-    /// The fresh first-page query of `observe`'s subscribe-before-query loop — a
-    /// cursorless `browse` for the observation's query shape; observation
-    /// intentionally has no cursor (docs/architecture.md). The
-    /// loop reuses it for the phase-1 recheck requeries and for every
-    /// phase-2 replacement page (docs/storage.md). Empty search uses
-    /// the same scalar recent path as one-shot browse (03b §8). Every page,
-    /// including a replacement, rechecks its source position after off-actor
-    /// search evaluation so superseded results are discarded before yield
-    /// (04 §7). As in initial observation, an uninterrupted write stream may
-    /// delay publication; cancellation exits between reads (04 §5).
+    /// A single recheck absorbs an isolated commit during evaluation. Under
+    /// sustained writes, publish the retry's coherent snapshot and let the
+    /// existing invalidation subscription drive the next page.
     private func firstPage(
         for request: HistoryObservationRequest
     ) async throws -> HistoryPage {
         let browseRequest = HistoryBrowseRequest(kind: request.kind, limit: request.limit, filter: request.filter,
                                                 sortOrder: request.sortOrder, conditionExpression: request.conditionExpression)
-        while true {
-            try Task.checkCancellation()
-            let page = try await browse(browseRequest)
-            try Task.checkCancellation()
-            if try await authority.currentPosition() == page.position {
-                return page
-            }
-        }
+        try Task.checkCancellation()
+        let page = try await browse(browseRequest)
+        try Task.checkCancellation()
+        guard try await authority.currentPosition() != page.position else { return page }
+        try Task.checkCancellation()
+        return try await browse(browseRequest)
     }
 }

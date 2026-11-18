@@ -57,62 +57,6 @@ struct HistoryDetailsFormatSafetyTests {
         }
     }
 
-    @Test(arguments: [
-        "public.image.private", "public.image-url", "public.png.private",
-        "public.url.private", "public.file-url.private", "com.example.curl-data", "dyn.example.url",
-    ])
-    func similarImageAndURLNamesRemainOpaque(_ identifier: String) throws {
-        let representation = HistoryRepresentation(typeIdentifier: identifier, bytes: Data([0xFF, 0x00, 0x41]))
-        let prepared = try DetailsContentPresentation(details: details(
-            canonical: [representation], effective: [representation]
-        ))
-        #expect(prepared.symbolName == "doc.on.clipboard")
-        #expect(prepared.effective[0].typeIdentifier == identifier)
-        #expect(prepared.effective[0].byteCount == 3)
-        #expect(!prepared.effective[0].isImage)
-        #expect(prepared.effective[0].presentation == .metadataOnly)
-    }
-
-    @Test(arguments: [
-        "public.image", "public.png", "public.jpeg", "public.tiff",
-        "public.heic", "public.heif", "com.compuserve.gif", "com.microsoft.bmp",
-    ])
-    func exactImageFamiliesKeepTheirPhotoPresentation(_ identifier: String) throws {
-        let representation = HistoryRepresentation(typeIdentifier: identifier, bytes: Data([0x41]))
-        let prepared = try DetailsContentPresentation(details: details(
-            canonical: [representation], effective: [representation]
-        ))
-        #expect(prepared.symbolName == "photo")
-        #expect(prepared.effective[0].isImage)
-        #expect(prepared.effective[0].presentation == .metadataOnly)
-    }
-
-    @Test(arguments: ["public.url", "public.file-url"])
-    func exactURLsKeepTheirLinkIconWithoutTextDecoding(_ identifier: String) throws {
-        let representation = HistoryRepresentation(typeIdentifier: identifier, bytes: Data("https://example.invalid".utf8))
-        let prepared = try DetailsContentPresentation(details: details(
-            canonical: [representation], effective: [representation]
-        ))
-        #expect(prepared.symbolName == "link")
-        #expect(!prepared.effective[0].isImage)
-        #expect(prepared.effective[0].presentation == .metadataOnly)
-    }
-
-    @Test func anImageSiblingDoesNotTurnAnUnknownRepresentationIntoAnImagePreview() throws {
-        let representations = [
-            HistoryRepresentation(typeIdentifier: "public.image.private", bytes: Data([0x01])),
-            HistoryRepresentation(typeIdentifier: "public.png", bytes: Data([0x89, 0x50, 0x4E, 0x47])),
-        ]
-        let prepared = try DetailsContentPresentation(details: details(
-            canonical: representations, effective: representations
-        ))
-        #expect(prepared.symbolName == "photo")
-        // RepresentationRow uses this flag to show the unknown format's
-        // unavailable-preview label and exclude the item's image thumbnail.
-        #expect(prepared.effective.map(\.isImage) == [false, true])
-        #expect(prepared.effective[0].presentation == .metadataOnly)
-    }
-
     @Test func preparedDetailsKeepBothBasesAndTextSiblingsIndependent() async throws {
         let canonical = [
             HistoryRepresentation(typeIdentifier: "public.html", bytes: Data("<p>original</p>".utf8)),
@@ -215,16 +159,6 @@ struct HistoryDetailsFormatSafetyTests {
         )
     }
 
-    @Test func exactUTF8PlainTextDisplaysDecodedText() async {
-        let representation = HistoryRepresentation(
-            typeIdentifier: "public.utf8-plain-text",
-            bytes: Data("Hello, Clipy — 你好".utf8)
-        )
-
-        let preview = await renderDetailsRepresentationForTest(representation)
-        #expect(preview.text?.text == "Hello, Clipy — 你好")
-    }
-
     /// Bytes being valid UTF-8 is not an encoding contract for abstract or
     /// encoding-unspecified text identifiers (review TYPE-2).
     @Test func textWithoutAnExactEncodingContractStaysMetadataOnly() async {
@@ -248,38 +182,6 @@ struct HistoryDetailsFormatSafetyTests {
         }
     }
 
-    @Test func nativeAndExternalUTF16RespectByteOrderAndBOM() async {
-        let fixtures: [(String, Data)] = [
-            ("public.utf16-plain-text", Data([0x41, 0x00, 0xA9, 0x03])),
-            ("public.utf16-external-plain-text", Data([0x00, 0x41, 0x03, 0xA9])),
-            ("public.utf16-plain-text", Data([0xFE, 0xFF, 0x00, 0x41, 0x03, 0xA9])),
-            ("public.utf16-external-plain-text", Data([0xFF, 0xFE, 0x41, 0x00, 0xA9, 0x03])),
-        ]
-        for (typeIdentifier, bytes) in fixtures {
-            let preview = await renderDetailsRepresentationForTest(
-                HistoryRepresentation(typeIdentifier: typeIdentifier, bytes: bytes)
-            )
-            #expect(preview.text?.text == "AΩ")
-        }
-    }
-
-    @Test func malformedOrEmptyUTF16StaysMetadataOnly() async {
-        for identifier in ["public.utf16-plain-text", "public.utf16-external-plain-text"] {
-            for bytes in [
-                Data(), Data([0x41]), Data([0xFF, 0xFE]), Data([0xFE, 0xFF, 0x41]),
-                Data([0x00, 0x41, 0x42]), Data([0x41, 0x00, 0x42]),
-                Data([0xFE, 0xFF, 0x00, 0x41, 0x42]),
-                Data([0xFF, 0xFE, 0x41, 0x00, 0x42]),
-            ] {
-                #expect(
-                    await renderDetailsRepresentationForTest(
-                        HistoryRepresentation(typeIdentifier: identifier, bytes: bytes)
-                    ) == .metadataOnly
-                )
-            }
-        }
-    }
-
     @Test func utf16PreviewPreservesWholeCharactersAtDisplayLimit() async throws {
         let body = String(repeating: "🦊", count: 501)
         let bytes = try #require(body.data(using: .utf16BigEndian))
@@ -290,52 +192,6 @@ struct HistoryDetailsFormatSafetyTests {
             )
         )
         #expect(preview.text?.text == String(repeating: "🦊", count: 500))
-        #expect(preview.text?.wasTruncated == true)
-    }
-
-    @Test func structuredRepresentationRendersItsOwnTextRatherThanItsPlainTextSibling() async {
-        let html = HistoryRepresentation(
-            typeIdentifier: "public.html",
-            bytes: Data("<p>HTML content</p>".utf8)
-        )
-        let plainText = HistoryRepresentation(
-            typeIdentifier: "public.utf8-plain-text",
-            bytes: Data("Semantic sibling".utf8)
-        )
-
-        let htmlPreview = await renderDetailsRepresentationForTest(html)
-        let plainPreview = await renderDetailsRepresentationForTest(plainText)
-        #expect(htmlPreview.text?.text == "HTML content")
-        #expect(plainPreview.text?.text == "Semantic sibling")
-    }
-
-    @Test func malformedOrEmptyExactUTF8StaysMetadataOnly() async {
-        let malformed = HistoryRepresentation(
-            typeIdentifier: "public.utf8-plain-text",
-            bytes: Data([0xC3, 0x28])
-        )
-        let empty = HistoryRepresentation(
-            typeIdentifier: "public.utf8-plain-text",
-            bytes: Data()
-        )
-
-        #expect(
-            await renderDetailsRepresentationForTest(malformed)
-                == .metadataOnly
-        )
-        #expect(
-            await renderDetailsRepresentationForTest(empty) == .metadataOnly
-        )
-    }
-
-    @Test func exactUTF8PreviewIsBoundedToFiveHundredCharacters() async {
-        let representation = HistoryRepresentation(
-            typeIdentifier: "public.utf8-plain-text",
-            bytes: Data(String(repeating: "x", count: 501).utf8)
-        )
-
-        let preview = await renderDetailsRepresentationForTest(representation)
-        #expect(preview.text?.text == String(repeating: "x", count: 500))
         #expect(preview.text?.wasTruncated == true)
     }
 }

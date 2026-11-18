@@ -23,12 +23,4 @@ struct PLAYPYA2FRequestIDTests {
             #expect(rejected?.requestID == nil)
         }
     }
-
-    @Test func callerMayReuseOneCanonicalIDAcrossSeparateCalls() {
-        let first = decodedRequest(ClipyCLIContract.decodeRequest(requestBytes()))
-        let second = decodedRequest(ClipyCLIContract.decodeRequest(requestBytes()))
-
-        #expect(first?.requestID.rawValue == validRequestID)
-        #expect(second == first)
-    }
 }

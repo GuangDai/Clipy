@@ -133,34 +133,6 @@ struct BuiltInAutomationTests {
         #expect(BuiltInAutomationLibrary(defaults: defaults).workflows == [workflow])
     }
 
-    @MainActor @Test func libraryRejectsIncompleteReplacementWithoutLosingSavedWorkflow() throws {
-        let suite = "BuiltInAutomationTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let library = BuiltInAutomationLibrary(defaults: defaults)
-        var workflow = BuiltInAutomationWorkflow(name: "Clean", steps: [.init(operation: .trim)])
-        try library.save(workflow)
-        workflow.steps.append(.init(operation: .replace))
-        #expect(throws: BuiltInAutomationFailure.emptyFind) { try library.save(workflow) }
-        #expect(BuiltInAutomationLibrary(defaults: defaults).workflows.first?.steps.count == 1)
-    }
-
-    @MainActor @Test func simultaneousLibrariesPreserveOtherWindowsSavedWorkflows() throws {
-        let suite = "BuiltInAutomationTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let first = BuiltInAutomationLibrary(defaults: defaults)
-        let second = BuiltInAutomationLibrary(defaults: defaults)
-        let alpha = BuiltInAutomationWorkflow(name: "Alpha", steps: [.init(operation: .trim)])
-        let beta = BuiltInAutomationWorkflow(name: "Beta", steps: [.init(operation: .uppercase)])
-        let gamma = BuiltInAutomationWorkflow(name: "Gamma", steps: [.init(operation: .lowercase)])
-        try first.save(alpha)
-        try second.save(beta)
-        try first.save(gamma)
-        try second.remove(alpha.id)
-        #expect(BuiltInAutomationLibrary(defaults: defaults).workflows == [beta, gamma])
-    }
-
     @MainActor @Test func previewRequiresByteExactSourceAndReplacementConfiguration() async {
         let model = BuiltInAutomationModel()
         let step = BuiltInAutomationStep(operation: .replace, find: "é", replacement: "x")

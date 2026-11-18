@@ -302,7 +302,7 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
             if handleCompletion(.accept) { return true }
             onSubmit()
         case #selector(NSResponder.insertTab(_:)):
-            return handleCompletion(.accept)
+            return handleCompletion(.acceptTab)
         case #selector(NSResponder.cancelOperation(_:)):
             return handleCompletion(.dismiss)
         case #selector(NSResponder.complete(_:)):

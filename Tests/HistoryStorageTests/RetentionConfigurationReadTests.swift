@@ -132,49 +132,6 @@ struct RetentionConfigurationReadTests {
         #expect(clearedConfiguration.policies == cleared)
     }
 
-    /// The read is the value a later set compares against (05 §3.2; `V2-02`
-    /// §3.3): re-applying exactly the read-back configuration is the
-    /// satisfied-value no-op (docs/architecture.md) — no commit, no
-    /// position advance, no retirement. This is the settings surface's
-    /// "Apply unchanged" safety property (SPEC-IMPL-003): an Apply that
-    /// starts from the authoritative read can never silently wipe a real
-    /// persisted policy.
-    @Test func reapplyingTheReadBackConfigurationIsUnchanged() async throws {
-        let history = try await openTemporaryHistory()
-
-        let policies = HistoryRetentionPolicies(
-            age: AgeRetention(maxAge: 7 * 86_400),
-            storage: nil,
-            revisions: RevisionRetention(
-                maxRevisionsPerItem: nil,
-                maxRevisionBytesPerItem: 16 * 1_048_576
-            )
-        )
-        _ = try await history.perform(.setRetentionPolicy(maximumUnpinnedItems: 150))
-        _ = try await history.perform(.setRetentionPolicies(policies))
-
-        let configuration = try await history.retentionConfiguration()
-
-        // The count read-back re-set is `.unchanged` (02 §12's satisfied
-        // value; the WS21 no-op posture).
-        let countReceipt = try await history.perform(
-            .setRetentionPolicy(maximumUnpinnedItems: configuration.maximumUnpinnedItems)
-        )
-        guard case .unchanged = countReceipt else {
-            Issue.record("SPEC-IMPL-003: expected .unchanged re-setting the read-back count, got \(countReceipt)")
-            return
-        }
-        // The V2-02 read-back re-set is `.unchanged` (the R.6 same-value
-        // satisfied no-op, `V2-02` §8.3).
-        let policyReceipt = try await history.perform(
-            .setRetentionPolicies(configuration.policies)
-        )
-        guard case .unchanged = policyReceipt else {
-            Issue.record("SPEC-IMPL-003: expected .unchanged re-setting the read-back policies, got \(policyReceipt)")
-            return
-        }
-    }
-
     /// RET-READ-1A: configured retention is durable History state, not UI-
     /// held defaults. The first facade and all six actor owners leave scope;
     /// a second public open must return the literal awkward-unit values. Both

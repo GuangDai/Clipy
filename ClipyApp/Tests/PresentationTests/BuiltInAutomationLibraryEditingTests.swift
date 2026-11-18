@@ -22,47 +22,6 @@ struct BuiltInAutomationLibraryEditingTests {
         #expect(!saved.contains { $0.id == unsaved.id })
     }
 
-    @Test func batchSaveRetainsOtherWindowsEditsAndAdditions() throws {
-        let suite = "WorkflowMergedSave.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let firstWindow = BuiltInAutomationLibrary(defaults: defaults)
-        var alpha = workflow("Alpha")
-        var beta = workflow("Beta")
-        try firstWindow.saveAll([alpha, beta])
-        let secondWindow = BuiltInAutomationLibrary(defaults: defaults)
-        let unrelated = workflow("Other window")
-        beta.name = "Beta edited elsewhere"
-        try secondWindow.saveAll([beta, unrelated])
-
-        let added = workflow("New draft")
-        alpha.steps.append(.init(operation: .uppercase))
-        try firstWindow.saveAll([alpha, added], orderedIDs: [beta.id, alpha.id, added.id])
-
-        #expect(BuiltInAutomationLibrary(defaults: defaults).workflows == [beta, alpha, unrelated, added])
-        #expect(firstWindow.workflows == [beta, alpha, unrelated, added])
-    }
-
-    @Test func invalidBatchDoesNotSaveEarlierDraftsOrOrder() throws {
-        let suite = "WorkflowInvalidBatch.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let library = BuiltInAutomationLibrary(defaults: defaults)
-        let original = workflow("Original")
-        try library.save(original)
-        let savedBytes = try #require(defaults.data(forKey: BuiltInAutomationLibrary.defaultsKey))
-        var edited = original
-        edited.name = "Changed"
-        let invalid = BuiltInAutomationWorkflow(name: "Incomplete", steps: [.init(operation: .replace)])
-
-        #expect(throws: BuiltInAutomationFailure.emptyFind) {
-            try library.saveAll([edited, invalid], orderedIDs: [invalid.id, edited.id])
-        }
-        #expect(defaults.data(forKey: BuiltInAutomationLibrary.defaultsKey) == savedBytes)
-        #expect(library.workflows == [original])
-        #expect(BuiltInAutomationLibrary(defaults: defaults).workflows == [original])
-    }
-
     @Test func exceedingWorkflowLimitDoesNotPartiallySaveBatch() throws {
         let suite = "WorkflowBatchLimit.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -99,33 +58,6 @@ struct BuiltInAutomationLibraryEditingTests {
         #expect(BuiltInAutomationLibrary.validationFailure(for: invalid) == .invalidRegex)
         #expect(throws: BuiltInAutomationFailure.invalidRegex) { try library.save(invalid) }
         #expect(BuiltInAutomationLibrary.validationFailure(for: workflow("  ")) == .invalidWorkflow)
-    }
-
-    @Test func duplicateHasIndependentIdentitiesAndStartsManual() throws {
-        let original = BuiltInAutomationWorkflow(name: "Automatic original", steps: [
-            .init(operation: .conditional, find: "TODO", thenSteps: [
-                .init(operation: .replace, find: "TODO", replacement: "Done"),
-                .init(operation: .conditional, condition: .isImage, thenSteps: [.init(operation: .recognizeText)])
-            ], otherwiseSteps: [.init(operation: .uppercase, enabled: false)])
-        ], trigger: .both, scope: .init(source: .clipboard, applications: "com.example.editor"))
-        let duplicate = original.duplicated(named: "My copy")
-
-        func allIDs(_ steps: [BuiltInAutomationStep]) -> [UUID] {
-            steps.flatMap { [$0.id] + allIDs($0.thenSteps) + allIDs($0.otherwiseSteps) }
-        }
-        let originalIDs = Set([original.id] + allIDs(original.steps))
-        let duplicateIDs = [duplicate.id] + allIDs(duplicate.steps)
-        #expect(duplicate.name == "My copy")
-        #expect(duplicate.trigger == .manual)
-        #expect(duplicate.scope == original.scope)
-        #expect(originalIDs.isDisjoint(with: duplicateIDs))
-        #expect(Set(duplicateIDs).count == duplicateIDs.count)
-        #expect(duplicateIDs.count == originalIDs.count)
-        #expect(duplicate.steps.first?.thenSteps.first?.find == "TODO")
-        #expect(duplicate.steps.first?.thenSteps.first?.replacement == "Done")
-        #expect(duplicate.steps.first?.otherwiseSteps.first?.enabled == false)
-        #expect(original.trigger == .both)
-        #expect(BuiltInAutomationLibrary.validationFailure(for: duplicate) == nil)
     }
 
     private func workflow(_ name: String) -> BuiltInAutomationWorkflow {

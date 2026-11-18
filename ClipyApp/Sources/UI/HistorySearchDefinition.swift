@@ -12,10 +12,10 @@ struct HistorySearchDefinition: Codable, Equatable, Sendable {
     var sortOrder: HistorySortOrder
 
     init(
-        query: String = "", mode: SearchMode = .fuzzy,
+        query: String = "", mode: SearchMode = .exact,
         typeFilter: HistoryTypeFilter = .all, pinnedOnly: Bool = false,
         filters: HistorySearchFilters = HistorySearchFilters(),
-        sortOrder: HistorySortOrder = .automatic
+        sortOrder: HistorySortOrder = .newestFirst
     ) {
         self.query = query
         self.mode = mode
@@ -32,7 +32,7 @@ struct HistorySearchDefinition: Codable, Equatable, Sendable {
     }
 
     var hasCriteria: Bool {
-        !query.isEmpty || typeFilter != .all || pinnedOnly || filters.isActive || sortOrder != .automatic
+        !query.isEmpty || typeFilter != .all || pinnedOnly || filters.isActive || sortOrder != .newestFirst
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {

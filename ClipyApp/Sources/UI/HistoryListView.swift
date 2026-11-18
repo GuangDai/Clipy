@@ -43,7 +43,7 @@ struct HistoryListView: View {
     private let onFocusHistory: () -> Void
     private let onHoverRow: (HistoryItemID) -> Void
     private let onKeyboardSelection: (HistoryItemID?) -> Void
-    private let onPointerMovement: () -> Void
+    private let onPointerMovement: (HistoryItemID?) -> Void
     private let onShowDetails: (HistoryItemReference) -> Void
 
     init(
@@ -61,7 +61,7 @@ struct HistoryListView: View {
         onFocusHistory: @escaping () -> Void = {},
         onHoverRow: @escaping (HistoryItemID) -> Void = { _ in },
         onKeyboardSelection: @escaping (HistoryItemID?) -> Void,
-        onPointerMovement: @escaping () -> Void = {},
+        onPointerMovement: @escaping (HistoryItemID?) -> Void = { _ in },
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
         self.viewState = viewState
@@ -88,10 +88,8 @@ struct HistoryListView: View {
 
     var body: some View {
         let _ = locale
-        // Observe row facts directly. A periodic TimelineView must not own
-        // publication of captures, pin changes or updated accessibility labels.
         VStack(spacing: 0) {
-            content(now: Date())
+            content
         }
         .background { selectionShortcuts }
         .onChange(of: viewState.hasAuthoritativeFirstPage) { _, hasPage in
@@ -107,18 +105,18 @@ struct HistoryListView: View {
     }
 
     @ViewBuilder
-    private func content(now: Date) -> some View {
+    private var content: some View {
         let rows = viewState.rowsForPresentation
         if rows.isEmpty {
             emptyState
         } else {
-            list(rows: rows, now: now)
+            list(rows: rows)
         }
     }
 
     // MARK: List
 
-    private func list(rows: [HistoryRow], now: Date) -> some View {
+    private func list(rows: [HistoryRow]) -> some View {
         // Reuse this render's displayed rows for the lane boundary instead
         // of materializing both filtered lanes several times (03b §8).
         let firstUnpinnedID = rows.first { $0.pinnedPosition == nil }?.item.id
@@ -138,7 +136,7 @@ struct HistoryListView: View {
                                     .frame(height: PanelContentFit.groupSeparatorHeight)
                                     .accessibilityHidden(true)
                             }
-                            rowContent(row, now: now, pinnedOrdinal: row.pinnedPosition.map { $0 + 1 })
+                            rowContent(row, pinnedOrdinal: row.pinnedPosition.map { $0 + 1 })
                         }
                         .id(row.item.id)
                     }
@@ -184,7 +182,12 @@ struct HistoryListView: View {
                     try await viewState.dragPayload(for: reference)
                 }
             }
-            .onPanelMouseMovement(onPointerMovement)
+            .onPanelMouseMovement {
+                let hit = inputMode == .keyboard
+                    ? dragSource.window.flatMap { dragSource.item(at: $0.mouseLocationOutsideOfEventStream) }
+                    : nil
+                onPointerMovement(hit?.id)
+            }
         }
     }
 
@@ -216,12 +219,10 @@ struct HistoryListView: View {
 
     private func rowContent(
         _ row: HistoryRow,
-        now: Date,
         pinnedOrdinal: Int?
     ) -> some View {
         HistoryRowView(
             row: row,
-            now: now,
             pinnedOrdinal: pinnedOrdinal,
             density: density,
             snippetLineCount: snippetLineCount,
@@ -263,10 +264,8 @@ struct HistoryListView: View {
         ))
         .disabled(viewState.isLoadingFirstPage)
         .allowsHitTesting(!viewState.isLoadingFirstPage)
-        // Hover selection (Maccy's HoverSelectionModifier): the surface
-        // state arbitrates pointer-vs-keyboard mode, so hover selects
-        // without scrolling only in mouse mode and otherwise defers until
-        // the mouse next moves.
+        // Layout can synthesize hover. The surface only selects immediately
+        // once real pointer movement has enabled mouse navigation.
         .onHover { inside in
             if inside, !viewState.isLoadingFirstPage { onHoverRow(row.item.id) }
         }
@@ -291,7 +290,7 @@ struct HistoryListView: View {
         if viewState.isLoadingPage {
             loadingRow
         } else if viewState.hasNextPage {
-            Button(HistoryListCopy.text("Older")) {
+            Button(HistoryListCopy.text("Load More")) {
                 viewState.loadNextPage()
             }
             .frame(maxWidth: .infinity)
@@ -308,41 +307,54 @@ struct HistoryListView: View {
             // viewport until the first page arrives instead of a second
             // full-surface spinner.
             Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if let issue = HistorySearchCopy.issue(for: viewState) {
-            emptyMessage(HistorySearchCopy.text("Check search conditions"), symbol: "exclamationmark.magnifyingglass",
-                         description: issue)
+        } else if let failure = HistorySearchCopy.resultsFailure(for: viewState) {
+            emptyMessage(HistorySearchCopy.resultsFailureTitle(failure), symbol: "exclamationmark.triangle",
+                         description: FailurePresentation.message(for: failure),
+                         offersRetry: HistorySearchCopy.canRetryResults(failure))
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("clipy.history.results-failure")
+        } else if !viewState.hasAuthoritativeFirstPage {
+            if let issue = HistorySearchCopy.issue(for: viewState) {
+                emptyMessage(HistorySearchCopy.text("Check search conditions"), symbol: "exclamationmark.magnifyingglass",
+                             description: issue)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("clipy.history.query-issue")
+            } else {
+                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         } else if viewState.hasActiveFilters {
             filteredEmptyState
         } else if viewState.isSearchActive {
-            emptyMessage("No Results", symbol: "magnifyingglass",
+            emptyMessage(HistoryListCopy.text("No Results"), symbol: "magnifyingglass",
                          description: HistoryListCopy.searchMiss(viewState.searchText))
         } else {
-            emptyMessage("No Clipboard History", symbol: "doc.on.clipboard",
+            emptyMessage(HistoryListCopy.text("No Clipboard History"), symbol: "doc.on.clipboard",
                          description: HistoryListCopy.text("Copy something and it will appear here."))
         }
     }
 
-    /// Filtered-to-empty keeps the pinned "No Results" title so the
-    /// running-app journey's headline assertion stays byte-identical, but
-    /// the description must not render an empty search literal: a pure
-    /// filter (no query) gets filter-specific copy, and a query plus filter
-    /// still names the query.
+    /// A pure filter gets filter-specific copy; a query plus filters still
+    /// names the query.
     private var filteredEmptyState: some View {
         VStack {
-            emptyMessage("No Results", symbol: "magnifyingglass", description: filteredEmptyDescription)
+            emptyMessage(HistoryListCopy.text("No Results"), symbol: "magnifyingglass", description: filteredEmptyDescription)
             paginationControl
                 .padding(.bottom)
         }
     }
 
-    private func emptyMessage(_ title: String, symbol: String, description: String) -> some View {
+    private func emptyMessage(_ title: String, symbol: String, description: String, offersRetry: Bool = false) -> some View {
         HStack(spacing: 10) {
             Image(systemName: symbol)
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text(HistoryListCopy.text(title)).font(.callout.weight(.medium))
+                Text(title).font(.callout.weight(.medium))
                 Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                if offersRetry {
+                    Button(PanelActionsCopy.text("Retry")) { viewState.refresh() }
+                        .accessibilityIdentifier("clipy.history.results-retry")
+                }
             }
             Spacer(minLength: 0)
         }

@@ -16,7 +16,7 @@ enum HistoryBrowsingSurface: Equatable, Sendable {
 
 struct HistoryWorkspaceLayout: Equatable, Sendable {
     var listWidth: Double = 350
-    var sortOrder: HistorySortOrder = .automatic
+    var sortOrder: HistorySortOrder = .newestFirst
     var compactRows = false
 
     /// A smaller window fits this preference temporarily; it never replaces

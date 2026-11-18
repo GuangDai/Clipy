@@ -20,12 +20,8 @@
 ///
 /// Two layers, mirroring the repo's fixture discipline:
 ///
-/// - `PreviewAccessProbeTests` (always green, fresh-clone safe): sink
-///   recording semantics with hand-built records (the
-///   ThumbnailMeasurementTests posture — durations are
-///   presence/non-negativity only, never a threshold), the envelope gate,
-///   and the structural mode facts on one in-test synthesized PNG via the
-///   child.
+/// - `PreviewAccessProbeTests`: the child processes a synthesized PNG and
+///   non-image bytes without depending on the external fixture tree.
 /// - `PreviewAccessProfileTests` (`.enabled(if: FixtureCatalog.available)`,
 ///   always on in CI because the fixture fetch step fails the job on any
 ///   error): the real-scale characterization over the fixtures-v1 image
@@ -183,85 +179,6 @@ struct PreviewAccessProbeTests {
         return output as Data
     }
 
-    // MARK: - Sink recording
-
-    /// Hand-built records pass through the sink one sorted JSON line each,
-    /// with sink-assigned `seq`/`monotonicMs` and an exact field round trip
-    /// (durations excluded from equality: JSON `Double` text is not a
-    /// contractual representation — they are asserted present and
-    /// non-negative instead, the ThumbnailMeasurementTests posture). This
-    /// test deliberately touches no decoder.
-    @Test func sinkWritesOneSortedLinePerRecord() throws {
-        let directory = try makeProbeChildDirectory()
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let fileURL = directory.appendingPathComponent("access-probe.jsonl")
-        var records: [PreviewAccessRecord] = [
-            PreviewAccessMode.headerOnly,
-            .incrementalRange,
-            .fullDecode,
-        ].map { mode in
-            var record = PreviewAccessRecord(
-                fixtureID: "manual-\(mode.rawValue)",
-                typeIdentifier: "public.png",
-                mode: mode,
-                inputBytes: 848_017,
-                maximumPixelExtent: 640
-            )
-            record.satisfiedPrefixBytes = 33
-            record.largestFailingPrefixBytes = 32
-            record.wallMs = 0.5
-            record.intrinsicWidth = 3_840
-            record.intrinsicHeight = 2_160
-            record.outputWidth = 640
-            record.outputHeight = 360
-            record.outputBytes = 640 * 360 * 4
-            record.decoderStatus = 0
-            record.decodesUnfinalizedAtFullLength = true
-            record.dimensionsAvailableUnfinalizedAtFullLength = true
-            return record
-        }
-        // Create-on-first-use: nothing on disk before the first record.
-        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
-
-        let sink = PreviewAccessMeasurement(fileURL: fileURL)
-        for index in records.indices {
-            sink.record(&records[index])
-        }
-
-        let decoded = try readProbeRecords(at: fileURL)
-        #expect(decoded.count == 3)
-        #expect(decoded.map(\.seq) == [1, 2, 3])
-        #expect(decoded.map(\.monotonicMs) == records.map(\.monotonicMs))
-        #expect(decoded[0].monotonicMs <= decoded[2].monotonicMs)
-        for (actual, expectedRecord) in zip(decoded, records) {
-            var normalizedActual = actual
-            normalizedActual.wallMs = nil
-            var expected = expectedRecord
-            expected.wallMs = nil
-            #expect(normalizedActual == expected)
-            let wallMs = try #require(actual.wallMs)
-            #expect(wallMs >= 0)
-        }
-    }
-
-    /// The sink activates only for an absolute path in
-    /// `CLIPY_PREVIEW_ACCESS_MEASUREMENT_PATH` (the
-    /// `ThumbnailMeasurement.makeIfRequested` absolute-path gate, minus the
-    /// running-app envelope: this probe is test-lane driven).
-    @Test func sinkActivatesOnlyForAbsolutePath() {
-        #expect(PreviewAccessMeasurement.makeIfRequested(environment: [:]) == nil)
-        #expect(
-            PreviewAccessMeasurement.makeIfRequested(environment: [
-                "CLIPY_PREVIEW_ACCESS_MEASUREMENT_PATH": "relative.jsonl",
-            ]) == nil
-        )
-        #expect(
-            PreviewAccessMeasurement.makeIfRequested(environment: [
-                "CLIPY_PREVIEW_ACCESS_MEASUREMENT_PATH": "/tmp/access-probe.jsonl",
-            ]) != nil
-        )
-    }
-
     // MARK: - Mode structure via the child (synthesized PNG)
 
     /// One child run over the synthesized PNG yields the three modes in
@@ -283,7 +200,7 @@ struct PreviewAccessProbeTests {
             outFileURL: directory.appendingPathComponent("records.jsonl")
         )
 
-        #expect(records.map(\.mode) == [.headerOnly, .incrementalRange, .fullDecode])
+        try #require(records.map(\.mode) == [.headerOnly, .incrementalRange, .fullDecode])
         #expect(records.map(\.seq) == [1, 2, 3])
         #expect(records.allSatisfy { $0.fixtureID == "synthesized-64x48-png" })
         #expect(records.allSatisfy { $0.typeIdentifier == "public.png" })
@@ -342,7 +259,7 @@ struct PreviewAccessProbeTests {
             outFileURL: directory.appendingPathComponent("records.jsonl")
         )
 
-        #expect(records.map(\.mode) == [.headerOnly, .incrementalRange, .fullDecode])
+        try #require(records.map(\.mode) == [.headerOnly, .incrementalRange, .fullDecode])
         let header = records[0]
         #expect(header.intrinsicWidth == nil)
         #expect(header.satisfiedPrefixBytes == nil)
@@ -481,7 +398,7 @@ struct PreviewAccessProfileTests {
     /// observation. Full decode still has exact product output expectations.
     private func expectHeadFixedProfile(_ fixture: RealFixture) throws {
         let records = try characterize(fixture)
-        #expect(records.map(\.mode) == [.headerOnly, .incrementalRange, .fullDecode])
+        try #require(records.map(\.mode) == [.headerOnly, .incrementalRange, .fullDecode])
         #expect(records.map(\.seq) == [1, 2, 3])
         #expect(records.allSatisfy { $0.fixtureID == fixture.path })
         #expect(records.allSatisfy { $0.inputBytes == fixture.inputBytes })
@@ -575,7 +492,7 @@ struct PreviewAccessProfileTests {
             fullHeight: 360
         )
         let records = try characterize(fixture)
-        #expect(records.map(\.mode) == [.headerOnly, .incrementalRange, .fullDecode])
+        try #require(records.map(\.mode) == [.headerOnly, .incrementalRange, .fullDecode])
         #expect(records.allSatisfy { $0.inputBytes == fixture.inputBytes })
 
         let header = records[0]

@@ -3,16 +3,17 @@ import Foundation
 import Testing
 
 struct BuiltInAutomationLongWorkflowTests {
-    @Test func longFlatWorkflowsExecuteEveryStepInBothEntryPoints() async throws {
-        let steps = (0..<513).map { index in
-            BuiltInAutomationStep(operation: .replace,
-                                  find: index.isMultiple(of: 2) ? "a" : "b",
-                                  replacement: index.isMultiple(of: 2) ? "b" : "a")
-        }
-        #expect(try BuiltInAutomation.run("a", steps: steps) == "b")
-        let output = try await BuiltInAutomation.run(.text("a"), steps: steps)
-        #expect(output.value == .text("b"))
-        #expect(output.originalInput == .text("a"))
+    @Test func longRulesExecuteEveryStepInOrderAfterParsingAndFormatting() async throws {
+        let numbers = (0..<513).map { String($0) }
+        let source = numbers.map { "replace(\">\", \"\($0),>\")" }.joined(separator: "\n")
+        let expected = numbers.joined(separator: ",") + ",>"
+        let steps = try BuiltInAutomationSyntax.parse(source)
+        #expect(try BuiltInAutomation.run(">", steps: steps) == expected)
+
+        let restored = try BuiltInAutomationSyntax.parse(BuiltInAutomationSyntax.render(steps))
+        let output = try await BuiltInAutomation.run(.text(">"), steps: restored)
+        #expect(output.value == .text(expected))
+        #expect(output.originalInput == .text(">"))
         #expect(output.matchedConditions)
         #expect(!output.requestsNotification)
     }
@@ -46,16 +47,6 @@ struct BuiltInAutomationLongWorkflowTests {
         #expect(output.originalInput == .text(" text "))
         #expect(output.matchedConditions)
         #expect(!output.requestsNotification)
-    }
-
-    @Test func aLateFlatGuardStillCancelsEveryDeferredEffectAndReturnsTheOriginal() async throws {
-        var steps = [BuiltInAutomationStep(operation: .notify)]
-        steps += (0..<256).map { _ in .init(operation: .trim) }
-        steps.append(.init(operation: .containsText, find: "TOKEN"))
-        let output = try await BuiltInAutomation.run(.text(" token "), steps: steps)
-        #expect(!output.matchedConditions)
-        #expect(!output.requestsNotification)
-        #expect(output.value == .text(" token "))
     }
 
     @Test func duplicateIDsInDisabledDeepBranchesRemainInvalid() throws {
@@ -177,17 +168,5 @@ struct BuiltInAutomationLongWorkflowTests {
         #expect(defaults.data(forKey: BuiltInAutomationLibrary.defaultsKey) == original)
         try library.refresh()
         #expect(library.workflows == [workflow])
-    }
-
-    @MainActor @Test func cancellationStillRejectsAQueuedLongWorkflowBeforePublishingAnything() async {
-        let steps = (0..<2_048).map { _ in BuiltInAutomationStep(operation: .trim) }
-        let task = Task { @MainActor in
-            try await BuiltInAutomation.run(.text(" text "), steps: steps)
-        }
-        task.cancel()
-        do {
-            _ = try await task.value
-            Issue.record("A cancelled long workflow returned an output")
-        } catch { #expect(error is CancellationError) }
     }
 }

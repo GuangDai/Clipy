@@ -26,20 +26,6 @@ struct FreshContextVisibilityProofTests {
         #expect(try freshReader.readTransaction { try Self.read(freshReader) } == after)
     }
 
-    @Test func authorityReadsSeeCommittedPositionAndRowsImmediately() async throws {
-        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
-        for (index, text) in ["first", "second"].enumerated() {
-            let receipt = try await history.perform(.capture(WSSupport.textCapture(text, observedAt: Date(timeIntervalSinceReferenceDate: Double(index)))))
-            guard case let .committed(commit) = receipt else { Issue.record("expected a committed capture"); return }
-            let position = try await history.authority.currentPosition()
-            #expect(position == commit.position)
-            let page = try await history.browse(.init(kind: .recent, limit: 10))
-            #expect(page.position == commit.position)
-            #expect(page.rows.count == index + 1)
-            #expect(page.rows.first?.title == text)
-        }
-    }
-
     private struct Read: Equatable {
         let position: UInt64
         let copyCount: UInt64

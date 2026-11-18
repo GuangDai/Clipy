@@ -706,6 +706,11 @@ final class AppComposition {
         cancelAllPendingPastes()
     }
 
+    func refreshDateFiltersIfNeeded() {
+        viewState.refreshDateFiltersIfNeeded()
+        historyWorkspaceViewState.refreshDateFiltersIfNeeded()
+    }
+
     private func cancelWorkspaceCopy() {
         if pasteSource == .workspace { cancelAllPendingPastes() }
         historyWorkspaceCopyState.status = nil
@@ -1274,9 +1279,8 @@ final class AppComposition {
         case cancelled
     }
 
-    /// Runs one accepted request as one structured sequence: resolve the
-    /// item's CURRENT Effective Content by ID, then perform the synchronous
-    /// AppKit write. It never spawns work and never invokes UI hooks itself.
+    /// Resolve Effective Content and require the exact version the user selected
+    /// before writing its immutable payload to the pasteboard.
     /// `.completed` is the sole verified-success outcome.
     private static func executePaste(
         _ item: HistoryItemReference,
@@ -1299,6 +1303,10 @@ final class AppComposition {
         }
 
         guard !Task.isCancelled else { return .cancelled }
+        guard payload.item == item else {
+            return .failed(.history(.staleContent(expected: item.contentVersion,
+                                                   current: payload.item.contentVersion)))
+        }
 
         if let pasteWriteFailureForTesting {
             return .failed(.write(pasteWriteFailureForTesting))

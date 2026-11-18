@@ -89,7 +89,7 @@ enum PanelGeometry {
             + 2 * PanelTheme.spacingXSmall
             + 2 * PanelTheme.headerHorizontalPadding
     }
-    static var minimumPersistedHeight: CGFloat { PanelContentFit.headerHeight }
+    static var minimumPersistedHeight: CGFloat { PanelContentFit.searchStripHeight }
 
     /// The UserDefaults key for the persisted browsing-column width.
     static let panelContentWidthDefaultsKey = "clipy.panelContentWidth"

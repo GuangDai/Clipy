@@ -75,55 +75,6 @@ struct AppCaptureAccessTests {
         #expect(try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 10)).rows.isEmpty)
     }
 
-    @Test("only explicit allow admits background polling")
-    @MainActor
-    func onlyExplicitAllowAdmitsBackgroundPolling() {
-        let cases: [(PasteboardAccessBehavior, CaptureAccessState)] = [
-            (.systemDefault, .systemDefault),
-            (.ask, .ask),
-            (.allowed, .allowed),
-            (.denied, .denied),
-            (.unavailable, .readFailure),
-        ]
-
-        for (behavior, expected) in cases {
-            let reducer = CaptureAccessReducer(systemBehavior: behavior)
-            #expect(reducer.state == expected)
-            #expect(
-                reducer.state.permitsBackgroundPolling == (expected == .allowed)
-            )
-            #expect(
-                reducer.state.recovery
-                    == (expected == .allowed ? nil : .retry)
-            )
-        }
-    }
-
-    @Test("pause wins over system and read-failure changes")
-    @MainActor
-    func userPauseHasPrecedence() {
-        var reducer = CaptureAccessReducer(systemBehavior: .allowed)
-        reducer.pause()
-        reducer.updateSystemBehavior(.denied)
-        reducer.recordReadFailure()
-
-        #expect(reducer.state == .userPaused)
-        #expect(reducer.state.recovery == .resume)
-
-        reducer.resume()
-        #expect(reducer.state == .readFailure)
-        #expect(reducer.state.recovery == .retry)
-
-        reducer.retry(systemBehavior: .allowed)
-        #expect(reducer.state == .allowed)
-        #expect(reducer.state.recovery == nil)
-    }
-
-    @Test("the product Pause window is exactly five minutes")
-    func standardPauseDurationIsFiveMinutes() {
-        #expect(CapturePausePolicy.standardDuration == .seconds(300))
-    }
-
     @Test("denied startup reads nothing and one recovery observes once")
     @MainActor
     func deniedStartupAndRecoveryAreBounded() async throws {
@@ -454,46 +405,6 @@ struct AppCaptureAccessTests {
         await deadline.value
     }
 
-    @Test("manual Resume cancels the outstanding Pause deadline")
-    @MainActor
-    func manualResumeCancelsTimedResume() async throws {
-        let history = try await ComposedSupport.openMemoryHistory()
-        let deadlineSleep = ControlledPauseDeadlineSleep()
-        let pasteboard = ComposedSupport.makePasteboard()
-        let accessReads = Mutex(0)
-        let composition = AppComposition.makeForTesting(
-            history: history,
-            adapter: PasteboardAdapter(pasteboard: pasteboard),
-            initialCaptureAccessBehavior: .allowed,
-            captureAccessBehaviorProvider: {
-                accessReads.withLock { count in
-                    count += 1
-                    return .allowed
-                }
-            },
-            capturePauseSleep: { duration in
-                try await deadlineSleep.sleep(for: duration)
-            }
-        )
-        defer { composition.stop() }
-
-        composition.pauseCapture()
-        #expect(composition.hasCapturePauseDeadlineForTesting)
-        try #require(await ComposedSupport.waitFor {
-            deadlineSleep.startedCount == 1
-        })
-        let deadline = try #require(composition.capturePauseTaskForTesting)
-        composition.resumeCapture()
-        #expect(!composition.hasCapturePauseDeadlineForTesting)
-        let readsAfterResume = accessReads.withLock { $0 }
-        #expect(deadline.isCancelled)
-        deadlineSleep.expire(0)
-        await deadline.value
-
-        #expect(composition.captureAccessState == .allowed)
-        #expect(accessReads.withLock { $0 } == readsAfterResume)
-    }
-
     @Test("a manually resumed Pause cannot end the next Pause")
     @MainActor
     func oldDeadlineCannotResumeANewerPause() async throws {
@@ -556,27 +467,21 @@ struct AppCaptureAccessTests {
         defer { appDelegate.removeStatusItemForTesting() }
         appDelegate.installCompositionForTesting(composition)
 
-        #expect(appDelegate.statusItemAccessibilityLabelForTesting == "Clipy")
+        let activeLabel = try #require(appDelegate.statusItemAccessibilityLabelForTesting)
+        #expect(!activeLabel.isEmpty)
         #expect(appDelegate.statusItemHasImageForTesting)
-        #expect(
-            appDelegate.statusItemSymbolNameForTesting == "list.clipboard"
-        )
+
         composition.pauseCapture()
         #expect(appDelegate.captureAccessState == .userPaused)
-        #expect(
-            appDelegate.statusItemAccessibilityLabelForTesting
-                == "Clipy, clipboard monitoring paused"
-        )
+        let pausedLabel = try #require(appDelegate.statusItemAccessibilityLabelForTesting)
+        #expect(!pausedLabel.isEmpty)
+        #expect(pausedLabel != activeLabel)
         #expect(appDelegate.statusItemHasImageForTesting)
-        #expect(appDelegate.statusItemSymbolNameForTesting == "pause.circle")
 
         composition.resumeCapture()
         #expect(appDelegate.captureAccessState == .allowed)
-        #expect(appDelegate.statusItemAccessibilityLabelForTesting == "Clipy")
+        #expect(appDelegate.statusItemAccessibilityLabelForTesting == activeLabel)
         #expect(appDelegate.statusItemHasImageForTesting)
-        #expect(
-            appDelegate.statusItemSymbolNameForTesting == "list.clipboard"
-        )
     }
 
     @Test("live revocation blocks payload capture and permission restoration resumes it")

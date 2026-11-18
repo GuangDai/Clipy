@@ -1,7 +1,6 @@
 /// HistoryRowView.swift — content-first history rows. Titles and search
-/// excerpts share the available column width. Copy provenance lives in the
-/// expanded preview; a small accessory identifies multi-source items. The row
-/// paints its rounded selection inside the SwiftUI scrolling list.
+/// excerpts share the available column width. A compact timestamp shows the
+/// last copy, and the preview provides the full copy provenance.
 /// Owning spec: docs/architecture.md (gesture actions), §5.7
 /// (thumbnail is requested by exact `HistoryItemReference`);
 /// docs/architecture.md (row fields, search presentation, 1-based
@@ -44,7 +43,6 @@ struct HistoryRowView: View {
     private let shortcuts: PanelShortcutSettings
     private let areShortcutsEnabled: Bool
     private let row: HistoryRow
-    private let now: Date
     private let pinnedOrdinal: Int?
     private let density: HistoryRowDensity
     private let snippetLineCount: HistorySnippetLineCount
@@ -70,7 +68,6 @@ struct HistoryRowView: View {
 
     init(
         row: HistoryRow,
-        now: Date,
         pinnedOrdinal: Int?,
         density: HistoryRowDensity = .compact,
         snippetLineCount: HistorySnippetLineCount = .automatic,
@@ -88,7 +85,6 @@ struct HistoryRowView: View {
         onShowDetails: @escaping (HistoryItemReference) -> Void
     ) {
         self.row = row
-        self.now = now
         self.pinnedOrdinal = pinnedOrdinal
         self.density = density
         self.snippetLineCount = snippetLineCount
@@ -106,7 +102,7 @@ struct HistoryRowView: View {
         self.onShowDetails = onShowDetails
     }
 
-    private var rowLayout: some View {
+    private func rowLayout(copyTime: HistoryRowCopyTime) -> some View {
         HStack(alignment: .center, spacing: PanelTheme.spacingSmall) {
             if HistoryRowKind.classify(effectiveTypeIdentifiers: row.typeIdentifiers) != .text {
                 thumbnail
@@ -123,6 +119,9 @@ struct HistoryRowView: View {
                             .accessibilityLabel(PreviewCopy.text("Multiple Applications"))
                     }
                     pinBadge
+                    HistoryCopyTimeLabel(copyTime: copyTime)
+                        .font(PanelTheme.timestampFont(for: fontSize))
+                        .foregroundStyle(secondaryForeground)
                 }
                 if let search = row.search, let snippet = search.snippet {
                     Text(MatchHighlighting.highlighted(snippet, ranges: search.matchedRanges,
@@ -155,7 +154,8 @@ struct HistoryRowView: View {
     }
 
     var body: some View {
-        rowLayout
+        let copyTime = HistoryRowCopyTime(row.lastCopiedAt, locale: locale, timeZone: timeZone)
+        rowLayout(copyTime: copyTime)
         .background {
             if dragSource != nil { HistoryRowDragRegion(view: dragRegion) }
         }
@@ -205,7 +205,7 @@ struct HistoryRowView: View {
             if let openFailure { Text(PanelActionsCopy.text(openFailure.message, bundle: copyBundle)) }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(verbatim: rowAccessibilityLabel))
+        .accessibilityLabel(Text(verbatim: rowAccessibilityLabel(copyTime: copyTime)))
         .accessibilityIdentifier("clipy.history.row.\(row.item.id.description)")
         .accessibilityAddTraits(rowAccessibilityTraits)
         .accessibilityValue(copyAccessibilityLabel)
@@ -228,13 +228,14 @@ struct HistoryRowView: View {
 
     /// Publish the current row facts as one label. Lazy row reuse must not
     /// depend on AppKit re-aggregating a newly inserted pin badge's children.
-    private var rowAccessibilityLabel: String {
+    private func rowAccessibilityLabel(copyTime: HistoryRowCopyTime) -> String {
         var parts = [row.title]
         if let snippet = row.search?.snippet, !snippet.isEmpty { parts.append(snippet) }
         if row.sourceCount > 1 { parts.append(PreviewCopy.text("Multiple Applications")) }
         if let pinnedOrdinal {
             parts.append(PanelActionsCopy.pinnedPosition(pinnedOrdinal, bundle: copyBundle, locale: locale))
         }
+        parts.append(copyTime.labeledFull)
         return parts.joined(separator: ", ")
     }
 
@@ -565,50 +566,36 @@ struct HistoryRowView: View {
     }
 }
 
-/// Deterministic row rendering at an explicitly supplied instant. The list
-/// owns the clock cadence and supplies one shared `now` to all rows; the row
-/// owns only formatting, so it never creates a timer or reaches for a global
-/// time service (review relative-time refresh leaf; 01 §6).
-/// Time stays relative at every width; a full localized date/time is
-/// available in the tooltip and VoiceOver. Both use the supplied locale and
-/// zone, and no metadata format changes when the user resizes the panel.
+/// Shared by the two history lists. Absolute dates remain current without
+/// invalidating either list on a timer.
 @MainActor
-struct HistoryRowRenderingModel {
-    let relativeTimeText: String
-    let sourceDisplayName: String?
-    private let lastCopiedAt: Date
-    private let absoluteLocale: Locale
-    private let absoluteTimeZone: TimeZone
+struct HistoryRowCopyTime {
+    let compact: String
+    let labeledFull: String
 
-    init(
-        row: HistoryRow,
-        now: Date,
-        locale: Locale = .current,
-        timeZone: TimeZone = .current
-    ) {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        formatter.locale = locale
-        relativeTimeText = formatter.localizedString(
-            for: row.lastCopiedAt,
-            relativeTo: now
-        )
-        sourceDisplayName = row.lastSource?.split(separator: ".").last.map(String.init)
-        lastCopiedAt = row.lastCopiedAt
-        absoluteLocale = locale
-        absoluteTimeZone = timeZone
+    init(_ date: Date, locale: Locale, timeZone: TimeZone) {
+        compact = date.formatted(Date.FormatStyle(
+            date: .numeric, time: .shortened, locale: locale, timeZone: timeZone
+        ))
+        let full = date.formatted(Date.FormatStyle(
+            date: .long, time: .complete, locale: locale, timeZone: timeZone
+        ))
+        let label = PanelActionsCopy.text("Last Copied", bundle: PanelActionsCopy.bundle(for: locale))
+        labeledFull = "\(label): \(full)"
     }
+}
 
-    /// The item's complete local date and time for its tooltip and AX label.
-    var absoluteDateTimeText: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .long
-        formatter.timeStyle = .short
-        formatter.locale = absoluteLocale
-        formatter.timeZone = absoluteTimeZone
-        return formatter.string(from: lastCopiedAt)
+struct HistoryCopyTimeLabel: View {
+    let copyTime: HistoryRowCopyTime
+
+    var body: some View {
+        Text(verbatim: copyTime.compact)
+            .monospacedDigit()
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(copyTime.labeledFull)
+            .accessibilityLabel(Text(verbatim: copyTime.labeledFull))
     }
-
 }
 
 #Preview {
@@ -628,7 +615,6 @@ struct HistoryRowRenderingModel {
     )
     return HistoryRowView(
         row: row,
-        now: Date(),
         pinnedOrdinal: 1,
         thumbnails: ThumbnailStore(history: PreviewClipboardHistory.populated),
         onCopy: { _ in },

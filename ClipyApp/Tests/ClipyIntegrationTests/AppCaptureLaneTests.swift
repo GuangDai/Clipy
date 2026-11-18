@@ -76,55 +76,6 @@ struct AppCaptureLaneTests {
         #expect(composition.captureHealth.activeCommitCount == 0)
     }
 
-    /// Every complete observation waits for the preceding commit. The real
-    /// receipt order distinguishes FIFO delivery from timestamp-sorted reads.
-    @Test @MainActor
-    func suspendedCapturePreservesAllPendingValuesInOrder() async throws {
-        let base = try await ComposedSupport.openMemoryHistory()
-        let history = FirstCaptureSuspendingHistory(base: base)
-        let pasteboard = ComposedSupport.makePasteboard()
-        pasteboard.clearContents()
-        defer { pasteboard.releaseGlobally() }
-        let composition = AppComposition.makeForTesting(
-            history: history,
-            adapter: PasteboardAdapter(pasteboard: pasteboard)
-        )
-        let appDelegate = AppDelegate()
-        appDelegate.installCompositionForTesting(composition)
-        let healthProbe = CaptureHealthProbe()
-        let shellHealthSink = composition.onCaptureHealthChanged
-        composition.onCaptureHealthChanged = { health in
-            shellHealthSink?(health)
-            healthProbe.receive(health)
-        }
-        defer { composition.stop() }
-
-        composition.submitCaptureForTesting(Self.capture("A", at: 1))
-        await history.waitUntilFirstCaptureIsSuspended()
-        for (index, text) in ["B", "C", "D"].enumerated() {
-            composition.submitCaptureForTesting(
-                Self.capture(text, at: TimeInterval(index + 2))
-            )
-            #expect(composition.captureHealth.activeCommitCount == 1)
-            #expect(composition.captureHealth.pendingCaptureCount == index + 1)
-            #expect(composition.captureHealth.pendingCaptureBytes == index + 1)
-            #expect(composition.captureHealth.droppedCaptureCount == 0)
-        }
-        #expect(appDelegate.captureHealth.pendingCaptureCount == 3)
-        #expect(appDelegate.captureNotice == nil)
-
-        await history.resumeFirstCapture()
-        await healthProbe.waitForIdle(failedCaptureCount: 0, lastFailure: nil)
-        let page = try await base.browse(.init(kind: .recent, limit: 10))
-        #expect(page.rows.map(\.title) == ["D", "C", "B", "A"])
-        #expect(await history.committedCaptureIDs == page.rows.reversed().map(\.item.id))
-        for row in page.rows {
-            let payload = try await base.pastePayload(for: row.item.id)
-            #expect(payload.representations.map(\.bytes) == [Data(row.title.utf8)])
-        }
-        #expect(appDelegate.captureHealth.pendingCaptureBytes == 0)
-    }
-
     /// A thousand observations cannot grow the entry count or replace an
     /// accepted capture. Only the first bounded window becomes History.
     @Test @MainActor
@@ -228,6 +179,11 @@ struct AppCaptureLaneTests {
         let page = try await base.browse(.init(kind: .recent, limit: 10))
         #expect(page.rows.map(\.title) == ["E", "CC", "B", "A"])
         #expect(await history.committedCaptureIDs == page.rows.reversed().map(\.item.id))
+        for row in page.rows {
+            let payload = try await base.pastePayload(for: row.item.id)
+            #expect(payload.representations.map(\.bytes) == [Data(row.title.utf8)])
+        }
+        #expect(composition.captureHealth.pendingCaptureBytes == 0)
     }
 
     /// A capture receipt carries same-commit retention effects back through
@@ -617,43 +573,6 @@ struct AppCaptureLaneTests {
         #expect(pasted[0].data(forType: .string) == Data("first".utf8))
         #expect(pasted[1].data(forType: .string) == Data("second".utf8))
     }
-
-#if DEBUG
-    /// The composition maps the adapter owner's declared-content-unavailable
-    /// result to one content-free category and never submits the triggering
-    /// observation. The adapter suite separately proves that an actual
-    /// all-unavailable provider yields the explicit empty partial; this hosted
-    /// test does not need access to that package-only AppKit fixture.
-    @Test @MainActor
-    func declaredContentUnavailableDispositionPublishesContentFreeFailure() async throws {
-        let history = try await ComposedSupport.openMemoryHistory()
-        let pasteboard = ComposedSupport.makePasteboard()
-        pasteboard.clearContents()
-        let unavailableType = NSPasteboard.PasteboardType("private.fixture.html")
-        pasteboard.setData(Data("<b>rich</b>".utf8), forType: unavailableType)
-        let adapter = PasteboardAdapter(pasteboard: pasteboard)
-
-        let composition = AppComposition.makeForTesting(
-            history: history,
-            adapter: adapter,
-            initialCaptureFailure: .declaredContentUnavailable
-        )
-        let appDelegate = AppDelegate()
-        appDelegate.installCompositionForTesting(composition)
-        defer { composition.stop() }
-
-        #expect(
-            appDelegate.captureNotice == .failed(.declaredContentUnavailable)
-        )
-        #expect(appDelegate.captureHealth.activeCommitCount == 0)
-        #expect(appDelegate.captureHealth.pendingCaptureCount == 0)
-
-        let page = try await history.browse(
-            HistoryBrowseRequest(kind: .recent, limit: 10)
-        )
-        #expect(page.rows.isEmpty)
-    }
-#endif
 
     /// The adapter's early concealment outcome is intentionally quiet at the
     /// same production callback seam that surfaces unsupported/unavailable

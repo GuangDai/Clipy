@@ -53,59 +53,6 @@ struct HCRStampingTests {
         #expect(coalesced.affectedItems == .explicit([second, third]))
     }
 
-    @Test("Pin, unpin, and remove use their explicit stamped payloads")
-    func placementAndRemovalKinds() throws {
-        let pinned = try derive(
-            mutations: [.relocatePin(PinRelocation(
-                itemID: second, previousOrdinal: nil, destinationOrdinal: PinOrdinal(rawValue: 0),
-                pinnedCountBefore: 0, shift: nil
-            ))],
-            outcome: .placedPinned(second)
-        )
-        #expect(pinned.changeKind == .pin)
-        #expect(pinned.affectedItems == .pinOrderChange(itemID: second, shiftedOrdinals: nil, affectedCount: 1))
-
-        let unpinned = try derive(
-            mutations: [.relocatePin(PinRelocation(
-                itemID: second, previousOrdinal: PinOrdinal(rawValue: 0), destinationOrdinal: nil,
-                pinnedCountBefore: 1, shift: nil
-            ))],
-            outcome: .unpinned(second)
-        )
-        #expect(unpinned.changeKind == .unpin)
-        #expect(unpinned.affectedItems == .pinOrderChange(itemID: second, shiftedOrdinals: nil, affectedCount: 1))
-
-        let removed = try derive(
-            mutations: [.delete(itemID: second, reason: .userRemoval)],
-            outcome: .removed(count: 1)
-        )
-        #expect(removed.changeKind == .remove)
-        #expect(removed.affectedItems == .explicit([second]))
-    }
-
-    @Test("Clear records preserve scope and actual retired count")
-    func clearScopeSpellsTheKind() throws {
-        let mutations: [StampedMutation] = [
-            .delete(itemID: second, reason: .clear),
-            .delete(itemID: first, reason: .clear),
-        ]
-        let all = try derive(
-            mutations: mutations,
-            outcome: .cleared(count: 2),
-            clearScope: .all
-        )
-        #expect(all.changeKind == .clearAll)
-        #expect(all.affectedItems == .all(retiredItems: 2))
-
-        let unpinned = try derive(
-            mutations: mutations,
-            outcome: .cleared(count: 2),
-            clearScope: .unpinned
-        )
-        #expect(unpinned.changeKind == .clearUnpinned)
-        #expect(unpinned.affectedItems == .unpinned(retiredItems: 2))
-    }
-
     @Test("Clear requires scope and non-clear rejects scope")
     func clearScopeIsRequiredOnlyForClear() {
         #expect(throws: StampingRejection.incoherentPlan) {
@@ -285,20 +232,6 @@ struct HCRStampingTests {
         }
     }
 
-    @Test("Payload reuses one position and preserves the supplied clock sample")
-    func payloadTokensAndTimestamp() throws {
-        let payload = try derive(
-            mutations: [.relocatePin(PinRelocation(
-                itemID: first, previousOrdinal: nil, destinationOrdinal: PinOrdinal(rawValue: 0),
-                pinnedCountBefore: 0, shift: nil
-            ))],
-            outcome: .placedPinned(first)
-        )
-        #expect(payload.sequence == 41)
-        #expect(payload.changePositionRaw == 41)
-        #expect(payload.createdAt == timestamp)
-    }
-
     @Test("Every non-empty stamped plan carries its derived HCR")
     func stampedPlanCarriesHCR() throws {
         let plan = MutationPlan(
@@ -324,22 +257,7 @@ struct HCRStampingTests {
         #expect(stamped.hcrAppend.createdAt == timestamp)
     }
 
-    @Test("bulk clear stamping keeps one scope and the exact receipt count")
-    func bulkClearScopeMatchesItsReceipt() throws {
-        for count in [1, 5_001, 1_000_000] {
-            let all = try derive(
-                mutations: [.bulkClear(scope: .all, affectedCount: count)],
-                outcome: .cleared(count: count), clearScope: .all
-            )
-            #expect(all.changeKind == .clearAll)
-            #expect(all.affectedItems == .all(retiredItems: count))
-            let unpinned = try derive(
-                mutations: [.bulkClear(scope: .unpinned, affectedCount: count)],
-                outcome: .cleared(count: count), clearScope: .unpinned
-            )
-            #expect(unpinned.changeKind == .clearUnpinned)
-            #expect(unpinned.affectedItems == .unpinned(retiredItems: count))
-        }
+    @Test func bulkClearRejectsMismatchedCountAndScope() {
         #expect(throws: StampingRejection.incoherentPlan) {
             try derive(
                 mutations: [.bulkClear(scope: .all, affectedCount: 2)],

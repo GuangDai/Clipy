@@ -11,9 +11,8 @@ struct HistorySearchOptionsView: View {
     @Environment(\.dismiss) private var dismiss
     private let viewState: HistoryViewState
     private let completion: HistorySearchCompletionState
+    private let showsExpressionGuide: Bool
     @State private var draft: HistorySearchFilters
-    @State private var draftSortOrder: HistorySortOrder
-    @State private var showsExpressionGuide: Bool
     @State private var isChoosingApplication = false
     @State private var applicationSelectionFailed = false
     @State private var applications: [SourceApplicationSearchResolver.Application] = []
@@ -24,9 +23,8 @@ struct HistorySearchOptionsView: View {
     init(viewState: HistoryViewState, completion: HistorySearchCompletionState, showsExpressionGuide: Bool) {
         self.viewState = viewState
         self.completion = completion
+        self.showsExpressionGuide = showsExpressionGuide
         _draft = State(initialValue: viewState.searchFilters)
-        _draftSortOrder = State(initialValue: viewState.sortOrder)
-        _showsExpressionGuide = State(initialValue: showsExpressionGuide)
     }
 
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
@@ -34,56 +32,47 @@ struct HistorySearchOptionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(text("Search options")).font(.headline)
-                Spacer()
-                Button(text("Done")) { dismiss() }
-                    .accessibilityIdentifier("clipy.search.options.done")
-            }
+            Text(text(showsExpressionGuide ? "Advanced expressions" : "Date and application filters"))
+                .font(.headline)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Picker(text("Sort results"), selection: $draftSortOrder) {
-                        ForEach(HistorySortOrder.allCases, id: \.self) { order in
-                            Text(HistorySearchCopy.sortTitle(order, bundle: copyBundle)).tag(order)
-                        }
+                    if showsExpressionGuide {
+                        expressionGuide
+                            .accessibilityIdentifier("clipy.search.expression.guide")
+                    } else {
+                        dateControls
+                        Divider()
+                        sourceControls
                     }
-                    .accessibilityIdentifier("clipy.search.options.sort")
-                    dateControls
-                    Divider()
-                    sourceControls
-                    HStack {
-                        Button(text("Reset")) {
-                            draft = HistorySearchFilters()
-                            draftSortOrder = .automatic
-                        }
-                        Spacer()
-                        Button(text("Apply search options")) {
-                            let changed = viewState.searchFilters != draft || viewState.sortOrder != draftSortOrder
-                            viewState.searchFilters = draft
-                            viewState.sortOrder = draftSortOrder
-                            if !changed { viewState.refresh() }
-                            dismiss()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!draft.hasValidDates())
-                        .accessibilityIdentifier("clipy.search.options.apply")
-                    }
-                    Divider()
-                    DisclosureGroup(text("Advanced expressions"), isExpanded: $showsExpressionGuide) {
-                        expressionGuide.padding(.top, 8)
-                    }
-                    .accessibilityIdentifier("clipy.search.expression.guide")
                 }
                 .padding(.trailing, 4)
             }
             .scrollBounceBehavior(.basedOnSize)
             .frame(maxHeight: 480)
+            Divider()
+            if showsExpressionGuide {
+                HStack {
+                    Spacer()
+                    Button(text("Done")) { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityIdentifier("clipy.search.options.done")
+                }
+            } else {
+                filterActions
+            }
         }
         .padding(16)
         .frame(width: 360)
         .accessibilityIdentifier("clipy.search.options")
-        .task { applications = await viewState.sourceApplicationsForCompletion() }
+        .onAppear {
+            if !showsExpressionGuide { draft = viewState.searchFilters }
+        }
+        .task {
+            guard !showsExpressionGuide else { return }
+            applications = await viewState.sourceApplicationsForCompletion()
+        }
         .task(id: SourceSuggestionQuery(prefix: Data(draft.sourceApplication.utf8), position: viewState.sourceCompletionPosition)) {
+            guard !showsExpressionGuide else { return }
             historySources = []
             historySourceReadFailed = false
             isLoadingHistorySources = true
@@ -98,6 +87,25 @@ struct HistorySearchOptionsView: View {
                 guard !Task.isCancelled else { return }
                 historySourceReadFailed = true
             }
+        }
+    }
+
+    private var filterActions: some View {
+        HStack {
+            Button(text("Reset")) { draft = HistorySearchFilters() }
+                .accessibilityIdentifier("clipy.search.options.reset")
+            Spacer()
+            Button(text("Cancel"), role: .cancel) { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("clipy.search.options.cancel")
+            Button(text("Apply filters")) {
+                if viewState.searchFilters == draft { viewState.refresh() }
+                else { viewState.searchFilters = draft }
+                dismiss()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!draft.hasValidDates())
+            .accessibilityIdentifier("clipy.search.options.apply")
         }
     }
 

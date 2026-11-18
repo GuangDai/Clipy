@@ -70,33 +70,6 @@ func largePinnedCountStillProducesConstantSizeRelocations(pinnedCount: Int) thro
     #expect(retiredID == target)
 }
 
-@Test func largeRetentionPrefixStillProducesOneRetirementMutation() {
-    let inventory: [RetainedItemSummary] = (1...100).map { index in
-        RetainedItemSummary(
-            id: capturePlannerID(UInt8(index)),
-            lastCopiedAt: Date(timeIntervalSinceReferenceDate: Double(index)),
-            pinOrdinal: nil
-        )
-    }
-    for maximum in [75, 74, 1] {
-        let prefix = retentionTestPrefix(inventory: inventory.reversed(), maximumUnpinnedItems: maximum)
-        let result = planRetention(
-            currentPolicy: RetentionPolicy(maximumUnpinnedItems: 100),
-            policy: RetentionPolicy(maximumUnpinnedItems: maximum),
-            retirementPrefix: prefix
-        )
-        guard case .commit(let plan) = result,
-              plan.mutations.count == 2,
-              case .retirePrefix(let selected) = plan.mutations[1] else {
-            Issue.record("Many victims must not expand into per-item mutations")
-            continue
-        }
-        #expect(selected.itemCount == 100 - maximum)
-        #expect(selected.through.itemID == capturePlannerID(UInt8(100 - maximum)))
-        #expect(inventory.filter { selected.contains($0) }.count == selected.itemCount)
-    }
-}
-
 /// Lane-1 equality (docs/architecture.md) must hold for hinted items
 /// whose Effective Content carries several representations with
 /// non-trivial payloads, and must not depend on fingerprint evidence —

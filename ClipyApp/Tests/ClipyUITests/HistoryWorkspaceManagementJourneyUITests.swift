@@ -162,6 +162,16 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         }, "An empty replacement query must retire the previous page.\n" + app.debugDescription)
         try assertSelectionCount(0, in: workspace, app: app)
 
+        search.click()
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey(.delete, modifierFlags: [])
+        app.typeText("$type:missing$")
+        let issue = workspace.descendants(matching: .any)["clipy.history.workspace.query-issue"]
+        try require(waitUntil {
+            issue.exists && !workspace.staticTexts["No matching items"].exists
+                && workspaceRows.count == 0 && !next.isEnabled && !previous.isEnabled
+        }, "A rejected query must explain its error instead of reporting an empty result.\n" + app.debugDescription)
+
         let clearSearch = workspace.buttons["clipy.search.clear"]
         try require(clearSearch.exists && clearSearch.isHittable, app.debugDescription)
         clearSearch.click()
@@ -173,7 +183,7 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         next.click()
         try assertPage(2, range: "Items 51–55", in: workspace, app: app)
 
-        try chooseSort("Oldest copied first", in: workspace, app: app)
+        try chooseSort("Oldest first", in: workspace, app: app)
         try assertPage(1, range: "Items 1–50", in: workspace, app: app)
         try require(waitUntil {
             let oldest = self.row(for: fixtures[0].id, in: workspace)
@@ -199,7 +209,7 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
 
         next.click()
         try assertPage(2, range: "Items 51–55", in: workspace, app: app)
-        try chooseSort("Most copied first", in: workspace, app: app)
+        try chooseSort("Most copied", in: workspace, app: app)
         try require(waitUntil {
             let frequent = self.row(for: fixtures[22].id, in: workspace)
             return frequent.exists && frequent.isHittable
@@ -337,7 +347,7 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
 
     @MainActor
     private func chooseSort(_ title: String, in workspace: XCUIElement, app: XCUIApplication) throws {
-        let sort = workspace.popUpButtons["clipy.history.workspace.sort"]
+        let sort = workspace.descendants(matching: .any)["clipy.search.sort"].firstMatch
         try require(sort.exists && sort.isHittable, app.debugDescription)
         sort.click()
         app.menuItems[title].click()

@@ -119,8 +119,21 @@ enum HistorySearchCompletionEngine {
         var blockStart: Int?
         var quoted = false
         var cursor = 0
+        var regexpBoundary = HistorySearchRegexpBoundary()
         while cursor < selection.location {
             let unit = text.character(at: cursor)
+            if mode == .regexp, blockStart == nil {
+                if unit == 36, regexpBoundary.allowsCondition,
+                   cursor == 0 || isWhitespace(text.character(at: cursor - 1)) {
+                    blockStart = cursor + 1
+                    cursor += 1
+                } else {
+                    let next = cursor + 1 < text.length ? text.character(at: cursor + 1) : nil
+                    let scalarWidth = next.map { (0xD800...0xDBFF).contains($0) ? 2 : 1 } ?? 0
+                    cursor += regexpBoundary.advance(unit, followedBy: next, nextScalarWidth: scalarWidth)
+                }
+                continue
+            }
             if unit == 92, cursor + 1 < text.length {
                 let following = text.character(at: cursor + 1)
                 if following == 36 || (blockStart != nil && quoted && (following == 34 || following == 92)) {
@@ -130,11 +143,7 @@ enum HistorySearchCompletionEngine {
             }
             if blockStart != nil, unit == 34 { quoted.toggle() }
             if unit == 36, !quoted {
-                if blockStart == nil {
-                    if mode != .regexp || cursor == 0 || isWhitespace(text.character(at: cursor - 1)) {
-                        blockStart = cursor + 1
-                    }
-                }
+                if blockStart == nil { blockStart = cursor + 1 }
                 else if !isAmountDigitAfter(cursor, in: text) { blockStart = nil }
             }
             cursor += 1
@@ -142,11 +151,16 @@ enum HistorySearchCompletionEngine {
 
         guard let blockStart else {
             guard explicit else { return nil }
-            let needsSeparator = mode == .regexp && selection.length == 0
-                && selection.location == text.length && selection.location > 0
-                && !isWhitespace(text.character(at: selection.location - 1))
+            if mode == .regexp {
+                guard let separator = HistorySearchQueryCompiler.regexpConditionInsertionPrefix(for: input.text)
+                else { return nil }
+                // The caret may be inside a regexp token or the user may
+                // have a selection. Keep the whole pattern and append.
+                return .init(kind: .term, prefix: "", replacementRange: NSRange(location: text.length, length: 0),
+                             field: nil, explicit: true, openingText: separator + "$", closingText: "$")
+            }
             return .init(kind: .term, prefix: "", replacementRange: selection,
-                         field: nil, explicit: true, openingText: needsSeparator ? " $" : "$", closingText: "$")
+                         field: nil, explicit: true, openingText: "$", closingText: "$")
         }
 
         let endLimit = min(text.length, selection.location + maximumLookAheadUTF16)

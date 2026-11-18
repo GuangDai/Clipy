@@ -77,7 +77,6 @@ struct HistoryRowAccessibilityActionTests {
     ) -> HistoryRowView {
         HistoryRowView(
             row: row,
-            now: Date(timeIntervalSince1970: 1_787_000_100),
             pinnedOrdinal: row.pinnedPosition.map { $0 + 1 },
             density: .comfortable,
             thumbnails: ThumbnailStore(history: ScriptedHistory()),
@@ -216,7 +215,6 @@ struct HistoryRowAccessibilityActionTests {
         // the same view-state methods ⌘P/⌫ use.
         let rowView = HistoryRowView(
             row: row,
-            now: Date(timeIntervalSince1970: 1_787_000_100),
             pinnedOrdinal: nil,
             density: .comfortable,
             thumbnails: ThumbnailStore(history: history),
@@ -283,7 +281,6 @@ struct HistoryRowAccessibilityActionTests {
 
         let rowView = HistoryRowView(
             row: row,
-            now: Date(timeIntervalSince1970: 1_787_000_100),
             pinnedOrdinal: nil,
             density: .comfortable,
             thumbnails: ThumbnailStore(history: ScriptedHistory()),

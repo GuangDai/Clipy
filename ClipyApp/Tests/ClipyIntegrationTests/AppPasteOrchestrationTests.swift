@@ -25,6 +25,7 @@
 /// package-only AppKit-result fixture; no adapter failure switch is exposed
 /// to this external package client.
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -148,10 +149,17 @@ struct AppPasteOrchestrationTests {
             HistoryBrowseRequest(kind: .recent, limit: 1)
         ).position
 
-        // Submit the PRE-revision reference deliberately: the frozen v1
-        // product rule is current-by-ID, so the lane resolves and writes the
-        // current revision without labelling it as the requested version.
+        // A command for the old preview cannot silently write the revision.
+        let previousPasteboardGeneration = pasteboard.changeCount
         viewState.requestPaste(inserted)
+        let staleTask = try #require(composition.pendingPasteForTesting)
+        await staleTask.value
+        #expect(pasteboard.changeCount == previousPasteboardGeneration)
+        #expect(completionCount == 0)
+        #expect(failures == [.history(.staleContent(expected: inserted.contentVersion,
+                                                    current: revised.contentVersion))])
+        failures.removeAll()
+        viewState.requestPaste(revised)
 
         // The write lands on the pasteboard (the adapter clears first and
         // writes every representation plus the hint).
@@ -268,9 +276,7 @@ struct AppPasteOrchestrationTests {
         )
     }
 
-    /// `DEC-PASTE-REFERENCE` chooses current-by-ID at the Authority read,
-    /// not a lease through the later AppKit write. Once History has returned
-    /// a self-consistent v1 payload, a v2 revision committed while that
+    /// Once History has returned the selected v1 payload, a v2 revision committed while that
     /// immutable payload is parked cannot silently replace its bytes. The
     /// accepted operation writes the tagged v1 exactly once while History
     /// remains current at v2.
@@ -384,6 +390,63 @@ struct AppPasteOrchestrationTests {
         #expect(pasteboard.pasteboardItems?.isEmpty ?? true)
         #expect(completionCount == 0)
         #expect(failures.isEmpty)
+    }
+
+    @Test(arguments: [false, true]) @MainActor
+    func returnCopiesTheQuickLookItemWhenTheListSelectionMoves(keepOpen: Bool) async throws {
+        try ComposedSupport.requireUsablePasteboard()
+        let history = try await ComposedSupport.openMemoryHistory()
+        let visibleBytes = "shown in Quick Look"
+        let visibleReceipt = try await history.perform(.capture(
+            ComposedSupport.textCapture(visibleBytes, observedAt: Date(timeIntervalSinceReferenceDate: 1))
+        ))
+        let backgroundReceipt = try await history.perform(.capture(
+            ComposedSupport.textCapture("background selection", observedAt: Date(timeIntervalSinceReferenceDate: 2))
+        ))
+        let visible = try #require(ComposedSupport.insertedReference(from: visibleReceipt, "visible item"))
+        let background = try #require(ComposedSupport.insertedReference(from: backgroundReceipt, "background item"))
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        let composition = AppComposition.makeForTesting(history: history, adapter: PasteboardAdapter(pasteboard: pasteboard))
+        let owner = AppDelegate()
+        owner.installCompositionForTesting(composition)
+        defer {
+            owner.closePanel()
+            composition.stop()
+            pasteboard.releaseGlobally()
+        }
+        owner.openPanelForTesting()
+        let panel = try #require(owner.panelForTesting)
+        let surface = try #require(owner.panelSurfaceState)
+        let ready = await ComposedSupport.waitFor {
+            composition.viewState.displayedRow(for: visible.id)?.item == visible
+                && composition.viewState.displayedRow(for: background.id)?.item == background
+        }
+        try #require(ready)
+
+        surface.selection = visible.id
+        surface.quickLookReference = visible
+        surface.selection = background.id
+        if keepOpen { owner.togglePanelKeepOpen() }
+        let returnKey = try #require(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: UInt16(kVK_Return)
+        ))
+
+        let generation = pasteboard.changeCount
+        owner.previewState.isInformationPresented = true
+        panel.sendEvent(returnKey)
+        #expect(composition.pendingPasteForTesting == nil)
+        #expect(pasteboard.changeCount == generation)
+        owner.previewState.isInformationPresented = false
+
+        panel.sendEvent(returnKey)
+        let copy = try #require(composition.pendingPasteForTesting)
+        await copy.value
+        #expect(pasteboard.data(forType: .string) == Data(visibleBytes.utf8))
+        #expect(panel.isPresented == keepOpen)
+        #expect(owner.isPanelKeepOpenActive == keepOpen)
     }
 
     /// Card 7/14: a payload parked in the old panel session must not write

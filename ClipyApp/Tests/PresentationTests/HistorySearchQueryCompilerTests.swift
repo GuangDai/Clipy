@@ -35,6 +35,26 @@ struct HistorySearchQueryCompilerTests {
         #expect(editing.literalText == unfinished)
         #expect(editing.expression == nil)
     }
+
+    @Test(arguments: [
+        ("^[ $]$", "$"),
+        (#"^[\] $]$"#, "]"),
+        (#"^\\[ $]$"#, #"\$"#),
+        (#"^\Q $source:Safari$ \E$"#, " $source:Safari$ "),
+        ("^report\\\u{3000}$", "report\u{3000}"),
+    ])
+    func regexpClassesAndQuotedTextKeepLiteralDollars(pattern: String, matchingText: String) throws {
+        let plain = try HistorySearchQueryCompiler.compile(pattern, mode: .regexp)
+        #expect(plain.literalText.utf8.elementsEqual(pattern.utf8))
+        #expect(plain.expression == nil)
+
+        let withCondition = try HistorySearchQueryCompiler.compile(pattern + " $type:text$", mode: .regexp)
+        #expect(withCondition.literalText.utf8.elementsEqual(pattern.utf8))
+        #expect(withCondition.expression == (try HistorySearchExpression.parse("type:text")))
+        let matcher = try NSRegularExpression(pattern: withCondition.literalText)
+        #expect(matcher.firstMatch(in: matchingText, range: NSRange(location: 0, length: matchingText.utf16.count)) != nil)
+    }
+
     @Test(arguments: [
         "source:Safari", "app:Notes", "source-id:com.apple.Safari", "type:text",
         "is:pinned", "before:2026-09-30", "NOT source:Safari OR type:images"

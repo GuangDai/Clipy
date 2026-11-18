@@ -235,6 +235,10 @@ final class SearchHistoryStore {
         if definition.mode == .regexp {
             return compilation.literalText.isEmpty || (try? NSRegularExpression(pattern: compilation.literalText)) != nil
         }
+        if definition.mode == .fuzzy || definition.mode == .expression {
+            let limit = HistoryLimits.standard.maximumFuzzyQueryCharacters
+            return compilation.literalText.prefix(limit + 1).count <= limit
+        }
         return true
     }
 
@@ -274,7 +278,8 @@ final class SearchHistoryStore {
                   Set(stored.favorites.map(\.id)).count == stored.favorites.count,
                   Set(stored.recentSearches.map(\.id)).count == stored.recentSearches.count,
                   (stored.favorites + stored.recentSearches).allSatisfy({
-                      $0.definition.hasCriteria && Self.isWellFormed($0.definition, name: $0.name)
+                      // Today's default can be a deliberately saved sort from an older version.
+                      Self.isWellFormed($0.definition, name: $0.name)
                           && $0.savedAt.timeIntervalSince1970.isFinite
                   }) else { throw SearchHistoryFailure.unreadableStore }
             let original = stored

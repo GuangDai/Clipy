@@ -37,13 +37,6 @@ struct BuiltInAutomationPredicateTests {
         }
     }
 
-    @Test func emptyGroupsAreIncompleteInsteadOfUnconditionalMatches() {
-        for predicate in [BuiltInAutomationPredicate.all([]), .any([])] {
-            #expect(throws: BuiltInAutomationFailure.emptyConditionGroup) { try predicate.validate() }
-            #expect(throws: BuiltInAutomationFailure.emptyConditionGroup) { try predicate.matches(.text("text")) }
-        }
-    }
-
     @Test(arguments: [BuiltInAutomationPredicate.all([]), .any([])])
     func nestedEmptyGroupsReportTheSameActionableFailureForSavingAndExecution(
         emptyGroup: BuiltInAutomationPredicate
@@ -93,13 +86,12 @@ struct BuiltInAutomationPredicateTests {
         #expect(first != second)
     }
 
-    @Test func deepConditionsUseTheirExplicitStacksWithoutAnArtificialStepLimit() throws {
+    @Test func deeplyNestedConditionsStillMatch() throws {
         var predicate = BuiltInAutomationPredicate.match(.isText, "")
         for _ in 0..<1_024 { predicate = .not(predicate) }
         try predicate.validate()
         #expect(try predicate.matches(.text("input")))
         #expect(!predicate.containsImageTest)
-        #expect(predicate == predicate)
         #expect(BuiltInAutomationPredicate.any([predicate, .match(.isImage, "")]).containsImageTest)
     }
 

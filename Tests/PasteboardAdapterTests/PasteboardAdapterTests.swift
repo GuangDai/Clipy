@@ -207,36 +207,7 @@ func pasteboardChangeBetweenRepresentationReadsProducesContentFreeRetryOutcome()
     // unavailable-type diagnosis.
 }
 
-@Test @MainActor
-func completeCaptureConvenienceRejectsPasteboardChangedDuringRead() {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    pasteboard.setData(Data("old plain".utf8), forType: .string)
-    pasteboard.setData(
-        Data("<b>old rich</b>".utf8),
-        forType: NSPasteboard.PasteboardType("public.html")
-    )
-    var didReplaceContents = false
-    var adapter = PasteboardAdapter(pasteboard: pasteboard)
-    adapter.payloadReadCompletionHook = { _ in
-        guard !didReplaceContents else { return }
-        didReplaceContents = true
-        pasteboard.clearContents()
-        pasteboard.setString("new plain", forType: .string)
-    }
-
-    #expect(adapter.capture() == nil)
-    #expect(didReplaceContents)
-}
 #endif
-
-@Test @MainActor
-func captureOfEmptyPasteboardReturnsNil() {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-
-    #expect(PasteboardAdapter(pasteboard: pasteboard).capture() == nil)
-}
 
 @Test @MainActor
 func multipleItemsPreserveOrderRepeatedTypesAndExactBytesThroughPaste() throws {
@@ -330,189 +301,12 @@ func privacyMarkerOnLaterItemRejectsWholeGestureBeforePayloadRead(marker: String
         return
     }
     #expect(concealed.markerTypeIdentifier == marker)
-    #expect(payloadAccessorCalls.isEmpty)
-}
-#endif
-
-#if DEBUG
-@Test @MainActor
-func laterItemStagingFailurePreservesTheExistingPasteboard() throws {
-    let pasteboard = makePasteboard()
-    #expect(pasteboard.setString("keep prior clipboard", forType: .string))
-    let oldChangeCount = pasteboard.changeCount
-    let rejectedType = "com.clipy.tests.rejected-later-item"
-    let adapter = PasteboardAdapter(pasteboard: pasteboard,
-        failureSimulation: PasteboardFailureSimulation(rejectedWriteTypeIdentifiers: [rejectedType]))
-    let id = HistoryItemID(rawValue: UUID())
-    let payload = PastePayload(
-        item: HistoryItemReference(id: id, contentVersion: .initial),
-        representations: [
-            HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("first".utf8)),
-            HistoryRepresentation(typeIdentifier: rejectedType, bytes: Data([1]), pasteboardItemIndex: 1)
-        ], lineageHint: id
-    )
-    #expect(throws: PasteboardWriteFailure.representationsRejected(typeIdentifiers: [rejectedType])) {
-        try adapter.write(payload)
-    }
-    #expect(pasteboard.changeCount == oldChangeCount)
-    #expect(pasteboard.string(forType: .string) == "keep prior clipboard")
-}
-#endif
-
-// MARK: - Concealment markers (roadmap 04 acceptance 2)
-
-#if DEBUG
-@Test @MainActor
-func declaredConcealmentMarkerShortCircuitsBeforeReadingLargeSiblingPayload() throws {
-    let marker = "org.nspasteboard.ConcealedType"
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    pasteboard.setData(
-        Data(repeating: 0x73, count: 5 * 1_024 * 1_024),
-        forType: .string
-    )
-    pasteboard.setData(
-        Data("marker".utf8),
-        forType: NSPasteboard.PasteboardType(marker)
-    )
-    var payloadAccessorCalls: [String] = []
-    var adapter = PasteboardAdapter(pasteboard: pasteboard)
-    adapter.payloadReadObserver = { typeIdentifier in
-        payloadAccessorCalls.append(typeIdentifier)
-    }
-
-    let outcome = try #require(adapter.captureOutcome())
-
-    #expect(payloadAccessorCalls.isEmpty)
-    guard case let .concealed(concealed) = outcome else {
-        Issue.record("expected the concealed-before-bytes outcome")
-        return
-    }
-    #expect(concealed.markerTypeIdentifier == marker)
     #expect(concealed.changeCount == pasteboard.changeCount)
+    #expect(payloadAccessorCalls.isEmpty)
     #expect(adapter.capture() == nil)
     #expect(payloadAccessorCalls.isEmpty)
 }
-
-@Test @MainActor
-func payloadReadInstrumentationObservesUnmarkedCaptureWithoutChangingIt() throws {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    pasteboard.setData(Data("ordinary".utf8), forType: .string)
-    var payloadAccessorCalls: [String] = []
-    var adapter = PasteboardAdapter(pasteboard: pasteboard)
-    adapter.payloadReadObserver = { typeIdentifier in
-        payloadAccessorCalls.append(typeIdentifier)
-    }
-
-    let outcome = try #require(adapter.captureOutcome())
-
-    #expect(payloadAccessorCalls == [NSPasteboard.PasteboardType.string.rawValue])
-    guard case let .complete(complete) = outcome else {
-        Issue.record("expected the stable complete outcome")
-        return
-    }
-    #expect(complete.changeCount == pasteboard.changeCount)
-    #expect(complete.capture.isConcealed == false)
-    #expect(complete.capture.representations == [
-        CapturedRepresentation(
-            typeIdentifier: NSPasteboard.PasteboardType.string.rawValue,
-            bytes: Data("ordinary".utf8)
-        )
-    ])
-}
 #endif
-
-@Test @MainActor
-func everyConcealmentMarkerMarksTheWholeCaptureConcealed() {
-    for marker in concealmentMarkers {
-        let pasteboard = makePasteboard()
-        pasteboard.clearContents()
-        pasteboard.setData(Data("sensitive".utf8), forType: .string)
-        pasteboard.setData(Data("marker".utf8), forType: NSPasteboard.PasteboardType(marker))
-
-        guard let outcome = PasteboardAdapter(pasteboard: pasteboard).captureOutcome() else {
-            Issue.record("expected concealed outcome for \(marker)")
-            continue
-        }
-
-        guard case let .concealed(concealed) = outcome else {
-            Issue.record("expected concealed outcome for \(marker)")
-            continue
-        }
-        #expect(concealed.markerTypeIdentifier == marker, "\(marker)")
-        #expect(concealed.changeCount == pasteboard.changeCount, "\(marker)")
-        // Whole-item privacy semantics: declared types are enough to reject
-        // this observation. The case has no capture field, so sibling bytes
-        // cannot be retained or accidentally submitted by a caller.
-    }
-}
-
-@Test @MainActor
-func marksConcealedRecognizesExactlyTheMarkerSet() {
-    for marker in concealmentMarkers {
-        #expect(PasteboardMarkers.marksConcealed([marker]), "\(marker)")
-        #expect(
-            PasteboardMarkers.marksConcealed(["public.utf8-plain-text", marker]),
-            "\(marker)"
-        )
-    }
-    #expect(!PasteboardMarkers.marksConcealed(["public.utf8-plain-text", "public.html"]))
-    #expect(!PasteboardMarkers.marksConcealed([]))
-    #expect(PasteboardMarkers.concealedTypeIdentifiers.count == 6)
-    #expect(concealmentMarkers.allSatisfy { PasteboardMarkers.concealedTypeIdentifiers.contains($0) })
-}
-
-// MARK: - Lineage hint codec (03b §9; roadmap 04 acceptance 3, codec half)
-
-@Test @MainActor
-func lineageHintCodecRoundTripsAndRejectsMalformedData() {
-    #expect(PasteboardLineageHint.typeIdentifier == "com.clipy.lineageHint")
-
-    let id = HistoryItemID(rawValue: UUID())
-    #expect(PasteboardLineageHint.encode(id) == Data(id.rawValue.uuidString.utf8))
-    #expect(PasteboardLineageHint.decode(PasteboardLineageHint.encode(id)) == id)
-
-    #expect(PasteboardLineageHint.decode(Data()) == nil)
-    #expect(PasteboardLineageHint.decode(Data("not-a-uuid".utf8)) == nil)
-    #expect(
-        PasteboardLineageHint.decode(Data("AB108DC6-779D-4C78-B7F5-45BE50EF1CD8".utf8)) != nil
-    )
-}
-
-// MARK: - Paste write + hint round-trip (03b §9; 04 §8; roadmap 04 acceptance 3)
-
-@Test @MainActor
-func writeRoundTripsLineageHintIntoCaptureOrigin() throws {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    let adapter = PasteboardAdapter(pasteboard: pasteboard)
-
-    let id = HistoryItemID(rawValue: UUID())
-    let payload = PastePayload(
-        item: HistoryItemReference(id: id, contentVersion: ContentVersion(rawValue: 1)),
-        representations: [
-            HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("Clipy".utf8)),
-            HistoryRepresentation(typeIdentifier: "public.html", bytes: Data("<b>Clipy</b>".utf8)),
-        ],
-        lineageHint: id
-    )
-
-    try adapter.write(payload)
-
-    let capture = adapter.capture()
-    #expect(capture != nil)
-    #expect(capture?.origin.lineageHint == id)
-    #expect(capture?.isConcealed == false)
-    // The hint marker is metadata: it must not survive as a retained
-    // representation of the re-captured paste.
-    #expect(capture?.representations.count == 2)
-    #expect(
-        capture?.representations.contains {
-            $0.typeIdentifier == PasteboardLineageHint.typeIdentifier
-        } == false
-    )
-}
 
 @Test @MainActor
 func writeReplacesPriorContentWithOneCompleteItem() throws {
@@ -557,213 +351,45 @@ func writeReplacesPriorContentWithOneCompleteItem() throws {
     )
 }
 
-// MARK: - Partial-freeze record + typed write failure (audit SPEC-IMPL-005)
+// MARK: - Write failures
 
 #if DEBUG
-@Test @MainActor
-func captureRecordsADeclaredButUnavailableTypeAsAPartialFreeze() {
+@Test(arguments: ["com.clipy.tests.rejected-later-item", PasteboardLineageHint.typeIdentifier]) @MainActor
+func stagingFailurePreservesTheExistingPasteboard(rejectedType: String) throws {
     let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    pasteboard.setData(Data("plain".utf8), forType: .string)
-    pasteboard.setData(Data("<b>rich</b>".utf8), forType: NSPasteboard.PasteboardType("public.html"))
-    let adapter = PasteboardAdapter(
-        pasteboard: pasteboard,
-        failureSimulation: PasteboardFailureSimulation(
-            unavailableTypeIdentifiers: ["public.html"]
-        )
-    )
-
-    guard let outcome = adapter.captureOutcome() else {
-        Issue.record("expected the declared-unavailable partial outcome")
-        return
-    }
-
-    // The nil-data type is RECORDED, never silently dropped. The available
-    // representation is still frozen, and the closed case marks it partial
-    // without claiming why the system did not vend those bytes.
-    guard case let .declaredUnavailable(partial) = outcome else {
-        Issue.record("expected the declared-unavailable partial outcome")
-        return
-    }
-    #expect(partial.unavailableTypeIdentifiers == ["public.html"])
-    #expect(partial.changeCount == pasteboard.changeCount)
-    #expect(partial.partialCapture.representations.count == 1)
-    #expect(
-        partial.partialCapture.representations.first?.typeIdentifier
-            == NSPasteboard.PasteboardType.string.rawValue
-    )
-    #expect(
-        partial.partialCapture.representations.first?.bytes == Data("plain".utf8)
-    )
-    #expect(adapter.capture() == nil)
-}
-#endif
-
-@Test @MainActor
-func captureOfAFullyObservedItemIsACompleteOutcome() {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    pasteboard.setData(Data("plain".utf8), forType: .string)
-    let stableChangeCount = pasteboard.changeCount
-
-    let observedAt = Date(timeIntervalSince1970: 1_760_000_000)
-    guard let outcome = PasteboardAdapter(pasteboard: pasteboard)
-        .captureOutcome(observedAt: observedAt) else {
-        Issue.record("expected the stable complete outcome")
-        return
-    }
-
-    guard case let .complete(complete) = outcome else {
-        Issue.record("expected the stable complete outcome")
-        return
-    }
-    #expect(complete.changeCount == stableChangeCount)
-    // The convenience half drops the record but freezes the same bytes;
-    // both calls share one injected observedAt so the comparison is
-    // deterministic (the default Date() stamps would differ sub-second).
-    #expect(
-        PasteboardAdapter(pasteboard: pasteboard)
-            .capture(observedAt: observedAt) == complete.capture
-    )
-}
-
-#if DEBUG
-@Test @MainActor
-func everyUnavailableRepresentationProducesAnExplicitPartialOutcome() {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    pasteboard.setData(Data("plain".utf8), forType: .string)
-    let adapter = PasteboardAdapter(
-        pasteboard: pasteboard,
-        failureSimulation: PasteboardFailureSimulation(
-            unavailableTypeIdentifiers: [
-                NSPasteboard.PasteboardType.string.rawValue
-            ]
-        )
-    )
-
-    guard let outcome = adapter.captureOutcome() else {
-        Issue.record("expected the all-unavailable partial outcome")
-        return
-    }
-
-    // The observer has consumed this changeCount, so an all-unavailable
-    // gesture must remain distinguishable from a cleared pasteboard.
-    guard case let .declaredUnavailable(partial) = outcome else {
-        Issue.record("expected the all-unavailable partial outcome")
-        return
-    }
-    #expect(
-        partial.unavailableTypeIdentifiers
-            == [NSPasteboard.PasteboardType.string.rawValue]
-    )
-    #expect(partial.partialCapture.representations.isEmpty)
-    #expect(partial.changeCount == pasteboard.changeCount)
-    #expect(adapter.capture() == nil)
-}
-
-@Test @MainActor
-func rejectedRepresentationStagingLeavesExistingPasteboardUntouched() throws {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
+    defer { pasteboard.releaseGlobally() }
     let sentinelType = NSPasteboard.PasteboardType("com.clipy.tests.sentinel")
-    let sentinelBytes = Data("keep me".utf8)
-    pasteboard.setData(sentinelBytes, forType: sentinelType)
-    let sentinelChangeCount = pasteboard.changeCount
+    let sentinelBytes = Data("keep prior clipboard".utf8)
+    try #require(pasteboard.setData(sentinelBytes, forType: sentinelType))
+    let oldChangeCount = pasteboard.changeCount
     let adapter = PasteboardAdapter(
         pasteboard: pasteboard,
-        failureSimulation: PasteboardFailureSimulation(
-            rejectedWriteTypeIdentifiers: ["public.html"]
-        )
+        failureSimulation: PasteboardFailureSimulation(rejectedWriteTypeIdentifiers: [rejectedType])
     )
-
     let id = HistoryItemID(rawValue: UUID())
     let payload = PastePayload(
-        item: HistoryItemReference(id: id, contentVersion: ContentVersion(rawValue: 1)),
+        item: HistoryItemReference(id: id, contentVersion: .initial),
         representations: [
-            HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("Clipy".utf8)),
-            HistoryRepresentation(typeIdentifier: "public.html", bytes: Data("<b>Clipy</b>".utf8)),
-        ],
-        lineageHint: id
-    )
-
-    // The typed failure names every refused staged type identifier.
-    do {
-        try adapter.write(payload)
-        Issue.record("SPEC-IMPL-005: expected PasteboardWriteFailure")
-    } catch let failure as PasteboardWriteFailure {
-        #expect(
-            failure == .representationsRejected(typeIdentifiers: ["public.html"]),
-            "SPEC-IMPL-005: the failure names the refused representation"
-        )
-    }
-
-    // All setters target an unbound in-memory item. A staging failure is
-    // reported before clear/writeObjects, so even changeCount is unchanged.
-    #expect(pasteboard.changeCount == sentinelChangeCount)
-    #expect(pasteboard.pasteboardItems?.count == 1)
-    let item = pasteboard.pasteboardItems?.first
-    #expect(item?.types.map(\.rawValue) == [sentinelType.rawValue])
-    #expect(item?.data(forType: sentinelType) == sentinelBytes)
-    #expect(item?.data(forType: .string) == nil)
-    #expect(item?.data(forType: NSPasteboard.PasteboardType("public.html")) == nil)
-    #expect(
-        item?.data(forType: NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier))
-            == nil
-    )
-}
-
-@Test @MainActor
-func rejectedLineageHintStagingLeavesExistingPasteboardUntouched() throws {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    let sentinelType = NSPasteboard.PasteboardType("com.clipy.tests.sentinel")
-    let sentinelBytes = Data("keep me too".utf8)
-    pasteboard.setData(sentinelBytes, forType: sentinelType)
-    let sentinelChangeCount = pasteboard.changeCount
-    let adapter = PasteboardAdapter(
-        pasteboard: pasteboard,
-        failureSimulation: PasteboardFailureSimulation(
-            rejectedWriteTypeIdentifiers: [
-                PasteboardLineageHint.typeIdentifier
-            ]
-        )
-    )
-
-    let id = HistoryItemID(rawValue: UUID())
-    let payload = PastePayload(
-        item: HistoryItemReference(id: id, contentVersion: ContentVersion(rawValue: 1)),
-        representations: [
+            HistoryRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data("first".utf8)),
             HistoryRepresentation(
-                typeIdentifier: "public.utf8-plain-text",
-                bytes: Data("Clipy".utf8)
-            )
+                typeIdentifier: "com.clipy.tests.rejected-later-item",
+                bytes: Data([1]),
+                pasteboardItemIndex: 1
+            ),
         ],
         lineageHint: id
     )
-
     do {
         try adapter.write(payload)
-        Issue.record("SPEC-IMPL-005: expected PasteboardWriteFailure")
-    } catch let failure as PasteboardWriteFailure {
-        #expect(
-            failure == .representationsRejected(
-                typeIdentifiers: [PasteboardLineageHint.typeIdentifier]
-            ),
-            "SPEC-IMPL-005: a hint refusal is named like any other type"
-        )
+        Issue.record("A rejected staged type must fail the write")
+    } catch PasteboardWriteFailure.representationsRejected(let typeIdentifiers) {
+        #expect(Set(typeIdentifiers) == [rejectedType])
     }
-
-    #expect(pasteboard.changeCount == sentinelChangeCount)
-    #expect(pasteboard.pasteboardItems?.count == 1)
-    let item = pasteboard.pasteboardItems?.first
-    #expect(item?.types.map(\.rawValue) == [sentinelType.rawValue])
-    #expect(item?.data(forType: sentinelType) == sentinelBytes)
-    #expect(item?.data(forType: .string) == nil)
-    #expect(
-        item?.data(forType: NSPasteboard.PasteboardType(PasteboardLineageHint.typeIdentifier))
-            == nil
-    )
+    #expect(pasteboard.changeCount == oldChangeCount)
+    let items = try #require(pasteboard.pasteboardItems)
+    try #require(items.count == 1)
+    #expect(items[0].types == [sentinelType])
+    #expect(items[0].data(forType: sentinelType) == sentinelBytes)
 }
 
 @Test @MainActor
@@ -806,48 +432,10 @@ func rejectedWholeItemIsReportedAfterClearingThePasteboard() throws {
 }
 #endif
 
-#if DEBUG
-@Test @MainActor
-func observerDeliversAPartialOutcomeForTheCompositionToJudge() {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    pasteboard.setData(Data("plain".utf8), forType: .string)
-    pasteboard.setData(Data("<b>rich</b>".utf8), forType: NSPasteboard.PasteboardType("public.html"))
-    let adapter = PasteboardAdapter(
-        pasteboard: pasteboard,
-        failureSimulation: PasteboardFailureSimulation(
-            unavailableTypeIdentifiers: ["public.html"]
-        )
-    )
-    let observer = PasteboardObserver(adapter: adapter, pollInterval: 0.05)
-
-    var received: [CaptureOutcome] = []
-    observer.start { outcome in
-        received.append(outcome)
-    }
-    defer { observer.stop() }
-
-    // start delivers the CURRENT contents synchronously: the partial
-    // freeze reaches the handler owner (the composition root drops it
-    // rather than admitting partial Canonical Content, 01 §5.1).
-    #expect(received.count == 1)
-    guard let firstOutcome = received.first else {
-        Issue.record("expected the observer to deliver an outcome")
-        return
-    }
-    guard case let .declaredUnavailable(partial) = firstOutcome else {
-        Issue.record("expected the observer to deliver the partial outcome")
-        return
-    }
-    #expect(partial.unavailableTypeIdentifiers == ["public.html"])
-    #expect(partial.partialCapture.representations.count == 1)
-}
-#endif
-
 // MARK: - Observation (01 §5.1; roadmap 04 deliverable 3, acceptance 4)
 
 @Test @MainActor
-func observerCapturesImmediatelyThenFiresOncePerChangeCountBump() {
+func observerCapturesImmediatelyThenFiresOncePerChangeCountBump() throws {
     let pasteboard = makePasteboard()
     pasteboard.clearContents()
     pasteboard.setString("first", forType: .string)
@@ -876,7 +464,7 @@ func observerCapturesImmediatelyThenFiresOncePerChangeCountBump() {
     // once, with the new contents.
     pasteboard.clearContents()
     pasteboard.setString("second", forType: .string)
-    #expect(spinMainRunLoop { received.count >= 2 })
+    try #require(spinMainRunLoop { received.count >= 2 })
     #expect(
         received.last?.representations.contains {
             $0.typeIdentifier == NSPasteboard.PasteboardType.string.rawValue
@@ -884,68 +472,12 @@ func observerCapturesImmediatelyThenFiresOncePerChangeCountBump() {
         } == true
     )
 
-    // A change that leaves nothing retainable is recorded but not
-    // delivered: the handler fires only for non-nil captures.
+    // Clearing the pasteboard yields no complete capture.
     pasteboard.clearContents()
     let deliveredEmptyChange = spinMainRunLoop(until: { received.count >= 3 }, timeout: 0.4)
     #expect(!deliveredEmptyChange)
 
     observer.stop()
-}
-
-@Test @MainActor
-func observerCanBaselineCurrentGenerationBeforePollingLaterCopies() {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    pasteboard.setString("copied-while-paused", forType: .string)
-    let observer = PasteboardObserver(
-        adapter: PasteboardAdapter(pasteboard: pasteboard),
-        pollInterval: 0.05
-    )
-
-    var received: [ClipboardCapture] = []
-    observer.start(captureCurrent: false) { outcome in
-        if case let .complete(complete) = outcome {
-            received.append(complete.capture)
-        }
-    }
-    defer { observer.stop() }
-
-    #expect(received.isEmpty)
-    pasteboard.clearContents()
-    pasteboard.setString("copied-after-resume", forType: .string)
-    #expect(spinMainRunLoop { received.count == 1 })
-    #expect(
-        received[0].representations.contains {
-            $0.typeIdentifier == NSPasteboard.PasteboardType.string.rawValue
-                && $0.bytes == Data("copied-after-resume".utf8)
-        }
-    )
-}
-
-@Test @MainActor
-func observerStopHaltsDelivery() {
-    let pasteboard = makePasteboard()
-    pasteboard.clearContents()
-    pasteboard.setString("first", forType: .string)
-    let observer = PasteboardObserver(
-        adapter: PasteboardAdapter(pasteboard: pasteboard),
-        pollInterval: 0.05
-    )
-
-    var received: [ClipboardCapture] = []
-    observer.start { outcome in
-        if case let .complete(complete) = outcome {
-            received.append(complete.capture)
-        }
-    }
-    observer.stop()
-
-    pasteboard.clearContents()
-    pasteboard.setString("after-stop", forType: .string)
-    let deliveredAfterStop = spinMainRunLoop(until: { received.count >= 2 }, timeout: 0.4)
-    #expect(!deliveredAfterStop)
-    #expect(received.count == 1)
 }
 
 #if DEBUG

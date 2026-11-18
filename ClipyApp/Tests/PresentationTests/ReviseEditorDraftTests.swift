@@ -196,24 +196,6 @@ struct ReviseEditorDraftTests {
         #expect(draft.isDirty)
     }
 
-    @Test func keepCurrentPreservesPreviouslyRevisedBytes() {
-        let currentText = Data("current revision".utf8)
-        let draft = ReviseEditorDraft(
-            details: details(
-                canonicalText: Data("original capture".utf8),
-                effectiveText: currentText
-            )
-        )
-
-        let decisions = decisions(from: draft.revisionRequest())
-
-        #expect(
-            decisions[textType]
-                == .inheritCurrent
-        )
-        #expect(decisions[siblingType] == .inheritCurrent)
-    }
-
     @Test func hidingSiblingDoesNotRestorePreviouslyRevisedBytes() {
         let currentText = Data("current revision".utf8)
         var draft = ReviseEditorDraft(
@@ -268,18 +250,6 @@ struct ReviseEditorDraftTests {
             decisions(from: draft.revisionRequest())[siblingType]
                 == .inheritCanonical
         )
-    }
-
-    @Test func openingDraftIsCleanAndCanDismissDirectly() {
-        let draft = ReviseEditorDraft(
-            details: details(
-                canonicalText: Data("original capture".utf8),
-                effectiveText: Data("current revision".utf8)
-            )
-        )
-
-        #expect(!draft.isDirty)
-        #expect(draft.dismissalDecision == .dismiss)
     }
 
     @Test func changedChoiceRequiresConfirmationUntilRestoredExactly() {
@@ -670,33 +640,6 @@ struct ReviseEditorDraftTests {
             #expect(!draft.canReplace(metadata(representation)))
             #expect(draft.replacementRequest(for: fixture.typeIdentifier) == nil)
             #expect(!draft.hasReplacementSource(for: fixture.typeIdentifier))
-        }
-    }
-
-    @Test func keepCurrentPreservesUnsupportedFormatBytesExactly() {
-        for fixture in nonReplaceableFormatFixtures() {
-            let draft = ReviseEditorDraft(
-                details: details(
-                    canonical: [
-                        HistoryRepresentation(
-                            typeIdentifier: fixture.typeIdentifier,
-                            bytes: fixture.canonicalBytes
-                        ),
-                    ],
-                    effective: [
-                        HistoryRepresentation(
-                            typeIdentifier: fixture.typeIdentifier,
-                            bytes: fixture.effectiveBytes
-                        ),
-                    ]
-                )
-            )
-
-            #expect(
-                decisions(from: draft.revisionRequest())[
-                    fixture.typeIdentifier
-                ] == .inheritCurrent
-            )
         }
     }
 

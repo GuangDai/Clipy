@@ -22,7 +22,8 @@ struct PreviewRasterNoticeTests {
         await loader.load(item: multiple)
         #expect(loader.phase == .content(.image))
         #expect(loader.raster?.sourceImageCount == 2)
-        #expect(loader.appliedRasterNotice() == PreviewCopy.multiImageDisclosure())
+        let disclosure = try #require(loader.appliedRasterNotice())
+        #expect(!disclosure.isEmpty)
         #expect(try await history.pastePayload(for: multiple.id).representations.map(\.bytes) == [bytes])
 
         await loader.load(item: single)

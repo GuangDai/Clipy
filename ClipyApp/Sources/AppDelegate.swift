@@ -17,6 +17,7 @@
 /// pasteboards and temp stores.
 import AppKit
 import Dispatch
+import Foundation
 import HistoryCore
 import HistoryStorage
 import Observation
@@ -341,10 +342,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var interactionSettings = AdvancedInteractionSettings()
     private var appliedNativeAppearance: NativeAppearance?
 
-    /// The footer keep-open pin. Session state, not a persisted preference:
-    /// while active, FloatingPanel skips ONLY its focus-loss close; every
-    /// explicit close path still retires the panel, and `panelDidClose`
-    /// resets the pin so the next summon starts unpinned.
+    /// Keep Open belongs to one panel session. It suppresses dismissal on
+    /// key focus loss and successful Copy. Any explicit close resets it.
     private(set) var isPanelKeepOpenActive = false
 
     /// The documented public `OpenSettingsAction` captured from the panel's
@@ -410,6 +409,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 #endif
     @ObservationIgnored
     private var workspaceLifecycleObserverTokens: [NSObjectProtocol] = []
+    @ObservationIgnored
+    private var dateFilterObserverTokens: [NSObjectProtocol] = []
     private var workspaceActivity = WorkspaceActivityState.active
     /// The single `UserDefaults.didChangeNotification` registration feeding
     /// `panelAppearance`. One token, installed by both initializers, removed
@@ -573,9 +574,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             },
         ]
+        let dateChanges: [Notification.Name] = [.NSCalendarDayChanged, .NSSystemTimeZoneDidChange]
+        dateFilterObserverTokens = dateChanges.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.composition?.refreshDateFiltersIfNeeded()
+                }
+            }
+        }
     }
 
     private func removeWorkspaceLifecycleObservation() {
+        for token in dateFilterObserverTokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+        dateFilterObserverTokens.removeAll()
         guard let workspaceLifecycleNotificationCenter else { return }
         for token in workspaceLifecycleObserverTokens {
             workspaceLifecycleNotificationCenter.removeObserver(token)
@@ -602,6 +615,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isSystemAwake: true,
             isLoginSessionActive: workspaceActivity.isLoginSessionActive
         ))
+        composition?.refreshDateFiltersIfNeeded()
     }
 
     private func workspaceSessionDidResignActive() {
@@ -728,9 +742,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsOpenOperation = operation
     }
 
-    /// The keep-open pin toggle driven by the panel footer. Explicitly
-    /// user-owned: focus loss consults the flag, and `panelDidClose`
-    /// clears it.
     func togglePanelKeepOpen() {
         isPanelKeepOpenActive.toggle()
     }
@@ -743,7 +754,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !isTerminating, workspaceActivity.permitsProductActivity else { return }
         reloadInteractionSettings()
         if !interactionSettings.remembersSearch {
-            composition?.viewState.clearSearch()
+            composition?.viewState.resetSearchForOpening()
         }
         ensurePanelWindow()
         if let composition {
@@ -774,17 +785,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rootView: PanelRootView(appDelegate: self),
             previewState: previewState,
             isSelectionSubmissionEnabled: { [weak self] in
-                guard let self,
-                      let composition = self.composition,
-                      let panelSurfaceState = self.panelSurfaceState,
-                      panelSurfaceState.isAtListRoot
-                else { return false }
-                return panelSurfaceState.selectedReference(
-                    in: composition.viewState.displayedRows
-                ) != nil
+                guard let self, let composition = self.composition,
+                      let surface = self.panelSurfaceState else { return false }
+                // An invalidated Quick Look still covers the list until
+                // SwiftUI reconciles. Its Return cannot fall through.
+                return surface.quickLookReference != nil
+                    || surface.keyboardCopyReference(in: composition.viewState) != nil
             },
             isSearchCompletionActive: { [weak self] in
-                self?.panelSurfaceState?.searchCompletion.consumesPanelCommands ?? false
+                guard let surface = self?.panelSurfaceState, surface.allowsListKeyboardCommands else { return false }
+                return surface.searchCompletion.consumesPanelCommands
             },
             onSubmitSelection: { [weak self] in
                 self?.submitPanelSelection()
@@ -812,19 +822,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func submitPanelSelection() {
-        guard let composition,
-              let reference = panelSurfaceState?.selectedReference(
-                  in: composition.viewState.displayedRows
-              )
+        guard let composition, let panelSurfaceState,
+              let reference = panelSurfaceState.keyboardCopyReference(in: composition.viewState)
         else { return }
-        if HistorySearchCopy.issue(for: composition.viewState) == nil,
+        if panelSurfaceState.quickLookReference == nil,
+           HistorySearchCopy.issue(for: composition.viewState) == nil,
            composition.viewState.sourceResolutionError == nil,
            composition.viewState.searchFilters.hasValidDates() {
             composition.searchHistoryStore.recordSubmittedSearch(
                 HistorySearchDefinition(viewState: composition.viewState)
             )
         }
-        composition.viewState.requestPaste(reference)
+        composition.viewState.requestPasteFromDisplayedRow(reference)
     }
 
     /// Closes the panel (idempotent; the panel's close fires
@@ -1218,11 +1227,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panelSurfaceState = panelSurfaceState
         panelSurfaceState.selectsOnHover = interactionSettings.selectsOnHover
         panelSurfaceState.respondToMemoryPressure(displayMemoryPressure)
-        // Paste ⇒ close the panel (Maccy's paste-dismiss); the panel never
-        // activates the app, so the paste target keeps focus.
+        // Successful Copy normally dismisses the panel. Keep Open applies
+        // to this session's Copy as well as transferring key focus.
         opened.onPasteCompleted = { [weak self] in
-            self?.pasteFailure = nil
-            self?.closePanel()
+            guard let self else { return }
+            self.pasteFailure = nil
+            if !self.isPanelKeepOpenActive { self.closePanel() }
         }
         opened.onPasteFailed = { [weak self] failure in
             self?.pasteFailure = failure

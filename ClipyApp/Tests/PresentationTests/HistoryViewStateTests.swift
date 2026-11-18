@@ -449,6 +449,7 @@ struct HistoryViewStateTests {
             ]
         )
         let state = HistoryViewState(history: history)
+        state.searchMode = .fuzzy
         state.activate()
         #expect(await pollUntil { state.rows.map(\.title) == ["fuzzy-first"] })
 
@@ -708,7 +709,7 @@ struct HistoryViewStateTests {
                 let requests = await history.observeRequests
                 return requests.count == 2
                     && requests.last?.kind
-                        == .search(text: "clipy", mode: .fuzzy)
+                        == .search(text: "clipy", mode: .exact)
             }
         )
 
@@ -771,7 +772,7 @@ struct HistoryViewStateTests {
                 let requests = await history.observeRequests
                 return requests.count == 3
                     && requests.last?.kind
-                        == .search(text: "current", mode: .fuzzy)
+                        == .search(text: "current", mode: .exact)
             }
         )
         await history.emitObservedPage(fixturePage(rows: [], next: nil))
@@ -828,18 +829,12 @@ struct HistoryViewStateTests {
         await history.finishObservation()
     }
 
-    /// Switching a long exact draft to fuzzy admits one bounded query intent
-    /// without first publishing an invalid fuzzy request. The raw draft stays
-    /// untouched so switching back to a syntax-bearing mode is lossless.
-    @Test(arguments: ["x", "e\u{301}", "😀"])
-    func longExactToFuzzyIsOneAtomicAdmittedIntent(character: String) async {
+    @Test func longFuzzyDraftIsRejectedWithoutTruncatingIt() async {
         let history = ScriptedHistory()
         let state = HistoryViewState(history: history)
-        let admittedDraft = String(repeating: character, count: 64)
-        let rawDraft = admittedDraft + "TAIL" + String(repeating: "suffix", count: 2_000)
+        let rawDraft = String(repeating: "e\u{301}", count: 64) + "TAIL"
 
         state.searchText = rawDraft
-        state.searchMode = .exact
         #expect(
             await pollUntil {
                 let requests = await history.observeRequests
@@ -849,27 +844,17 @@ struct HistoryViewStateTests {
         let requestCountBeforeSwitch = await history.observeRequests.count
 
         state.searchMode = .fuzzy
-        #expect(
-            await pollUntil {
-                await history.observeRequests.count == requestCountBeforeSwitch + 1
-            }
-        )
-
-        let allRequests = await history.observeRequests
-        let switchedRequests = allRequests.dropFirst(requestCountBeforeSwitch)
-        #expect(switchedRequests.count == 1)
-        #expect(
-            switchedRequests.first?.kind
-                == .search(text: admittedDraft, mode: .fuzzy)
-        )
-        #expect(state.searchText == rawDraft)
-
-        state.searchMode = .regexp
-        #expect(await pollUntil {
-            await history.observeRequests.last?.kind
-                == .search(text: rawDraft, mode: .regexp)
-        })
+        #expect(state.fuzzyQueryExceedsLimit)
+        #expect(!state.isLoadingFirstPage)
+        #expect(await history.observeRequests.count == requestCountBeforeSwitch)
         #expect(Data(state.searchText.utf8) == Data(rawDraft.utf8))
+
+        state.searchMode = .exact
+        #expect(await pollUntil {
+            let requests = await history.observeRequests
+            return requests.count == requestCountBeforeSwitch + 1
+                && requests.last?.kind == .search(text: rawDraft, mode: .exact)
+        })
 
         state.deactivate()
         await history.finishObservation()
@@ -888,7 +873,7 @@ struct HistoryViewStateTests {
             await pollUntil {
                 let requests = await history.observeRequests
                 return requests.last?.kind
-                    == .search(text: "needle", mode: .fuzzy)
+                    == .search(text: "needle", mode: .exact)
             }
         )
         let countBeforeClear = await history.observeRequests.count

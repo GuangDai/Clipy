@@ -201,6 +201,11 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
             preferredPlacement: resizedAnchor?.placement,
             preferredInnerEdge: resizedAnchor?.innerEdge
         )
+        if isPresented, self.placement != placement.placement {
+            // Moving across the main panel changes the reveal direction.
+            // Finish any old reveal before publishing the new physical edge.
+            motionPresentation.cancel()
+        }
         self.placement = placement.placement
         if frame != placement.frame {
             setFrame(placement.frame, display: isPresented)

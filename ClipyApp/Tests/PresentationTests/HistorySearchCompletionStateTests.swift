@@ -249,7 +249,7 @@ struct HistorySearchCompletionStateTests {
         else { #expect(!state.isPresented) }
     }
 
-    @Test func pendingAndFailedSourcePopupsConsumeCommandsWhileEmptyFocusAndIMEKeepThemUnhandled() async throws {
+    @Test func emptySourcePopupLetsTabLeaveAndReturnRetriesFailureWithoutSubmittingSelection() async throws {
         let base = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
         let commit = try await capture("alpha item", source: "com.example.Alpha", at: 1, in: base)
         let history = CompletionSourceReadHistory(base: base)
@@ -259,7 +259,7 @@ struct HistorySearchCompletionStateTests {
             Task { await history.releaseRead() }
         }
         state.update(input(""))
-        for command in [HistorySearchCompletionCommand.previous, .next, .accept, .dismiss] {
+        for command in [HistorySearchCompletionCommand.previous, .next, .accept, .acceptTab, .dismiss] {
             let decision = state.command(command)
             #expect(isUnhandled(decision))
         }
@@ -268,6 +268,7 @@ struct HistorySearchCompletionStateTests {
         try #require(await pollUntil { await history.isHoldingRead })
         #expect(state.candidates.isEmpty)
         #expect(state.consumesPanelCommands)
+        #expect(isUnhandled(state.command(.acceptTab)))
         for command in [HistorySearchCompletionCommand.previous, .next, .accept] {
             let decision = state.command(command)
             #expect(isHandled(decision))
@@ -282,15 +283,22 @@ struct HistorySearchCompletionStateTests {
         try #require(await pollUntil { state.sourceFailure && !state.isLoadingSources })
         #expect(state.candidates.isEmpty)
         #expect(state.consumesPanelCommands)
-        for command in [HistorySearchCompletionCommand.previous, .next, .accept] {
+        #expect(isUnhandled(state.command(.acceptTab)))
+        for command in [HistorySearchCompletionCommand.previous, .next] {
             let decision = state.command(command)
             #expect(isHandled(decision))
         }
+        let retry = state.command(.accept)
+        #expect(isHandled(retry))
+        try #require(await pollUntil {
+            !state.sourceFailure && !state.isLoadingSources && state.candidates.first?.subtitle == "com.example.Alpha"
+        })
+        #expect(state.insertion == nil)
 
         state.update(input("$type:li", composing: true))
         #expect(!state.isPresented)
         #expect(!state.consumesPanelCommands)
-        for command in [HistorySearchCompletionCommand.previous, .next, .accept, .dismiss, .request] {
+        for command in [HistorySearchCompletionCommand.previous, .next, .accept, .acceptTab, .dismiss, .request] {
             let decision = state.command(command)
             #expect(isUnhandled(decision))
         }

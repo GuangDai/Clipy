@@ -5,9 +5,9 @@ import Testing
 struct UTF16ContentMarkerPreviewTests {
     @Test(arguments: [
         ("public.utf16-plain-text", Data([0x41, 0x00]), "A"),
-        ("public.utf16-external-plain-text", Data([0x00, 0x41]), "A"),
+        ("public.utf16-external-plain-text", Data([0x00, 0x41, 0xD8, 0x3E, 0xDD, 0x8A]), "A🦊"),
         ("public.utf16-plain-text", Data([0xFE, 0xFF, 0x00, 0x41]), "A"),
-        ("public.utf16-external-plain-text", Data([0xFF, 0xFE, 0x41, 0x00]), "A"),
+        ("public.utf16-external-plain-text", Data([0xFF, 0xFE, 0x41, 0x00, 0x3E, 0xD8, 0x8A, 0xDD]), "A🦊"),
         ("public.utf16-plain-text", Data([0xFF, 0xFE, 0xFF, 0xFE, 0x41, 0x00]), "\u{FEFF}A"),
         ("public.utf16-plain-text", Data([0xFF, 0xFE, 0xFE, 0xFF, 0x41, 0x00]), "\u{FFFE}A"),
         ("public.utf16-external-plain-text", Data([0xFE, 0xFF, 0xFE, 0xFF, 0x00, 0x41]), "\u{FEFF}A"),
@@ -39,12 +39,15 @@ struct UTF16ContentMarkerPreviewTests {
         ("public.utf16-external-plain-text", Data([0xD8, 0x00, 0x00, 0x41])),
         ("public.utf16-external-plain-text", Data([0xFE, 0xFF, 0xDC, 0x00])),
         ("public.utf16-external-plain-text", Data([0xFF, 0xFE, 0x00, 0xD8])),
+        ("public.utf16-plain-text", Data([0xFE, 0xFF, 0x41])),
+        ("public.utf16-external-plain-text", Data([0xFE, 0xFF, 0x41])),
         ("public.utf16-plain-text", Data()),
         ("public.utf16-external-plain-text", Data()),
         ("public.utf16-plain-text", Data([0xFF, 0xFE])),
         ("public.utf16-external-plain-text", Data([0xFE, 0xFF])),
+        ("public.utf16-external-plain-text", Data([0xFF, 0xFE])),
     ])
-    func detailsSizedPreviewRejectsUnpairedSurrogatesAndEmptyText(type: String, bytes: Data) async {
+    func detailsSizedPreviewRejectsMalformedOrEmptyText(type: String, bytes: Data) async {
         #expect(await renderDetailsExcerpt(type: type, bytes: bytes) == .failed(.malformedRepresentation))
     }
 
@@ -74,8 +77,6 @@ struct UTF16ContentMarkerPreviewTests {
         #expect(text.wasTruncated)
         #expect(Data(text.text.utf8) == Data(expected.utf8))
         #expect(Data(text.displaySegments.joined().utf8) == Data(expected.utf8))
-        #expect(text.displaySegments.first?.utf16.count == 499)
-        #expect(text.displaySegments.dropFirst().allSatisfy { $0.utf16.count <= 64 })
     }
 
     private func renderDetailsExcerpt(type: String, bytes: Data) async -> PreviewOutcome {

@@ -58,9 +58,7 @@ enum SearchLibraryCopy {
         } else if definition.filters.dateRange != .anyTime {
             parts.append(HistorySearchCopy.text(definition.filters.dateRange.title, bundle: bundle))
         }
-        if definition.sortOrder != .automatic {
-            parts.append(HistorySearchCopy.sortTitle(definition.sortOrder, bundle: bundle))
-        }
+        parts.append(HistorySearchCopy.sortTitle(definition.sortOrder, bundle: bundle))
         return parts.joined(separator: " · ")
     }
 }

@@ -50,17 +50,18 @@ struct HistorySearchFilters: Codable, Equatable, Sendable {
     /// transitions. End dates include the chosen day, excluding the next day.
     func dateBounds(now: Date, calendar: Calendar) -> (after: Date?, before: Date?) {
         let today = calendar.startOfDay(for: now)
-        func day(_ offset: Int, from date: Date) -> Date? {
-            calendar.date(byAdding: .day, value: offset, to: date)
+        let endOfToday = calendar.dateInterval(of: .day, for: now)?.end
+        func priorDay(_ offset: Int) -> Date? {
+            calendar.date(byAdding: .day, value: offset, to: today).map { calendar.startOfDay(for: $0) }
         }
         switch dateRange {
         case .anyTime: return (nil, nil)
-        case .today: return (today, day(1, from: today))
-        case .yesterday: return (day(-1, from: today), today)
-        case .lastSevenDays: return (day(-6, from: today), day(1, from: today))
-        case .lastThirtyDays: return (day(-29, from: today), day(1, from: today))
+        case .today: return (today, endOfToday)
+        case .yesterday: return (priorDay(-1), today)
+        case .lastSevenDays: return (priorDay(-6), endOfToday)
+        case .lastThirtyDays: return (priorDay(-29), endOfToday)
         case .custom:
-            return (calendar.startOfDay(for: startDate), day(1, from: calendar.startOfDay(for: endDate)))
+            return (calendar.startOfDay(for: startDate), calendar.dateInterval(of: .day, for: endDate)?.end)
         }
     }
 }
@@ -81,7 +82,7 @@ enum HistorySearchCopy {
 
     static func sortTitle(_ order: HistorySortOrder, bundle: Bundle = AppLocalization.bundle) -> String {
         switch order {
-        case .automatic: text("Automatic", bundle: bundle)
+        case .automatic: text("Pinned first", bundle: bundle)
         case .newestFirst: text("Newest first", bundle: bundle)
         case .oldestFirst: text("Oldest first", bundle: bundle)
         case .mostCopied: text("Most copied", bundle: bundle)
@@ -91,6 +92,11 @@ enum HistorySearchCopy {
     @MainActor
     static func issue(for state: HistoryViewState, bundle: Bundle = AppLocalization.bundle) -> String? {
         if let error = state.expressionValidationError { return expressionError(error, bundle: bundle) }
+        if state.fuzzyQueryExceedsLimit {
+            return String(format: text(
+                "Fuzzy search supports up to %d characters. Use Exact to search the entire text.", bundle: bundle
+            ), HistoryLimits.standard.maximumFuzzyQueryCharacters)
+        }
         if !state.unresolvedSearchSources.isEmpty {
             return format("No installed application matches %@. Choose an application or use an exact bundle ID.",
                           state.unresolvedSearchSources.joined(separator: ", "), bundle: bundle)
@@ -103,5 +109,21 @@ enum HistorySearchCopy {
                           text(error.message, bundle: bundle), bundle: bundle)
         }
         return nil
+    }
+
+    @MainActor
+    static func resultsFailure(for state: HistoryViewState) -> HistoryFailure? {
+        guard !state.isLoadingFirstPage, state.canRetryFailureByRefreshing,
+              state.displayedRows.isEmpty else { return nil }
+        return state.failure
+    }
+
+    static func resultsFailureTitle(_ failure: HistoryFailure, bundle: Bundle = AppLocalization.bundle) -> String {
+        text(canRetryResults(failure) ? "Couldn't load results" : "Check search conditions", bundle: bundle)
+    }
+
+    static func canRetryResults(_ failure: HistoryFailure) -> Bool {
+        if case .invalidInput = failure { return false }
+        return true
     }
 }

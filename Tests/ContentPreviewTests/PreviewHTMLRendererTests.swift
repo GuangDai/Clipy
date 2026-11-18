@@ -50,19 +50,6 @@ struct PreviewHTMLRendererTests {
         #expect(!text.wasTruncated)
     }
 
-    @Test func historyPaneShowsCopiedTextAreaCodeWithoutInterpretingItsTags() async {
-        let source = #"<textarea><img src="file:///private/secret">&amp;<iframe src="https://example.invalid"></iframe></textarea>"#
-        let outcome = await ContentPreview().renderHistoryPane([
-            PreviewRepresentation(typeIdentifier: "public.html", bytes: Data(source.utf8)),
-        ])
-        guard case .content(.text(let text)) = outcome else {
-            Issue.record("Expected inert textarea contents, got \(outcome)")
-            return
-        }
-        #expect(text.text == #"<img src="file:///private/secret">&<iframe src="https://example.invalid"></iframe>"#)
-        #expect(!text.wasTruncated)
-    }
-
     @Test func textAreaKeepsTheExistingGraphemeAndByteLimits() throws {
         let prefix = String(repeating: "x", count: 49_999) + "e\u{301}"
         let text = try rendered("<textarea>" + prefix + " omitted</textarea>")

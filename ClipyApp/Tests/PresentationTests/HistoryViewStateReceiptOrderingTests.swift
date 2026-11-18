@@ -96,7 +96,7 @@ struct HistoryViewStateReceiptOrderingTests {
         await history.finishObservations()
     }
 
-    @Test func receiptFloorSurvivesCloseAndQueryAndNeverMovesBackwards() async throws {
+    @Test func ordinaryCaptureReceiptsDoNotPreventFirstPaintAfterReopening() async throws {
         let row = fixtureRow(
             id: "00000000-0000-0000-0000-00000000B603", title: "matching", pinned: 0
         )
@@ -123,10 +123,9 @@ struct HistoryViewStateReceiptOrderingTests {
         state.activate()
         try #require(await pollUntil { await history.observations.count == 2 })
         let reopened = await history.observations[1]
-        try await deliver(page([row], position: 9, next: "closed-stale"), to: reopened)
-        #expect(state.rows.isEmpty)
-        #expect(state.isLoadingFirstPage)
-        #expect(!state.hasNextPage)
+        try await deliver(page([row], position: 9, next: "catching-up"), to: reopened)
+        #expect(state.rows == [row])
+        #expect(!state.isLoadingFirstPage)
         try await deliver(page([row], position: 10), to: reopened)
         #expect(state.rows == [row])
         #expect(state.showsPinnedOnly)
@@ -137,10 +136,6 @@ struct HistoryViewStateReceiptOrderingTests {
         state.refresh()
         try #require(await pollUntil { await history.observations.count == 3 })
         let searched = await history.observations[2]
-        try await deliver(page([row], position: 9, next: "query-stale"), to: searched)
-        #expect(state.rows.isEmpty)
-        #expect(state.isLoadingFirstPage)
-        #expect(announcements == 0)
         try await deliver(page([row], position: 10), to: searched)
         #expect(state.displayedRows == [row])
         #expect(announcements == 1)

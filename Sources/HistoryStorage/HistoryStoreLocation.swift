@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import HistoryCore
 
@@ -48,6 +49,26 @@ internal final class HistoryStoreLocation: Sendable {
             databaseURL = directory.appendingPathComponent("history.sqlite")
             disposableRoot = directory
         }
+    }
+
+    /// A missing or empty database may be initialized only when no companion
+    /// files survive. Bootstrap would otherwise treat their content as orphaned.
+    internal func permitsDatabaseCreation() throws -> Bool {
+        guard disposableRoot == nil else { return true }
+        let databasePath = databaseURL.path
+        var status = stat()
+        let databaseExists = Darwin.lstat(databasePath, &status) == 0
+        guard databaseExists || errno == ENOENT else {
+            throw HistoryFailure.persistence(.openStore)
+        }
+        if databaseExists && status.st_size > 0 { return false }
+
+        for path in [rootURL.path, databasePath + "-wal", databasePath + "-shm", databasePath + "-journal"] {
+            guard Darwin.lstat(path, &status) != 0, errno == ENOENT else {
+                throw HistoryFailure.persistence(.openStore)
+            }
+        }
+        return !databaseExists
     }
 
     deinit {

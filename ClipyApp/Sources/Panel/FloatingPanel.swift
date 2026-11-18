@@ -200,9 +200,20 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         let responder = firstResponder
         let hasMarkedText = (responder as? NSTextInputClient)?
             .hasMarkedText() ?? false
-        let isCompletionCommand = event.keyCode == UInt16(kVK_Return)
+        let isReturn = event.keyCode == UInt16(kVK_Return)
             || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
-            || event.keyCode == UInt16(kVK_Escape)
+        let isCompletionCommand = isReturn || event.keyCode == UInt16(kVK_Escape)
+        if isCompletionCommand, attachedSheet != nil || NSApp.modalWindow != nil {
+            super.sendEvent(event)
+            return
+        }
+        if isReturn, !hasMarkedText,
+           event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+           previewState.isInformationPresented || previewState.isFileConfirmationPresented {
+            // The popover or confirmation owns Return. An event delivered to
+            // the window behind it must never invoke a hidden Copy shortcut.
+            return
+        }
         if !hasMarkedText, isCompletionCommand,
            event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
            isSearchCompletionActive(), let responder, responder !== self {

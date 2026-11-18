@@ -84,12 +84,16 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         XCTAssertEqual(search.label, "搜索剪贴板历史记录")
         let rows = historyRows(in: app)
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 })
-        XCTAssertTrue(rows.element(boundBy: 0).label.contains(captured))
+        let row = rows.element(boundBy: 0)
+        XCTAssertTrue(row.label.contains(captured))
+        XCTAssertTrue(row.label.contains("最近复制"))
+        let timeInList = XCTAttachment(screenshot: app.screenshot())
+        timeInList.name = "localized-copy-time-in-history-list"
+        timeInList.lifetime = .keepAlways
+        add(timeInList)
 
-        // The default fuzzy mode may legitimately match the shared "clipy"
-        // text. Select Exact through its real shortcut before asserting the
-        // localized no-results state; language does not alter matching rules.
-        search.typeKey("1", modifierFlags: [.command])
+        // The default exact search excludes this unrelated query regardless
+        // of the current interface language.
         search.typeText("no-such-clipy-value")
         XCTAssertEqual(search.value as? String, "no-such-clipy-value")
         let clear = app.buttons["clipy.search.clear"]

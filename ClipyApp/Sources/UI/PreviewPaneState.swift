@@ -270,6 +270,13 @@ final class PreviewPaneState {
 
     // MARK: - Selection dwell (Maccy `scheduleRetarget(lead:)`)
 
+    /// A replacement query retires the prepared target from the old rows.
+    /// The pane already on screen may stay during the loading interval.
+    func retirePendingSelection() {
+        currentSelectionReference = previewedItem
+        cancelPendingAutoOpen()
+    }
+
     /// The list selection changed. Cancels any pending dwell and clears the
     /// manual-close suppression. A `nil` selection closes an open preview
     /// immediately (nothing to preview). Keyboard selection and an explicit

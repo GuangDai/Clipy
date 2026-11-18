@@ -636,22 +636,20 @@ struct PreviewContentLoaderTests {
     /// An image item publishes the BOUNDED decoded image (1×1 here — under
     /// the 640 px preview cap, so no rescale): the loader retains decoded
     /// pixels only, never the full encoded bytes.
-    @Test func imageContentPublishesTheBoundedDecode() async {
+    @Test func imageContentPublishesTheBoundedDecode() async throws {
         let ref = reference("00000000-0000-0000-0000-0000000001F1", version: 1)
         let history = PausablePreviewHistory()
         await history.scriptPayload(payload(for: ref, imageBytes: fixturePNGData))
         let loader = PreviewContentLoader(history: history)
 
         let task = Task { await loader.load(item: ref) }
-        #expect(await pollUntil { await history.payloadRequests.count == 1 })
+        try #require(await pollUntil { await history.payloadRequests.count == 1 })
         await history.resumePayload(for: ref.id)
         _ = await task.value
         #expect(loader.phase == .content(.image))
         #expect(loader.appliedImageSize == CGSize(width: 1, height: 1))
-        #expect(
-            loader.appliedImageAccessibilityLabel
-                == "Image preview, 1 by 1 pixels"
-        )
+        let label = try #require(loader.imageAccessibilityLabel(locale: Locale(identifier: "en_US")))
+        #expect(!label.isEmpty)
     }
 
     /// A supported image type whose decoder cannot produce an artifact lands

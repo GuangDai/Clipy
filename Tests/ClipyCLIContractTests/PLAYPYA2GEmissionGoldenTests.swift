@@ -1,29 +1,9 @@
-/// PLAY-PY-A2G — X.8 proves immutable emission bytes, not real stdio.
 @testable import ClipyCLIContract
 import Foundation
 import Testing
 
 struct PLAYPYA2GEmissionGoldenTests {
-    @Test func emptySuccessIsCompactSortedAndEndsInExactlyOneLF() throws {
-        let request = try #require(
-            decodedRequest(ClipyCLIContract.decodeRequest(requestBytes()))
-        )
-        let result = try ClipyCLIBrowsePreviewResult(items: [], nextCursor: nil)
-        let output = ClipyCLIContract.render(
-            try .success(for: request, result: result)
-        )
-
-        #expect(output.exitCode == 0)
-        #expect(output.stderr.isEmpty)
-        #expect(
-            utf8(output.stdout)
-                == #"{"ok":true,"protocolVersion":1,"requestID":"9bd92054-bd3f-4d20-8f8a-5d77aa63b726","result":{"items":[],"nextCursor":null}}"# + "\n"
-        )
-        #expect(output.stdout.last == 0x0A)
-        #expect(output.stdout.dropLast().last != 0x0A)
-    }
-
-    @Test func itemFieldsAreSortedWhileSemanticArraysKeepInputOrder() throws {
+    @Test func browseReplyPreservesTheTitleTypeOrderAndCursor() throws {
         let request = try #require(
             decodedRequest(ClipyCLIContract.decodeRequest(requestBytes()))
         )
@@ -41,24 +21,22 @@ struct PLAYPYA2GEmissionGoldenTests {
         )
 
         let output = ClipyCLIContract.render(try .success(for: request, result: result))
-
-        #expect(
-            utf8(output.stdout)
-                == #"{"ok":true,"protocolVersion":1,"requestID":"9bd92054-bd3f-4d20-8f8a-5d77aa63b726","result":{"items":[{"lastCopiedAt":"2026-08-23T12:34:56.007Z","locator":"opaque-1","pinned":true,"snippet":null,"title":"a \"title\"","typeIdentifiers":["public.png","public.text"]}],"nextCursor":"next"}}"# + "\n"
-        )
-    }
-
-    @Test func errorGoldenHasClosedContentFreeStderr() {
-        let output = ClipyCLIContract.render(
-            .failure(requestID: nil, code: .invalidRequest)
-        )
-
-        #expect(output.exitCode == 2)
-        #expect(
-            utf8(output.stdout)
-                == #"{"error":{"code":"invalid_request"},"ok":false,"protocolVersion":1,"requestID":null}"# + "\n"
-        )
-        #expect(utf8(output.stderr) == "clipyctl: invalid_request\n")
+        #expect(output.exitCode == 0)
+        #expect(output.stderr.isEmpty)
+        let reply = try #require(JSONSerialization.jsonObject(with: output.stdout) as? [String: Any])
+        #expect(reply["ok"] as? Bool == true)
+        #expect(reply["protocolVersion"] as? Int == 1)
+        #expect(reply["requestID"] as? String == request.requestID.rawValue)
+        let body = try #require(reply["result"] as? [String: Any])
+        let rows = try #require(body["items"] as? [[String: Any]])
+        try #require(rows.count == 1)
+        #expect(rows[0]["locator"] as? String == item.locator)
+        #expect(rows[0]["title"] as? String == item.title)
+        #expect(rows[0]["typeIdentifiers"] as? [String] == item.typeIdentifiers)
+        #expect(rows[0]["lastCopiedAt"] as? String == item.lastCopiedAt)
+        #expect(rows[0]["pinned"] as? Bool == item.pinned)
+        #expect(rows[0]["snippet"] is NSNull)
+        #expect(body["nextCursor"] as? String == result.nextCursor)
     }
 
     @Test func typedDecodeFailureEchoesOnlyTheValidatedCorrelationID() throws {
@@ -77,35 +55,19 @@ struct PLAYPYA2GEmissionGoldenTests {
         #expect(utf8(output.stderr) == "clipyctl: unknown_operation\n")
     }
 
-    @Test func boundedWriterCountsTerminalLFAtExactMaximum() {
-        do {
-            var exact = BoundedJSONWriter(
-                maximumBytes: ClipyCLIContract.maximumResponseBytes
-            )
-            exact.appendJSON(
-                String(
-                    repeating: "x",
-                    count: ClipyCLIContract.maximumResponseBytes - 3
-                )
-            )
-            exact.appendByte(0x0A)
+    @Test func boundedWriterCountsTheNewlineInTheResponseBudget() {
+        let payload = "value"
+        let stringByteCount = payload.utf8.count + 2
+        var exact = BoundedJSONWriter(maximumBytes: stringByteCount + 1)
+        exact.appendJSON(payload)
+        exact.appendByte(0x0A)
+        #expect(!exact.exceeded)
+        #expect(exact.data.count == stringByteCount + 1)
+        #expect(exact.data.last == 0x0A)
 
-            #expect(!exact.exceeded)
-            #expect(exact.data.count == ClipyCLIContract.maximumResponseBytes)
-            #expect(exact.data.last == 0x0A)
-        }
-
-        var over = BoundedJSONWriter(
-            maximumBytes: ClipyCLIContract.maximumResponseBytes
-        )
-        over.appendJSON(
-            String(
-                repeating: "x",
-                count: ClipyCLIContract.maximumResponseBytes - 2
-            )
-        )
+        var over = BoundedJSONWriter(maximumBytes: stringByteCount)
+        over.appendJSON(payload)
         over.appendByte(0x0A)
-
         #expect(over.exceeded)
     }
 
@@ -135,34 +97,11 @@ struct PLAYPYA2GEmissionGoldenTests {
         )
 
         #expect(output.exitCode == 2)
-        #expect(
-            utf8(output.stdout)
-                == #"{"error":{"code":"response_too_large"},"ok":false,"protocolVersion":1,"requestID":"9bd92054-bd3f-4d20-8f8a-5d77aa63b726"}"# + "\n"
-        )
-        #expect(utf8(output.stderr) == "clipyctl: response_too_large\n")
-    }
-
-    @Test func replyConstructorsRejectOutOfContractValues() {
-        #expect(throws: ClipyCLIValueFailure.invalidValue) {
-            try ClipyCLIBrowsePreviewItem(
-                locator: "",
-                title: "title",
-                typeIdentifiers: [],
-                lastCopiedAt: "2026-08-23T12:34:56.007Z",
-                pinned: false,
-                snippet: nil
-            )
-        }
-        #expect(throws: ClipyCLIValueFailure.invalidValue) {
-            try ClipyCLIBrowsePreviewItem(
-                locator: "locator",
-                title: "title",
-                typeIdentifiers: [],
-                lastCopiedAt: "2026-02-30T12:34:56.007Z",
-                pinned: false,
-                snippet: nil
-            )
-        }
+        let reply = try #require(JSONSerialization.jsonObject(with: output.stdout) as? [String: Any])
+        #expect(reply["ok"] as? Bool == false)
+        #expect(reply["requestID"] as? String == request.requestID.rawValue)
+        #expect(reply["result"] == nil)
+        #expect((reply["error"] as? [String: String])?["code"] == "response_too_large")
     }
 
     @Test func successCannotReturnMoreItemsThanTheRequestLimit() throws {

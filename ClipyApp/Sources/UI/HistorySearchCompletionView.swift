@@ -48,9 +48,11 @@ struct HistorySearchCompletionView: View {
                             HStack {
                                 Text(text("Source applications could not be loaded."))
                                     .font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Spacer(minLength: 0)
                                 Button(text("Retry")) { _ = completion.command(.request) }
                                     .buttonStyle(.plain).focusable(false)
+                                    .accessibilityHint(text("Return retries when there are no candidates."))
                             }.padding(9)
                         }
                     }
@@ -63,7 +65,7 @@ struct HistorySearchCompletionView: View {
                 }
             }
             Divider()
-            Text(text("↑↓ Choose · Tab/Return Insert · Esc Dismiss"))
+            Text(instructions)
                 .font(.caption2).foregroundStyle(.secondary)
                 .padding(.horizontal, 9).padding(.vertical, 5)
         }
@@ -79,6 +81,12 @@ struct HistorySearchCompletionView: View {
     private func isSelected(_ id: String) -> Bool {
         completion.candidates.indices.contains(completion.selectedIndex)
             && completion.candidates[completion.selectedIndex].id.utf8.elementsEqual(id.utf8)
+    }
+
+    private var instructions: String {
+        if !completion.candidates.isEmpty { return text("↑↓ Choose · Tab/Return Insert · Esc Dismiss") }
+        if completion.sourceFailure { return text("Return Retry · Esc Dismiss") }
+        return text("Esc Dismiss")
     }
 
     private func text(_ key: String) -> String { HistorySearchCopy.text(key, bundle: bundle) }

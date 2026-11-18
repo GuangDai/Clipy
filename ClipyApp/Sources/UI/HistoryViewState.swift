@@ -156,7 +156,7 @@ final class HistoryViewState {
 
     /// The search evaluation mode (docs/architecture.md). A change
     /// restarts observation immediately.
-    var searchMode: SearchMode = .fuzzy {
+    var searchMode: SearchMode = .exact {
         didSet {
             guard searchMode != oldValue else { return }
             validateSearchExpression()
@@ -165,7 +165,7 @@ final class HistoryViewState {
         }
     }
 
-    var sortOrder: HistorySortOrder = .automatic {
+    var sortOrder: HistorySortOrder = .newestFirst {
         didSet {
             guard sortOrder != oldValue else { return }
             advanceSearchQueryGeneration()
@@ -206,10 +206,17 @@ final class HistoryViewState {
 
     var hasWrappedSearchConditions: Bool { parsedSearchExpression != nil }
 
+    var fuzzyQueryExceedsLimit: Bool {
+        guard searchMode == .fuzzy || searchMode == .expression,
+              let text = compiledSearchQuery?.literalText else { return false }
+        let limit = HistoryLimits.standard.maximumFuzzyQueryCharacters
+        return text.prefix(limit + 1).count > limit
+    }
+
     /// The status row and the native content-height calculation use the
     /// same visibility, including rejected closed conditions with no AST.
     var isSearchStatusVisible: Bool {
-        hasActiveFilters || hasWrappedSearchConditions || sortOrder != .automatic
+        hasActiveFilters || hasWrappedSearchConditions
             || HistorySearchCopy.issue(for: self) != nil
     }
 
@@ -364,6 +371,10 @@ final class HistoryViewState {
     /// position. Buffered observations/one-shot reads may predate its delivery.
     /// Query changes and panel closure do not erase that already-known fact.
     private var latestReceiptPosition: ChangePosition?
+    /// The minimum position that can safely expose executable rows after a
+    /// deletion or content revision. Ordinary captures permit an older coherent
+    /// first page while the observer catches up to continuing writes.
+    private var latestInvalidatingReceiptPosition: ChangePosition?
 
     /// Rows-epoch counter. Bumped on every observation restart AND on every
     /// applied observed page, so a one-shot pagination result captured against
@@ -460,6 +471,15 @@ final class HistoryViewState {
     }
 
     private var searchDateBounds: (after: Date?, before: Date?) = (nil, nil)
+
+    func refreshDateFiltersIfNeeded(now: Date = Date(), calendar: Calendar = .current) {
+        guard searchFilters.dateRange != .anyTime, observationTask != nil else { return }
+        let bounds = searchFilters.dateBounds(now: now, calendar: calendar)
+        guard bounds != searchDateBounds else { return }
+        let anchor = readingItemID
+        beginFirstPageLoad(dateBounds: bounds)
+        startObservation(restoring: anchor)
+    }
 
     var hasActiveFilters: Bool {
         typeFilter != .all || showsPinnedOnly || searchFilters.isActive
@@ -571,10 +591,8 @@ final class HistoryViewState {
         !searchText.isEmpty
     }
 
-    /// The admitted query shape derived atomically from raw draft + mode.
-    /// Exact/regexp use the compiled outside text. Fuzzy admission is a
-    /// bounded view of that text, leaving the raw draft intact for a later
-    /// mode switch (03b §8; 06 §2).
+    /// The query uses the full compiled text. When a fuzzy draft exceeds its
+    /// matcher limit, preparation keeps the draft editable without issuing a query.
     private var admittedKind: HistoryBrowseKind {
         guard !searchText.isEmpty else { return .recent }
         let literalText = compiledSearchQuery?.literalText ?? searchText
@@ -585,8 +603,7 @@ final class HistoryViewState {
         case .fuzzy, .expression:
             // Old saved mode values follow the current wrapped syntax too;
             // they never re-enable interpretation of bare source:/type: text.
-            let limit = HistoryLimits.standard.maximumFuzzyQueryCharacters
-            return .search(text: String(literalText.prefix(limit)), mode: .fuzzy)
+            return .search(text: literalText, mode: .fuzzy)
         }
     }
 
@@ -644,6 +661,11 @@ final class HistoryViewState {
         debounceTask?.cancel()
         debounceTask = nil
         startObservation()
+    }
+
+    func resetSearchForOpening() {
+        clearFilters()
+        clearSearch()
     }
 
     /// Appends the next older page, retiring the newest page when the window
@@ -1046,7 +1068,7 @@ final class HistoryViewState {
     /// Synchronously retires all state owned by the previous browse intent.
     /// This is the single invalidation path for immediate and debounced
     /// replacement, not a general loading-state reducer.
-    private func beginFirstPageLoad() {
+    private func beginFirstPageLoad(dateBounds: (after: Date?, before: Date?)? = nil) {
         debounceTask?.cancel()
         debounceTask = nil
         observationTask?.cancel()
@@ -1073,13 +1095,13 @@ final class HistoryViewState {
         didLoseReadingPosition = false
         sourceResolutionError = nil
         // Relative days refresh with each query, and stay fixed while paging.
-        searchDateBounds = searchFilters.dateBounds(now: Date(), calendar: .current)
-        isLoadingFirstPage = expressionValidationError == nil
+        searchDateBounds = dateBounds ?? searchFilters.dateBounds(now: Date(), calendar: .current)
+        isLoadingFirstPage = expressionValidationError == nil && !fuzzyQueryExceedsLimit
     }
 
     /// Starts observation for the already-invalidated current intent.
     private func startObservation(restoring itemID: HistoryItemID? = nil) {
-        guard expressionValidationError == nil else {
+        guard expressionValidationError == nil, !fuzzyQueryExceedsLimit else {
             isLoadingFirstPage = false
             return
         }
@@ -1130,7 +1152,7 @@ final class HistoryViewState {
                         }
                         guard !Task.isCancelled, let self else { return }
                         guard restoredPage.position >= page.position,
-                              self.latestReceiptPosition.map({ restoredPage.position >= $0 }) ?? true
+                              self.allowsObservedPosition(restoredPage.position)
                         else { continue }
                         self.applyObservedPage(restoredPage, forSearchGeneration: queryGeneration)
                         self.didLoseReadingPosition = targetWasRemoved
@@ -1191,6 +1213,10 @@ final class HistoryViewState {
                 return false
             }
         }
+        guard !fuzzyQueryExceedsLimit else {
+            isLoadingFirstPage = false
+            return false
+        }
         let expression = parsedSearchExpression
         let filters = searchFilters
         if !(expression?.applicationTerms.isEmpty ?? true)
@@ -1223,7 +1249,8 @@ final class HistoryViewState {
             isSourceSearchTooBroad = true
         }
         unresolvedSearchSources = Array(Set(unresolved)).sorted()
-        guard unresolvedSearchSources.isEmpty, !isSourceSearchTooBroad, sourceResolutionError == nil else {
+        let hasUnresolvedSourceFilter = resolvedSourceApplicationIDs?.isEmpty == true
+        guard !hasUnresolvedSourceFilter, !isSourceSearchTooBroad, sourceResolutionError == nil else {
             isLoadingFirstPage = false
             return false
         }
@@ -1237,7 +1264,7 @@ final class HistoryViewState {
         _ page: HistoryPage,
         forSearchGeneration queryGeneration: Int
     ) {
-        guard latestReceiptPosition.map({ page.position >= $0 }) ?? true else { return }
+        guard allowsObservedPosition(page.position) else { return }
         invalidatePagination()
         observationGeneration += 1
         rows = page.rows
@@ -1396,6 +1423,9 @@ final class HistoryViewState {
         position: ChangePosition
     ) -> HistorySurfacePurge {
         recordCommittedPosition(position)
+        if latestInvalidatingReceiptPosition.map({ position > $0 }) ?? true {
+            latestInvalidatingReceiptPosition = position
+        }
         let hasObservedCommit = observedPosition.map {
             $0 >= position
         } ?? false
@@ -1425,6 +1455,11 @@ final class HistoryViewState {
     private func recordCommittedPosition(_ position: ChangePosition) {
         guard latestReceiptPosition.map({ position > $0 }) ?? true else { return }
         latestReceiptPosition = position
+    }
+
+    private func allowsObservedPosition(_ position: ChangePosition) -> Bool {
+        (observedPosition.map { position > $0 } ?? true)
+            && (latestInvalidatingReceiptPosition.map { position >= $0 } ?? true)
     }
 
     private func publishExactItemPurge(

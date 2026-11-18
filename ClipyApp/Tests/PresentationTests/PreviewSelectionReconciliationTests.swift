@@ -83,24 +83,6 @@ struct PreviewSelectionReconciliationTests {
         #expect(selection.previewTarget(previewedItem: preview.previewedItem) == current)
     }
 
-    @Test func crossItemChangeKeepsTheDwellTargetUntilPaneStateRetargets() {
-        let previous = HistoryItemReference(
-            id: HistoryItemID(
-                rawValue: UUID(uuidString: "00000000-0000-0000-0000-0000000009A2")!
-            ),
-            contentVersion: ContentVersion(rawValue: 1)
-        )
-        let selected = PreviewSelectionResolution.resolve(
-            selectedID: selectedID,
-            rows: [
-                row(id: previous.id, version: 1),
-                row(version: 2),
-            ]
-        )
-
-        #expect(selected.previewTarget(previewedItem: previous) == previous)
-    }
-
     @Test(arguments: [(UInt64(1), UInt64(2)), (UInt64(2), UInt64(1)), (UInt64(2), UInt64(2))])
     func crossItemPreviewUsesItsOwnNewestReference(observed: UInt64, pane: UInt64) {
         let previewID = HistoryItemID(

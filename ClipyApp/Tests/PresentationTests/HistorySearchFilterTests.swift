@@ -12,7 +12,8 @@ struct HistorySearchFilterTests {
         (SearchMode.fuzzy, "meting", "meeting final"),
         (.exact, "meeting", "meeting final"),
         (.regexp, "^meeting final$", "meeting final"),
-        (.regexp, #"\$\d+$"#, "meeting $20")
+        (.regexp, #"\$\d+$"#, "meeting $20"),
+        (.regexp, "^report[ $]$", "report$")
     ])
     func outsideTextKeepsItsModeWhileConditionsMatchAnOlderCopySource(
         mode: SearchMode, literal: String, content: String
@@ -37,6 +38,35 @@ struct HistorySearchFilterTests {
         #expect(state.rows.first?.lastSource == "org.example.new")
         #expect(state.rows.first?.search != nil)
         #expect(state.searchMode == mode)
+        #expect(state.failure == nil)
+    }
+
+    @Test func regexpCharacterClassAndExplicitConditionFindTheCorrectRows() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let date = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let dollar = try await capture("report$", source: "org.example.editor", at: date, in: history)
+        let bracket = try await capture("report]", source: "org.example.browser", at: date, in: history)
+        _ = try await capture("reporta", source: "org.example.editor", at: date, in: history)
+
+        let state = HistoryViewState(history: history)
+        let pattern = #"^report[\] $]$"#
+        state.searchMode = .regexp
+        state.searchText = pattern
+        state.activate()
+        defer { state.deactivate() }
+
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(Set(state.rows.map(\.item)) == Set([dollar, bracket]))
+
+        let source = "source-id:org.example.editor"
+        let input = HistorySearchCompletionInput(text: pattern, selection: NSRange(location: 2, length: 0), isComposing: false)
+        let context = try #require(HistorySearchCompletionEngine.context(for: input, explicit: true, mode: .regexp))
+        let candidate = HistorySearchCompletionEngine.candidate(id: "editor", title: "Editor", term: source, context: context)
+        state.searchText = (pattern as NSString).replacingCharacters(in: candidate.replacementRange, with: candidate.insertion)
+
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.item) == [dollar])
+        #expect(state.rows.first?.search?.matchedRanges == [.init(location: 0, length: 7)])
         #expect(state.failure == nil)
     }
 
@@ -341,12 +371,69 @@ struct HistorySearchFilterTests {
         state.clearFilters()
         state.searchText = "$source:NoSuchApplication$"
         try #require(await pollUntil {
-            state.unresolvedSearchSources == ["NoSuchApplication"] && !state.isLoadingFirstPage
+            state.hasAuthoritativeFirstPage && state.unresolvedSearchSources == ["NoSuchApplication"]
         })
         #expect(state.rows.isEmpty)
         #expect(state.expressionValidationError == nil)
         #expect(state.failure == nil)
         #expect(state.searchText == "$source:NoSuchApplication$")
+    }
+
+    @Test func unknownApplicationNameOnlyMakesItsOwnExpressionBranchFalse() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let date = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let report = try await capture("available report", source: "org.example.retired", at: date, in: history)
+        let note = try await capture("notebook", source: "org.example.notes", at: date.addingTimeInterval(1), in: history)
+        let resolver = SourceApplicationSearchResolver(applications: [
+            .init(bundleID: "org.example.notes", displayName: "Example Notes")
+        ])
+        let state = HistoryViewState(history: history, searchSourceResolver: resolver)
+        state.activate()
+        defer { state.deactivate() }
+
+        let cases: [(condition: String, expected: Set<HistoryItemReference>)] = [
+            ("source:Missing AND report", []),
+            ("source:Missing OR report", [report]),
+            ("NOT source:Missing", [note, report]),
+            ("source:Missing OR source-id:org.example.retired OR source:Notes", [note, report]),
+        ]
+        for (condition, expected) in cases {
+            state.searchText = "$" + condition + "$"
+            try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+            #expect(Set(state.rows.map(\.item)) == expected)
+            #expect(state.unresolvedSearchSources == ["Missing"])
+            #expect(HistorySearchCopy.issue(for: state) != nil)
+            #expect(state.failure == nil)
+        }
+    }
+
+    @Test func activeDateFilterReplacesItsPageAtALocalDayBoundaryAfterAMidnightShift() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/Sao_Paulo"))
+        let noon = try #require(calendar.date(from: DateComponents(year: 2018, month: 11, day: 4, hour: 12)))
+        let firstValidTime = calendar.startOfDay(for: noon)
+        #expect(calendar.component(.hour, from: firstValidTime) == 1)
+        let midnight = try #require(calendar.date(from: DateComponents(year: 2018, month: 11, day: 5, hour: 0)))
+        _ = try await capture("previous day starts", source: nil, at: firstValidTime, in: history)
+        let beforeMidnight = try await capture("previous day ends", source: nil, at: midnight.addingTimeInterval(-1), in: history)
+        let atMidnight = try await capture("new day begins", source: nil, at: midnight, in: history)
+
+        let state = HistoryViewState(history: history, pageLimit: 1)
+        state.searchFilters.dateRange = .today
+        state.activate()
+        defer { state.deactivate() }
+
+        state.refreshDateFiltersIfNeeded(now: noon, calendar: calendar)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.item) == [beforeMidnight])
+        #expect(state.hasNextPage)
+
+        state.refreshDateFiltersIfNeeded(now: midnight, calendar: calendar)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.item) == [atMidnight])
+        #expect(!state.hasNextPage)
+        #expect(state.failure == nil)
     }
 
     @Test(arguments: [(3, 8, 23), (11, 1, 25)])

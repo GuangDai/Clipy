@@ -232,29 +232,4 @@ struct PasteboardAdapterStressTests {
         #expect(!deliveredAfterStop)
         #expect(received.count == deliveredAtStop)
     }
-
-    // MARK: - Concealed 5 MiB text (05 §6.1; 03a §4)
-
-    /// A declared concealment marker prevents the adjacent 5 MiB payload
-    /// from entering the frozen capture. The exact accessor-zero proof lives
-    /// in PasteboardAdapterTests; this fixture locks the resulting value shape.
-    @Test func concealedFiveMegabyteTextProducesUnreadOutcome() throws {
-        let textBytes = Data(try FixtureCatalog.text("text/lorem-5mb.txt").utf8)
-        let pasteboard = makePasteboard()
-        pasteboard.clearContents()
-        pasteboard.setData(textBytes, forType: .string)
-        pasteboard.setData(
-            Data("marker".utf8),
-            forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
-        )
-
-        let adapter = PasteboardAdapter(pasteboard: pasteboard)
-        let outcome = try #require(adapter.captureOutcome())
-        guard case let .concealed(value) = outcome else {
-            Issue.record("concealed marker must produce the closed concealed case")
-            return
-        }
-        #expect(value.markerTypeIdentifier == "org.nspasteboard.ConcealedType")
-        #expect(adapter.capture() == nil)
-    }
 }

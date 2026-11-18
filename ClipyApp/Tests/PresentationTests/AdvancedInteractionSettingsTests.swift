@@ -130,7 +130,7 @@ struct AdvancedInteractionSettingsTests {
         defer { surface.endSession() }
 
         preview.pointerEntered(.mainPanel)
-        surface.notePointerMovement()
+        surface.notePointerMovement(over: nil)
         #expect(preview.isPointerInteractionActive)
         preview.togglePreview(for: row.item)
         #expect(preview.isOpen)
@@ -144,11 +144,11 @@ struct AdvancedInteractionSettingsTests {
         #expect(preview.isOpen)
         #expect(preview.previewedItem == row.item)
 
-        surface.notePointerMovement()
+        surface.notePointerMovement(over: nil)
         #expect(preview.isPointerInteractionActive)
     }
 
-    @Test func disablingHoverRetiresDeferredSelectionButPreservesKeyboardNavigation() async throws {
+    @Test func disablingHoverIgnoresPointerHitsButPreservesKeyboardNavigation() async throws {
         let history = try await SQLiteHistory.open(
             configuration: HistoryConfiguration(persistence: .temporary)
         )
@@ -160,12 +160,9 @@ struct AdvancedInteractionSettingsTests {
         surface.beginSession(rows: rows)
         surface.moveSelection(in: rows, direction: .next)
         defer { surface.endSession() }
-        surface.handleRowHover(rows[1].item.id)
-        #expect(surface.deferredHoverSelection == rows[1].item.id)
         surface.selectsOnHover = false
-        surface.notePointerMovement()
+        surface.notePointerMovement(over: rows[1].item.id)
         surface.handleRowHover(rows[1].item.id)
-        #expect(surface.deferredHoverSelection == nil)
         #expect(surface.selection == rows[0].item.id)
         surface.moveSelection(in: rows, direction: .next)
         #expect(surface.selection == rows[1].item.id)

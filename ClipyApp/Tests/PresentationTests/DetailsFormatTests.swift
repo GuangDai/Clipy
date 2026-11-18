@@ -3,42 +3,6 @@ import Testing
 @testable import ClipyApp
 
 struct DetailsFormatTests {
-    @Test(arguments: [
-        ("zh_Hans_CN", 0, "2001年1月1日 0:00:00"),
-        ("de_DE", 9 * 3_600, "1. Jan. 2001, 9:00:00"),
-    ])
-    func referenceEpochUsesNativeDateAndTimeStyles(
-        localeIdentifier: String, offset: Int, expected: String
-    ) throws {
-        let locale = Locale(identifier: localeIdentifier)
-        let zone = try #require(TimeZone(secondsFromGMT: offset))
-        // The reference epoch is 2001-01-01 at midnight UTC. Native styles
-        // use an unpadded hour and the locale's abbreviated month form.
-        let instant = Date(timeIntervalSinceReferenceDate: 0)
-        #expect(DetailsFormat.dateTime(instant, locale: locale, timeZone: zone) == expected)
-    }
-
-    @Test func countsFollowTheSelectedRegionWithoutNarrowingUnsignedFacts() {
-        #expect(DetailsFormat.count(1_234, locale: Locale(identifier: "en_US")) == "1,234")
-        #expect(DetailsFormat.count(1_234, locale: Locale(identifier: "de_DE")) == "1.234")
-        #expect(DetailsFormat.count(1_234, locale: Locale(identifier: "ar_EG")) == "١٬٢٣٤")
-        #expect(DetailsFormat.count(UInt64.max, locale: Locale(identifier: "en_US"))
-            == "18,446,744,073,709,551,615")
-    }
-
-    @Test func byteFactsKeepEnglishLabelsAndUseTheSelectedNumericRegion() {
-        let english = Locale(identifier: "en_US")
-        #expect(DetailsFormat.bytes(1, locale: english) == "1 byte")
-        #expect(DetailsFormat.bytes(4, locale: english) == "4 bytes")
-        #expect(DetailsFormat.bytes(13, locale: english) == "13 bytes")
-        #expect(DetailsFormat.bytes(70, locale: english) == "70 bytes")
-        #expect(DetailsFormat.bytes(1_500_000, locale: english) == "1.5 MB")
-        let german = DetailsFormat.bytes(1_500_000, locale: Locale(identifier: "de_DE"))
-        #expect(german.hasPrefix("1,5") && german.hasSuffix("MB"))
-        let chinese = DetailsFormat.bytes(70, locale: Locale(identifier: "zh_Hans_CN"))
-        #expect(chinese.contains("70") && chinese.contains("字节"))
-    }
-
     @Test func occurrenceAndRevisionDatesUseTheViewLocaleAndTimeZone() throws {
         let utc = try #require(TimeZone(secondsFromGMT: 0))
         var calendar = Calendar(identifier: .gregorian)

@@ -3,7 +3,7 @@ import HistoryCore
 import Observation
 
 enum HistorySearchCompletionCommand: Equatable {
-    case previous, next, accept, dismiss, request
+    case previous, next, accept, acceptTab, dismiss, request
 }
 
 enum HistorySearchCompletionDecision {
@@ -128,7 +128,13 @@ final class HistorySearchCompletionState {
             selectedIndex = min(candidates.count - 1, max(0, selectedIndex + (command == .next ? 1 : -1)))
             return .handled
         case .accept:
-            guard candidates.indices.contains(selectedIndex) else { return isPresented ? .handled : .unhandled }
+            if candidates.indices.contains(selectedIndex) { return accept(selectedIndex) }
+            if sourceFailure {
+                refresh(explicit: true)
+                return .handled
+            }
+            return isLoadingSources ? .handled : .unhandled
+        case .acceptTab:
             return accept(selectedIndex)
         }
     }

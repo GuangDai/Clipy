@@ -260,6 +260,29 @@ struct SearchHistoryStoreTests {
         }
     }
 
+    @Test func aSavedNewestSortStillReopensWhenNewestBecomesTheDefault() throws {
+        try withStore { store, defaults in
+            enableAll(store)
+            #expect(store.saveFavorite(.init(sortOrder: .oldestFirst), name: "Copy order") == .saved)
+            let serialized = try #require(defaults.data(forKey: SearchHistoryStore.defaultsKey))
+            var record = try #require(JSONSerialization.jsonObject(with: serialized) as? [String: Any])
+            var favorites = try #require(record["favorites"] as? [[String: Any]])
+            var definition = try #require(favorites.first?["definition"] as? [String: Any])
+            definition["sortOrder"] = HistorySortOrder.newestFirst.rawValue
+            favorites[0]["definition"] = definition
+            record["favorites"] = favorites
+            let previousPreferences = try JSONSerialization.data(withJSONObject: record)
+            defaults.set(previousPreferences, forKey: SearchHistoryStore.defaultsKey)
+
+            let reopened = SearchHistoryStore(defaults: defaults)
+            #expect(reopened.failure == nil)
+            let restored = try #require(reopened.favorites.first)
+            #expect(restored.definition.query.isEmpty)
+            #expect(restored.definition.sortOrder == .newestFirst)
+            #expect(defaults.data(forKey: SearchHistoryStore.defaultsKey) == previousPreferences)
+        }
+    }
+
     @Test func invalidDefinitionsNeverReplacePreviouslySavedSearches() throws {
         try withStore { store, _ in
             enableAll(store)
@@ -274,6 +297,7 @@ struct SearchHistoryStoreTests {
             nonfinite.startDate = Date(timeIntervalSinceReferenceDate: .infinity)
             let invalid: [HistorySearchDefinition] = [
                 .init(query: "[", mode: .regexp), .init(query: "$(report OR$", mode: .fuzzy),
+                .init(query: String(repeating: "x", count: 1 + HistoryLimits.standard.maximumFuzzyQueryCharacters), mode: .fuzzy),
                 .init(filters: reversed), .init(filters: nonfinite),
                 .init(query: String(repeating: "x", count: 16_385), mode: .exact),
             ]
@@ -479,7 +503,7 @@ struct SearchHistoryStoreTests {
             var dates = HistorySearchFilters()
             dates.dateRange = .today
             let definitions: [HistorySearchDefinition] = [
-                .init(query: "same"), .init(query: "same", mode: .exact),
+                .init(query: "same"), .init(query: "same", mode: .fuzzy),
                 .init(query: "same", typeFilter: .text), .init(query: "same", pinnedOnly: true),
                 .init(query: "same", filters: source), .init(query: "same", filters: alternateSource),
                 .init(query: "same", filters: dates), .init(query: "same", sortOrder: .oldestFirst),

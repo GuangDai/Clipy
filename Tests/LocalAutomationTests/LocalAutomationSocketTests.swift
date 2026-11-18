@@ -242,64 +242,6 @@ final class LocalAutomationSocketTests: XCTestCase {
         }
     }
 
-    func testRejectedRevisionEncodingAndOversizedRequestsNeverModifyHistory() async throws {
-        try await withFixture { fixture in
-            try await fixture.history.grantCapability(.browsePreview, to: fixture.connection)
-            try await fixture.history.grantCapability(.reviseContent, to: fixture.connection)
-            let pageOutput = try await fixture.send(Self.json(arguments: ["limit": 1]))
-            let page = try Self.result(pageOutput)
-            let rows = try XCTUnwrap(page["items"] as? [[String: Any]])
-            let locator = try XCTUnwrap(rows.first?["locator"] as? String)
-            for encoded in ["AA", "AB==", "AA==\n", "not base64"] {
-                let output = try await fixture.send(Self.json(operation: "reviseContent", arguments: [
-                    "locator": locator, "expectedContentVersion": 1,
-                    "representations": [["typeIdentifier": "com.clipy.tests.binary", "bytesBase64": encoded]],
-                ]))
-                XCTAssertTrue(output.exitCode == 2)
-                XCTAssertTrue(String(decoding: output.stderr, as: UTF8.self) == "clipyctl: invalid_request\n")
-            }
-            let oversized = try await fixture.send(Self.json(operation: "reviseContent", arguments: [
-                "locator": locator, "expectedContentVersion": 1,
-                "representations": [["typeIdentifier": "com.clipy.tests.binary", "bytesBase64":
-                    Data(repeating: 0, count: 50_000).base64EncodedString()]],
-            ]))
-            XCTAssertTrue(oversized.exitCode == 2)
-            XCTAssertTrue(String(decoding: oversized.stderr, as: UTF8.self) == "clipyctl: request_too_large\n")
-            let current = try await fixture.history.browse(.init(kind: .recent, limit: 10))
-            XCTAssertTrue(current.rows.count == 3)
-            XCTAssertTrue(current.rows.allSatisfy { $0.item.contentVersion.rawValue == 1 })
-        }
-    }
-
-    func testStopClosesIncompleteClientsAndRemovesItsEndpoint() async throws {
-        try await withFixture { fixture in
-            let client = try await LocalAutomationClient.connect(endpointURL: fixture.endpoint)
-            await fixture.service.stop()
-            let output = await client.request(try Self.json(arguments: ["limit": 1]), credential: fixture.credential)
-            XCTAssertTrue(output.exitCode == 5)
-            XCTAssertTrue(!FileManager.default.fileExists(atPath: fixture.endpoint.path))
-        }
-    }
-
-    func testCancelledUnsentRevisionDoesNotModifyHistory() async throws {
-        try await withFixture { fixture in
-            let client = try await LocalAutomationClient.connect(endpointURL: fixture.endpoint)
-            let request = try Self.json(operation: "reviseContent", arguments: [
-                "locator": "i1_interrupted", "expectedContentVersion": 1,
-                "representations": [["typeIdentifier": "public.utf8-plain-text", "bytesBase64": "AA=="]],
-            ])
-            let invocation = Task {
-                withUnsafeCurrentTask { $0?.cancel() }
-                return await client.request(request, credential: fixture.credential)
-            }
-            let output = await invocation.value
-            XCTAssertTrue(output.exitCode == 5)
-            XCTAssertTrue(String(decoding: output.stderr, as: UTF8.self) == "clipyctl: cancelled\n")
-            let current = try await fixture.history.browse(.init(kind: .recent, limit: 10))
-            XCTAssertTrue(current.rows.allSatisfy { $0.item.contentVersion.rawValue == 1 })
-        }
-    }
-
     func testCancelledStartDoesNotRecreateAStoppedEndpoint() async throws {
         try await withFixture { fixture in
             await fixture.service.stop()

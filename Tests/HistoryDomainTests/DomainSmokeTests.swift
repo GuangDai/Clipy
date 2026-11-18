@@ -20,16 +20,12 @@ private func canonicalRepresentation(
     )
 }
 
-@Test func canonicalContentAcceptsNormalizedInput() throws {
+@Test func canonicalContentIdentityIgnoresFingerprints() throws {
     let content = try CanonicalContent(representations: [
         canonicalRepresentation(pngImage, [0x89, 0x50], fingerprint: 1),
         canonicalRepresentation(plainText, [0x68, 0x69], fingerprint: 2),
     ])
 
-    #expect(content.representations.count == 2)
-
-    // §2.2/§2.3: equality and hashing use `content` only — diverging
-    // fingerprints never change a Canonical value's identity (D7).
     let sameContentDifferentFingerprints = try CanonicalContent(representations: [
         canonicalRepresentation(pngImage, [0x89, 0x50], fingerprint: 41),
         canonicalRepresentation(plainText, [0x68, 0x69], fingerprint: 42),
