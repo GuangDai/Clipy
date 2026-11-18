@@ -142,7 +142,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil { search.value as? String == "alpha$" && rows.count == 1 }, app.debugDescription)
         if language == "en" {
             exerciseDateConfirmation(in: app, dates: dates)
-            exerciseFuzzyLimit(in: app, search: search, rows: rows, pasteboard: pasteboard)
+            exerciseFuzzyLimit(in: app, search: search, sort: sort, rows: rows, pasteboard: pasteboard)
         }
     }
 
@@ -167,7 +167,8 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
 
     @MainActor
     private func exerciseFuzzyLimit(
-        in app: XCUIApplication, search: XCUIElement, rows: XCUIElementQuery, pasteboard: NSPasteboard
+        in app: XCUIApplication, search: XCUIElement, sort: XCUIElement,
+        rows: XCUIElementQuery, pasteboard: NSPasteboard
     ) {
         let sharedPrefix = String(repeating: "x", count: 64)
         let longText = sharedPrefix + "a"
@@ -182,8 +183,18 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         }
 
         search.click()
-        app.typeText(longText)
         app.typeKey("2", modifierFlags: .command)
+        app.typeText(String(sharedPrefix.prefix(8)))
+        XCTAssertTrue(waitUntil { rows.count == 2 }, app.debugDescription)
+        sort.click()
+        let relevance = app.menuItems["Pinned, then relevance"]
+        XCTAssertTrue(relevance.waitForExistence(timeout: 5), app.debugDescription)
+        relevance.click()
+        XCTAssertTrue(waitUntil { sort.value as? String == "Pinned, then relevance" }, app.debugDescription)
+
+        search.click()
+        app.typeKey("a", modifierFlags: .command)
+        app.typeText(longText)
 
         let useExact = app.links["clipy.search.fuzzy.use-exact"]
         XCTAssertTrue(useExact.waitForExistence(timeout: 5), app.debugDescription)
@@ -193,6 +204,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil {
             !useExact.exists && search.value as? String == longText
                 && rows.count == 1 && rows.firstMatch.label.contains(longText)
+                && sort.value as? String == "Pinned first"
         }, app.debugDescription)
     }
 

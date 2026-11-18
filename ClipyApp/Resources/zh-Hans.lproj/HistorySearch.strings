@@ -71,7 +71,7 @@
 "Oldest" = "最早";
 "Pinned first" = "置顶优先";
 "Pinned first preserves your pin order." = "置顶记录按你设定的顺序显示。";
-"With Pinned first, unpinned fuzzy matches are ranked by relevance." = "置顶优先时，未置顶的模糊搜索结果按相关度排序。";
+"Unpinned results are ranked by fuzzy match relevance." = "未置顶的结果按模糊匹配的相关度排序。";
 "With Pinned first, unpinned results are sorted by latest copy." = "置顶优先时，未置顶记录按最近复制时间排序。";
 "Newest first" = "最新优先";
 "Oldest first" = "最早优先";

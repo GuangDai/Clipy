@@ -427,15 +427,15 @@ struct SearchHeaderView: View {
         Menu {
             Picker(HistorySearchCopy.text("Sort results", bundle: copyBundle), selection: sortBinding) {
                 ForEach([HistorySortOrder.newestFirst, .oldestFirst, .mostCopied, .automatic], id: \.self) { order in
-                    Text(HistorySearchCopy.sortTitle(order, bundle: copyBundle)).tag(order)
+                    Text(sortTitle(order)).tag(order)
                 }
             }
             .pickerStyle(.inline)
             Divider()
             Text(HistorySearchCopy.text("Pinned first preserves your pin order.", bundle: copyBundle))
             Text(HistorySearchCopy.text(
-                viewState.searchMode == .fuzzy || viewState.searchMode == .expression
-                    ? "With Pinned first, unpinned fuzzy matches are ranked by relevance."
+                viewState.isFuzzyTextSearch
+                    ? "Unpinned results are ranked by fuzzy match relevance."
                     : "With Pinned first, unpinned results are sorted by latest copy.",
                 bundle: copyBundle
             ))
@@ -447,7 +447,7 @@ struct SearchHeaderView: View {
         .fixedSize()
         .help(HistorySearchCopy.text("Sort results", bundle: copyBundle))
         .accessibilityLabel(HistorySearchCopy.text("Sort results", bundle: copyBundle))
-        .accessibilityValue(HistorySearchCopy.sortTitle(viewState.sortOrder, bundle: copyBundle))
+        .accessibilityValue(sortTitle(viewState.sortOrder))
         .accessibilityIdentifier("clipy.search.sort")
     }
 
@@ -465,10 +465,15 @@ struct SearchHeaderView: View {
         switch viewState.sortOrder {
         case .newestFirst: HistorySearchCopy.text("Newest", bundle: copyBundle)
         case .oldestFirst: HistorySearchCopy.text("Oldest", bundle: copyBundle)
-        case .automatic where viewState.searchMode == .fuzzy || viewState.searchMode == .expression:
-            HistorySearchCopy.text("Pinned, then relevance", bundle: copyBundle)
-        case .automatic, .mostCopied: HistorySearchCopy.sortTitle(viewState.sortOrder, bundle: copyBundle)
+        case .automatic, .mostCopied: sortTitle(viewState.sortOrder)
         }
+    }
+
+    private func sortTitle(_ order: HistorySortOrder) -> String {
+        if order == .automatic, viewState.isFuzzyTextSearch {
+            return HistorySearchCopy.text("Pinned, then relevance", bundle: copyBundle)
+        }
+        return HistorySearchCopy.sortTitle(order, bundle: copyBundle)
     }
 
     private func modeName(_ mode: SearchMode) -> String {

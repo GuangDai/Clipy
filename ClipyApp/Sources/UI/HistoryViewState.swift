@@ -656,6 +656,11 @@ final class HistoryViewState {
         !searchText.isEmpty
     }
 
+    var isFuzzyTextSearch: Bool {
+        if case .search(_, .fuzzy) = admittedKind { return true }
+        return false
+    }
+
     /// The query uses the full compiled text. When a fuzzy draft exceeds its
     /// matcher limit, preparation keeps the draft editable without issuing a query.
     private var admittedKind: HistoryBrowseKind {

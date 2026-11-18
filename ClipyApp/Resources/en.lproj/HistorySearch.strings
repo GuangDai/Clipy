@@ -71,7 +71,7 @@
 "Oldest" = "Oldest";
 "Pinned first" = "Pinned first";
 "Pinned first preserves your pin order." = "Pinned first preserves your pin order.";
-"With Pinned first, unpinned fuzzy matches are ranked by relevance." = "With Pinned first, unpinned fuzzy matches are ranked by relevance.";
+"Unpinned results are ranked by fuzzy match relevance." = "Unpinned results are ranked by fuzzy match relevance.";
 "With Pinned first, unpinned results are sorted by latest copy." = "With Pinned first, unpinned results are sorted by latest copy.";
 "Newest first" = "Newest first";
 "Oldest first" = "Oldest first";
