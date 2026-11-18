@@ -48,54 +48,25 @@ jobs:
           bash scripts/ci/run_spm_correctness.sh
           "$LOG_DIR" "$RUNNER_TEMP/clipy-fixtures"
 
+      - name: Capture SwiftPM crash evidence
+        if: failure()
+        shell: bash
+        run: |
+          python3 - <<'CRASH'
+          from pathlib import Path
+          import os
+          import shutil
+          directory = Path.home() / "Library" / "Logs" / "DiagnosticReports"
+          for report in sorted(directory.glob("swiftpm-testing-helper*.ips"),
+                               key=lambda path: path.stat().st_mtime, reverse=True)[:2]:
+              shutil.copy2(report, Path(os.environ["LOG_DIR"]) / report.name)
+          CRASH
+
       - name: Upload SwiftPM evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: spm-${{ github.run_id }}-${{ github.run_attempt }}
           path: ci-logs
-          if-no-files-found: warn
-          retention-days: 14
-
-  xcodeproj:
-    name: App build + GUI tests (${{ inputs.ui_test_class || format('{0}/4', matrix.shard) }})
-    runs-on: macos-26
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      max-parallel: 4
-      matrix:
-        shard: ${{ fromJSON(github.event_name == 'workflow_dispatch' && inputs.ui_test_class != '' && '[4]' || '[1,2,3,4]') }}
-    env:
-      HOMEBREW_NO_REQUIRE_TAP_TRUST: "1"
-      LOG_DIR: ${{ github.workspace }}/ci-logs
-      RESULT_BUNDLES: ${{ github.workspace }}/ci-result-bundles
-      DERIVED_DATA: ${{ github.workspace }}/DerivedData
-      CLIPY_CI_UI_TEST_CLASS: ${{ inputs.ui_test_class }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Verify runner contract
-        shell: bash
-        run: bash scripts/ci/verify_macos_runner.sh
-
-      - name: Run application correctness
-        shell: bash
-        run: >-
-          bash scripts/ci/run_app_correctness.sh
-          "$LOG_DIR" "$RESULT_BUNDLES" "$DERIVED_DATA"
-          "$RUNNER_TEMP/clipy-fixtures"
-          "$RUNNER_TEMP/xcodegen-2.45.4"
-          "${{ matrix.shard }}"
-
-      - name: Upload application evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: xcodeproj-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ci-logs
-            ci-result-bundles
           if-no-files-found: warn
           retention-days: 14

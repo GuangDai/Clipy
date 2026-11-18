@@ -110,6 +110,7 @@ struct ConditionalSearchTests {
                 observedAt: Date(timeIntervalSinceReferenceDate: Double(index))
             )
         }
+        print("compound-search fixture committed")
         // Candidate planning may inspect either required operand, but the
         // original Boolean order continues to select the returned highlight.
         for (query, hasBodySnippet) in [
@@ -117,6 +118,7 @@ struct ConditionalSearchTests {
             ("(all AND quartz) OR (all AND absent)", false),
             (Array(repeating: "all", count: 127).joined(separator: " ") + " quartz", false),
         ] {
+            print("compound-search expression begins", query.utf8.count)
             let measured = await history.measureSearch(.init(
                 kind: .search(text: query, mode: .expression), limit: 2
             ))
@@ -130,6 +132,7 @@ struct ConditionalSearchTests {
                 let kind = HistoryBrowseKind.search(text: literal, mode: mode)
                 let condition = try HistorySearchExpression.parse(conditionText)
                 let request = HistoryBrowseRequest(kind: kind, limit: 2, conditionExpression: condition)
+                print("compound-search qualified mode begins", mode)
                 let first = await history.measureSearch(request)
                 let firstPage = try first.result.get()
                 #expect(firstPage.rows.map(\.title) == ["all record 5", "all record 4"])
@@ -162,6 +165,7 @@ struct ConditionalSearchTests {
                 #expect(located.metrics.rowsDecoded <= 12)
             }
         }
+        print("compound-search dense cases begin")
         try await repeatedTextQueriesPreserveLiteralTermsAndPages(in: history)
     }
 
