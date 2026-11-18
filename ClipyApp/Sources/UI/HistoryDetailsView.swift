@@ -1439,17 +1439,19 @@ struct DetailsTextPreview: View {
             query.mode == .regexp && text.wasTruncated ? nil : PreviewTextSearchInput(text: text.text, query: query)
         }
         let matches = textMatches.flatMap { $0.input == search ? $0 : nil }
-        VStack(alignment: .leading, spacing: 4) {
-            if let matches, matches.targets.count > 1 {
-                PreviewSearchMatchNavigator(count: matches.targets.count, selection: activeMatch,
-                    accessibilityID: accessibilityID + ".matches") { index in
-                    activeMatch = index
-                    scrollToMatch(anchor(for: matches.targets[index]))
-                }
-            }
-            LazyVStack(alignment: .leading, spacing: 0) {
+        LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
+            Section {
                 ForEach(text.displaySegmentGroups, id: \.lowerBound) { group in
                     textGroup(group, matches: matches).id(anchor(for: group.lowerBound))
+                }
+            } header: {
+                if let matches, matches.targets.count > 1 {
+                    PreviewSearchMatchNavigator(count: matches.targets.count, selection: activeMatch,
+                        accessibilityID: accessibilityID + ".matches") { index in
+                        activeMatch = index
+                        scrollToMatch(anchor(for: matches.targets[index]))
+                    }
+                    .background(.background)
                 }
             }
         }
