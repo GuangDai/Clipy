@@ -19,20 +19,23 @@ struct RegexpLiteralFastPathTests {
         ("aaaaaaa", "ZZZZZZZZ"),
         ("abbbc", "ab+c"),
         ("abbbc", "^ab+c$"),
+        ("alpha alpha " + String(repeating: "x", count: 988) + "alpha", "alpha"),
     ])
     func matchesFoundationWithoutChangingRanges(_ text: String, _ pattern: String) async throws {
         let regex = try NSRegularExpression(pattern: pattern)
-        let expected = regex.firstMatch(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
+        let prefix = String(text.prefix(HistoryLimits.standard.maximumRegexpTitleBodyPrefixCharacters))
+        let expected = regex.matches(in: prefix, range: NSRange(prefix.startIndex..<prefix.endIndex, in: prefix))
         let worker = SearchWorker()
         let page = try await worker.page(
             HistoryBrowseRequest(kind: .search(text: pattern, mode: .regexp), limit: 1),
             in: corpus(text), continuationAnchor: nil, processMarker: UUID()
         )
-        if let expected {
+        if !expected.isEmpty {
             let row = try #require(page.rows.first)
-            #expect(row.search?.matchedRanges == [UTF16TextRange(
-                location: expected.range.location, length: expected.range.length
-            )])
+            #expect(row.title == text)
+            #expect(row.search?.matchedRanges == expected.map {
+                UTF16TextRange(location: $0.range.location, length: $0.range.length)
+            })
             #expect(row.search?.snippet == nil)
         } else {
             #expect(page.rows.isEmpty)

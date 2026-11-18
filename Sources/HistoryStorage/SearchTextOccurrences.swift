@@ -61,10 +61,13 @@ public enum SearchTextOccurrences {
         in text: String, pattern: NSRegularExpression, literalPattern: String?, scope: Range<Int>,
         limit: Int, deadline: ContinuousClock.Instant
     ) -> [UTF16TextRange] {
-        guard !scope.isEmpty, !Task.isCancelled, ContinuousClock.now < deadline else { return [] }
+        // A displayed title can extend past the prefix admitted for regexp search.
+        let lowerBound = max(0, scope.lowerBound)
+        let upperBound = min(scope.upperBound, text.utf16.count)
+        guard lowerBound < upperBound, !Task.isCancelled, ContinuousClock.now < deadline else { return [] }
         if let literalPattern {
             return literalRanges(in: text, term: literalPattern, options: .literal,
-                                 scope: scope, limit: limit, deadline: deadline)
+                                 scope: lowerBound..<upperBound, limit: limit, deadline: deadline)
         }
         // Scan the original bounded input so anchors and lookaround keep
         // their real context. Collect only occurrences in the display scope.
@@ -76,11 +79,11 @@ public enum SearchTextOccurrences {
                 return
             }
             guard let range = match?.range else { return }
-            if range.location >= scope.upperBound {
+            if range.location >= upperBound {
                 stop.pointee = true
                 return
             }
-            guard range.location >= scope.lowerBound, range.length > 0 else { return }
+            guard range.location >= lowerBound, range.length > 0 else { return }
             results.append(.init(location: range.location, length: range.length))
             if results.count >= limit { stop.pointee = true }
         }
