@@ -71,6 +71,32 @@ internal final class HistoryStoreLocation: Sendable {
         return !databaseExists
     }
 
+    /// A cancelled first startup can leave these two directories empty. Any
+    /// entry inside them may belong to an earlier database and must survive.
+    internal func requireEmptyContentDirectories() throws {
+        guard disposableRoot == nil else { return }
+        for name in ["blobs", "staging"] {
+            let directory = rootURL.appendingPathComponent(name, isDirectory: true)
+            var status = stat()
+            if Darwin.lstat(directory.path, &status) != 0 {
+                guard errno == ENOENT else { throw HistoryFailure.persistence(.openStore) }
+                continue
+            }
+            var enumerationFailed = false
+            guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+                  let entries = FileManager.default.enumerator(
+                    at: directory, includingPropertiesForKeys: nil,
+                    options: .skipsSubdirectoryDescendants,
+                    errorHandler: { _, _ in
+                        enumerationFailed = true
+                        return false
+                    }
+                  ), entries.nextObject() == nil, !enumerationFailed else {
+                throw HistoryFailure.persistence(.openStore)
+            }
+        }
+    }
+
     deinit {
         // Only the unique directory created above is eligible. A caller's
         // persistent location is never removed, including on open failure.

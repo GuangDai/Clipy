@@ -17,6 +17,7 @@ internal struct BlobCleanupBatchResult: Sendable, Equatable {
 /// synchronous: publication/reference commits and cleanup cannot interleave.
 /// V2-09 §§3/5/6: random identity, immutable files, database references last.
 internal final class ImmutableBlobStore {
+    private static let shardNameBytes = Set("0123456789ABCDEF".utf8)
     private let root: URL
     private let synchronize: (Int32, Bool) throws -> Void
     private let files = FileManager()
@@ -184,7 +185,7 @@ internal final class ImmutableBlobStore {
                 let directory = root.appendingPathComponent(cleaningStaging ? "staging" : "blobs")
                 cleanupEnumerationFailure = nil
                 guard let enumerator = files.enumerator(
-                    at: directory, includingPropertiesForKeys: [.isRegularFileKey],
+                    at: directory, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey],
                     errorHandler: { [weak self] _, error in
                         self?.cleanupEnumerationFailure = error
                         return false
@@ -199,7 +200,7 @@ internal final class ImmutableBlobStore {
                 cancelCleanupPass()
                 throw PersistenceErrorClassification.transactionFailure(for: error)
             }
-            guard let url = next as? URL else {
+            guard let url = next as? URL, let enumerator = cleanupEnumerator else {
                 cleanupEnumerator = nil
                 if cleaningStaging {
                     cleaningStaging = false
@@ -208,10 +209,24 @@ internal final class ImmutableBlobStore {
                 cleaningStaging = true
                 continue
             }
+            let properties = try url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .isSymbolicLinkKey])
+            if properties.isDirectory == true {
+                let name = url.lastPathComponent.utf8
+                // Blobs have one shard level. A nested store or other
+                // directory may have a different owner and reference set.
+                let isShard = !cleaningStaging && enumerator.level == 1 && name.count == 2
+                    && name.allSatisfy(Self.shardNameBytes.contains)
+                if !isShard || properties.isSymbolicLink != false { enumerator.skipDescendants() }
+                continue
+            }
             let suffix = cleaningStaging ? "partial" : "blob"
-            guard url.pathExtension == suffix,
+            guard enumerator.level == (cleaningStaging ? 1 : 2),
+                  properties.isRegularFile == true, properties.isSymbolicLink == false,
+                  url.pathExtension == suffix,
                   let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
-                  try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
+                  url.lastPathComponent == "\(id.uuidString).\(suffix)",
+                  cleaningStaging || url.deletingLastPathComponent().lastPathComponent == String(id.uuidString.prefix(2))
+            else { continue }
             let referenced: Bool
             if cleaningStaging {
                 referenced = false

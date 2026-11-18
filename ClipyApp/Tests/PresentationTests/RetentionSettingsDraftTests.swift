@@ -128,11 +128,11 @@ struct RetentionSettingsDraftTests {
         #expect(submission.policies.age?.maxAge == 90_001)
         #expect(submission.policies.storage?.maxTotalBytes == 15_728_640)
         let count = try #require(draft.countSubmission())
-        #expect(draft.maximumUnpinnedRequiresTightening(for: count))
+        #expect(draft.requiresCountRemovalConfirmation(for: count))
 
         // Reopening starts after these edits. It must preserve them just as
         // a read that started before the edits does, while updating untouched
-        // fields and the authoritative strictness baseline.
+        // fields and the authoritative configured values.
         let reopened = draft.beginLoadRequest()
         let acceptedReopened = draft.acceptLoaded(HistoryRetentionConfiguration(
             maximumUnpinnedItems: 20,
@@ -149,7 +149,8 @@ struct RetentionSettingsDraftTests {
         #expect(draft.ageDaysText == "3")
         #expect(try #require(draft.submission()).policies.age?.maxAge == 180_001)
         #expect(try #require(draft.submission()).policies.storage?.maxTotalBytes == 15_728_640)
-        #expect(!draft.maximumUnpinnedRequiresTightening(for: count))
+        #expect(draft.configuredRetentionConfiguration.maximumUnpinnedItems == 20)
+        #expect(draft.countSubmission()?.maximumUnpinnedItems == 31)
     }
 
     @Test("reload preserves unsaved toggles and all V2 value fields")
@@ -269,11 +270,11 @@ struct RetentionSettingsDraftTests {
         let submission = try #require(draft.countSubmission())
         #expect(submission.maximumUnpinnedItems == 37)
         #expect(!draft.maximumUnpinnedValueIsDirty)
-        #expect(!draft.maximumUnpinnedRequiresTightening(for: submission))
+        #expect(!draft.requiresCountRemovalConfirmation(for: submission))
 
         draft.setMaximumUnpinnedText("36")
         let tightened = try #require(draft.countSubmission())
-        #expect(draft.maximumUnpinnedRequiresTightening(for: tightened))
+        #expect(draft.requiresCountRemovalConfirmation(for: tightened))
     }
 
     @Test("count Apply is enabled only when the validated value differs from configuration")
@@ -938,8 +939,8 @@ struct RetentionSettingsDraftTests {
         #expect(!valueDraft.hasCountChanges)
     }
 
-    @Test("loosening the count applies without destructive confirmation")
-    func loosenedCountDoesNotRequireTighteningConfirmation() throws {
+    @Test("raising the count can still remove unpinned items")
+    func raisedCountRequiresRemovalConfirmation() throws {
         var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(
             HistoryRetentionConfiguration(
@@ -953,12 +954,10 @@ struct RetentionSettingsDraftTests {
             into: &draft
         )
 
-        // Raising the configured count can retire nothing, so the direct
-        // Apply path is taken without the strict confirmation (Card 10D).
         draft.setMaximumUnpinnedText("38")
         let submission = try #require(draft.countSubmission())
         #expect(draft.hasCountChanges)
-        #expect(!draft.maximumUnpinnedRequiresTightening(for: submission))
+        #expect(draft.requiresCountRemovalConfirmation(for: submission))
     }
 
     @Test("loosening or disabling non-age thresholds applies directly with age off")

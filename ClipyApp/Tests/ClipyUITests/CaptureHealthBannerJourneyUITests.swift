@@ -42,6 +42,7 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         ]
         let dismiss = app.buttons["clipy.capture.notice.dismiss"]
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        let window = app.dialogs.containing(.textField, identifier: "clipy.search.field").firstMatch
 
         stageUnsupportedGeneration(suffix: "first")
         XCTAssertTrue(
@@ -57,7 +58,8 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         XCTAssertTrue(search.exists)
         XCTAssertLessThanOrEqual(banner.frame.maxY, search.frame.minY,
                                  "The warning belongs above the search strip")
-        let visualEvidence = XCTAttachment(screenshot: panel.screenshot())
+        XCTAssertTrue(window.exists && window.frame.contains(banner.frame))
+        let visualEvidence = XCTAttachment(screenshot: window.screenshot())
         visualEvidence.name = "Capture warning layout"
         visualEvidence.lifetime = .keepAlways
         add(visualEvidence)
@@ -90,7 +92,8 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         XCTAssertTrue(search.isHittable)
         XCTAssertTrue(dismiss.isHittable)
         XCTAssertLessThanOrEqual(banner.frame.maxY, search.frame.minY)
-        let reopened = XCTAttachment(screenshot: panel.screenshot())
+        XCTAssertTrue(window.exists && window.frame.contains(banner.frame))
+        let reopened = XCTAttachment(screenshot: window.screenshot())
         reopened.name = "Capture warning after reopening the panel"
         reopened.lifetime = .keepAlways
         add(reopened)

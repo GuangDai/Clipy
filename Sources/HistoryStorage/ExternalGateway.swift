@@ -89,7 +89,8 @@ internal actor ExternalGateway {
     /// save-boundary gate and audited commit path (`V2-05` §5.1/§6.3).
     internal func perform(
         _ request: ExternalRequest,
-        as connection: ExternalConnectionID
+        as connection: ExternalConnectionID,
+        onCommittedRemoval: (@Sendable (HistoryItemID, ChangePosition) async -> Void)? = nil
     ) async throws -> ExternalResponse {
         let requestedAt = storageClock.now()
         try requireKnownConnection(connection, capability: .manage)
@@ -100,11 +101,10 @@ internal actor ExternalGateway {
             expectedConnectionKind: .appIntents,
             requestedAt: requestedAt
         )
-        return try await authority.commitExternal(
-            request: request,
-            connection: connection,
+        return try await commitMutation(
+            request, connection: connection,
             expectedConnectionKind: .appIntents,
-            requestedAt: requestedAt
+            requestedAt: requestedAt, onCommittedRemoval: onCommittedRemoval
         )
     }
 
@@ -172,7 +172,8 @@ internal actor ExternalGateway {
     /// owners. Local grants remain independent: organizing cannot delete.
     internal func performLocalAutomation(
         _ request: ExternalRequest,
-        asAuthenticated connection: ExternalConnectionID
+        asAuthenticated connection: ExternalConnectionID,
+        onCommittedRemoval: (@Sendable (HistoryItemID, ChangePosition) async -> Void)?
     ) async throws -> ExternalResponse {
         let requestedAt = storageClock.now()
         let descriptor = ExternalOperationDescriptor.forRequest(
@@ -184,10 +185,27 @@ internal actor ExternalGateway {
 #if DEBUG
         await ExternalGatewayDebugInstrumentation.beforeLocalAutomationWriteCommit?()
 #endif
-        return try await authority.commitExternal(
-            request: request, connection: connection,
-            expectedConnectionKind: .localAutomation, requestedAt: requestedAt
+        return try await commitMutation(
+            request, connection: connection, expectedConnectionKind: .localAutomation,
+            requestedAt: requestedAt, onCommittedRemoval: onCommittedRemoval
         )
+    }
+
+    private func commitMutation(
+        _ request: ExternalRequest,
+        connection: ExternalConnectionID,
+        expectedConnectionKind: ConnectionEnrollKind,
+        requestedAt: Date,
+        onCommittedRemoval: (@Sendable (HistoryItemID, ChangePosition) async -> Void)?
+    ) async throws -> ExternalResponse {
+        let result = try await authority.commitExternal(
+            request: request, connection: connection,
+            expectedConnectionKind: expectedConnectionKind, requestedAt: requestedAt
+        )
+        if case .remove(let itemID) = request, let position = result.removalPosition {
+            await onCommittedRemoval?(itemID, position)
+        }
+        return result.response
     }
 
     internal func readLocalAutomationEffectiveContent(

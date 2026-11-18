@@ -41,7 +41,7 @@ extension HistoryAuthority {
         connection: ExternalConnectionID,
         expectedConnectionKind: ConnectionEnrollKind = .appIntents,
         requestedAt: Date
-    ) async throws -> ExternalResponse {
+    ) async throws -> (response: ExternalResponse, removalPosition: ChangePosition?) {
         let write = ExternalWriteCommitContext(
             connection: connection,
             expectedConnectionKind: expectedConnectionKind,
@@ -83,7 +83,7 @@ extension HistoryAuthority {
         } catch {
             try publishExternalWriteFailure(error, write: write)
         }
-        return try Self.externalResponse(from: receipt, request: request)
+        return try Self.externalResult(from: receipt, request: request)
     }
 
     /// Shared failure tail for the manage and two-phase revision entries.
@@ -300,23 +300,23 @@ private extension HistoryAuthority {
         let denialReason: ExternalDenialReason?
     }
 
-    static func externalResponse(
+    static func externalResult(
         from receipt: HistoryReceipt,
         request: ExternalRequest
-    ) throws -> ExternalResponse {
+    ) throws -> (response: ExternalResponse, removalPosition: ChangePosition?) {
         switch receipt {
         case .unchanged:
-            return .unchanged
+            return (.unchanged, nil)
         case .committed(let commit):
             switch (request, commit.outcome) {
             case (.pin(let requested), .placedPinned(let committed))
                     where requested == committed:
-                return .pin(committed)
+                return (.pin(committed), nil)
             case (.unpin(let requested), .unpinned(let committed))
                     where requested == committed:
-                return .unpin(committed)
+                return (.unpin(committed), nil)
             case (.remove, .removed(let count)) where count == 1:
-                return .removed(count: count)
+                return (.removed(count: count), commit.position)
             default:
                 throw ExternalFailure.persistence(.invariantViolation)
             }

@@ -373,10 +373,13 @@ internal struct RetentionSettingsDraft {
         submission.editGeneration == editGeneration
     }
 
-    internal func maximumUnpinnedRequiresTightening(
+    /// Applying an enabled limit can retire records even if the limit rises.
+    /// Unpinning can leave more unpinned items than the configured count.
+    internal func requiresCountRemovalConfirmation(
         for submission: CountSubmission
     ) -> Bool {
-        Self.tightens(submission.maximumUnpinnedItems, from: configuredMaximumUnpinnedItems)
+        guard let maximum = submission.maximumUnpinnedItems else { return false }
+        return maximum != configuredMaximumUnpinnedItems
     }
 
     /// Applying an enabled age policy checks the current time even when

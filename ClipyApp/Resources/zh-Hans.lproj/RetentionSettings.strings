@@ -26,9 +26,9 @@
 "settings.retention.feedback.no-change" = "没有更改。";
 "settings.retention.feedback.nothing-to-clear" = "没有可清空的项目。";
 "settings.retention.items.apply" = "应用项目数量限制";
-"settings.retention.items.confirm-apply" = "应用更严格的限制";
-"settings.retention.items.confirm-message" = "更严格的限制可能会立即移除未置顶项目，且无法恢复。";
-"settings.retention.items.confirm-title" = "应用更严格的项目数量限制？";
+"settings.retention.items.confirm-apply" = "应用限制";
+"settings.retention.items.confirm-message" = "如果未置顶项目超过新上限，系统会从最早复制的项目开始永久删除，直到数量符合上限。";
+"settings.retention.items.confirm-title" = "应用此项目数量限制？";
 "settings.retention.items.field-accessibility-label" = "未置顶项目数量上限";
 "settings.retention.items.keep-at-most" = "最多保留";
 "settings.retention.items.section" = "项目";

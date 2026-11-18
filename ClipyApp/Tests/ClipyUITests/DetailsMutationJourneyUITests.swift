@@ -204,7 +204,7 @@ final class DetailsMutationJourneyUITests: XCTestCase {
         }
         guard assertEventually({ info.isHittable }, in: app, message: "Details copy information is not reachable.") else { return }
         info.click()
-        let copyCount = detailsRoot.descendants(matching: .any)["clipy.details.copy-count"]
+        let copyCount = detailsRoot.staticTexts["clipy.details.copy-count"]
         guard assertEventually({ copyCount.exists && (copyCount.value as? String) == "1" },
                                in: app, message: "Details did not show the target's first copy.") else { return }
 

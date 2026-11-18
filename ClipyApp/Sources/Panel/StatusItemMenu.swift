@@ -3,15 +3,8 @@
 /// byte-identically; only an actual right-mouse event routes to the menu
 /// (see `StatusItemClickDecision`).
 ///
-/// The menu is presentation only and owns no state: "Show Clipboard
-/// History" reuses the primary-click summon path, Pause/Resume routes
-/// through the SAME composition-owned transitions as the panel's
-/// `clipy.capture.pause` row (AppDelegate.pauseCapture) and the access
-/// banner's Resume recovery (AppDelegate.recoverCaptureAccess), "Settings…"
-/// invokes the same public OpenSettingsAction the panel footer uses, and
-/// "Quit Clipy" is `NSApp.terminate`. The one state-dependent title is
-/// recomputed in `menuNeedsUpdate` so it never survives a capture-pause
-/// transition.
+/// The menu dispatches the intent shown on each item. The Pause/Resume
+/// title and action are set together each time AppKit prepares the menu.
 import AppKit
 
 /// The two dispositions a status-item activation can take — the same
@@ -59,29 +52,29 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
     private let localizationBundle: Bundle?
     private let languageDefaults: UserDefaults
 
-    private let isCapturePaused: @MainActor () -> Bool
-    private let canToggleCapturePause: @MainActor () -> Bool
+    private let captureAccessState: @MainActor () -> CaptureAccessState
     private let onShowHistory: @MainActor () -> Void
-    private let onToggleCapturePause: @MainActor () -> Void
+    private let onPauseCapture: @MainActor () -> Void
+    private let onResumeCapture: @MainActor () -> Void
     private let onOpenSettings: @MainActor () -> Void
     private let onQuit: @MainActor () -> Void
     private let onMenuDidClose: @MainActor () -> Void
 
     init(
-        isCapturePaused: @escaping @MainActor () -> Bool,
-        canToggleCapturePause: @escaping @MainActor () -> Bool,
+        captureAccessState: @escaping @MainActor () -> CaptureAccessState,
         onShowHistory: @escaping @MainActor () -> Void,
-        onToggleCapturePause: @escaping @MainActor () -> Void,
+        onPauseCapture: @escaping @MainActor () -> Void,
+        onResumeCapture: @escaping @MainActor () -> Void,
         onOpenSettings: @escaping @MainActor () -> Void,
         onQuit: @escaping @MainActor () -> Void,
         onMenuDidClose: @escaping @MainActor () -> Void,
         localizationBundle: Bundle? = nil,
         languageDefaults: UserDefaults = .standard
     ) {
-        self.isCapturePaused = isCapturePaused
-        self.canToggleCapturePause = canToggleCapturePause
+        self.captureAccessState = captureAccessState
         self.onShowHistory = onShowHistory
-        self.onToggleCapturePause = onToggleCapturePause
+        self.onPauseCapture = onPauseCapture
+        self.onResumeCapture = onResumeCapture
         self.onOpenSettings = onOpenSettings
         self.onQuit = onQuit
         self.onMenuDidClose = onMenuDidClose
@@ -90,7 +83,7 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
         let bundle = localizationBundle ?? AppLocalization.bundle(for: AppLanguageSettings.load(from: languageDefaults))
         let pauseResumeItem = NSMenuItem(
             title: StatusMenuCopy.text("Pause Clipboard Monitoring for 5 Minutes", bundle: bundle),
-            action: #selector(toggleCapturePauseClicked(_:)),
+            action: #selector(pauseCaptureClicked(_:)),
             keyEquivalent: ""
         )
         self.pauseResumeItem = pauseResumeItem
@@ -131,21 +124,23 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
         refresh()
     }
 
-    /// Recomputes language and capture state from the owner's live facts.
-    /// Called at build time and by AppKit on every `menuNeedsUpdate`
-    /// (before each presentation), so a stale title can never be shown.
-    /// `NSMenu.update()` is NOT a refresh entry: it only applies
-    /// NSMenuValidation enable/disable state.
+    /// AppKit calls this before each presentation. While the menu is open,
+    /// an expired pause can make its displayed Resume action a no-op.
     func refresh() {
         let bundle = localizationBundle ?? AppLocalization.bundle(for: AppLanguageSettings.load(from: languageDefaults))
         showHistoryItem.title = StatusMenuCopy.text("Show Clipboard History", bundle: bundle)
         settingsItem.title = StatusMenuCopy.text("Settings…", bundle: bundle)
         quitItem.title = StatusMenuCopy.text("Quit Clipy", bundle: bundle)
-        let title = isCapturePaused()
+        let state = captureAccessState()
+        let isPaused = state == .userPaused
+        let title = isPaused
             ? "Resume Clipboard Monitoring"
             : "Pause Clipboard Monitoring for 5 Minutes"
         pauseResumeItem.title = StatusMenuCopy.text(title, bundle: bundle)
-        pauseResumeItem.isEnabled = canToggleCapturePause()
+        pauseResumeItem.action = isPaused
+            ? #selector(resumeCaptureClicked(_:))
+            : #selector(pauseCaptureClicked(_:))
+        pauseResumeItem.isEnabled = state == .allowed || isPaused
     }
 
     // MARK: - NSMenuDelegate
@@ -174,8 +169,12 @@ final class StatusItemMenu: NSObject, NSMenuDelegate {
         onShowHistory()
     }
 
-    @objc private func toggleCapturePauseClicked(_ sender: NSMenuItem) {
-        onToggleCapturePause()
+    @objc private func pauseCaptureClicked(_ sender: NSMenuItem) {
+        onPauseCapture()
+    }
+
+    @objc private func resumeCaptureClicked(_ sender: NSMenuItem) {
+        onResumeCapture()
     }
 
     @objc private func openSettingsClicked(_ sender: NSMenuItem) {

@@ -112,6 +112,7 @@ enum HistorySearchCompletionEngine {
         let text = input.text as NSString
         guard let selection = safeSelection(input.selection, in: text),
               selection.location <= maximumLookBehindUTF16 else { return nil }
+        let endLimit = min(text.length, selection.location + maximumLookAheadUTF16)
 
         // Quote state is meaningful only inside a dollar block. Checking the
         // bounded prefix establishes delimiter pairing; guessing the parity
@@ -124,13 +125,20 @@ enum HistorySearchCompletionEngine {
             let unit = text.character(at: cursor)
             if mode == .regexp, blockStart == nil {
                 if unit == 36, regexpBoundary.allowsCondition,
-                   cursor == 0 || isWhitespace(text.character(at: cursor - 1)) {
+                   cursor == 0 || isWhitespace(text.character(at: cursor - 1)),
+                   !HistorySearchRegexpBoundary.isAnchorBeforeCondition(
+                       at: cursor, end: endLimit, unitAt: { text.character(at: $0) },
+                       whitespaceWidth: { isWhitespace(text.character(at: $0)) ? 1 : 0 }
+                   ) {
                     blockStart = cursor + 1
                     cursor += 1
                 } else {
                     let next = cursor + 1 < text.length ? text.character(at: cursor + 1) : nil
-                    let scalarWidth = next.map { (0xD800...0xDBFF).contains($0) ? 2 : 1 } ?? 0
-                    cursor += regexpBoundary.advance(unit, followedBy: next, nextScalarWidth: scalarWidth)
+                    let third = cursor + 2 < text.length ? text.character(at: cursor + 2) : nil
+                    cursor += regexpBoundary.advance(
+                        unit, followedBy: next, nextScalarWidth: next.map(utf16ScalarWidth) ?? 0,
+                        thirdUnit: third, thirdScalarWidth: third.map(utf16ScalarWidth) ?? 0
+                    )
                 }
                 continue
             }
@@ -163,7 +171,6 @@ enum HistorySearchCompletionEngine {
                          field: nil, explicit: true, openingText: "$", closingText: "$")
         }
 
-        let endLimit = min(text.length, selection.location + maximumLookAheadUTF16)
         var closing: Int?
         // A caret can sit between a backslash and its escaped quote/dollar.
         // The prefix scanner has already consumed that pair in this case.
@@ -384,6 +391,10 @@ enum HistorySearchCompletionEngine {
         return CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 
+    private static func utf16ScalarWidth(_ leadingUnit: UInt16) -> Int {
+        (0xD800...0xDBFF).contains(leadingUnit) ? 2 : 1
+    }
+
     private static func isAmountDigitAfter(_ index: Int, in text: NSString) -> Bool {
         isDecimalDigit(at: index + 1, in: text)
     }
@@ -404,19 +415,7 @@ enum HistorySearchCompletionEngine {
     private static func isAmount(in text: NSString, range: NSRange) -> Bool {
         guard range.length <= maximumTermUTF16 else { return false }
         let value = text.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
-        var seenDigit = false
-        var seenPeriod = false
-        var endsWithDigit = false
-        for scalar in value.unicodeScalars {
-            if CharacterSet.decimalDigits.contains(scalar) {
-                seenDigit = true
-                endsWithDigit = true
-            } else if scalar == ".", seenDigit, !seenPeriod {
-                seenPeriod = true
-                endsWithDigit = false
-            } else { return false }
-        }
-        return seenDigit && endsWithDigit
+        return HistorySearchQueryCompiler.isAmount(value)
     }
 
     /// Shared with the bounded source worker. Reject oversized values before

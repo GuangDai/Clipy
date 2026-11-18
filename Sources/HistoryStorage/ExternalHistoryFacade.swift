@@ -20,6 +20,15 @@ public struct ExternalHistoryFacade: ExternalHistory, Sendable {
         try await gateway.perform(request, as: connectionID)
     }
 
+    /// The app uses the committed position to retire buffered display state
+    /// before returning a successful removal to App Intents.
+    public func perform(
+        _ request: ExternalRequest,
+        onCommittedRemoval: @escaping @Sendable (HistoryItemID, ChangePosition) async -> Void
+    ) async throws -> ExternalResponse {
+        try await gateway.perform(request, as: connectionID, onCommittedRemoval: onCommittedRemoval)
+    }
+
     public func read(
         _ request: ExternalRead
     ) async throws -> ExternalReadResult {

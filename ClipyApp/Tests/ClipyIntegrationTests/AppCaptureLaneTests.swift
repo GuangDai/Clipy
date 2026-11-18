@@ -43,15 +43,18 @@ struct AppCaptureLaneTests {
         try #require(await ComposedSupport.waitFor {
             states.allSatisfy { state in
                 state.retentionChangePosition != nil && state.displayedRow(for: victim.id) == nil
+                    && state.displayedRows.map(\.title) == ["new entry", "keep pinned"]
             }
         })
         for state in states {
             #expect(state.surfacePurge == nil)
             #expect(state.displayedRow(for: pinned.id)?.item == pinned)
-            #expect(state.displayedRows.map(\.title) == ["new entry", "keep pinned"])
         }
         let surviving = try await history.pastePayload(for: pinned.id)
         #expect(surviving.representations.map(\.bytes) == [Data("keep pinned".utf8)])
+        await #expect(throws: HistoryFailure.notFound(victim.id)) {
+            try await history.pastePayload(for: victim.id)
+        }
     }
 
     @Test @MainActor
@@ -226,15 +229,15 @@ struct AppCaptureLaneTests {
         #expect(composition.captureHealth.pendingCaptureBytes == 0)
     }
 
-    /// A capture receipt carries same-commit retention effects back through
-    /// the app owner before the next authoritative observation is delivered.
-    /// The held pre-commit rows are therefore non-executable during that
-    /// delivery gap, then the real storage snapshot repopulates survivors.
+    /// A retention receipt arrives before the replacement observation. A
+    /// surviving row remains usable, and SQLite refuses the retired item.
     @Test @MainActor
-    func captureRetentionReceiptPurgesSurfaceBeforeObservationCatchesUp() async throws {
+    func captureRetentionKeepsSurvivorReadableWhileReplacementObservationIsHeld() async throws {
         let base = try await ComposedSupport.openMemoryHistory(maximumUnpinned: 2)
-        _ = try await base.perform(.capture(Self.capture("A", at: 5)))
-        _ = try await base.perform(.capture(Self.capture("B", at: 6)))
+        let retiredReceipt = try await base.perform(.capture(Self.capture("A", at: 5)))
+        let retired = try #require(ComposedSupport.insertedReference(from: retiredReceipt, "retired arrange"))
+        let survivingReceipt = try await base.perform(.capture(Self.capture("B", at: 6)))
+        let surviving = try #require(ComposedSupport.insertedReference(from: survivingReceipt, "survivor arrange"))
         let history = PostInitialObservationSuspendingHistory(base: base)
         let pasteboard = ComposedSupport.makePasteboard()
         pasteboard.clearContents()
@@ -242,30 +245,37 @@ struct AppCaptureLaneTests {
             history: history,
             adapter: PasteboardAdapter(pasteboard: pasteboard)
         )
-        defer { composition.stop() }
+        defer {
+            composition.stop()
+            pasteboard.releaseGlobally()
+        }
 
         composition.viewState.activate()
-        let initialPageArrived = await ComposedSupport.waitFor {
-            composition.viewState.rows.map(\.title) == ["B", "A"]
-        }
-        #expect(initialPageArrived)
+        try #require(await ComposedSupport.waitFor {
+            composition.viewState.displayedRows.map(\.item) == [surviving, retired]
+        })
 
         composition.submitCaptureForTesting(Self.capture("C", at: 7))
-        await history.waitUntilPostInitialObservationIsHeld()
-        let drained = await ComposedSupport.waitFor {
-            composition.captureHealth.activeCommitCount == 0
+        let capture = try #require(composition.activeCaptureForTesting)
+        await capture.value
+        try await history.requireHeldPostInitialObservation()
+        do {
+            #expect(composition.viewState.retentionChangePosition != nil)
+            #expect(composition.viewState.surfacePurge == nil)
+            let survivor = try await composition.viewState.dragPayload(for: surviving)
+            #expect(survivor?.representations.map(\.bytes) == [Data("B".utf8)])
+            await #expect(throws: HistoryFailure.notFound(retired.id)) {
+                try await base.pastePayload(for: retired.id)
+            }
+        } catch {
+            await history.releasePostInitialObservation()
+            throw error
         }
-        #expect(drained)
-        #expect(
-            composition.viewState.rows.isEmpty,
-            "the destructive receipt retires stale executable rows"
-        )
 
         await history.releasePostInitialObservation()
-        let authoritativePageArrived = await ComposedSupport.waitFor {
-            composition.viewState.rows.map(\.title) == ["C", "B"]
-        }
-        #expect(authoritativePageArrived)
+        try #require(await ComposedSupport.waitFor {
+            composition.viewState.displayedRows.map(\.title) == ["C", "B"]
+        })
     }
 
     /// A stopped owner drops its pending capture and cancels the active task.

@@ -58,7 +58,7 @@ struct HistorySearchCompletionView: View {
                     }
                 }
                 .scrollBounceBehavior(.basedOnSize)
-                .onChange(of: completion.selectedIndex) { _, selected in
+                .onChange(of: completion.selectedIndex, initial: true) { _, selected in
                     if completion.candidates.indices.contains(selected) {
                         proxy.scrollTo(completion.candidates[selected].id)
                     }
@@ -70,7 +70,7 @@ struct HistorySearchCompletionView: View {
                 .padding(.horizontal, 9).padding(.vertical, 5)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: min(completion.availableHeight, Double(completion.candidates.count * 46 + 26 + (completion.isLoadingSources || completion.sourceFailure ? 40 : 0))))
+        .frame(height: completion.presentationHeight)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
         .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.25)) }
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)

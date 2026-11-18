@@ -181,6 +181,12 @@ struct HistoryPreviewView: View {
     }
 
     var body: some View {
+        let image = previewImage
+        let showsFileContents = switch loader.phase {
+        case .content(.text): true
+        case .content(.image): image != nil
+        default: false
+        }
         VStack(spacing: 0) {
             searchMatch
             if loader.requestedItem == targetItem, let file = loader.loadedFileReference {
@@ -201,12 +207,15 @@ struct HistoryPreviewView: View {
                             .truncationMode(.middle)
                             .help(file.filePath ?? file.address)
                     }
-                    Text(PreviewCopy.text("Showing the file contents loaded for this preview. Copying still copies the original file reference."))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .help(PreviewCopy.text("Showing the file contents loaded for this preview. Copying still copies the original file reference."))
-                        .accessibilityIdentifier("clipy.preview.file.disclosure")
+                    if showsFileContents {
+                        let disclosure = PreviewCopy.text("Showing the file contents loaded for this preview. Copying still copies the original file reference.")
+                        Text(disclosure)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .help(disclosure)
+                            .accessibilityIdentifier("clipy.preview.file.disclosure")
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
@@ -217,7 +226,7 @@ struct HistoryPreviewView: View {
                 .onDisappear { fileHeaderHeight = 0 }
                 Divider()
             }
-            previewBody
+            previewBody(image: image)
                 .frame(maxWidth: .infinity, maxHeight: flexibleHeight)
                 .layoutPriority(1)
             if PreviewFooterMetadata(item: targetItem, row: observedRow) != nil {
@@ -414,8 +423,16 @@ struct HistoryPreviewView: View {
         }
     }
 
+    private var previewImage: Image? {
+        guard loader.requestedItem == targetItem,
+              case .content(.image) = loader.phase,
+              let raster = loader.raster,
+              let label = loader.imageAccessibilityLabel(locale: locale) else { return nil }
+        return PreviewRasterDisplay.image(raster, scale: 1, label: Text(label))
+    }
+
     @ViewBuilder
-    private var previewBody: some View {
+    private func previewBody(image: Image?) -> some View {
         if targetItem == nil {
             unavailableBody
         } else if loader.requestedItem != targetItem {
@@ -425,14 +442,7 @@ struct HistoryPreviewView: View {
             case .loading:
                 loadingBody
             case .content(.image):
-                if let raster = loader.raster,
-                   let accessibilityLabel =
-                    loader.imageAccessibilityLabel(locale: locale),
-                   let image = PreviewRasterDisplay.image(
-                       raster,
-                       scale: 1,
-                       label: Text(accessibilityLabel)
-                   ) {
+                if let raster = loader.raster, let image {
                     VStack(spacing: 0) {
                         image
                             .resizable()

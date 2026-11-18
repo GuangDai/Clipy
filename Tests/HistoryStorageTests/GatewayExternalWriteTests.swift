@@ -44,7 +44,7 @@ struct GatewayExternalWriteTests {
             connection: fixture.connection,
             requestedAt: Self.requestedAt
         )
-        guard case .pin(let pinnedID) = pinned else {
+        guard case .pin(let pinnedID) = pinned.response else {
             Issue.record("expected external pin response")
             return
         }
@@ -67,7 +67,7 @@ struct GatewayExternalWriteTests {
             connection: fixture.connection,
             requestedAt: Self.requestedAt.addingTimeInterval(1)
         )
-        guard case .unchanged = unchanged else {
+        guard case .unchanged = unchanged.response else {
             Issue.record("expected repeated external pin to be unchanged")
             return
         }
@@ -90,7 +90,7 @@ struct GatewayExternalWriteTests {
             connection: fixture.connection,
             requestedAt: Self.requestedAt.addingTimeInterval(2)
         )
-        guard case .unpin(let unpinnedID) = unpinned else {
+        guard case .unpin(let unpinnedID) = unpinned.response else {
             Issue.record("expected external unpin response")
             return
         }
@@ -113,12 +113,13 @@ struct GatewayExternalWriteTests {
             connection: fixture.connection,
             requestedAt: Self.requestedAt.addingTimeInterval(3)
         )
-        guard case .removed(let count) = removed else {
+        guard case .removed(let count) = removed.response else {
             Issue.record("expected external remove response")
             return
         }
         #expect(count == 1)
         let afterRemove = try await Self.snapshot(fixture)
+        #expect(removed.removalPosition?.rawValue == afterRemove.position)
         try Self.expectCommittedWrite(
             afterRemove,
             prior: afterUnpin,

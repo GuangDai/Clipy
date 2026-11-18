@@ -450,8 +450,8 @@ struct AppPasteOrchestrationTests {
 
     /// Card 7/14: a payload parked in the old panel session must not write
     /// into the newly summoned session or dismiss it. Join the actual retired
-    /// task before checking the unchanged private pasteboard, then prove that
-    /// a new explicit Copy still writes and closes through production wiring.
+    /// task before checking the unchanged private pasteboard and the cleared
+    /// busy warning. A new Copy still writes and closes through production wiring.
     @Test @MainActor
     func panelCloseCancelsUnresolvedCopyAndReopenAcceptsANewCopy() async throws {
         try ComposedSupport.requireUsablePasteboard()
@@ -466,6 +466,7 @@ struct AppPasteOrchestrationTests {
             ComposedSupport.insertedReference(from: receipt, "session arrange")
         )
         let pasteboard = ComposedSupport.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
         ComposedSupport.setPasteboardContents("previous owner", on: pasteboard)
         let pausingHistory = PausingPastePayloadHistory(base: history)
         let composition = AppComposition.makeForTesting(
@@ -482,12 +483,15 @@ struct AppPasteOrchestrationTests {
         let panel = try #require(appDelegate.panelForTesting)
         let changeCountBeforeCopy = pasteboard.changeCount
         composition.viewState.requestPaste(item)
-        await pausingHistory.waitUntilPastePayloadIsPaused()
         let pendingPaste = try #require(composition.pendingPasteForTesting)
+        await pausingHistory.waitUntilPastePayloadIsPaused()
+        composition.viewState.requestPaste(item)
+        #expect(appDelegate.pasteFailure == .busy)
 
         appDelegate.closePanel()
         #expect(composition.pendingPasteForTesting == nil)
         appDelegate.openPanelForTesting()
+        #expect(appDelegate.pasteFailure == nil)
         await pausingHistory.resumePastePayload()
         await pendingPaste.value
 

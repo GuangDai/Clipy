@@ -58,18 +58,23 @@ internal enum SQLiteHistorySchema {
             return
         }
 
-        let occupied = try database.prepare("""
-            SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1
-            """)
-        let hasExistingSchema = try occupied.step()
-        occupied.finalize()
-        guard !hasExistingSchema else { throw HistoryFailure.persistence(.openStore) }
+        guard try !containsApplicationSchema(in: database) else {
+            throw HistoryFailure.persistence(.openStore)
+        }
 
         // No nested transaction: startup's one write transaction includes the
         // DDL and the business singleton/bootstrap rows supplied by its owners.
         for sql in statements { try database.execute(sql) }
         try createSourceApplicationIndex(in: database)
         try createRecentProjectionIndex(in: database)
+    }
+
+    internal static func containsApplicationSchema(in database: SQLiteDatabase) throws -> Bool {
+        let occupied = try database.prepare("""
+            SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' LIMIT 1
+            """)
+        defer { occupied.finalize() }
+        return try occupied.step()
     }
 
     /// Rebuildable optimizer index for the global source vocabulary and exact

@@ -13,6 +13,7 @@ struct HistorySearchCompletionStateTests {
     @Test func repeatedEditorInputPreservesExplicitCandidatesAndKeyboardSelection() throws {
         let state = HistorySearchCompletionState()
         defer { state.close() }
+        state.setAvailableHeight(240)
         state.setFocused(true)
         let current = input("notes")
         state.update(current)
@@ -307,6 +308,7 @@ struct HistorySearchCompletionStateTests {
 
     private func completion(history: any ClipboardHistory, position: ChangePosition) -> HistorySearchCompletionState {
         let state = HistorySearchCompletionState()
+        state.setAvailableHeight(240)
         state.configure(history: history, applications: { [] })
         state.updateHistoryPosition(position)
         state.setFocused(true)

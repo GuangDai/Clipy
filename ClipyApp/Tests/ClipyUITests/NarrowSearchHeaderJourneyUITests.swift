@@ -142,7 +142,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil { search.value as? String == "alpha$" && rows.count == 1 }, app.debugDescription)
         if language == "en" {
             exerciseDateConfirmation(in: app, dates: dates)
-            exerciseFuzzyLimit(in: app, search: search)
+            exerciseFuzzyLimit(in: app, search: search, rows: rows, pasteboard: pasteboard)
         }
     }
 
@@ -166,18 +166,33 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    private func exerciseFuzzyLimit(in app: XCUIApplication, search: XCUIElement) {
-        let longText = String(repeating: "x", count: 65)
+    private func exerciseFuzzyLimit(
+        in app: XCUIApplication, search: XCUIElement, rows: XCUIElementQuery, pasteboard: NSPasteboard
+    ) {
+        let sharedPrefix = String(repeating: "x", count: 64)
+        let longText = sharedPrefix + "a"
+        let distractor = sharedPrefix + "b"
+        app.buttons["clipy.search.clear"].click()
+        XCTAssertTrue(waitUntil { search.value as? String == "" }, app.debugDescription)
+        for sample in [longText, distractor] {
+            pasteboard.clearContents()
+            XCTAssertTrue(pasteboard.setString(sample, forType: .string))
+            XCTAssertTrue(waitUntil { rows.allElementsBoundByIndex.contains { $0.label.contains(sample) } },
+                          app.debugDescription)
+        }
+
         search.click()
-        app.typeKey("a", modifierFlags: .command)
         app.typeText(longText)
         app.typeKey("2", modifierFlags: .command)
 
-        let useExact = app.buttons["clipy.search.fuzzy.use-exact"]
+        let useExact = app.links["clipy.search.fuzzy.use-exact"]
         XCTAssertTrue(useExact.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertEqual(search.value as? String, longText)
         useExact.click()
-        XCTAssertTrue(waitUntil { !useExact.exists && search.value as? String == longText }, app.debugDescription)
+        XCTAssertTrue(waitUntil {
+            !useExact.exists && search.value as? String == longText
+                && rows.count == 1 && rows.firstMatch.label.contains(longText)
+        }, app.debugDescription)
     }
 
     @MainActor

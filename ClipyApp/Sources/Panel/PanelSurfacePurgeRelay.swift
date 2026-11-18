@@ -16,8 +16,8 @@ final class PanelSurfacePurgeRelay {
         self.surface = surface
     }
 
-    func acceptCommittedExternalRemoval(_ itemID: HistoryItemID) {
-        let purge = viewState.acceptCommittedExternalRemoval(itemID)
+    func acceptCommittedExternalRemoval(_ itemID: HistoryItemID, position: ChangePosition) {
+        let purge = viewState.acceptCommittedExternalRemoval(itemID, position: position)
         surface?.apply(purge)
     }
 

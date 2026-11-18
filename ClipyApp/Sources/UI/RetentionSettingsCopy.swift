@@ -51,15 +51,15 @@ internal enum RetentionSettingsCopy {
     ) }
     internal static var confirmItemLimitTitle: String { plain(
         "settings.retention.items.confirm-title",
-        "Apply a stricter item limit?"
+        "Apply this item limit?"
     ) }
     internal static var confirmItemLimitApply: String { plain(
         "settings.retention.items.confirm-apply",
-        "Apply Stricter Limit"
+        "Apply Limit"
     ) }
     internal static var confirmItemLimitMessage: String { plain(
         "settings.retention.items.confirm-message",
-        "A stricter limit can immediately remove unpinned items, and they can't be recovered."
+        "If there are more unpinned items than the new limit allows, the oldest will be removed permanently."
     ) }
 
     // MARK: Item age section

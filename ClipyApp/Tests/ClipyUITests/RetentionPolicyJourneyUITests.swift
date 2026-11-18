@@ -134,15 +134,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             diagnostic(app, context: "exact storage retirement receipt")
         )
 
-        let refreshUsage = app.buttons["clipy.settings.usage.refresh"]
-        assertExists(refreshUsage, timeout: 10, in: app, context: "retained usage Refresh")
-        guard scrollUntilFullyVisible(
-            refreshUsage,
-            in: retentionScrollView,
-            app: app,
-            context: "retained usage Refresh after R2"
-        ) else { return }
-        refreshUsage.click()
+        // The confirmed change refreshes usage on this still-open page.
         assertUsage(itemCount: "0", contentSize: "0 bytes", in: app)
 
         closeSettingsAndSummonPanel(

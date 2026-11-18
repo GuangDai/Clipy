@@ -42,6 +42,8 @@ struct HistorySearchQueryCompilerTests {
         (#"^\\[ $]$"#, #"\$"#),
         (#"^\Q $source:Safari$ \E$"#, " $source:Safari$ "),
         ("^report\\\u{3000}$", "report\u{3000}"),
+        ("^(?# note [ $type:images$)memo$", "memo"),
+        ("^report $", "report "),
     ])
     func regexpClassesAndQuotedTextKeepLiteralDollars(pattern: String, matchingText: String) throws {
         let plain = try HistorySearchQueryCompiler.compile(pattern, mode: .regexp)
@@ -53,6 +55,14 @@ struct HistorySearchQueryCompilerTests {
         #expect(withCondition.expression == (try HistorySearchExpression.parse("type:text")))
         let matcher = try NSRegularExpression(pattern: withCondition.literalText)
         #expect(matcher.firstMatch(in: matchingText, range: NSRange(location: 0, length: matchingText.utf16.count)) != nil)
+    }
+
+    @Test func regexpKeepsExplicitLiteralPhraseConditions() throws {
+        let pattern = "^report $"
+        let result = try HistorySearchQueryCompiler.compile(pattern + #" $"release notes"$"#, mode: .regexp)
+
+        #expect(result.literalText.utf8.elementsEqual(pattern.utf8))
+        #expect(result.expression == (try HistorySearchExpression.parse(#""release notes""#)))
     }
 
     @Test(arguments: [
@@ -205,12 +215,13 @@ struct HistorySearchQueryCompilerTests {
     }
 
     @Test func numericPricesRemainTextBesideRealConditions() throws {
-        let price = try HistorySearchQueryCompiler.compile("报价 $10$、$10.50$，保存 $ １２３ $")
-        let mixed = try HistorySearchQueryCompiler.compile("报价 $10$ $source:Safari$")
+        let amounts = "报价 $10$、$10.50$、$10,50$、$١٠٫٥٠$、$１０．５０$，保存 $ １２３ $"
+        let price = try HistorySearchQueryCompiler.compile(amounts, mode: .exact)
+        let mixed = try HistorySearchQueryCompiler.compile(amounts + " $source:Safari$", mode: .exact)
 
-        #expect(price.literalText == "报价 $10$、$10.50$，保存 $ １２３ $")
+        #expect(price.literalText == amounts)
         #expect(price.expression == nil)
-        #expect(mixed.literalText == "报价 $10$")
+        #expect(mixed.literalText == amounts)
         #expect(mixed.expression?.applicationTerms == ["Safari"])
     }
 

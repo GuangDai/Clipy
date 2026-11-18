@@ -461,9 +461,9 @@ struct FloatingPreviewRootView: View {
     var motionPresentation: AppMotionPresentation?
     @Environment(\.layoutDirection) private var layoutDirection
 
-    private var resizePaddingEdge: Edge.Set {
+    private var resizeHandleUsesLeadingAlignment: Bool {
         let isPhysicalLeft = appDelegate.previewState.isPreviewOnLeadingSide
-        return isPhysicalLeft == (layoutDirection == .leftToRight) ? .leading : .trailing
+        return isPhysicalLeft == (layoutDirection == .leftToRight)
     }
 
     /// The per-pane icon store, built once at this AppKit boundary through
@@ -515,7 +515,8 @@ struct FloatingPreviewRootView: View {
                     fillsAvailableHeight: true,
                     preparedLoader: appDelegate.floatingPreviewLoader
                 )
-                .padding(resizePaddingEdge, PreviewWidthResizeHandle.thickness)
+                .padding(resizeHandleUsesLeadingAlignment ? .leading : .trailing,
+                         PreviewWidthResizeHandle.thickness)
                 .id(item)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 // Retargeting removes the old content immediately, including
@@ -524,22 +525,15 @@ struct FloatingPreviewRootView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        // Use physical sides for window geometry even in an RTL interface.
-        .overlay(alignment: .topLeading) {
-            GeometryReader { geometry in
-                PreviewWidthResizeHandle(
-                    width: appDelegate.previewState.displayedPreviewWidth,
-                    onDragChanged: { appDelegate.resizeFloatingPreviewWidth() },
-                    onDragEnded: { appDelegate.finishFloatingPreviewWidthResize() },
-                    onAdjust: { appDelegate.adjustFloatingPreviewWidth(by: $0) }
-                )
-                .position(
-                    x: appDelegate.previewState.isPreviewOnLeadingSide
-                        ? PreviewWidthResizeHandle.thickness / 2
-                        : geometry.size.width - PreviewWidthResizeHandle.thickness / 2,
-                    y: geometry.size.height / 2
-                )
-            }
+        // Align the handle and its reserved strip on the same physical edge.
+        .overlay(alignment: resizeHandleUsesLeadingAlignment ? .leading : .trailing) {
+            PreviewWidthResizeHandle(
+                width: appDelegate.previewState.displayedPreviewWidth,
+                isOnLeftEdge: appDelegate.previewState.isPreviewOnLeadingSide,
+                onDragChanged: { appDelegate.resizeFloatingPreviewWidth() },
+                onDragEnded: { appDelegate.finishFloatingPreviewWidthResize() },
+                onAdjust: { appDelegate.adjustFloatingPreviewWidth(by: $0) }
+            )
         }
         .onExitCommand {
             Self.handleExitCommand(appDelegate: appDelegate)

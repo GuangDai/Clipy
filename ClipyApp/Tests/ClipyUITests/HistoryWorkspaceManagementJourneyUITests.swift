@@ -102,6 +102,30 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         try require(!workspace.buttons["clipy.history.workspace.copy"].isEnabled)
         try require(workspace.exists, "Batch removal must keep the Settings workspace open.")
 
+        let clearedTitle = "Workspace batch title retired by clear"
+        NSPasteboard.general.clearContents()
+        try require(NSPasteboard.general.setString(clearedTitle, forType: .string))
+        try require(row(named: clearedTitle, in: workspace).waitForExistence(timeout: 10), app.debugDescription)
+        workspace.buttons["clipy.history.workspace.select-page"].click()
+        workspace.buttons["clipy.history.workspace.batch.pin"].click()
+        try assertBatchCompleted(1, operation: "Pin", in: workspace, app: app)
+        let status = workspace.descendants(matching: .any)["clipy.history.workspace.status"]
+        let completed = status.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@", "clipy.history.workspace.batch.completed."
+        )).firstMatch
+        if !completed.exists { status.disclosureTriangles["Item results"].click() }
+        try require(waitUntil { completed.exists && completed.label == clearedTitle }, app.debugDescription)
+        workspace.descendants(matching: .any)["clipy.history.workspace.actions"].firstMatch.click()
+        app.menuItems["Clear all history…"].click()
+        let clear = app.buttons["clipy.history.workspace.confirm-clear"].firstMatch
+        try require(clear.waitForExistence(timeout: 5), app.debugDescription)
+        clear.click()
+        try require(waitUntil {
+            workspace.staticTexts["History is empty"].exists
+                && completed.exists && completed.label == "History item"
+        }, app.debugDescription)
+        try assertBatchCompleted(1, operation: "Pin", in: workspace, app: app)
+
         // Terminating releases the app's Authority before checking durable
         // public History facts. A filtered/hidden row is not deletion evidence.
         app.terminate()
@@ -118,7 +142,7 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         let storeURL = directory.appendingPathComponent("history.sqlite")
         let fixtures = try await seedPagingHistory(at: storeURL)
         NSPasteboard.general.clearContents()
-        let app = launch(storeURL: storeURL, captureAccess: "denied")
+        let app = launch(storeURL: storeURL, captureAccess: "allowed")
         defer { app.terminate(); NSPasteboard.general.clearContents() }
         try require(app.descendants(matching: .any)["clipy.panel.root"].waitForExistence(timeout: 20), app.debugDescription)
         let workspace = try openWorkspace(in: app)
@@ -202,13 +226,21 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         let selectedPosition = firstVisible.frame.minY
         try require(abs(selectedPosition - position) <= 1,
                        "Selecting a later row moved the first row from \(position) to \(selectedPosition).")
+        NSPasteboard.general.clearContents()
+        try require(NSPasteboard.general.setString("Unrelated background copy", forType: .string))
+        try require(waitUntil {
+            page.exists && ((page.value as? String) ?? page.label) == "Near your reading position"
+        }, app.debugDescription)
+        try assertSelectionCount(1, in: workspace, app: app)
+        try assertPreview(fixtures[54].text, in: workspace, app: app)
         try require(!next.isEnabled)
         previous.click()
         try assertPage(1, range: "Items 1–50", in: workspace, app: app)
         try require(row(for: fixtures[0].id, in: workspace).isHittable, app.debugDescription)
+        try assertSelectionCount(0, in: workspace, app: app)
 
         next.click()
-        try assertPage(2, range: "Items 51–55", in: workspace, app: app)
+        try assertPage(2, range: "Items 51–56", in: workspace, app: app)
         try chooseSort("Most copied", in: workspace, app: app)
         try require(waitUntil {
             let frequent = self.row(for: fixtures[22].id, in: workspace)

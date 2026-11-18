@@ -260,6 +260,7 @@ final class AppComposition {
     private var droppedCaptureCount = 0
     private var failedCaptureCount = 0
     private var lastCaptureFailure: ClipyCaptureFailure?
+    private var pendingCaptureFailureChangeCount: Int?
     private var acceptsCaptures = false
     private var isStarted = false
     /// Sleep stops new observation/admission but does not erase complete
@@ -381,9 +382,9 @@ final class AppComposition {
         appIntentHistoryIngress = appIntentsHistoryFacade.map { facade in
             AppIntentHistoryIngress(
                 facade: facade,
-                onCommittedRemoval: { [panelSurfacePurgeRelay] itemID in
+                onCommittedRemoval: { [panelSurfacePurgeRelay] itemID, position in
                     panelSurfacePurgeRelay
-                        .acceptCommittedExternalRemoval(itemID)
+                        .acceptCommittedExternalRemoval(itemID, position: position)
                 }
             )
         }
@@ -546,8 +547,8 @@ final class AppComposition {
             let relay = composition.panelSurfacePurgeRelay
             let controller = LocalAutomationController(
                 ingress: history.localAutomationIngress(
-                    onCommittedRemoval: { itemID in
-                        await relay.acceptCommittedExternalRemoval(itemID)
+                    onCommittedRemoval: { itemID, position in
+                        await relay.acceptCommittedExternalRemoval(itemID, position: position)
                     },
                     onCommittedRevision: { old, commit in
                         await relay.acceptCommittedExternalRevision(from: old, commit: commit)
@@ -1019,7 +1020,8 @@ final class AppComposition {
             viewState.acceptCaptureReceipt(receipt)
             guard !Task.isCancelled else { return }
             if let capture, acceptsCaptures { workflowRunner.submit(capture) }
-            if failureCountAtAdmission == failedCaptureCount {
+            if failureCountAtAdmission == failedCaptureCount,
+               pendingCaptureFailureChangeCount == nil {
                 lastCaptureFailure = nil
             }
         case .cancelled:
@@ -1031,6 +1033,7 @@ final class AppComposition {
         case .failed(let failure):
             failedCaptureCount += 1
             lastCaptureFailure = failure
+            pendingCaptureFailureChangeCount = nil
             if failure == .temporarilyUnavailable(.insufficientDiskSpace) {
                 // A full volume is not made healthier by immediately
                 // replaying bytes observed while the failed transaction was
@@ -1073,9 +1076,10 @@ final class AppComposition {
             return
         case .unsupportedMultiItem:
             recordCaptureFailure(.unsupportedClipboardShape)
-        case .changedDuringRead,
-             .declaredUnavailable:
-            recordCaptureFailure(.declaredContentUnavailable)
+        case .changedDuringRead(let race):
+            recordCaptureFailure(.declaredContentUnavailable, pendingChangeCount: race.endChangeCount)
+        case .declaredUnavailable(let partial):
+            recordCaptureFailure(.declaredContentUnavailable, pendingChangeCount: partial.changeCount)
         }
     }
 
@@ -1100,9 +1104,17 @@ final class AppComposition {
         )
     }
 
-    private func recordCaptureFailure(_ failure: ClipyCaptureFailure) {
+    private func recordCaptureFailure(_ failure: ClipyCaptureFailure, pendingChangeCount: Int? = nil) {
         failedCaptureCount += 1
         lastCaptureFailure = failure
+        pendingCaptureFailureChangeCount = pendingChangeCount
+        publishCaptureHealthIfChanged()
+    }
+
+    private func finishPendingCapture(_ changeCount: Int) {
+        guard pendingCaptureFailureChangeCount == changeCount else { return }
+        pendingCaptureFailureChangeCount = nil
+        lastCaptureFailure = nil
         publishCaptureHealthIfChanged()
     }
 
@@ -1145,12 +1157,18 @@ final class AppComposition {
                 onAccessBehaviorChanged: { [weak self] behavior in
                     self?.receiveCaptureAccessBehavior(behavior)
                 },
+                onPendingCaptureEnded: { [weak self] changeCount in
+                    self?.finishPendingCapture(changeCount)
+                },
                 handler: { [weak self] outcome in
                     self?.receiveCaptureOutcome(outcome)
                 }
             )
         } else {
             observer.stop()
+            if let pendingCaptureFailureChangeCount {
+                finishPendingCapture(pendingCaptureFailureChangeCount)
+            }
         }
     }
 

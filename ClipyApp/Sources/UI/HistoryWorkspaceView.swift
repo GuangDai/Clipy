@@ -140,10 +140,10 @@ struct HistoryWorkspaceView: View {
                 // An empty result or failed preparation leaves rows == []
                 // across the whole load. Its completion still retires the
                 // previous page and any pending navigation.
+                paging.reset()
                 reconcilePage()
             }
         }
-        .onChange(of: paging.startOrdinal) { _, _ in if !isMutating { selectedIDs = [] } }
         .onChange(of: listWidth) { _, _ in saveLayout() }
         .onChange(of: compactRows) { _, _ in saveLayout() }
         .onChange(of: viewState.sortOrder) { _, _ in saveLayout() }
@@ -153,20 +153,30 @@ struct HistoryWorkspaceView: View {
         .onChange(of: viewState.didLoseReadingPosition) { _, lost in
             if lost { browsingPreferences?.clearReadingPosition(for: .workspace) }
         }
-        .onChange(of: viewState.hasKnownRowOffset) { old, new in
-            // A keyset restore can leave a short first cache page when it
-            // reaches the start. Reopen the same query with its standard page
-            // boundaries before presenting fixed-size numbered pages.
-            if isActive, viewState.hasAuthoritativeFirstPage,
-               HistoryWorkspacePaging.shouldRestartAtKnownBoundary(wasKnown: old, isKnown: new,
-                                                                   isLoadingFirstPage: viewState.isLoadingFirstPage) {
+        .onChange(of: viewState.hasUnalignedLeadingPage) { _, unaligned in
+            // Prepending a short leading chunk can split a numbered page
+            // across storage cursors. An observed first page is already aligned.
+            if isActive, unaligned, !viewState.isLoadingFirstPage {
                 refresh()
             }
         }
-        .onChange(of: viewState.surfacePurge) { _, purge in
+        .onChange(of: viewState.surfacePurge) { previous, purge in
             guard let purge else { return }
             thumbnails.purge(purge.scope)
             previewState.purge(purge.scope)
+            if purge.generation != (previous?.generation ?? 0) + 1 {
+                // SwiftUI may combine several purges into one notification.
+                batchTitles.removeAll()
+                return
+            }
+            switch purge.scope {
+            case .all, .unpinned: batchTitles.removeAll()
+            case .item(let id): batchTitles.removeValue(forKey: id)
+            case .revision(let old, _): batchTitles.removeValue(forKey: old.id)
+            }
+        }
+        .onChange(of: viewState.retentionChangePosition) { _, position in
+            if position != nil { batchTitles.removeAll() }
         }
         .onChange(of: memoryPressureGeneration) { _, _ in applyMemoryPressure() }
         .task(id: action) { await performAction() }
@@ -205,6 +215,7 @@ struct HistoryWorkspaceView: View {
                 if let clearScope { submit(.clear(clearScope)) }
                 clearScope = nil
             }
+            .accessibilityIdentifier("clipy.history.workspace.confirm-clear")
             Button(text("Cancel"), role: .cancel) { clearScope = nil }
         } message: {
             Text(text(clearScope == .all
@@ -319,7 +330,7 @@ struct HistoryWorkspaceView: View {
                 .listStyle(.inset)
                 .coordinateSpace(name: "history-workspace-list")
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listViewportHeight = $0 }
-                .id(paging.startOrdinal)
+                .id(paging.navigationGeneration)
                 .accessibilityIdentifier("clipy.history.workspace.list")
                 .onKeyPress(.return) {
                     guard !isSearchFocused else { return .ignored }
@@ -569,7 +580,10 @@ struct HistoryWorkspaceView: View {
                     }
                     .accessibilityIdentifier("clipy.history.workspace.batch.retry")
                 }
-                Button { showsBatchResult = false } label: { Image(systemName: "xmark.circle") }
+                Button {
+                    showsBatchResult = false
+                    batchTitles.removeAll()
+                } label: { Image(systemName: "xmark.circle") }
                     .buttonStyle(.plain).accessibilityLabel(text("Dismiss"))
             }
             if let first = batchModel.failures.first {
@@ -587,6 +601,7 @@ struct HistoryWorkspaceView: View {
                         ForEach(batchModel.succeeded, id: \.id) { item in
                             Label(batchTitles[item.id] ?? text("History item"), systemImage: "checkmark.circle")
                                 .lineLimit(2)
+                                .accessibilityIdentifier("clipy.history.workspace.batch.completed." + item.id.description)
                         }
                         ForEach(batchModel.failures, id: \.item.id) { failure in
                             VStack(alignment: .leading, spacing: 3) {

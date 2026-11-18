@@ -252,7 +252,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
                 super.sendEvent(event)
             }
         case .submitSelection:
-            onSubmitSelection()
+            // A held key is still one Copy. Leave key repetition available
+            // to the editors and completion list that own other Return events.
+            if !event.isARepeat { onSubmitSelection() }
         case .forwardToWindow:
             super.sendEvent(event)
         }

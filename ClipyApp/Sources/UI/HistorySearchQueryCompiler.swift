@@ -17,13 +17,17 @@ struct HistorySearchRegexpBoundary {
     private var characterClassDepth = 0
     private var isQuoted = false
     private var previousWasEscaped = false
+    private var isInComment = false
 
     var allowsCondition: Bool {
-        characterClassDepth == 0 && !isQuoted && !previousWasEscaped
+        characterClassDepth == 0 && !isQuoted && !previousWasEscaped && !isInComment
     }
 
     /// Advance over a regexp unit or an escape and its complete scalar.
-    mutating func advance(_ unit: UInt16, followedBy next: UInt16?, nextScalarWidth: Int) -> Int {
+    mutating func advance(
+        _ unit: UInt16, followedBy next: UInt16?, nextScalarWidth: Int,
+        thirdUnit: UInt16?, thirdScalarWidth: Int
+    ) -> Int {
         if isQuoted {
             if unit == 92, next == 69 { // \E
                 isQuoted = false
@@ -33,16 +37,50 @@ struct HistorySearchRegexpBoundary {
         }
         if unit == 92 { // Backslash
             if next == 81 { isQuoted = true } // \Q
+            if isInComment, next == 41 { isInComment = false } // \) ends an ICU comment.
             previousWasEscaped = !isQuoted
+            if next == 99 { return 2 + thirdScalarWidth } // \cX owns its control operand.
             return next == nil ? 1 : 1 + nextScalarWidth
         }
         previousWasEscaped = false
+        if isInComment {
+            if unit == 41 { isInComment = false }
+            return 1
+        }
+        if characterClassDepth == 0, unit == 40, next == 63, thirdUnit == 35 { // (?#…)
+            isInComment = true
+            return 3
+        }
         switch unit {
         case 91: characterClassDepth += 1 // [
         case 93 where characterClassDepth > 0: characterClassDepth -= 1 // ]
         default: break
         }
         return 1
+    }
+
+    /// A space-separated dollar followed by a nonempty condition gives that
+    /// condition its own opening delimiter and keeps this dollar in the regex.
+    static func isAnchorBeforeCondition(
+        at index: Int, end: Int, unitAt: (Int) -> UInt16, whitespaceWidth: (Int) -> Int
+    ) -> Bool {
+        func skipWhitespace(from start: Int) -> Int {
+            var cursor = start
+            while cursor < end {
+                let width = whitespaceWidth(cursor)
+                guard width > 0 else { break }
+                cursor += width
+            }
+            return cursor
+        }
+
+        let opening = skipWhitespace(from: index + 1)
+        guard opening > index + 1, opening < end, unitAt(opening) == 36 else { return false }
+        let value = skipWhitespace(from: opening + 1)
+        // Preserve an intentionally empty wrapper unless the later dollar
+        // also has text and a closing delimiter of its own.
+        guard value < end, unitAt(value) != 36 else { return false }
+        return (value + 1..<end).contains { unitAt($0) == 36 }
     }
 }
 
@@ -80,11 +118,17 @@ enum HistorySearchQueryCompiler {
                 // a Clipy condition.
                 let unit = bytes[cursor]
                 if unit != 36 || !regexpBoundary.allowsCondition
-                    || (cursor > 0 && !hasWhitespaceBefore(cursor, in: bytes)) {
+                    || (cursor > 0 && !hasWhitespaceBefore(cursor, in: bytes))
+                    || HistorySearchRegexpBoundary.isAnchorBeforeCondition(
+                        at: cursor, end: bytes.count, unitAt: { UInt16(bytes[$0]) },
+                        whitespaceWidth: { whitespaceWidth(at: $0, in: bytes) }
+                    ) {
                     let next = cursor + 1 < bytes.count ? bytes[cursor + 1] : nil
+                    let third = cursor + 2 < bytes.count ? bytes[cursor + 2] : nil
                     let end = cursor + regexpBoundary.advance(
                         UInt16(unit), followedBy: next.map { UInt16($0) },
-                        nextScalarWidth: next.map(utf8ScalarWidth) ?? 0
+                        nextScalarWidth: next.map(utf8ScalarWidth) ?? 0,
+                        thirdUnit: third.map { UInt16($0) }, thirdScalarWidth: third.map(utf8ScalarWidth) ?? 0
                     )
                     literal.append(contentsOf: bytes[cursor..<end])
                     cursor = end
@@ -296,16 +340,16 @@ enum HistorySearchQueryCompiler {
         HistorySearchExpressionError(reason: .queryTooLong, offset: 0)
     }
 
-    private static func isAmount(_ text: String) -> Bool {
+    static func isAmount(_ text: String) -> Bool {
         var hasDigit = false
-        var hasPoint = false
+        var hasDecimalSeparator = false
         var endsWithDigit = false
         for scalar in text.unicodeScalars {
             if CharacterSet.decimalDigits.contains(scalar) {
                 hasDigit = true
                 endsWithDigit = true
-            } else if scalar == ".", hasDigit, !hasPoint {
-                hasPoint = true
+            } else if ".,٫．，".unicodeScalars.contains(scalar), hasDigit, !hasDecimalSeparator {
+                hasDecimalSeparator = true
                 endsWithDigit = false
             } else {
                 return false
@@ -338,7 +382,17 @@ enum HistorySearchQueryCompiler {
         // Decode only the preceding complete UTF-8 scalar, including Unicode
         // separators; the admitted query is already valid Swift text.
         while start > 0, bytes[start] & 0xC0 == 0x80 { start -= 1 }
-        guard let scalar = String(decoding: bytes[start..<index], as: UTF8.self).unicodeScalars.first else { return false }
-        return CharacterSet.whitespacesAndNewlines.contains(scalar)
+        return whitespaceWidth(at: start, in: bytes) > 0
+    }
+
+    private static func whitespaceWidth(at index: Int, in bytes: [UInt8]) -> Int {
+        let width = utf8ScalarWidth(bytes[index])
+        if width == 1 {
+            let byte = bytes[index]
+            return byte == 32 || (9...13).contains(byte) ? 1 : 0
+        }
+        guard let scalar = String(decoding: bytes[index..<index + width], as: UTF8.self).unicodeScalars.first,
+              CharacterSet.whitespacesAndNewlines.contains(scalar) else { return 0 }
+        return width
     }
 }

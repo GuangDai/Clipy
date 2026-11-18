@@ -265,10 +265,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// turning the composition root into an observable service object.
     private(set) var captureHealth = ClipyCaptureHealth.inactive
 
-    /// The currently visible capture-health episode. Dismissal clears only
-    /// this presentation value; a later replacement or failed-capture count
-    /// publishes a new episode even when its typed failure equals the old one.
-    private(set) var captureNotice: ClipyCaptureNotice?
+    private var captureFailureNotice: ClipyCaptureFailure?
+    private var captureOverflowNotice: Int?
+
+    /// Show the current failure first. A dropped copy stays visible after the
+    /// failure resolves, until the user acknowledges the overflow itself.
+    var captureNotice: ClipyCaptureNotice? {
+        if let captureFailureNotice { return .failed(captureFailureNotice) }
+        return captureOverflowNotice.map { .droppedCapture(totalDropped: $0) }
+    }
 
     /// Authoritative, content-free pasteboard access posture. It is distinct
     /// from an empty History and controls the access/recovery banner.
@@ -365,19 +370,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the duration of one pop-up (see `presentStatusItemMenu`).
     @ObservationIgnored
     private lazy var statusItemMenu: StatusItemMenu = StatusItemMenu(
-        isCapturePaused: { [weak self] in
-            self?.captureAccessState == .userPaused
-        },
-        canToggleCapturePause: { [weak self] in
-            guard let self else { return false }
-            return self.captureAccessState == .allowed
-                || self.captureAccessState == .userPaused
+        captureAccessState: { [weak self] in
+            self?.captureAccessState ?? .systemDefault
         },
         onShowHistory: { [weak self] in
-            self?.togglePanelFromStatusItem()
+            self?.showPanelFromStatusItem()
         },
-        onToggleCapturePause: { [weak self] in
-            self?.toggleCapturePauseFromMenu()
+        onPauseCapture: { [weak self] in
+            self?.pauseCapture()
+        },
+        onResumeCapture: { [weak self] in
+            self?.composition?.resumeCapture()
         },
         onOpenSettings: { [weak self] in
             self?.openSettingsFromStatusMenu()
@@ -665,14 +668,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The primary-click (and menu "Show Clipboard History") action:
-    /// summon at the status item, or dismiss when already presented.
+    /// The primary click toggles visibility.
     private func togglePanelFromStatusItem() {
         if panel?.isPresented == true {
             closePanel()
         } else {
-            openPanel(at: .statusItem)
+            showPanelFromStatusItem()
         }
+    }
+
+    /// Showing an already open panel preserves its session and position.
+    private func showPanelFromStatusItem() {
+        guard !isTerminating, workspaceActivity.permitsProductActivity else { return }
+        if let panel, panel.isPresented {
+            panel.orderFrontRegardless()
+            panel.makeKey()
+            return
+        }
+        openPanel(at: .statusItem)
     }
 
     /// Secondary click: pop the menu AT the status item. The menu is
@@ -689,18 +702,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let statusItem, let button = statusItem.button else { return }
         statusItem.menu = statusItemMenu.menu
         button.performClick(nil)
-    }
-
-    /// The menu's Pause/Resume entry routes through the SAME
-    /// composition-owned transitions as the panel's `clipy.capture.pause`
-    /// row and the access banner's Resume recovery; the menu owns no pause
-    /// state of its own.
-    private func toggleCapturePauseFromMenu() {
-        if captureAccessState == .userPaused {
-            recoverCaptureAccess()
-        } else {
-            pauseCapture()
-        }
     }
 
     /// The status menu's Settings entry: activate first (an LSUIElement
@@ -840,8 +841,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pasteFailure = nil
     }
 
-    func dismissCaptureNotice() {
-        captureNotice = nil
+    func dismissCaptureNotice(_ notice: ClipyCaptureNotice? = nil) {
+        switch notice ?? captureNotice {
+        case .failed(let failure) where captureFailureNotice == failure:
+            captureFailureNotice = nil
+        case .droppedCapture(let count) where captureOverflowNotice == count:
+            captureOverflowNotice = nil
+        default:
+            break
+        }
     }
 
     func recoverCaptureAccess() {
@@ -1010,6 +1018,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelContentFitTask = nil
         pendingPanelContentFitInput = nil
         composition?.cancelPendingPaste()
+        if pasteFailure == .busy { pasteFailure = nil }
         if let composition {
             composition.historyBrowsingPreferences.rememberReadingPosition(
                 composition.viewState.readingItemID ?? panelSurfaceState?.selection, for: .panel
@@ -1243,6 +1252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     hasNextPage: hasNextPage
                 )
         }
+        opened.historyWorkspaceViewState.onSettledSearchResultCount = opened.viewState.onSettledSearchResultCount
         opened.onCaptureHealthChanged = { [weak self] health in
             self?.receiveCaptureHealth(health)
         }
@@ -1297,19 +1307,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { return }
         captureHealth = health
 
+        if health.droppedCaptureCount > previous.droppedCaptureCount {
+            captureOverflowNotice = health.droppedCaptureCount
+        }
         if health.failedCaptureCount > previous.failedCaptureCount,
            let failure = health.lastFailure {
-            captureNotice = .failed(failure)
+            captureFailureNotice = failure
             accessibilityAnnouncement.announceCaptureFailure(failure)
-        } else if health.droppedCaptureCount > previous.droppedCaptureCount {
-            captureNotice = .droppedCapture(
-                totalDropped: health.droppedCaptureCount
-            )
-        } else if health.lastFailure == nil,
-                  case .failed? = captureNotice {
-            // A later successful capture is authoritative recovery for the
-            // failed episode. Queue overflow notices remain until dismissed.
-            captureNotice = nil
+        } else if health.lastFailure == nil {
+            captureFailureNotice = nil
         }
     }
 

@@ -157,12 +157,21 @@ struct FloatingPanelMarkedTextEventTests {
         #expect(panel.isPresented)
         NSApp.sendEvent(returnKey)
         #expect(submissionCount == 1)
+        let repeatedReturn = try #require(keyDown(
+            keyCode: UInt16(kVK_Return), characters: "\r",
+            windowNumber: panel.windowNumber, isRepeat: true
+        ))
+        NSApp.sendEvent(repeatedReturn)
+        #expect(submissionCount == 1)
+        NSApp.sendEvent(returnKey)
+        #expect(submissionCount == 2)
     }
 
     private func keyDown(
         keyCode: UInt16,
         characters: String,
-        windowNumber: Int
+        windowNumber: Int,
+        isRepeat: Bool = false
     ) -> NSEvent? {
         NSEvent.keyEvent(
             with: .keyDown,
@@ -173,7 +182,7 @@ struct FloatingPanelMarkedTextEventTests {
             context: nil,
             characters: characters,
             charactersIgnoringModifiers: characters,
-            isARepeat: false,
+            isARepeat: isRepeat,
             keyCode: keyCode
         )
     }

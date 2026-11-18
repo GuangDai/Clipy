@@ -171,24 +171,6 @@ struct HistoryWorkspacePagingTests {
         #expect(paging.canMove(.next, loadedRange: 1...100, hasPreviousPage: false, hasNextPage: true))
     }
 
-    @Test(arguments: [
-        (false, true, false, true),
-        (false, true, true, false),
-        (false, false, false, false),
-        (false, false, true, false),
-        (true, true, false, false),
-        (true, true, true, false),
-        (true, false, false, false),
-        (true, false, true, false)
-    ])
-    func aKnownBoundaryRestartsOnlyWhenASeekReachesTheBeginningOutsideAnExistingRefresh(
-        wasKnown: Bool, isKnown: Bool, isLoading: Bool, expectsRestart: Bool
-    ) {
-        #expect(HistoryWorkspacePaging.shouldRestartAtKnownBoundary(
-            wasKnown: wasKnown, isKnown: isKnown, isLoadingFirstPage: isLoading
-        ) == expectsRestart)
-    }
-
     @Test func restartingAfterAShortPrecedingPageKeepsRows126Through150InTheVisitedPages() {
         var paging = HistoryWorkspacePaging()
         // A seek at row 76, followed by two newer requests, creates storage
@@ -196,9 +178,6 @@ struct HistoryWorkspacePagingTests {
         paging.move(.previous, loadedRange: 1...100, hasPreviousPage: true,
                     hasNextPage: true, hasKnownRowOffset: false)
         paging.reconcile(loadedRange: 1...125, isLoadingPage: false)
-        #expect(HistoryWorkspacePaging.shouldRestartAtKnownBoundary(
-            wasKnown: false, isKnown: true, isLoadingFirstPage: false
-        ))
 
         paging.reset()
         paging.reconcile(loadedRange: nil, isLoadingPage: false)

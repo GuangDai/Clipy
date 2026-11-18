@@ -272,6 +272,29 @@ final class CaptureAccessJourneyUITests: XCTestCase {
             duration: 1.5,
             message: "Denied monitoring later captured or replaced a retained row."
         )
+
+        let filters = deniedApp.menuButtons["clipy.search.filter"]
+        guard assertCondition(filters.isHittable, in: deniedApp, message: "Filters are unavailable while denied.") else { return }
+        filters.click()
+        let images = deniedApp.menuItems["Images"]
+        guard assertCondition(images.waitForExistence(timeout: 5), in: deniedApp, message: "The Images filter did not open.") else { return }
+        images.click()
+
+        let clearFilters = deniedApp.buttons["clipy.search.clear-filters"]
+        guard assertEventually(
+            {
+                rows.count == 0 && deniedApp.staticTexts["No Results"].exists
+                    && deniedApp.textFields["clipy.search.field"].isHittable && clearFilters.isHittable
+            },
+            in: deniedApp,
+            message: "An empty filtered result replaced the browser with the access screen."
+        ) else { return }
+        clearFilters.click()
+        assertEventually(
+            { rows.count == 1 && rows.element(boundBy: 0).label.contains(retained) },
+            in: deniedApp,
+            message: "Clearing the filter did not restore retained history while access remained denied."
+        )
     }
 
     /// The visible Pause and Resume controls drive the same composition-owned

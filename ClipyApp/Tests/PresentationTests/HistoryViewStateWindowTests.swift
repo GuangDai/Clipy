@@ -93,10 +93,14 @@ struct HistoryViewStateWindowTests {
         let expectedKind: HistoryBrowseKind = searching ? .search(text: "row ", mode: .exact) : .recent
         #expect(await history.browseRequests.allSatisfy { $0.kind == expectedKind && $0.limit == 2 && $0.filter == HistoryFilter(type: .text) })
         #expect(state.surfacePurge == nil, "DTO eviction is not a History deletion")
-        _ = state.acceptCommittedExternalRemoval(allRows[rowCount - 1].item.id)
+        let position = ChangePosition(rawValue: 2)
+        _ = state.acceptCommittedExternalRemoval(allRows[rowCount - 1].item.id, position: position)
         #expect(state.displayedCountIsLowerBound,
                 "Receipt-purged partial rows cannot become a false exact total before observation")
+        let priorObservations = await history.observeRequests.count
         state.returnToLatest()
+        try #require(await pollUntil { await history.observeRequests.count > priorObservations })
+        await history.emitObservedPage(fixturePage(rows: Array(allRows.prefix(2)), next: "fresh-first", position: 2))
         try #require(await pollUntil { state.rows == Array(allRows.prefix(2)) })
         #expect(!state.hasPreviousPage)
         #expect(!state.hasWindowedPages)
@@ -336,7 +340,7 @@ struct HistoryViewStateWindowTests {
         #expect(state.failure == nil)
     }
 
-    @Test func receiptOutdatingAnOwnedNewerPageRetiresBothEdgesAndKeepsAPartialCount() async throws {
+    @Test func copyReceiptRejectsAnOlderCursorResultAndObservationReplacesTheWindow() async throws {
         let (_, allRows) = fixture()
         let (history, _) = fixture(newerOutcome: .paused(
             fixturePage(rows: Array(allRows.prefix(2)), next: "page-1")
@@ -359,17 +363,10 @@ struct HistoryViewStateWindowTests {
         await history.resumeBrowse(cursor: cursor)
         try #require(await pollUntil { !state.isLoadingPage })
         #expect(state.rows == Array(allRows[2..<8]))
-        #expect(state.loadedPageCount == 0)
-        #expect(!state.hasPreviousPage)
-        #expect(!state.hasNextPage)
-        #expect(state.hasWindowedPages, "Latest stays reachable for the partial window")
+        #expect(state.hasPreviousPage && state.hasNextPage)
         #expect(state.displayedCount == 8)
         #expect(state.displayedCountIsLowerBound)
         #expect(HistoryPanelView.itemCountText(for: state, locale: Locale(identifier: "en_US")) == "8+ items")
-        let priorRequests = await history.browseRequests.count
-        state.loadPreviousPage()
-        state.loadNextPage()
-        #expect(await history.browseRequests.count == priorRequests)
         await history.emitObservedPage(HistoryPage(
             position: ChangePosition(rawValue: 2), rows: [allRows[0]], next: nil
         ))

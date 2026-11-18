@@ -192,7 +192,8 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
 
     func controlTextDidChange(_ notification: Notification) {
         textRevision += 1
-        onTextChange(stringValue)
+        let editor = currentEditor() as? NSTextView
+        if editor?.hasMarkedText() != true { onTextChange(editor?.string ?? stringValue) }
         reportInput()
     }
 

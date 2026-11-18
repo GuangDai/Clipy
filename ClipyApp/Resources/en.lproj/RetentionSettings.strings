@@ -26,9 +26,9 @@
 "settings.retention.feedback.no-change" = "No change.";
 "settings.retention.feedback.nothing-to-clear" = "Nothing to clear.";
 "settings.retention.items.apply" = "Apply Item Limit";
-"settings.retention.items.confirm-apply" = "Apply Stricter Limit";
-"settings.retention.items.confirm-message" = "A stricter limit can immediately remove unpinned items, and they can't be recovered.";
-"settings.retention.items.confirm-title" = "Apply a stricter item limit?";
+"settings.retention.items.confirm-apply" = "Apply Limit";
+"settings.retention.items.confirm-message" = "If there are more unpinned items than the new limit allows, the oldest will be removed permanently.";
+"settings.retention.items.confirm-title" = "Apply this item limit?";
 "settings.retention.items.field-accessibility-label" = "Maximum unpinned items";
 "settings.retention.items.keep-at-most" = "Keep at most";
 "settings.retention.items.section" = "Items";

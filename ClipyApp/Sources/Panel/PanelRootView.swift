@@ -188,11 +188,13 @@ struct PanelRootView: View {
     private func showsCaptureAccessEmptyState(
         _ composition: AppComposition?
     ) -> Bool {
-        guard let composition else { return false }
+        guard let viewState = composition?.viewState else { return false }
         return appDelegate.captureAccessState != .allowed
-            && composition.viewState.rows.isEmpty
-            && !composition.viewState.isLoadingFirstPage
-            && !composition.viewState.isSearchActive
+            && viewState.hasAuthoritativeFirstPage
+            && viewState.failure == nil
+            && viewState.rows.isEmpty
+            && !viewState.isSearchActive
+            && !viewState.hasActiveFilters
     }
 
     private var pauseCaptureAction: (() -> Void)? {
@@ -355,7 +357,7 @@ struct PanelRootView: View {
                 .accessibilityIdentifier("clipy.capture.notice.message")
             Spacer(minLength: 8)
             Button {
-                appDelegate.dismissCaptureNotice()
+                appDelegate.dismissCaptureNotice(notice)
             } label: {
                 Image(systemName: "xmark")
             }

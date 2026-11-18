@@ -41,7 +41,7 @@ struct RetentionSettingsTab: View {
     @State private var isCancelling = false
     @State private var pendingCountSubmission:
         RetentionSettingsDraft.CountSubmission?
-    @State private var isConfirmingCountTightening = false
+    @State private var isConfirmingCountRemoval = false
     @State private var pendingSubmission: RetentionSettingsDraft.Submission?
     @State private var isConfirmingPolicyRemoval = false
 
@@ -151,22 +151,20 @@ struct RetentionSettingsTab: View {
                     )
                     .confirmationDialog(
                         RetentionSettingsCopy.confirmItemLimitTitle,
-                        isPresented: $isConfirmingCountTightening,
-                        titleVisibility: .visible
-                    ) {
+                        isPresented: $isConfirmingCountRemoval,
+                        titleVisibility: .visible,
+                        presenting: pendingCountSubmission
+                    ) { submission in
                         Button(
                             RetentionSettingsCopy.confirmItemLimitApply,
                             role: .destructive
                         ) {
-                            guard let submission = pendingCountSubmission else {
-                                return
-                            }
                             startApply { await applyMaximumUnpinned(submission) }
                         }
                         Button(RetentionSettingsCopy.confirmCancel, role: .cancel) {
                             pendingCountSubmission = nil
                         }
-                    } message: {
+                    } message: { _ in
                         Text(RetentionSettingsCopy.confirmItemLimitMessage)
                     }
                     // The status sits on its own row below the button so a
@@ -433,15 +431,12 @@ struct RetentionSettingsTab: View {
         )
     }
 
-    /// Count is part of the same destructive-retention family as the V2
-    /// thresholds: lowering the configured value requires confirmation;
-    /// equal or looser values apply directly (`04` Red 10D).
     private func requestMaximumUnpinnedApply() {
         guard !isWorking, hasLoadedRetentionConfiguration, draft.hasCountChanges,
               let submission = draft.countSubmission() else { return }
-        if draft.maximumUnpinnedRequiresTightening(for: submission) {
+        if draft.requiresCountRemovalConfirmation(for: submission) {
             pendingCountSubmission = submission
-            isConfirmingCountTightening = true
+            isConfirmingCountRemoval = true
         } else {
             startApply { await applyMaximumUnpinned(submission) }
         }

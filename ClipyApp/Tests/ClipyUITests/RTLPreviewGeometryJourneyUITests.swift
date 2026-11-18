@@ -43,7 +43,9 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         app.launch()
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        let window = app.dialogs.containing(.textField, identifier: "clipy.search.field").firstMatch
         XCTAssertTrue(panel.waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertTrue(window.exists, app.debugDescription)
         let rows = panel.descendants(matching: .any).matching(
             NSPredicate(format: "identifier BEGINSWITH %@", "clipy.history.row.")
         )
@@ -71,8 +73,8 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         // unresolved issue; launch preferences provide only this setup.
         // Move the real pointer using the visible panel, then start a fresh
         // dwell at x=40 with room for the 360-point panel and trailing pane.
-        panel.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-            .withOffset(CGVector(dx: 40 - panel.frame.minX, dy: 0))
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            .withOffset(CGVector(dx: 40 - window.frame.minX, dy: 0))
             .hover()
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(waitUntil(timeout: 5) { !panel.exists }, app.debugDescription)
@@ -80,7 +82,7 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
         HistoryJourneyControls.selectFirst(in: app)
 
-        let pane = app.descendants(matching: .any)["clipy.panel.floatingPreview"]
+        let pane = app.dialogs["clipy.panel.floatingPreview"]
         XCTAssertTrue(
             pane.waitForExistence(timeout: 10),
             "auto-open dwell must present the floating pane.\n\(app.debugDescription)"
@@ -96,15 +98,16 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         // side: top edges align, the panel keeps its compact width, and the
         // pane is a separate window rather than panel content.
         XCTAssertTrue(waitUntil(timeout: 5) {
-            abs(panel.frame.width - compactWidth) <= 3
+            abs(window.frame.width - compactWidth) <= 3
                 && abs(pane.frame.width - paneWidth) <= 3
-                && abs(pane.frame.minX - panel.frame.maxX - gap) <= 3
-                && abs(pane.frame.minY - panel.frame.minY) <= 3
+                && abs(pane.frame.minX - window.frame.maxX - gap) <= 3
+                && abs(pane.frame.minY - window.frame.minY) <= 3
                 && pane.frame.height > 0
-                && abs(pane.frame.height - panel.frame.height) <= 3
+                && abs(pane.frame.height - window.frame.height) <= 3
         }, "trailing floating pane under RTL.\n\(app.debugDescription)")
+        let resizedWidth = resizePreview(pane, beside: window, isOnLeft: false, in: app)
 
-        // One Escape retires both ordinary browsing and its passive preview.
+        // One Escape retires both windows even when the preview has focus.
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil(timeout: 5) { !pane.exists && !panel.exists },
                       "Esc must dismiss the panel and its floating preview together.\n\(app.debugDescription)")
@@ -116,8 +119,8 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(panel.waitForExistence(timeout: 10), app.debugDescription)
         HistoryJourneyControls.selectFirst(in: app)
-        panel.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-            .withOffset(CGVector(dx: 900 - panel.frame.minX, dy: 0))
+        window.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            .withOffset(CGVector(dx: 900 - window.frame.minX, dy: 0))
             .hover()
         app.typeKey(.escape, modifierFlags: [])
         XCTAssertTrue(waitUntil(timeout: 5) { !panel.exists }, app.debugDescription)
@@ -129,13 +132,47 @@ final class RTLPreviewGeometryJourneyUITests: XCTestCase {
             "the reopened session's dwell must present the floating pane.\n\(app.debugDescription)"
         )
         XCTAssertTrue(waitUntil(timeout: 5) {
-            abs(panel.frame.width - compactWidth) <= 3
-                && abs(pane.frame.width - paneWidth) <= 3
-                && abs(pane.frame.maxX + gap - panel.frame.minX) <= 3
-                && abs(pane.frame.minY - panel.frame.minY) <= 3
+            abs(window.frame.width - compactWidth) <= 3
+                && abs(pane.frame.width - resizedWidth) <= 3
+                && abs(pane.frame.maxX + gap - window.frame.minX) <= 3
+                && abs(pane.frame.minY - window.frame.minY) <= 3
                 && pane.frame.height > 0
-                && abs(pane.frame.height - panel.frame.height) <= 3
+                && abs(pane.frame.height - window.frame.height) <= 3
         }, "leading floating pane at the screen's right edge under RTL.\n\(app.debugDescription)")
+        _ = resizePreview(pane, beside: window, isOnLeft: true, in: app)
+    }
+
+    @MainActor
+    private func resizePreview(
+        _ pane: XCUIElement, beside window: XCUIElement, isOnLeft: Bool, in app: XCUIApplication
+    ) -> CGFloat {
+        let handle = pane.descendants(matching: .any)["clipy.preview.resize-width"]
+        XCTAssertTrue(handle.waitForExistence(timeout: 5), app.debugDescription)
+        let initial = pane.frame
+        let mainFrame = window.frame
+        let outerEdge = isOnLeft ? initial.minX : initial.maxX
+        let handleEdge = isOnLeft ? handle.frame.minX : handle.frame.maxX
+        let contentEdge = isOnLeft ? initial.maxX : initial.minX
+        XCTAssertEqual(handleEdge, outerEdge, accuracy: 2, app.debugDescription)
+
+        let distance: CGFloat = 48
+        let start = handle.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.4, thenDragTo: start.withOffset(CGVector(
+            dx: isOnLeft ? distance : -distance, dy: 0
+        )), withVelocity: .slow, thenHoldForDuration: 0.5)
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            pane.exists && abs(pane.frame.width - (initial.width - distance)) <= 6
+        }, app.debugDescription)
+
+        let draggedWidth = pane.frame.width
+        let outwardKey: XCUIKeyboardKey = isOnLeft ? .leftArrow : .rightArrow
+        app.typeKey(outwardKey, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            pane.exists && pane.frame.width > draggedWidth
+        }, "The focused handle must grow outwards by keyboard.\n\(app.debugDescription)")
+        XCTAssertEqual(isOnLeft ? pane.frame.maxX : pane.frame.minX, contentEdge, accuracy: 2)
+        XCTAssertEqual(window.frame, mainFrame)
+        return pane.frame.width
     }
 
     @MainActor

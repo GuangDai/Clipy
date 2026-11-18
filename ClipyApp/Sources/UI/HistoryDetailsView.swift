@@ -1107,11 +1107,10 @@ private struct DetailsBody: View {
                     details.occurrence.lastCopiedAt, locale: locale, timeZone: timeZone
                 )
             )
-            LabeledContent(countLabel, value: copyCount)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(countLabel)
-                .accessibilityValue(copyCount)
-                .accessibilityIdentifier("clipy.details.copy-count")
+            LabeledContent(countLabel) {
+                Text(verbatim: copyCount)
+                    .accessibilityIdentifier("clipy.details.copy-count")
+            }
             LabeledContent(
                 PanelActionsCopy.text("Source", bundle: copyBundle),
                 value: details.occurrence.lastSource.map {
