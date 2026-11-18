@@ -53,8 +53,8 @@ struct HistorySnippetLineCount: RawRepresentable, Hashable, Sendable {
 
     var rawValue: String { count.map(String.init) ?? "automatic" }
 
-    func baseLineLimit(density: HistoryRowDensity) -> Int {
-        count ?? (density == .compact ? 1 : 2)
+    func baseLineLimit(density: HistoryRowDensity, forSearchResults: Bool = false) -> Int {
+        count ?? (forSearchResults || density == .compact ? 1 : 2)
     }
 }
 
@@ -84,9 +84,6 @@ struct HistoryRowFontSize: RawRepresentable, Hashable, Sendable {
 
     var rawValue: String { String(points) }
 
-    /// Supporting row text retains the former 11/12/13pt scale at the
-    /// former 11/13/15pt choices, and scales continuously for custom input.
-    var snippetPoints: Double { min(points, (points + 11) / 2) }
     var metadataPoints: Double { max(1, points - 2) }
 }
 

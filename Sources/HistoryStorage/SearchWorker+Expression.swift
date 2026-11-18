@@ -158,14 +158,16 @@ internal indirect enum PreparedSearchExpression {
         case .noMatch: return (false, nil)
         case .text(let matcher):
             if let found = matcher.firstMatch(in: row.title) {
-                return (true, .ready(SearchPresentation(snippet: nil, matchedRanges: [
-                    UTF16TextRange(location: found.utf16Offset, length: found.utf16Length),
-                ])))
+                return (true, .titleUTF16(
+                    firstRange: UTF16TextRange(location: found.utf16Offset, length: found.utf16Length),
+                    additionalMatches: .exact(term: matcher.literalTerm)
+                ))
             }
             if let found = matcher.firstMatch(in: row.searchBody) {
                 return (true, .bodyExcerpt(
                     characterRanges: [], maximumCharacters: nil, bodySuffixWasOmitted: false,
-                    utf16Range: UTF16TextRange(location: found.utf16Offset, length: found.utf16Length)
+                    utf16Range: UTF16TextRange(location: found.utf16Offset, length: found.utf16Length),
+                    additionalMatches: .exact(term: matcher.literalTerm)
                 ))
             }
             return (false, nil)

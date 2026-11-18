@@ -12,15 +12,12 @@ import Testing
 @Suite("Panel content-fit height oracle")
 struct PanelContentFitTests {
 
-    private func textRow(snippetLines: Int = 0) -> PanelContentFit.RowDescriptor {
-        PanelContentFit.RowDescriptor(
-            isImageRow: false,
-            snippetLineCount: snippetLines
-        )
+    private func textRow() -> PanelContentFit.RowDescriptor {
+        PanelContentFit.RowDescriptor()
     }
 
     private var imageRow: PanelContentFit.RowDescriptor {
-        PanelContentFit.RowDescriptor(isImageRow: true, snippetLineCount: 0)
+        PanelContentFit.RowDescriptor(usesLargeImageSlot: true)
     }
 
     /// Compact/medium: a 16pt content line plus 4pt padding and 4pt insets.
@@ -49,20 +46,6 @@ struct PanelContentFitTests {
             PanelContentFit.rowHeight(
                 imageRow, density: .comfortable, fontSize: .medium
             ) == 68
-        )
-    }
-
-    @Test func snippetRowsGrowByTheEffectiveLineCount() {
-        // 16pt title + 4pt gap + 15pt snippet + 8pt padding/insets.
-        #expect(
-            PanelContentFit.rowHeight(
-                textRow(snippetLines: 1), density: .compact, fontSize: .medium
-            ) == 43
-        )
-        #expect(
-            PanelContentFit.rowHeight(
-                textRow(snippetLines: 2), density: .compact, fontSize: .medium
-            ) == 58
         )
     }
 
@@ -187,8 +170,8 @@ struct PanelContentFitTests {
         )
         #expect(
             PanelContentFit.RowDescriptor(
-                row: imageHistoryRow, snippetLineLimit: 1
-            ).isImageRow
+                row: imageHistoryRow, linePreference: .one, density: .compact, forSearchResults: false
+            ).usesLargeImageSlot
         )
         let textHistoryRow = HistoryRow(
             item: reference,
@@ -201,17 +184,20 @@ struct PanelContentFitTests {
             search: nil
         )
         let descriptor = PanelContentFit.RowDescriptor(
-            row: textHistoryRow, snippetLineLimit: 2
+            row: textHistoryRow, linePreference: .two, density: .compact, forSearchResults: false
         )
-        #expect(!descriptor.isImageRow)
-        #expect(descriptor.titleLineCount == 2)
-        #expect(descriptor.snippetLineCount == 0)
+        #expect(!descriptor.usesLargeImageSlot)
+        #expect(descriptor.textLineCount == 2)
     }
 
     @Test func multiLineBrowseTitlesFitTheSelectedTypography() {
         let row = titleRow()
-        let twoLines = PanelContentFit.RowDescriptor(row: row, snippetLineLimit: 2)
-        let threeLines = PanelContentFit.RowDescriptor(row: row, snippetLineLimit: 3)
+        let twoLines = PanelContentFit.RowDescriptor(
+            row: row, linePreference: .two, density: .comfortable, forSearchResults: false
+        )
+        let threeLines = PanelContentFit.RowDescriptor(
+            row: row, linePreference: .three, density: .compact, forSearchResults: false
+        )
 
         // Comfortable/medium: two 16pt title lines plus 12pt padding/insets.
         // Previously this row was only 36pt high, leaving 24pt for its title.
@@ -225,28 +211,26 @@ struct PanelContentFitTests {
         #expect(PanelContentFit.idealHeight(input) == PanelContentFit.headerHeight + 88 + PanelContentFit.bottomSlack)
     }
 
-    @Test func searchExcerptsKeepOneTitleLineWhileTitleMatchesUseThePreference() {
-        let excerpt = PanelContentFit.RowDescriptor(
-            row: titleRow(search: SearchPresentation(snippet: "Body evidence", matchedRanges: [])),
-            snippetLineLimit: 3
-        )
-        #expect(excerpt.titleLineCount == 1)
-        #expect(excerpt.snippetLineCount == 3)
-        // 16pt title + 4pt gap + three 15pt snippet lines + 8pt padding/insets.
-        #expect(PanelContentFit.rowHeight(excerpt, density: .compact, fontSize: .medium) == 73)
-
-        let titleMatch = PanelContentFit.RowDescriptor(
-            row: titleRow(search: SearchPresentation(snippet: nil, matchedRanges: [])),
-            snippetLineLimit: 3
-        )
-        #expect(titleMatch.titleLineCount == 3)
-        #expect(titleMatch.snippetLineCount == 0)
-        #expect(PanelContentFit.rowHeight(titleMatch, density: .compact, fontSize: .medium) == 56)
+    @Test func searchResultsUseOneHeightAcrossTitleBodyAndImageMatches() {
+        let rows = [
+            titleRow(search: SearchPresentation(snippet: nil, matchedRanges: [])),
+            titleRow(search: SearchPresentation(snippet: "Body evidence", matchedRanges: [])),
+            titleRow(typeIdentifiers: ["public.png"]),
+        ]
+        for (preference, lineCount) in [(HistorySnippetLineCount.automatic, 1), (.three, 3)] {
+            let descriptors = rows.map {
+                PanelContentFit.RowDescriptor(row: $0, linePreference: preference,
+                                             density: .comfortable, forSearchResults: true)
+            }
+            #expect(descriptors.allSatisfy { $0.textLineCount == lineCount && !$0.usesLargeImageSlot })
+            let heights = descriptors.map { PanelContentFit.rowHeight($0, density: .comfortable, fontSize: .medium) }
+            #expect(Set(heights).count == 1)
+        }
     }
 
     @Test func imageRowsGrowWhenTheTitleExceedsTheThumbnailSlot() {
         let descriptor = PanelContentFit.RowDescriptor(
-            row: titleRow(typeIdentifiers: ["public.png"]), snippetLineLimit: 3
+            row: titleRow(typeIdentifiers: ["public.png"]), linePreference: .three, density: .compact, forSearchResults: false
         )
         // Three 18pt title lines exceed the compact 44pt image slot.
         #expect(PanelContentFit.rowHeight(descriptor, density: .compact, fontSize: .large) == 62)

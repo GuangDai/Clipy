@@ -34,6 +34,8 @@ struct AppearanceSettingsTab: View {
     private var rowFontSize: HistoryRowFontSize = .medium
     @AppStorage(PanelAppearanceSettings.previewAutoOpenDefaultsKey)
     private var isPreviewAutoOpenEnabled = true
+    @AppStorage(SearchMatchStyle.defaultsKey)
+    private var searchMatchStyle: SearchMatchStyle = .background
 
     @State private var isShowingTextAppearance = true
     @State private var isShowingPreviewOptions = false
@@ -76,6 +78,12 @@ struct AppearanceSettingsTab: View {
                 }
                 .id(interfaceLocale.identifier)
                 .accessibilityIdentifier("clipy.settings.appearance.motion-speed")
+                Picker(SettingsCopy.text("Search highlights"), selection: $searchMatchStyle) {
+                    ForEach(SearchMatchStyle.allCases, id: \.self) { style in
+                        Text(SettingsCopy.text(style.title)).tag(style)
+                    }
+                }
+                .accessibilityIdentifier("clipy.settings.appearance.search-highlights")
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(NativeAppearanceCopy.text("Uses the macOS accent color and contrast settings."))
@@ -143,7 +151,7 @@ struct AppearanceSettingsTab: View {
                             .accessibilityIdentifier("clipy.settings.appearance.snippet-lines")
                         }
                     }
-                    Text(SettingsCopy.text("Enter a font size from 1 to 200 pt and a line count from 1 to 100. Automatic uses the row density."))
+                    Text(SettingsCopy.text("Enter a font size from 1 to 200 pt and a line count from 1 to 100. Automatic uses one line in search results."))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -332,9 +340,7 @@ struct AppearanceSettingsTab: View {
         _ title: String, symbol: String?, selected: Bool = false
     ) -> some View {
         let lines = snippetLineCount.baseLineLimit(density: rowDensity)
-        let descriptor = PanelContentFit.RowDescriptor(
-            isImageRow: false, titleLineCount: lines, snippetLineCount: 0
-        )
+        let descriptor = PanelContentFit.RowDescriptor(textLineCount: lines)
         return HStack(spacing: PanelTheme.spacingSmall) {
             if let symbol {
                 Image(systemName: symbol)

@@ -45,3 +45,6 @@
 
 "More Sources" = "更多来源";
 "Search match" = "搜索命中";
+"%@ of %@ matches shown" = "本预览第 %@ 处，共 %@ 处";
+"Previous match" = "上一处匹配";
+"Next match" = "下一处匹配";

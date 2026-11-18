@@ -68,10 +68,6 @@ enum PanelTheme {
         .system(size: CGFloat(size.points))
     }
 
-    static func snippetFont(for size: HistoryRowFontSize) -> Font {
-        .system(size: CGFloat(size.snippetPoints))
-    }
-
     static func timestampFont(for size: HistoryRowFontSize) -> Font {
         .system(size: CGFloat(size.metadataPoints))
     }

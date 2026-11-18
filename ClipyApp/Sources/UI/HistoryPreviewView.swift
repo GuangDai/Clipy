@@ -41,6 +41,7 @@ struct HistoryPreviewView: View {
     @State private var searchMatchHeight: CGFloat = 0
     @State private var imageFooterHeight: CGFloat = 0
     @State private var textNoticeHeight: CGFloat = 0
+    @State private var textMatches: PreviewTextMatches?
     @State private var loader: PreviewContentLoader
     @State private var retryGeneration = 0
     @State private var retryItem: HistoryItemReference?
@@ -74,6 +75,11 @@ struct HistoryPreviewView: View {
     private struct RetentionCheck: Equatable {
         let item: HistoryItemReference
         let position: ChangePosition
+    }
+
+    private struct TextSearch: Equatable {
+        let item: HistoryItemReference
+        let input: PreviewTextSearchInput
     }
 
     /// Standalone entry point: PreviewPaneState owns the exact target.
@@ -167,6 +173,16 @@ struct HistoryPreviewView: View {
         return row
     }
 
+    private var textSearch: TextSearch? {
+        guard viewState.hasAuthoritativeFirstPage, let row = observedRow, row.search != nil,
+              loader.requestedItem == row.item, loader.loadedFileReference == nil,
+              case .content(.text(let text, let wasTruncated)) = loader.phase,
+              let search = viewState.textualSearch,
+              search.mode != .regexp || !wasTruncated,
+              let query = PreviewSearchQuery(term: search.term, mode: search.mode) else { return nil }
+        return TextSearch(item: row.item, input: PreviewTextSearchInput(text: text, query: query))
+    }
+
     private var retentionCheck: RetentionCheck? {
         guard let targetItem, let position = viewState.retentionChangePosition else { return nil }
         return RetentionCheck(item: targetItem, position: position)
@@ -182,13 +198,15 @@ struct HistoryPreviewView: View {
 
     var body: some View {
         let image = previewImage
+        let search = textSearch
+        let matches = textMatches.flatMap { $0.input == search?.input ? $0 : nil }
         let showsFileContents = switch loader.phase {
         case .content(.text): true
         case .content(.image): image != nil
         default: false
         }
         VStack(spacing: 0) {
-            searchMatch
+            if matches?.targets.isEmpty != false { searchMatch }
             if loader.requestedItem == targetItem, let file = loader.loadedFileReference {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
@@ -226,7 +244,7 @@ struct HistoryPreviewView: View {
                 .onDisappear { fileHeaderHeight = 0 }
                 Divider()
             }
-            previewBody(image: image)
+            previewBody(image: image, matches: matches)
                 .frame(maxWidth: .infinity, maxHeight: flexibleHeight)
                 .layoutPriority(1)
             if PreviewFooterMetadata(item: targetItem, row: observedRow) != nil {
@@ -260,6 +278,14 @@ struct HistoryPreviewView: View {
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { metadataHeight = $0 }
                 .onDisappear { metadataHeight = 0 }
             }
+        }
+        .task(id: search) {
+            textMatches = nil
+            guard let search else { return }
+            let received = await PreviewTextMatches.prepare(input: search.input,
+                segments: loader.textSegments, groups: loader.textSegmentGroups)
+            guard !Task.isCancelled, self.textSearch == search else { return }
+            textMatches = received
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
         // One load per exact reference or retry; the loader's fence
@@ -403,23 +429,9 @@ struct HistoryPreviewView: View {
     private var searchMatch: some View {
         if viewState.hasAuthoritativeFirstPage, let row = observedRow, let match = row.search,
            match.snippet != nil || !match.matchedRanges.isEmpty {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(PreviewCopy.text("Search match"))
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                Text(MatchHighlighting.highlighted(match.snippet ?? row.title, ranges: match.matchedRanges,
-                    prioritizesMatch: true))
-                    .font(.callout)
-                    .lineLimit(3)
-                    .accessibilityIdentifier("clipy.preview.search-match")
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(.quaternary)
-            .fixedSize(horizontal: false, vertical: true)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { searchMatchHeight = $0 }
-            .onDisappear { searchMatchHeight = 0 }
+            PreviewSearchEvidence(row: row, accessibilityID: "clipy.preview.search-match")
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { searchMatchHeight = $0 }
+                .onDisappear { searchMatchHeight = 0 }
         }
     }
 
@@ -432,7 +444,7 @@ struct HistoryPreviewView: View {
     }
 
     @ViewBuilder
-    private func previewBody(image: Image?) -> some View {
+    private func previewBody(image: Image?, matches: PreviewTextMatches?) -> some View {
         if targetItem == nil {
             unavailableBody
         } else if loader.requestedItem != targetItem {
@@ -483,7 +495,7 @@ struct HistoryPreviewView: View {
                 VStack(spacing: 0) {
                     PreviewTextBody(segments: loader.textSegments, groups: loader.textSegmentGroups,
                         maximumHeight: bodyMaximumHeight.map { max(0, $0 - textNoticeHeight) },
-                        fillsAvailableHeight: fillsAvailableHeight)
+                        fillsAvailableHeight: fillsAvailableHeight, matches: matches)
                     .id(targetItem)
                     // The body scrolls independently; the disclosure stays
                     // visible and never becomes part of selectable content.

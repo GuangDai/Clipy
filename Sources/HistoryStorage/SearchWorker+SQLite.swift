@@ -424,6 +424,10 @@ extension SearchWorker {
             var returnedCounts: [HistoryItemID: Int] = [:]
             var excerptBodyLookup: SQLiteStatement?
             defer { excerptBodyLookup?.finalize() }
+            let regexpPresentationDeadline = min(
+                lifetimeDeadline.advanced(by: .milliseconds(-50)),
+                ContinuousClock.now.advanced(by: SearchTextOccurrences.regexpPresentationBudget)
+            )
             for evaluated in window.rows {
                 try checkSnapshotDeadline(lifetimeDeadline)
                 let row: EvaluatedRow
@@ -449,7 +453,7 @@ extension SearchWorker {
                 } else {
                     row = evaluated
                 }
-                rows.append(materialize(row))
+                rows.append(materialize(row, regexpPresentationDeadline: regexpPresentationDeadline))
                 if includesRevisionCounts {
                     guard let count = revisionCounts[row.corpusRow.id], count >= 0,
                           count <= limits.maximumRevisionsPerItem else {

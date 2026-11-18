@@ -405,9 +405,10 @@ internal actor SearchWorker {
 #endif
 
         let pageSlice = window.rows
+        let regexpPresentationDeadline = ContinuousClock.now.advanced(by: SearchTextOccurrences.regexpPresentationBudget)
         let rows = try pageSlice.map { row in
             try Task.checkCancellation()
-            return materialize(row)
+            return materialize(row, regexpPresentationDeadline: regexpPresentationDeadline)
         }
         try Task.checkCancellation()
 
@@ -458,20 +459,27 @@ internal actor SearchWorker {
 
     /// Both SQLite streaming and the pure matcher fixtures materialize only
     /// returned rows, using the same frozen Unicode/window construction.
-    internal func materialize(_ evaluatedRow: EvaluatedRow) -> HistoryRow {
+    internal func materialize(
+        _ evaluatedRow: EvaluatedRow, regexpPresentationDeadline: ContinuousClock.Instant
+    ) -> HistoryRow {
         let row = evaluatedRow.corpusRow
         let search: SearchPresentation?
         switch evaluatedRow.search {
         case nil:
             search = nil
-        case .ready(let presentation):
-            search = presentation
+        case .titleUTF16(let first, let matcher):
+            let additional = Self.followingMatches(
+                after: first, using: matcher, windowText: row.title, windowStart: 0,
+                regexpInput: String(row.title.prefix(limits.maximumRegexpTitleBodyPrefixCharacters)),
+                regexpPresentationDeadline: regexpPresentationDeadline
+            )
+            search = SearchPresentation(snippet: nil, matchedRanges: [first] + additional)
         case .titleRanges(let characterRanges):
             search = SearchPresentation(
                 snippet: nil,
                 matchedRanges: Self.utf16Ranges(from: characterRanges, in: row.title)
             )
-        case .bodyExcerpt(let ranges, let maximumCharacters, let omitted, let utf16Range):
+        case .bodyExcerpt(let ranges, let maximumCharacters, let omitted, let utf16Range, let additionalMatches):
             let body: Substring
             if let maximumCharacters {
                 body = Self.boundedCharacterPrefix(
@@ -483,7 +491,8 @@ internal actor SearchWorker {
             let excerpt = Self.bodyExcerpt(
                 body: body, characterRanges: ranges,
                 snippetLimit: limits.maximumBodySearchSnippetCharacters,
-                bodySuffixWasOmitted: omitted, utf16Range: utf16Range
+                bodySuffixWasOmitted: omitted, utf16Range: utf16Range,
+                additionalMatches: additionalMatches, regexpPresentationDeadline: regexpPresentationDeadline
             )
             search = SearchPresentation(snippet: excerpt.snippet, matchedRanges: excerpt.ranges)
         }

@@ -196,6 +196,17 @@ struct HistoryDetailsView: View {
         return FactsRequest(item: details.item, position: position, reloadRevisions: reloadRevisions)
     }
 
+    private var searchRow: HistoryRow? {
+        guard viewState.hasAuthoritativeFirstPage, let row = viewState.displayedRow(for: currentItem.id),
+              row.item == currentItem, row.search != nil else { return nil }
+        return row
+    }
+
+    private var searchQuery: PreviewSearchQuery? {
+        guard searchRow != nil, let query = viewState.textualSearch else { return nil }
+        return PreviewSearchQuery(term: query.term, mode: query.mode)
+    }
+
     init(viewState: HistoryViewState, item: HistoryItemReference,
          onFinishWorkspace: (@MainActor () -> Void)? = nil) {
         self.viewState = viewState
@@ -480,7 +491,9 @@ struct HistoryDetailsView: View {
                 previewRequest: previewRequest,
                 representationPreview: representationPreview,
                 isLoadingRepresentation: representationTask != nil,
-                representationFailure: representationFailure
+                representationFailure: representationFailure,
+                searchRow: searchRow,
+                searchQuery: searchQuery
             )
             .disabled(isRevising)
             Divider()
@@ -1025,20 +1038,27 @@ private struct DetailsBody: View {
     var representationPreview: DetailsRepresentationPresentation?
     var isLoadingRepresentation = false
     var representationFailure: String?
+    var searchRow: HistoryRow?
+    var searchQuery: PreviewSearchQuery?
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: PanelTheme.spacingLarge) {
-                headerSection
-                contentSection
-                Divider()
-                infoSection
-                if !details.revisions.isEmpty {
-                    revisionsSection
+        ScrollViewReader { reader in
+            ScrollView {
+                VStack(alignment: .leading, spacing: PanelTheme.spacingLarge) {
+                    headerSection
+                    if basis == .effective, let searchRow {
+                        PreviewSearchEvidence(row: searchRow, accessibilityID: "clipy.details.search-match")
+                    }
+                    contentSection { reader.scrollTo($0, anchor: .center) }
+                    Divider()
+                    infoSection
+                    if !details.revisions.isEmpty {
+                        revisionsSection
+                    }
                 }
+                .padding(PanelTheme.spacingLarge)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(PanelTheme.spacingLarge)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -1125,7 +1145,7 @@ private struct DetailsBody: View {
         .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.details.info"))
     }
 
-    private var contentSection: some View {
+    private func contentSection(scrollToMatch: @escaping (String) -> Void) -> some View {
         VStack(alignment: .leading, spacing: PanelTheme.spacingSmall) {
             Picker(PanelActionsCopy.text("Content", bundle: copyBundle), selection: $basis) {
                 Text(PanelActionsCopy.text("Effective", bundle: copyBundle)).tag(ContentBasis.effective)
@@ -1154,6 +1174,8 @@ private struct DetailsBody: View {
                     preview: selected ? representationPreview : nil,
                     isLoading: selected && isLoadingRepresentation,
                     failure: selected ? representationFailure : nil,
+                    searchQuery: selected && basis == .effective ? searchQuery : nil,
+                    scrollToMatch: scrollToMatch,
                     onPreview: { if let request { onPreview(request) } },
                     onExport: {
                         if let raw = basis.representation(
@@ -1237,6 +1259,8 @@ private struct RepresentationRow: View {
     let preview: DetailsRepresentationPresentation?
     let isLoading: Bool
     let failure: String?
+    let searchQuery: PreviewSearchQuery?
+    let scrollToMatch: (String) -> Void
     let onPreview: () -> Void
     let onExport: () -> Void
 
@@ -1327,7 +1351,8 @@ private struct RepresentationRow: View {
             if let failure { Text(failure).font(.caption).foregroundStyle(.secondary) }
             if let text = preview?.text {
                 DetailsTextPreview(text: text,
-                    accessibilityID: "clipy.details.text-preview." + representation.identity.accessibilitySuffix)
+                    accessibilityID: "clipy.details.text-preview." + representation.identity.accessibilitySuffix,
+                    searchQuery: searchQuery, scrollToMatch: scrollToMatch)
                     .frame(maxWidth: 840, alignment: .leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, PanelTheme.spacingMedium)
@@ -1399,25 +1424,56 @@ private struct RepresentationRow: View {
 struct DetailsTextPreview: View {
     let text: PreviewText
     let accessibilityID: String
+    var searchQuery: PreviewSearchQuery? = nil
+    var scrollToMatch: (String) -> Void = { _ in }
+    @State private var textMatches: PreviewTextMatches?
+    @State private var activeMatch = 0
+    @Environment(\.searchMatchStyle) private var searchMatchStyle
     #if DEBUG
     var onSegmentMaterialized: ((Int) -> Void)?
     var onGroupMaterialized: ((Int) -> Void)?
     #endif
 
     var body: some View {
-        LazyVStack(alignment: .leading, spacing: 0) {
-            ForEach(text.displaySegmentGroups, id: \.lowerBound) { group in
-                textGroup(group)
+        let search = searchQuery.flatMap { query in
+            query.mode == .regexp && text.wasTruncated ? nil : PreviewTextSearchInput(text: text.text, query: query)
+        }
+        let matches = textMatches.flatMap { $0.input == search ? $0 : nil }
+        VStack(alignment: .leading, spacing: 4) {
+            if let matches, matches.targets.count > 1 {
+                PreviewSearchMatchNavigator(count: matches.targets.count, selection: activeMatch,
+                    accessibilityID: accessibilityID + ".matches") { index in
+                    activeMatch = index
+                    scrollToMatch(anchor(for: matches.targets[index]))
+                }
             }
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(text.displaySegmentGroups, id: \.lowerBound) { group in
+                    textGroup(group, matches: matches).id(anchor(for: group.lowerBound))
+                }
+            }
+        }
+        .task(id: search) {
+            textMatches = nil
+            activeMatch = 0
+            guard let search else { return }
+            let received = await PreviewTextMatches.prepare(input: search,
+                segments: text.displaySegments, groups: text.displaySegmentGroups)
+            guard !Task.isCancelled else { return }
+            textMatches = received
         }
     }
 
-    private func textGroup(_ group: Range<Int>) -> some View {
+    private func anchor(for index: Int) -> String { accessibilityID + ".group.\(index)" }
+
+    private func textGroup(_ group: Range<Int>, matches: PreviewTextMatches?) -> some View {
         #if DEBUG
         return DetailsTextSegmentGroup(text: text.displaySegments[group], accessibilityID: accessibilityID,
+            matches: matches, activeMatch: activeMatch, searchMatchStyle: searchMatchStyle,
             onSegmentMaterialized: onSegmentMaterialized, onGroupMaterialized: onGroupMaterialized)
         #else
-        return DetailsTextSegmentGroup(text: text.displaySegments[group], accessibilityID: accessibilityID)
+        return DetailsTextSegmentGroup(text: text.displaySegments[group], accessibilityID: accessibilityID,
+            matches: matches, activeMatch: activeMatch, searchMatchStyle: searchMatchStyle)
         #endif
     }
 }
@@ -1425,6 +1481,9 @@ struct DetailsTextPreview: View {
 private struct DetailsTextSegmentGroup: View {
     let text: ArraySlice<Substring>
     let accessibilityID: String
+    let matches: PreviewTextMatches?
+    let activeMatch: Int
+    let searchMatchStyle: SearchMatchStyle
     #if DEBUG
     var onSegmentMaterialized: ((Int) -> Void)?
     var onGroupMaterialized: ((Int) -> Void)?
@@ -1437,7 +1496,8 @@ private struct DetailsTextSegmentGroup: View {
         #endif
         return VStack(alignment: .leading, spacing: 0) {
             ForEach(text.indices, id: \.self) { index in
-                Text(verbatim: String(text[index]))
+                PreviewTextMatches.displayText(text[index], highlights: matches?.highlights[index],
+                    activeMatch: activeMatch, style: searchMatchStyle)
                     .font(.body)
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)

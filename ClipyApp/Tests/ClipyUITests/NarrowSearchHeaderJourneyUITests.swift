@@ -38,6 +38,8 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
             "-AppleLanguages", "(\(language))", "-AppleLocale", locale,
             "-clipy.language", "system",
             "-clipy.appearance.previewAutoOpen", "YES",
+            "-clipy.appearance.rowDensity", language == "en" ? "comfortable" : "compact",
+            "-clipy.appearance.snippetLineCount", "automatic",
             // Keep the native resize edge away from the screen boundary,
             // independent of where a preceding GUI journey left the pointer.
             "-panelPosition", "center",
@@ -143,6 +145,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         if language == "en" {
             exerciseDateConfirmation(in: app, dates: dates)
             exerciseFuzzyLimit(in: app, search: search, sort: sort, rows: rows, pasteboard: pasteboard)
+            exerciseUniformSearchRows(in: app, panel: panel, search: search, sort: sort, rows: rows, pasteboard: pasteboard)
         }
     }
 
@@ -214,5 +217,63 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
             predicate: NSPredicate { _, _ in condition() }, object: nil
         )
         return XCTWaiter.wait(for: [expectation], timeout: 10) == .completed
+    }
+
+    @MainActor
+    private func exerciseUniformSearchRows(
+        in app: XCUIApplication, panel: XCUIElement, search: XCUIElement, sort: XCUIElement,
+        rows: XCUIElementQuery, pasteboard: NSPasteboard
+    ) {
+        let term = "layoutneedle"
+        let shortTitle = "\(term) short"
+        let bodyTitle = "A multiline note"
+        let bodyMatch = "\(term) on the second line"
+        let bodyText = "\(bodyTitle)\n\(bodyMatch)\nThird line of the original note"
+        let longTitle = "\(term) long " + String(repeating: "Content that wraps at this window width. ", count: 5)
+        app.buttons["clipy.search.clear"].click()
+        app.buttons["clipy.search.clear-filters"].click()
+        XCTAssertTrue(waitUntil { search.value as? String == "" && rows.count == 3 }, app.debugDescription)
+
+        for (text, title) in [(shortTitle, shortTitle), (bodyText, bodyTitle), (longTitle, "\(term) long")] {
+            pasteboard.clearContents()
+            XCTAssertTrue(pasteboard.setString(text, forType: .string))
+            XCTAssertTrue(waitUntil { rows.allElementsBoundByIndex.contains { $0.label.contains(title) } },
+                          app.debugDescription)
+        }
+
+        sort.click()
+        let newest = app.menuItems["Newest first"]
+        XCTAssertTrue(newest.waitForExistence(timeout: 5), app.debugDescription)
+        newest.click()
+        search.click()
+        app.typeText(term)
+        XCTAssertTrue(waitUntil {
+            rows.count == 3 && rows.element(boundBy: 0).label.contains("\(term) long")
+                && rows.element(boundBy: 1).label.contains(bodyMatch)
+                && rows.element(boundBy: 2).label.contains(shortTitle)
+        }, app.debugDescription)
+
+        let bodyRow = rows.element(boundBy: 1)
+        XCTAssertTrue(bodyRow.label.contains(bodyTitle))
+        let frames = rows.allElementsBoundByIndex.map(\.frame)
+        for frame in frames {
+            XCTAssertFalse(frame.isEmpty)
+            XCTAssertEqual(frame.height, frames[0].height, accuracy: 1, app.debugDescription)
+        }
+        let screenshot = XCTAttachment(screenshot: panel.screenshot())
+        screenshot.name = "Uniform title and body search results at narrow width"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+
+        let sentinel = NSPasteboardItem()
+        XCTAssertTrue(sentinel.setString("before copying the body match", forType: .string))
+        XCTAssertTrue(sentinel.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType")))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([sentinel]))
+        let before = pasteboard.changeCount
+        bodyRow.click()
+        XCTAssertTrue(waitUntil {
+            !panel.exists && pasteboard.changeCount != before && pasteboard.data(forType: .string) == Data(bodyText.utf8)
+        }, app.debugDescription)
     }
 }

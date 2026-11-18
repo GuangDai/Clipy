@@ -211,7 +211,7 @@ struct HistoryListView: View {
             guard rows.indices.contains(next) else { break }
             target = next
             let descriptor = PanelContentFit.RowDescriptor(row: rows[target],
-                snippetLineLimit: snippetLineCount.baseLineLimit(density: density))
+                linePreference: snippetLineCount, density: density, forSearchResults: viewState.usesSearchResultRows)
             distance += PanelContentFit.rowHeight(descriptor, density: density, fontSize: fontSize)
         } while distance < viewportHeight
         return rows[target].item.id
@@ -227,6 +227,7 @@ struct HistoryListView: View {
             density: density,
             snippetLineCount: snippetLineCount,
             fontSize: fontSize,
+            forSearchResults: viewState.usesSearchResultRows,
             isSelected: selection.wrappedValue == row.item.id,
             shortcuts: shortcuts,
             areShortcutsEnabled: areShortcutsEnabled,

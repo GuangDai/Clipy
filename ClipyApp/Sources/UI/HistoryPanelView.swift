@@ -926,18 +926,18 @@ struct HistoryPanelView: View {
     }
 
     private func contentFitInput(topNoticeHeight: CGFloat) -> PanelContentFit.Input {
-        let snippetLineLimit = appearance.snippetLineCount.baseLineLimit(
-            density: appearance.rowDensity
-        )
+        let forSearchResults = viewState.usesSearchResultRows
         return PanelContentFit.Input(
             pinnedRows: viewState.displayedPinnedRows.map {
                 PanelContentFit.RowDescriptor(
-                    row: $0, snippetLineLimit: snippetLineLimit
+                    row: $0, linePreference: appearance.snippetLineCount,
+                    density: appearance.rowDensity, forSearchResults: forSearchResults
                 )
             },
             unpinnedRows: viewState.displayedUnpinnedRows.map {
                 PanelContentFit.RowDescriptor(
-                    row: $0, snippetLineLimit: snippetLineLimit
+                    row: $0, linePreference: appearance.snippetLineCount,
+                    density: appearance.rowDensity, forSearchResults: forSearchResults
                 )
             },
             density: appearance.rowDensity,

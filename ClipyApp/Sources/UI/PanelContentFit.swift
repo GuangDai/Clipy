@@ -19,35 +19,21 @@ import HistoryCore
 /// AppKit side (`FloatingPanel.fitToContent`) owns the actual frame change.
 enum PanelContentFit {
 
-    /// One displayed row's height-relevant facts: its slot kind (image rows
-    /// carry the generous 44/56pt slot) and the effective title/snippet
-    /// line counts (0 snippet lines when the row renders no excerpt).
+    /// One text block and one thumbnail height drive rendering, fitting and paging.
     struct RowDescriptor: Equatable, Sendable {
-        let isImageRow: Bool
-        let titleLineCount: Int
-        let snippetLineCount: Int
+        let usesLargeImageSlot: Bool
+        let textLineCount: Int
 
-        init(isImageRow: Bool, titleLineCount: Int = 1, snippetLineCount: Int) {
-            self.isImageRow = isImageRow
-            self.titleLineCount = titleLineCount
-            self.snippetLineCount = snippetLineCount
+        init(usesLargeImageSlot: Bool = false, textLineCount: Int = 1) {
+            self.usesLargeImageSlot = usesLargeImageSlot
+            self.textLineCount = textLineCount
         }
 
-        /// Maps an authoritative row through the same classification the
-        /// row view uses (`HistoryRowKind`, shared with the type filter).
-        /// The oracle cannot measure text wrapping analytically; it reserves
-        /// the configured line limit for the title or body excerpt
-        /// (`HistorySnippetLineCount.baseLineLimit(density:)`), the same
-        /// bound the row view renders with.
-        init(row: HistoryRow, snippetLineLimit: Int) {
-            isImageRow = HistoryRowKind.classify(
-                effectiveTypeIdentifiers: row.typeIdentifiers
-            ) == .image
-            // The line preference applies to the title in browse/title-match
-            // rows. Body matches keep a single title above their excerpt.
-            titleLineCount = row.search?.snippet == nil ? snippetLineLimit : 1
-            snippetLineCount = row.search?.snippet == nil
-                ? 0 : snippetLineLimit
+        init(row: HistoryRow, linePreference: HistorySnippetLineCount,
+             density: HistoryRowDensity, forSearchResults: Bool) {
+            usesLargeImageSlot = !forSearchResults
+                && HistoryRowKind.classify(effectiveTypeIdentifiers: row.typeIdentifiers) == .image
+            textLineCount = linePreference.baseLineLimit(density: density, forSearchResults: forSearchResults)
         }
     }
 
@@ -141,35 +127,22 @@ enum PanelContentFit {
     // MARK: Row typography (PanelTheme's Font mappings)
 
     /// The system text line box scales with the actual point size. Ceil
-    /// reserves a whole point for fractional sizes and preserves the existing
-    /// 11/13/15pt title and 11/12/13pt snippet geometry.
+    /// reserves a whole point for fractional sizes.
     static func titleLineHeight(for size: HistoryRowFontSize) -> CGFloat {
         ceil(CGFloat(size.points) * 1.2)
     }
 
-    static func snippetLineHeight(for size: HistoryRowFontSize) -> CGFloat {
-        ceil(CGFloat(size.snippetPoints) * 1.2)
-    }
-
-    /// One row: `max(slot, title block)` plus the row's vertical padding
-    /// (`PanelTheme.rowVerticalPadding`) and the hoisted list-row insets.
-    /// The title block uses the configured title lines plus, when a snippet
-    /// renders, the title/snippet gap (`PanelTheme.spacingXXSmall`) and the
-    /// effective snippet lines.
+    /// One row contains the fixed slot and the configured text block.
     static func rowHeight(
         _ row: RowDescriptor,
         density: HistoryRowDensity,
         fontSize: HistoryRowFontSize
     ) -> CGFloat {
-        let slot = row.isImageRow
+        let slot = row.usesLargeImageSlot
             ? PanelTheme.imageThumbnailHeight(for: density)
             : PanelTheme.thumbnailSize(for: density)
-        var titleBlock = CGFloat(row.titleLineCount) * titleLineHeight(for: fontSize)
-        if row.snippetLineCount > 0 {
-            titleBlock += PanelTheme.spacingXXSmall
-                + CGFloat(row.snippetLineCount) * snippetLineHeight(for: fontSize)
-        }
-        return max(slot, titleBlock)
+        let textHeight = CGFloat(row.textLineCount) * titleLineHeight(for: fontSize)
+        return max(slot, textHeight)
             + 2 * PanelTheme.rowVerticalPadding(for: density)
             + 2 * listRowVerticalInset
     }
@@ -188,7 +161,7 @@ enum PanelContentFit {
     /// plus the same bottom slack as the content-fit calculation. Optional
     /// filters, banners and pagination add demand above this natural floor.
     static let minimumHeight: CGFloat = headerHeight + bottomSlack + 5 * rowHeight(
-        RowDescriptor(isImageRow: false, snippetLineCount: 0),
+        RowDescriptor(),
         density: .compact, fontSize: .medium
     )
     static let emptyStateHeight: CGFloat = 52

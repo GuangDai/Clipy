@@ -60,8 +60,11 @@ extension SearchWorker {
             next = try Self.mintSearchCursor(at: lastAnchor, direction: .forward, request: request,
                                              position: corpus.position, processMarker: processMarker)
         } else { next = nil }
+        let presentedTarget = materialize(
+            target, regexpPresentationDeadline: ContinuousClock.now.advanced(by: SearchTextOccurrences.regexpPresentationBudget)
+        )
         return HistoryPage(position: corpus.position,
-                           rows: [materialize(target)] + following,
+                           rows: [presentedTarget] + following,
                            previous: previous, next: next)
     }
 

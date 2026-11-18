@@ -64,4 +64,7 @@
 
 "Automatic text lines" = "Automatic text lines";
 
-"Enter a font size from 1 to 200 pt and a line count from 1 to 100. Automatic uses the row density." = "Enter a font size from 1 to 200 pt and a line count from 1 to 100. Automatic uses the row density.";
+"Enter a font size from 1 to 200 pt and a line count from 1 to 100. Automatic uses one line in search results." = "Enter a font size from 1 to 200 pt and a line count from 1 to 100. Automatic uses one line in search results.";
+"Search highlights" = "Search highlights";
+"Background" = "Background";
+"Underline" = "Underline";

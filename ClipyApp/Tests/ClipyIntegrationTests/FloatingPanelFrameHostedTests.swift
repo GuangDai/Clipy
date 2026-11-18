@@ -46,7 +46,7 @@ struct FloatingPanelFrameHostedTests {
         let panel = try #require(owner.panelForTesting)
         let initialHeight = panel.frame.height
         let latest = PanelContentFit.Input(unpinnedRows: [
-            .init(isImageRow: false, snippetLineCount: 0),
+            .init(),
         ])
         owner.panelContentFitDidChange(.init(prefersFullHeight: true))
         owner.panelContentFitDidChange(latest)

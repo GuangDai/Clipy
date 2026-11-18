@@ -43,6 +43,34 @@ struct SearchBodyScalarHighlightTests {
         ("👩‍💻", "💻", 3, 2)
     ]
 
+    @Test(arguments: [SearchMode.exact, .regexp])
+    func windowedBodyHighlightsEveryRetainedOccurrence(mode: SearchMode) async throws {
+        let body = "heading\n" + String(repeating: "a", count: 180)
+            + "💻! next 💻!" + String(repeating: "b", count: 180) + "💻!"
+        let query = mode == .regexp ? "💻(?=!)" : "💻"
+        let presentation = try await search(body, query: query, mode: mode)
+        let snippet = try #require(presentation.snippet)
+        #expect(snippet.hasPrefix("…") && snippet.hasSuffix("…"))
+        #expect(presentation.matchedRanges == [
+            UTF16TextRange(location: 160, length: 2),
+            UTF16TextRange(location: 169, length: 2),
+        ])
+        #expect(matchedSubstrings(in: snippet, from: presentation.matchedRanges) == ["💻", "💻"])
+    }
+
+    @Test(arguments: [SearchMode.exact, .regexp])
+    func titleAndRenderedTextKeepSeparateOccurrences(mode: SearchMode) async throws {
+        let title = "📌 NeedLE needle"
+        let query = mode == .regexp ? "(?i)needle" : "needle"
+        let presentation = try await search(title, query: query, mode: mode, title: title)
+        #expect(presentation.snippet == nil)
+        #expect(matchedSubstrings(in: title, from: presentation.matchedRanges) == ["NeedLE", "needle"])
+
+        let preview = title + "\r\nlast needle"
+        let ranges = SearchTextOccurrences.ranges(in: preview, term: query, mode: mode)
+        #expect(matchedSubstrings(in: preview, from: ranges) == ["NeedLE", "needle", "needle"])
+    }
+
     @Test func zeroLengthBodyMatchStillReturnsContextWithoutAHighlight() async throws {
         let body = "heading\n" + String(repeating: "a", count: 180)
             + "é" + String(repeating: "b", count: 180)
@@ -54,7 +82,7 @@ struct SearchBodyScalarHighlightTests {
     }
 
     private func search(
-        _ body: String, query: String, mode: SearchMode
+        _ body: String, query: String, mode: SearchMode, title: String = "heading"
     ) async throws -> SearchPresentation {
         let history = try await SQLiteHistory.open(
             configuration: HistoryConfiguration(persistence: .temporary)
@@ -67,9 +95,18 @@ struct SearchBodyScalarHighlightTests {
         ))
         try #require(page.rows.count == 1)
         let row = try #require(page.rows.first)
-        #expect(row.title == "heading")
+        #expect(row.title == title)
         #expect(page.next == nil)
         return try #require(row.search)
+    }
+
+    private func matchedSubstrings(in text: String, from ranges: [UTF16TextRange]) -> [String] {
+        let string = text as NSString
+        return ranges.compactMap { range in
+            let end = range.location + range.length
+            guard range.location >= 0, range.length > 0, end <= string.length else { return nil }
+            return string.substring(with: NSRange(location: range.location, length: range.length))
+        }
     }
 
     private func expectHighlightedBytes(

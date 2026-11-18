@@ -84,7 +84,7 @@ final class FloatingPreviewPanel: NSPanel, NSWindowDelegate {
 
         var presentationRoot = rootView
         presentationRoot.motionPresentation = motionPresentation
-        let hostingView = NSHostingView(rootView: presentationRoot.appLanguage())
+        let hostingView = NSHostingView(rootView: presentationRoot.appLanguage().searchMatchAppearance())
         hostingView.sizingOptions = []
         hostingView.wantsLayer = true
         contentView = hostingView

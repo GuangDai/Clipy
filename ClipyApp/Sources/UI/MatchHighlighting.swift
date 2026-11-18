@@ -10,9 +10,46 @@ import Foundation
 import HistoryCore
 import SwiftUI
 
+enum SearchMatchStyle: String, CaseIterable, Sendable {
+    case background
+    case underline
+
+    static let defaultsKey = "clipy.appearance.searchMatchStyle"
+
+    var title: String {
+        switch self {
+        case .background: "Background"
+        case .underline: "Underline"
+        }
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var searchMatchStyle: SearchMatchStyle = .background
+}
+
+private struct SearchMatchStyleModifier: ViewModifier {
+    @AppStorage(SearchMatchStyle.defaultsKey) private var style: SearchMatchStyle = .background
+
+    func body(content: Content) -> some View {
+        content.environment(\.searchMatchStyle, style)
+    }
+}
+
+extension View {
+    func searchMatchAppearance() -> some View {
+        modifier(SearchMatchStyleModifier())
+    }
+}
+
 /// Builds a highlighted `AttributedString`, preserving exact scalar boundaries
 /// within graphemes (docs/search.md).
 enum MatchHighlighting {
+    static func resultText(for row: HistoryRow, foreground: Color?, style: SearchMatchStyle) -> AttributedString {
+        guard let match = row.search else { return AttributedString(flattened(row.title[...])) }
+        return highlighted(match.snippet ?? row.title, ranges: match.matchedRanges,
+                           foreground: foreground, prioritizesMatch: true, style: style, flattensLineBreaks: true)
+    }
 
     /// - Parameters:
     ///   - text: The base string (title or snippet excerpt).
@@ -25,8 +62,14 @@ enum MatchHighlighting {
         _ text: String,
         ranges: [UTF16TextRange],
         foreground: Color? = .accentColor,
-        prioritizesMatch: Bool = false
+        prioritizesMatch: Bool = false,
+        style: SearchMatchStyle = .background,
+        focusedRange: UTF16TextRange? = nil,
+        flattensLineBreaks: Bool = false
     ) -> AttributedString {
+        func rendered(_ slice: Substring) -> AttributedString {
+            AttributedString(flattensLineBreaks ? flattened(slice) : String(slice))
+        }
         let bounds: [(start: Int, end: Int)] = ranges.compactMap { range in
             guard range.location >= 0, range.length > 0 else { return nil }
             let (end, overflow) = range.location.addingReportingOverflow(range.length)
@@ -34,7 +77,7 @@ enum MatchHighlighting {
             return (range.location, end)
         }
         let endpoints = Set(bounds.flatMap { [$0.start, $0.end] })
-        guard let finalOffset = endpoints.max() else { return AttributedString(text) }
+        guard let finalOffset = endpoints.max() else { return rendered(text[...]) }
 
         // Resolve all requested UTF-16 boundaries in one scalar walk. Seeking
         // separately from the string's start for every range repeats O(n)
@@ -59,7 +102,13 @@ enum MatchHighlighting {
             }
             .sorted { $0.lowerBound < $1.lowerBound }
 
-        guard let firstMatch = matched.first else { return AttributedString(text) }
+        guard let firstMatch = matched.first else { return rendered(text[...]) }
+        let focused = focusedRange.flatMap { range -> Range<String.Index>? in
+            let (end, overflow) = range.location.addingReportingOverflow(range.length)
+            guard !overflow, let startIndex = indices[range.location], let endIndex = indices[end],
+                  startIndex < endIndex else { return nil }
+            return startIndex..<endIndex
+        }
 
         var result = AttributedString()
         var cursor = text.startIndex
@@ -80,18 +129,35 @@ enum MatchHighlighting {
                   range.lowerBound < range.upperBound
             else { continue }
             if cursor < range.lowerBound {
-                result.append(AttributedString(String(text[cursor..<range.lowerBound])))
+                result.append(rendered(text[cursor..<range.lowerBound]))
             }
-            var segment = AttributedString(String(text[range]))
+            var segment = rendered(text[range])
             segment.inlinePresentationIntent = .stronglyEmphasized
-            segment.foregroundColor = foreground
+            let isFocused = focused == range
+            switch style {
+            case .background:
+                segment.swiftUI.backgroundColor = isFocused
+                    ? Color(red: 1, green: 0.65, blue: 0.12)
+                    : Color(red: 1, green: 0.85, blue: 0.49)
+                segment.swiftUI.foregroundColor = .black
+            case .underline:
+                segment.swiftUI.underlineStyle = .single
+                segment.swiftUI.foregroundColor = foreground
+                if isFocused {
+                    segment.swiftUI.backgroundColor = Color(red: 1, green: 0.85, blue: 0.49)
+                    segment.swiftUI.foregroundColor = .black
+                }
+            }
             result.append(segment)
             cursor = range.upperBound
         }
         if cursor < text.endIndex {
-            result.append(AttributedString(String(text[cursor..<text.endIndex])))
+            result.append(rendered(text[cursor..<text.endIndex]))
         }
         return result
     }
 
+    private static func flattened(_ text: Substring) -> String {
+        String(text.map { $0.isNewline ? " " : $0 })
+    }
 }

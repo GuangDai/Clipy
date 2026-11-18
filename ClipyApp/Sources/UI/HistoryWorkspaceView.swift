@@ -306,7 +306,7 @@ struct HistoryWorkspaceView: View {
                 List(selection: $selectedIDs) {
                     ForEach(rows, id: \.item.id) { row in
                         HistoryWorkspaceRow(row: row, thumbnails: thumbnails, sourceIcons: sourceIcons,
-                                            compact: compactRows)
+                                            compact: compactRows, isSearchResult: viewState.usesSearchResultRows)
                             .tag(row.item.id)
                             .contextMenu {
                                 rowContextMenu(for: row).disabled(isMutating || viewState.isLoadingFirstPage)
@@ -764,10 +764,12 @@ struct HistoryWorkspaceView: View {
 private struct HistoryWorkspaceRow: View {
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
+    @Environment(\.searchMatchStyle) private var searchMatchStyle
     let row: HistoryRow
     let thumbnails: ThumbnailStore
     let sourceIcons: SourceIconStore
     let compact: Bool
+    let isSearchResult: Bool
 
     private var kind: HistoryRowKind { HistoryRowKind.classify(effectiveTypeIdentifiers: row.typeIdentifiers) }
     private var symbol: String {
@@ -788,14 +790,12 @@ private struct HistoryWorkspaceRow: View {
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .top, spacing: 6) {
-                    Text(title).lineLimit(compact ? 1 : 2).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(primaryText)
+                        .lineLimit(isSearchResult || compact ? 1 : 2, reservesSpace: isSearchResult)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .help(row.title)
+                        .accessibilityLabel(Text(verbatim: primaryAccessibilityLabel))
                     if row.pinnedPosition != nil { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary) }
-                }
-                if let match = row.search, let snippet = match.snippet {
-                    Text(MatchHighlighting.highlighted(snippet, ranges: match.matchedRanges,
-                        foreground: nil, prioritizesMatch: true))
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(compact ? 1 : 2)
                 }
                 HStack {
                     if let source = row.lastSource {
@@ -804,6 +804,7 @@ private struct HistoryWorkspaceRow: View {
                     }
                     if row.copyCount > 1 {
                         Text("×\(row.copyCount)")
+                            .lineLimit(1)
                             .help(String(format: HistoryWorkspaceCopy.text("Copied %llu times", bundle: PanelActionsCopy.bundle(for: locale)),
                                          row.copyCount))
                     }
@@ -845,10 +846,15 @@ private struct HistoryWorkspaceRow: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var title: AttributedString {
-        guard let match = row.search, match.snippet == nil else { return AttributedString(row.title) }
-        return MatchHighlighting.highlighted(row.title, ranges: match.matchedRanges,
-            foreground: nil, prioritizesMatch: true)
+    private var primaryText: AttributedString {
+        isSearchResult
+            ? MatchHighlighting.resultText(for: row, foreground: nil, style: searchMatchStyle)
+            : AttributedString(row.title)
+    }
+
+    private var primaryAccessibilityLabel: String {
+        guard isSearchResult, let snippet = row.search?.snippet, !snippet.isEmpty else { return row.title }
+        return "\(row.title), \(snippet)"
     }
 }
 

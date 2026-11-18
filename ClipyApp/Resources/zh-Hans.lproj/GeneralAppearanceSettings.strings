@@ -64,4 +64,7 @@
 
 "Automatic text lines" = "自动文本行数";
 
-"Enter a font size from 1 to 200 pt and a line count from 1 to 100. Automatic uses the row density." = "输入 1–200 pt 的字号和 1–100 的行数。自动行数跟随列表密度。";
+"Enter a font size from 1 to 200 pt and a line count from 1 to 100. Automatic uses one line in search results." = "字号可设为 1–200 pt，行数可设为 1–100。自动模式下，搜索结果显示一行。";
+"Search highlights" = "搜索高亮";
+"Background" = "背景色";
+"Underline" = "下划线";

@@ -19,12 +19,25 @@ struct MatchHighlightingTests {
     @Test func selectedMatchesKeepTheirEmphasisWithAReadableForeground() {
         let result = MatchHighlighting.highlighted("a match", ranges: [
             UTF16TextRange(location: 2, length: 5)
-        ], foreground: PanelTheme.selectedForeground)
+        ], foreground: PanelTheme.selectedForeground, style: .underline)
         #expect(String(result.characters) == "a match")
         #expect(segments(of: result, emphasized: true) == ["match"])
         for run in result.runs where run.inlinePresentationIntent?.contains(.stronglyEmphasized) == true {
             #expect(run.foregroundColor == PanelTheme.selectedForeground)
+            #expect(run.underlineStyle == .single)
+            #expect(run.backgroundColor == nil)
         }
+    }
+
+    @Test func backgroundMarksBothHitsWithoutMarkingTheGap() {
+        let result = MatchHighlighting.highlighted("Hit\nthen hit", ranges: [
+            UTF16TextRange(location: 0, length: 3), UTF16TextRange(location: 9, length: 3)
+        ], flattensLineBreaks: true)
+        #expect(String(result.characters) == "Hit then hit")
+        let marked = result.runs.compactMap { run in
+            run.backgroundColor.map { _ in String(result.characters[run.range]) }
+        }
+        #expect(marked == ["Hit", "hit"])
     }
 
     // MARK: - Run-inspection helper

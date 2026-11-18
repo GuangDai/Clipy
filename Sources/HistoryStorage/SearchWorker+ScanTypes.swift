@@ -12,8 +12,8 @@ extension SearchWorker {
     /// work; a query matching thousands of rows must not pay it for the
     /// rows a bounded page drops, and every continuation page would
     /// otherwise rebuild them from scratch):
-    /// - `ready` carries the final frozen presentation (title matches and
-    ///   any lane whose construction is already O(1));
+    /// - `titleUTF16` retains the exact or regexp first match and defers
+    ///   finding further occurrences in the displayed title;
     /// - `titleRanges` defers the fuzzy title UTF-16 translation to page
     ///   materialization;
     /// - `bodyExcerpt` defers the 03b §8 body excerpt window, recording the
@@ -22,14 +22,20 @@ extension SearchWorker {
     ///   windows the full stored body in exact mode), and whether the
     ///   stored body continued past that prefix.
     internal enum DeferredSearchPresentation {
-        case ready(SearchPresentation)
+        case titleUTF16(firstRange: UTF16TextRange, additionalMatches: AdditionalSearchMatches)
         case titleRanges([Range<Int>])
         case bodyExcerpt(
             characterRanges: [Range<Int>],
             maximumCharacters: Int?,
             bodySuffixWasOmitted: Bool,
-            utf16Range: UTF16TextRange? = nil
+            utf16Range: UTF16TextRange? = nil,
+            additionalMatches: AdditionalSearchMatches? = nil
         )
+    }
+
+    internal enum AdditionalSearchMatches {
+        case exact(term: String)
+        case regexp(NSRegularExpression, literalPattern: String?)
     }
 
     /// The page-driven scan directive for order-preserving lanes (03b §8;

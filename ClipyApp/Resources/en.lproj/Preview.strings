@@ -45,3 +45,6 @@
 
 "More Sources" = "More sources";
 "Search match" = "Search match";
+"%@ of %@ matches shown" = "%@ of %@ matches shown";
+"Previous match" = "Previous match";
+"Next match" = "Next match";

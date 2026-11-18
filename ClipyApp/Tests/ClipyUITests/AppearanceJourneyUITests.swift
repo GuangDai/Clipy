@@ -74,6 +74,9 @@ final class AppearanceJourneyUITests: XCTestCase {
                            "Changing appearance must preserve row layout.")
         }
         chooseOption("Follow macOS", in: appearance, app: app, context: "restore system appearance")
+        let highlights = app.popUpButtons["clipy.settings.appearance.search-highlights"]
+        assertExists(highlights, timeout: 5, in: app, context: "search highlight style")
+        chooseOption("Underline", in: highlights, app: app, context: "underline search matches")
         let motion = app.popUpButtons["clipy.settings.appearance.motion-speed"]
         assertExists(motion, timeout: 5, in: app, context: "ten-level animation speed")
         chooseOption("1 — Slowest", in: motion, app: app, context: "slower motion")
@@ -114,6 +117,8 @@ final class AppearanceJourneyUITests: XCTestCase {
         XCTAssertEqual(font.value as? String, "17.5")
         XCTAssertEqual(lines.value as? String, "5")
         XCTAssertEqual(motion.value as? String, "1 — Slowest")
+        XCTAssertEqual(highlights.value as? String, "Underline")
+        chooseOption("Background", in: highlights, app: app, context: "restore background highlighting")
         chooseOption("10 — Fastest", in: motion, app: app, context: "restore fastest motion")
         XCTAssertTrue(waitUntil(timeout: 5) { motion.value as? String == "10 — Fastest" },
                       diagnostic(app, context: "motion returns to fastest"))

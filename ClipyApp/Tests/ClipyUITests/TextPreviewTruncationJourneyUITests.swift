@@ -99,7 +99,7 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
 
         // A different real capture reuses the same panel/preview surface.
         // Wait for its text, not merely the notice disappearing during load.
-        let shortText = "clipy-short-preview-after-truncation"
+        let shortText = "clipy-short-preview first marker, then another marker"
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setString(shortText, forType: .string))
         app.typeKey("c", modifierFlags: [.command, .shift])
@@ -114,6 +114,44 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) {
             body.exists && self.text(of: body) == shortText && !notice.exists
         }, "Short-text preview must retire the preceding truncation notice")
+
+        search.click()
+        app.typeText("marker")
+        XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 && shortRow.exists })
+        HistoryJourneyControls.select(shortRow, in: app)
+        let position = preview.descendants(matching: .any)["clipy.preview.matches.position"]
+        let previous = preview.buttons["clipy.preview.matches.previous"]
+        let next = preview.buttons["clipy.preview.matches.next"]
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            position.exists && self.text(of: position) == "1 of 2 matches shown" && next.isHittable
+        }, preview.debugDescription)
+        XCTAssertFalse(previous.isEnabled)
+        next.click()
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            self.text(of: position) == "2 of 2 matches shown" && previous.isHittable && !next.isEnabled
+        }, preview.debugDescription)
+        let attachment = XCTAttachment(screenshot: preview.screenshot())
+        attachment.name = "Two highlighted occurrences in one expanded search preview"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        previous.click()
+        XCTAssertTrue(waitUntil(timeout: 5) { self.text(of: position) == "1 of 2 matches shown" })
+
+        shortRow.rightClick()
+        let showDetails = app.menuItems["Show Details"]
+        XCTAssertTrue(showDetails.waitForExistence(timeout: 5))
+        showDetails.click()
+        let details = app.descendants(matching: .any)["clipy.details.root"]
+        let evidence = details.descendants(matching: .any)["clipy.details.search-match"]
+        XCTAssertTrue(waitUntil(timeout: 5) { evidence.exists && self.text(of: evidence).contains("marker") })
+        details.buttons["clipy.details.show-preview.public.utf8-plain-text"].click()
+        let detailsPosition = details.descendants(matching: .any)["clipy.details.text-preview.public.utf8-plain-text.matches.position"]
+        let detailsNext = details.buttons["clipy.details.text-preview.public.utf8-plain-text.matches.next"]
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            detailsPosition.exists && self.text(of: detailsPosition) == "1 of 2 matches shown" && detailsNext.isHittable
+        }, details.debugDescription)
+        detailsNext.click()
+        XCTAssertTrue(waitUntil(timeout: 5) { self.text(of: detailsPosition) == "2 of 2 matches shown" })
     }
 
     @MainActor

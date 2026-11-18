@@ -42,6 +42,7 @@ struct ClipyAppMain: App {
         Settings {
             SettingsRootView(appDelegate: appDelegate)
                 .appLanguage()
+                .searchMatchAppearance()
                 // Settings defaults to disabled resize interaction even when
                 // contentMinSize allows a range. Let SwiftUI own both the
                 // interaction behavior and the existing content constraints.

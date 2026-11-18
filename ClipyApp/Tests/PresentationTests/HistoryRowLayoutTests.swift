@@ -40,25 +40,10 @@ struct HistoryRowLayoutTests {
     func customTypographySizesRows() throws {
         let font = try #require(HistoryRowFontSize(rawValue: "17.5"))
         let lines = try #require(HistorySnippetLineCount(rawValue: "5"))
-        let row = PanelContentFit.RowDescriptor(
-            isImageRow: false,
-            titleLineCount: lines.baseLineLimit(density: .compact),
-            snippetLineCount: 0
-        )
+        let row = PanelContentFit.RowDescriptor(textLineCount: lines.baseLineLimit(density: .compact))
         #expect(font.points == 17.5)
         #expect(PanelContentFit.titleLineHeight(for: font) == 21)
         #expect(PanelContentFit.rowHeight(row, density: .compact, fontSize: font) == 113)
-    }
-
-    @Test("text rows use a 16/24pt slot; image rows get 44/56pt")
-    func densityRowMetrics() {
-        #expect(PanelTheme.thumbnailSize(for: .compact) == 16)
-        #expect(PanelTheme.thumbnailSize(for: .comfortable) == 24)
-        #expect(PanelTheme.imageThumbnailHeight(for: .compact) == 44)
-        #expect(PanelTheme.imageThumbnailHeight(for: .comfortable) == 56)
-        // The taller image slot adds no vertical padding beyond density.
-        #expect(PanelTheme.rowVerticalPadding(for: .compact) == 2)
-        #expect(PanelTheme.rowVerticalPadding(for: .comfortable) == 4)
     }
 
 }

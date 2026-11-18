@@ -8,8 +8,8 @@ extension SearchWorker {
     // MARK: - Exact mode (03b §8)
 
     /// Case-insensitive literal substring search (03b §8): title first and,
-    /// only on title miss, the full bounded `searchBody`; the first match
-    /// wins; the default row order is preserved. `.literal` pins the
+    /// only on title miss, the full bounded `searchBody`. The first match
+    /// selects the displayed excerpt; the default row order is preserved. `.literal` pins the
     /// "literal" half of the frozen definition — no canonical-equivalence
     /// folding, only case-insensitivity.
     internal func evaluateExact(
@@ -133,13 +133,13 @@ extension SearchWorker {
                 scanTracker.appendIfRetained(
                     EvaluatedRow(
                         corpusRow: row,
-                        search: .ready(SearchPresentation(
-                            snippet: nil,
-                            matchedRanges: [UTF16TextRange(
+                        search: .titleUTF16(
+                            firstRange: UTF16TextRange(
                                 location: found.utf16Offset,
                                 length: found.utf16Length
-                            )]
-                        )),
+                            ),
+                            additionalMatches: .exact(term: term)
+                        ),
                         anchor: Self.defaultOrderAnchor(for: row)
                     ),
                     to: &evaluated
@@ -206,7 +206,8 @@ extension SearchWorker {
                         utf16Range: UTF16TextRange(
                             location: found.utf16Offset,
                             length: found.utf16Length
-                        )
+                        ),
+                        additionalMatches: .exact(term: term)
                     ),
                     anchor: Self.defaultOrderAnchor(for: row)
                 ),

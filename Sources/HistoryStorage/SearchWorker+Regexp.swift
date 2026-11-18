@@ -18,7 +18,7 @@ extension SearchWorker {
     /// admission rejects an invalid or known unsafe pattern BEFORE any
     /// scanning; evaluation scans at most the first 1,000 Characters of
     /// title and, only on title miss, the first 1,000 Characters of body;
-    /// the first match wins; the default row order is preserved. The body
+    /// the first match selects presentation; the default row order is preserved. The body
     /// excerpt windows only that bounded prefix, while its trailing ellipsis
     /// still records when the stored body continues beyond the scan bound.
     ///
@@ -139,13 +139,13 @@ extension SearchWorker {
                 scanTracker.appendIfRetained(
                     EvaluatedRow(
                         corpusRow: row,
-                        search: .ready(SearchPresentation(
-                            snippet: nil,
-                            matchedRanges: [UTF16TextRange(
+                        search: .titleUTF16(
+                            firstRange: UTF16TextRange(
                                 location: match.location,
                                 length: match.length
-                            )]
-                        )),
+                            ),
+                            additionalMatches: .regexp(regex, literalPattern: literalPattern)
+                        ),
                         anchor: Self.defaultOrderAnchor(for: row)
                     ),
                     to: &evaluated
@@ -200,7 +200,8 @@ extension SearchWorker {
                         utf16Range: UTF16TextRange(
                             location: match.location,
                             length: match.length
-                        )
+                        ),
+                        additionalMatches: .regexp(regex, literalPattern: literalPattern)
                     ),
                     anchor: Self.defaultOrderAnchor(for: row)
                 ),

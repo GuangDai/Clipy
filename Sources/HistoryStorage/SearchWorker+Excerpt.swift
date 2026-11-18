@@ -49,7 +49,9 @@ extension SearchWorker {
         characterRanges: [Range<Int>],
         snippetLimit: Int,
         bodySuffixWasOmitted: Bool = false,
-        utf16Range: UTF16TextRange? = nil
+        utf16Range: UTF16TextRange? = nil,
+        additionalMatches: AdditionalSearchMatches? = nil,
+        regexpPresentationDeadline: ContinuousClock.Instant? = nil
     ) -> (snippet: String, ranges: [UTF16TextRange]) {
         let windowCapacity = snippetLimit - 2
         // Exact/regexp matches can end inside an extended grapheme cluster.
@@ -209,10 +211,17 @@ extension SearchWorker {
                 utf16Range.location + utf16Range.length,
                 windowUpperIndex.utf16Offset(in: body)
             )
-            let ranges = lower < upper ? [UTF16TextRange(
-                location: lower - windowStart + (hasLeadingEllipsis ? 1 : 0),
-                length: upper - lower
-            )] : []
+            let additional = additionalMatches.map { matcher in
+                followingMatches(after: utf16Range, using: matcher, windowText: windowText,
+                                 windowStart: windowStart, regexpInput: String(body),
+                                 regexpPresentationDeadline: regexpPresentationDeadline)
+            } ?? []
+            let first = lower < upper
+                ? [UTF16TextRange(location: lower - windowStart, length: upper - lower)] : []
+            let ellipsisOffset = hasLeadingEllipsis ? 1 : 0
+            let ranges = (first + additional).map {
+                UTF16TextRange(location: $0.location + ellipsisOffset, length: $0.length)
+            }
             return (snippet, ranges)
         }
 
@@ -239,6 +248,37 @@ extension SearchWorker {
             )
         }
         return (snippet, ranges)
+    }
+
+    /// Earlier matching selects the window and its first highlighted range.
+    /// Collect more occurrences only while materializing rows the UI receives.
+    internal static func followingMatches(
+        after first: UTF16TextRange, using matcher: AdditionalSearchMatches,
+        windowText: String, windowStart: Int, regexpInput: @autoclosure () -> String,
+        regexpPresentationDeadline: ContinuousClock.Instant?
+    ) -> [UTF16TextRange] {
+        let windowLength = windowText.utf16.count
+        let start = max(0, first.location + first.length - windowStart)
+        guard start < windowLength else { return [] }
+        let limit = SearchTextOccurrences.resultRangeLimit - 1
+        switch matcher {
+        case .exact(let term):
+            return SearchTextOccurrences.literalRanges(
+                in: windowText, term: term, options: [.literal, .caseInsensitive],
+                scope: start..<windowLength, limit: limit
+            )
+        case .regexp(let pattern, let literalPattern):
+            guard let regexpPresentationDeadline, ContinuousClock.now < regexpPresentationDeadline else { return [] }
+            let ranges = SearchTextOccurrences.regexpRanges(
+                in: regexpInput(), pattern: pattern, literalPattern: literalPattern,
+                scope: (windowStart + start)..<(windowStart + windowLength),
+                limit: limit, deadline: regexpPresentationDeadline
+            )
+            return ranges.map { range in
+                let location = range.location - windowStart
+                return .init(location: location, length: min(range.length, windowLength - location))
+            }
+        }
     }
 
     /// Expand only the window anchor to complete Characters. Keep an empty

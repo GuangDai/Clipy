@@ -667,6 +667,13 @@ final class HistoryViewState {
         !searchText.isEmpty
     }
 
+    var usesSearchResultRows: Bool { isSearchActive || hasActiveFilters }
+
+    var textualSearch: (term: String, mode: SearchMode)? {
+        guard case .search(let term, let mode) = admittedKind else { return nil }
+        return (term, mode)
+    }
+
     var isFuzzyTextSearch: Bool {
         if case .search(_, .fuzzy) = admittedKind { return true }
         return false

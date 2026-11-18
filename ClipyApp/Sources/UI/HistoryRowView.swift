@@ -47,6 +47,7 @@ struct HistoryRowView: View {
     private let density: HistoryRowDensity
     private let snippetLineCount: HistorySnippetLineCount
     private let fontSize: HistoryRowFontSize
+    private let forSearchResults: Bool
     private let isSelected: Bool
     private let thumbnails: ThumbnailStore
     private let dragSource: HistoryListDraggingView?
@@ -65,6 +66,7 @@ struct HistoryRowView: View {
 
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
+    @Environment(\.searchMatchStyle) private var searchMatchStyle
 
     init(
         row: HistoryRow,
@@ -72,6 +74,7 @@ struct HistoryRowView: View {
         density: HistoryRowDensity = .compact,
         snippetLineCount: HistorySnippetLineCount = .automatic,
         fontSize: HistoryRowFontSize = .medium,
+        forSearchResults: Bool = false,
         isSelected: Bool = false,
         shortcuts: PanelShortcutSettings = PanelShortcutSettings(),
         areShortcutsEnabled: Bool = true,
@@ -89,6 +92,7 @@ struct HistoryRowView: View {
         self.density = density
         self.snippetLineCount = snippetLineCount
         self.fontSize = fontSize
+        self.forSearchResults = forSearchResults
         self.isSelected = isSelected
         self.shortcuts = shortcuts
         self.areShortcutsEnabled = areShortcutsEnabled
@@ -103,35 +107,32 @@ struct HistoryRowView: View {
     }
 
     private func rowLayout(copyTime: HistoryRowCopyTime) -> some View {
-        HStack(alignment: .center, spacing: PanelTheme.spacingSmall) {
-            if HistoryRowKind.classify(effectiveTypeIdentifiers: row.typeIdentifiers) != .text {
+        let descriptor = rowDescriptor
+        return HStack(alignment: .center, spacing: PanelTheme.spacingSmall) {
+            let kind = HistoryRowKind.classify(effectiveTypeIdentifiers: row.typeIdentifiers)
+            if kind != .text {
                 thumbnail
+            } else if forSearchResults {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 12))
+                    .foregroundStyle(secondaryForeground)
+                    .frame(width: PanelTheme.thumbnailSize(for: density))
+                    .accessibilityHidden(true)
             }
-            VStack(alignment: .leading, spacing: PanelTheme.spacingXXSmall) {
-                HStack(alignment: .firstTextBaseline, spacing: PanelTheme.spacingXSmall) {
-                    title
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if row.sourceCount > 1 {
-                        Image(systemName: "square.on.square")
-                            .font(.caption)
-                            .foregroundStyle(secondaryForeground)
-                            .help(PreviewCopy.text("Multiple Applications"))
-                            .accessibilityLabel(PreviewCopy.text("Multiple Applications"))
-                    }
-                    pinBadge
-                    HistoryCopyTimeLabel(copyTime: copyTime)
-                        .font(PanelTheme.timestampFont(for: fontSize))
+            HStack(alignment: .firstTextBaseline, spacing: PanelTheme.spacingXSmall) {
+                title(lineCount: descriptor.textLineCount)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if row.sourceCount > 1 {
+                    Image(systemName: "square.on.square")
+                        .font(.caption)
                         .foregroundStyle(secondaryForeground)
+                        .help(PreviewCopy.text("Multiple Applications"))
+                        .accessibilityLabel(PreviewCopy.text("Multiple Applications"))
                 }
-                if let search = row.search, let snippet = search.snippet {
-                    Text(MatchHighlighting.highlighted(snippet, ranges: search.matchedRanges,
-                        foreground: isSelected ? PanelTheme.selectedForeground : .accentColor,
-                        prioritizesMatch: true))
-                        .font(PanelTheme.snippetFont(for: fontSize))
-                        .foregroundStyle(secondaryForeground)
-                        .lineLimit(rowDescriptor.snippetLineCount)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                pinBadge
+                HistoryCopyTimeLabel(copyTime: copyTime)
+                    .font(PanelTheme.timestampFont(for: fontSize))
+                    .foregroundStyle(secondaryForeground)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -141,7 +142,7 @@ struct HistoryRowView: View {
         // Like Maccy's ListItemView, the row's dimensions depend only on
         // content kind/typography, never on the asynchronous thumbnail.
         .frame(height: PanelContentFit.rowHeight(
-            rowDescriptor,
+            descriptor,
             density: density, fontSize: fontSize
         ) - 2 * PanelContentFit.listRowVerticalInset)
         .background {
@@ -247,7 +248,7 @@ struct HistoryRowView: View {
     /// Rendering and content fitting share the same line counts so explicit
     /// multi-line preferences cannot outgrow the row's fixed frame (V2-11).
     private var rowDescriptor: PanelContentFit.RowDescriptor {
-        .init(row: row, snippetLineLimit: snippetLineCount.baseLineLimit(density: density))
+        .init(row: row, linePreference: snippetLineCount, density: density, forSearchResults: forSearchResults)
     }
 
     // MARK: Accessibility action dispatch (V2-07 §9)
@@ -293,7 +294,7 @@ struct HistoryRowView: View {
     /// state retains only a framework-neutral eager raster (01 §6; 04 §9).
     private var thumbnail: some View {
         Group {
-            if isImageRow {
+            if rowDescriptor.usesLargeImageSlot {
                 imageThumbnail
             } else {
                 standardThumbnail
@@ -326,16 +327,6 @@ struct HistoryRowView: View {
             }
         }
         .accessibilityHidden(true)
-    }
-
-    /// True when the row's effective identifiers classify as the image
-    /// family — the same `HistoryRowKind` vocabulary the header filter and
-    /// the fallback symbol share, so the slot choice, the symbol, and the
-    /// type filter always agree.
-    private var isImageRow: Bool {
-        HistoryRowKind.classify(
-            effectiveTypeIdentifiers: row.typeIdentifiers
-        ) == .image
     }
 
     /// The retained eager raster as a SwiftUI image, or nil while the fetch
@@ -445,24 +436,17 @@ struct HistoryRowView: View {
 
     // MARK: Title
 
-    /// A title match has `snippet == nil` and UTF-16 ranges relative to the
-    /// title; when a snippet is present the ranges belong to that excerpt, so
-    /// the title renders unhighlighted (03b §8).
-    private var title: some View {
-        Text(displayedTitle)
+    private func title(lineCount: Int) -> some View {
+        let text = forSearchResults ? MatchHighlighting.resultText(
+            for: row, foreground: isSelected ? PanelTheme.selectedForeground : .accentColor,
+            style: searchMatchStyle
+        ) : AttributedString(row.title)
+        return Text(text)
             .font(PanelTheme.titleFont(for: fontSize))
             .fontWeight(.regular)
-            .lineLimit(rowDescriptor.titleLineCount)
+            .lineLimit(lineCount, reservesSpace: forSearchResults)
             .multilineTextAlignment(.leading)
             .help(row.title)
-    }
-
-    private var displayedTitle: AttributedString {
-        guard let search = row.search, search.snippet == nil else {
-            return AttributedString(row.title)
-        }
-        return MatchHighlighting.highlighted(row.title, ranges: search.matchedRanges,
-            foreground: isSelected ? PanelTheme.selectedForeground : .accentColor, prioritizesMatch: true)
     }
 
     /// The same count with translated plural-aware VoiceOver copy (§9/§10).

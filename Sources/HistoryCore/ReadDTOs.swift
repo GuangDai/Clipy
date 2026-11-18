@@ -15,7 +15,8 @@ public struct UTF16TextRange: Sendable, Hashable {
 
 /// Presentation evidence for a search-matched row: an optional bounded body
 /// excerpt plus the UTF-16 ranges that matched within the title (when
-/// `snippet == nil`) or within `snippet`.
+/// `snippet == nil`) or within `snippet`. A fuzzy match can span several
+/// ranges. The array describes displayed evidence, without a whole-item count.
 /// Owning spec: docs/architecture.md
 public struct SearchPresentation: Sendable, Hashable {
     public let snippet: String?
