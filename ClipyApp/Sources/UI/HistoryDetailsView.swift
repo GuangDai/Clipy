@@ -161,6 +161,7 @@ struct HistoryDetailsView: View {
 
     @State private var phase: DetailsPhase = .loading
     @State private var factsPosition: ChangePosition?
+    @State private var revisionsPosition: ChangePosition?
     @State private var basis: ContentBasis = .effective
     @State private var showsStaleNotice = false
     @State private var shouldLoadLatestReference = false
@@ -182,13 +183,17 @@ struct HistoryDetailsView: View {
     private struct FactsRequest: Equatable {
         let item: HistoryItemReference
         let position: ChangePosition
+        let reloadRevisions: Bool
     }
 
     private var factsRequest: FactsRequest? {
         guard !showsEditor, case .loaded(let details, _) = phase, details.item == currentItem,
-              let position = viewState.sourceCompletionPosition,
-              factsPosition.map({ position > $0 }) ?? true else { return nil }
-        return FactsRequest(item: details.item, position: position)
+              let position = viewState.sourceCompletionPosition else { return nil }
+        let reloadRevisions = viewState.revisionPrunePosition.map { prune in
+            revisionsPosition.map { prune > $0 } ?? true
+        } ?? false
+        guard reloadRevisions || (factsPosition.map { position > $0 } ?? true) else { return nil }
+        return FactsRequest(item: details.item, position: position, reloadRevisions: reloadRevisions)
     }
 
     init(viewState: HistoryViewState, item: HistoryItemReference,
@@ -322,6 +327,7 @@ struct HistoryDetailsView: View {
             showsEditor = false
             phase = .loading
             factsPosition = nil
+            revisionsPosition = nil
         }
         .onChange(of: basis) { _, _ in
             cancelExport()
@@ -791,6 +797,7 @@ struct HistoryDetailsView: View {
                 isCancelled: Task.isCancelled
             ) else { return }
             factsPosition = positionAtStart
+            revisionsPosition = positionAtStart
             phase = .loaded(details, content)
         } catch let failure as HistoryFailure {
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
@@ -817,9 +824,20 @@ struct HistoryDetailsView: View {
               reconcileSurfacePurge(viewState.surfacePurge), loadFence.isActive else { return }
         let generation = loadFence.generation
         do {
+            if request.reloadRevisions {
+                let updated = try await viewState.details(for: request.item.id)
+                guard ownsFactsRequest(request, at: generation), case .loaded(_, let content) = phase else { return }
+                if updated.item.contentVersion > request.item.contentVersion {
+                    invalidateLoadedDetails(as: .changed)
+                } else if updated.item == request.item {
+                    factsPosition = request.position
+                    revisionsPosition = request.position
+                    phase = .loaded(updated, content)
+                }
+                return
+            }
             let row = try await viewState.detailRow(for: request.item.id, atLeast: request.position)
-            guard !Task.isCancelled, factsRequest == request,
-                  reconcileSurfacePurge(viewState.surfacePurge), loadFence.owns(generation),
+            guard ownsFactsRequest(request, at: generation),
                   case .loaded(let details, let content) = phase else { return }
             factsPosition = request.position
             if row.item.contentVersion > details.item.contentVersion {
@@ -838,12 +856,16 @@ struct HistoryDetailsView: View {
                 occurrence: occurrence, pinnedPosition: row.pinnedPosition
             ), content)
         } catch {
-            guard !Task.isCancelled, factsRequest == request,
-                  reconcileSurfacePurge(viewState.surfacePurge), loadFence.owns(generation) else { return }
+            guard ownsFactsRequest(request, at: generation) else { return }
             if let failure = error as? HistoryFailure, case .notFound = failure {
                 invalidateLoadedDetails(as: .removed)
             }
         }
+    }
+
+    private func ownsFactsRequest(_ request: FactsRequest, at generation: Int) -> Bool {
+        !Task.isCancelled && factsRequest == request
+            && reconcileSurfacePurge(viewState.surfacePurge) && loadFence.owns(generation)
     }
 
     @MainActor
@@ -1480,6 +1502,7 @@ private struct RevisionRow: View {
                 .disabled(revision.isActive)
                 .help(PanelActionsCopy.format("Revert to %@", revision.title, bundle: copyBundle))
                 .accessibilityLabel(PanelActionsCopy.format("Revert to %@", revision.title, bundle: copyBundle))
+                .accessibilityIdentifier("clipy.details.revision.revert." + revision.id.rawValue.uuidString)
                 .accessibilityHint(
                     PanelActionsCopy.text("Restores this revision as the item's current content.", bundle: copyBundle)
                 )

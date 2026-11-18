@@ -11,9 +11,12 @@
 /// before singleton update → `.persistence(.transaction)`) needs the
 /// storage-side transaction-injection seam and stays in
 /// `Tests/HistoryStorageTests/WS13TransactionFailureTests.swift`.
+import AppKit
 import Foundation
 import HistoryCore
 import HistoryStorage
+import PasteboardAdapter
+import SwiftUI
 @testable import ClipyApp
 import Testing
 
@@ -133,5 +136,88 @@ struct WS13ComposedDetailsReviseOCCAndRevisionsTests {
         let afterIncoherent = try await viewState.details(for: inserted.id)
         #expect(afterIncoherent.revisions.count == 1)
         #expect(afterIncoherent.item.contentVersion.rawValue == 2)
+    }
+
+    @Test @MainActor
+    func pruningRevisionsRefreshesAnOpenDetailsViewWithoutChangingItsCopy() async throws {
+        try ComposedSupport.requireUsablePasteboard()
+        let history = try await ComposedSupport.openMemoryHistory()
+        let captured = try await history.perform(.capture(ComposedSupport.textCapture(
+            "Original content", observedAt: Date(timeIntervalSinceReferenceDate: 700_201_900)
+        )))
+        var current = try #require(ComposedSupport.insertedReference(from: captured, "capture for revision pruning"))
+        let effectiveText = "Current revised content"
+        for replacement in ["Older revision", effectiveText] {
+            let receipt = try await history.perform(.revise(RevisionRequest(
+                itemID: current.id, expected: current.contentVersion,
+                intent: .replace(RevisionDraft(decisions: [RevisionDecision(
+                    typeIdentifier: ComposedSupport.plainTextTypeIdentifier,
+                    action: .replace(bytes: Data(replacement.utf8))
+                )]))
+            )))
+            current = try #require(ComposedSupport.revisedReference(from: receipt, "prepare two retained revisions"))
+        }
+        let opening = try await history.details(for: current.id)
+        let retired = try #require(opening.revisions.first(where: { !$0.isActive }))
+        let active = try #require(opening.revisions.first(where: { $0.isActive }))
+        let retiredControl = "clipy.details.revision.revert." + retired.id.rawValue.uuidString
+        let activeControl = "clipy.details.revision.revert." + active.id.rawValue.uuidString
+
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history, adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
+        defer { composition.stop() }
+        let workspace = composition.historyWorkspaceViewState
+        let host = NSHostingView(rootView: HistoryDetailsView(viewState: workspace, item: current))
+        let frame = NSRect(x: 0, y: 0, width: 540, height: 600)
+        host.frame = frame
+        let window = NSWindow(contentRect: frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.close() }
+
+        try #require(await ComposedSupport.waitFor {
+            host.layoutSubtreeIfNeeded()
+            return element(retiredControl, in: window) != nil && element(activeControl, in: window) != nil
+        })
+
+        let receipt = try await composition.viewState.applyRetentionPolicies(HistoryRetentionPolicies(
+            age: nil, storage: nil, revisions: RevisionRetention(maxRevisionsPerItem: 1, maxRevisionBytesPerItem: nil)
+        ))
+        guard case .committed(let commit) = receipt,
+              case .retentionPoliciesSet(retiredItems: 0, prunedRevisions: 1) = commit.outcome else {
+            Issue.record("Expected the policy to prune exactly the inactive revision")
+            return
+        }
+
+        try #require(await ComposedSupport.waitFor {
+            host.layoutSubtreeIfNeeded()
+            return element(retiredControl, in: window) == nil && element(activeControl, in: window) != nil
+        })
+        let retained = try await history.details(for: current.id)
+        #expect(retained.item == current)
+        let copy = try #require(element("clipy.details.copy", in: window))
+        let copyPressed = copy.accessibilityPerformPress()
+        try #require(copyPressed)
+        let effectiveBytes = Data(effectiveText.utf8)
+        #expect(await ComposedSupport.waitFor { pasteboard.data(forType: .string) == effectiveBytes })
+    }
+
+    @MainActor
+    private func element(_ identifier: String, in window: NSWindow) -> (any NSAccessibilityProtocol)? {
+        var pending: [Any] = [window]
+        var index = 0
+        while index < pending.count, index < 256 {
+            let next = pending[index]
+            index += 1
+            guard let node = next as? any NSAccessibilityProtocol else { continue }
+            if node.accessibilityIdentifier() == identifier { return node }
+            pending.append(contentsOf: node.accessibilityChildren() ?? [])
+        }
+        return nil
     }
 }

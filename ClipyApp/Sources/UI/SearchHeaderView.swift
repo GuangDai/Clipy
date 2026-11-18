@@ -407,7 +407,7 @@ struct SearchHeaderView: View {
                 openOptions(expressionGuide: true)
             }
         } label: {
-            queryMenuLabel("Match", value: viewState.searchMode == .regexp
+            queryMenuLabel(viewState.searchMode == .regexp
                 ? HistorySearchCopy.text("Regex", bundle: copyBundle) : modeName(viewState.searchMode))
         }
         .menuStyle(.borderlessButton)
@@ -436,7 +436,7 @@ struct SearchHeaderView: View {
                 bundle: copyBundle
             ))
         } label: {
-            queryMenuLabel("Sort", value: compactSortName)
+            queryMenuLabel(compactSortName)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
@@ -447,9 +447,8 @@ struct SearchHeaderView: View {
         .accessibilityIdentifier("clipy.search.sort")
     }
 
-    private func queryMenuLabel(_ key: String, value: String) -> some View {
+    private func queryMenuLabel(_ value: String) -> some View {
         HStack(spacing: 3) {
-            Text(HistorySearchCopy.text(key, bundle: copyBundle)).foregroundStyle(.secondary)
             Text(value).fontWeight(.medium)
             Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
         }
@@ -462,6 +461,8 @@ struct SearchHeaderView: View {
         switch viewState.sortOrder {
         case .newestFirst: HistorySearchCopy.text("Newest", bundle: copyBundle)
         case .oldestFirst: HistorySearchCopy.text("Oldest", bundle: copyBundle)
+        case .automatic where viewState.searchMode == .fuzzy || viewState.searchMode == .expression:
+            HistorySearchCopy.text("Pinned, then relevance", bundle: copyBundle)
         case .automatic, .mostCopied: HistorySearchCopy.sortTitle(viewState.sortOrder, bundle: copyBundle)
         }
     }

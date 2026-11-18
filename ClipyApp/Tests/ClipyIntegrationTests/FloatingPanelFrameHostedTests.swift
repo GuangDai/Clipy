@@ -102,6 +102,30 @@ struct FloatingPanelFrameHostedTests {
         #expect(panel.frame.height == PanelGeometry.minimumHeight)
     }
 
+    @Test
+    func temporaryWarningHeightDoesNotMoveThePanelPermanently() throws {
+        let restoreGeometry = isolatePersistedPanelGeometryKeys()
+        defer { restoreGeometry() }
+        let visible = try #require(NSScreen.main ?? NSScreen.screens.first).visibleFrame
+        try #require(visible.height >= 500)
+        PanelGeometry.persistSize(contentWidth: 360, height: 420, to: .standard)
+        let owner = AppDelegate()
+        let panel = FloatingPanel(rootView: PanelRootView(appDelegate: owner), previewState: owner.previewState,
+                                  onClosed: {})
+        defer { panel.close() }
+        panel.open(at: .center, statusItemButtonScreenFrame: nil)
+        panel.fitToContent(idealHeight: 220)
+        let original = NSRect(x: panel.frame.minX, y: visible.minY + 20, width: panel.frame.width, height: 220)
+        panel.setFrame(original, display: false)
+        panel.windowDidMove(Notification(name: NSWindow.didMoveNotification, object: panel))
+
+        panel.fitToContent(idealHeight: 360)
+        #expect(panel.frame.minY == visible.minY)
+        #expect(panel.frame.maxY > original.maxY)
+        panel.fitToContent(idealHeight: 220)
+        #expect(panel.frame == original)
+    }
+
     @Test(arguments: [false, true])
     func closeDuringLiveResizePreservesPreferencesAndReopeningFitsContent(settleAfterReopen: Bool) throws {
         let restoreGeometry = isolatePersistedPanelGeometryKeys()

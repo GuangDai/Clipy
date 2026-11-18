@@ -90,6 +90,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// The latest content-fit demand (the oracle's ideal height), retained
     /// so the live-resize settle boundary and a later open can re-apply it.
     private var pendingContentFitHeight: CGFloat?
+    /// Desired top edge before temporarily fitting taller content to the screen.
+    private var contentFitTopEdge: CGFloat?
 
     /// Content fit is suspended while the user drags a resize edge; the
     /// settle boundary persists the dragged height as the new ceiling and
@@ -311,7 +313,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             screens: screens,
             lastPositionAnchor: Self.savedAnchor()
         )
-        setFrameProgrammatically(NSRect(origin: origin, size: size), display: false)
+        let openingFrame = NSRect(origin: origin, size: size)
+        contentFitTopEdge = openingFrame.maxY
+        setFrameProgrammatically(openingFrame, display: false)
         if !isPresented {
             motionPresentation.play(duration: presentationDuration(screen))
         }
@@ -393,6 +397,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             height: size.height
         )
         guard fitted != frame else { return }
+        contentFitTopEdge = fitted.maxY
         setFrameProgrammatically(fitted, display: isPresented)
     }
 
@@ -508,6 +513,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// own child window and never enters this frame.
     func windowDidMove(_ notification: Notification) {
         guard !isProgrammaticMove else { return }
+        contentFitTopEdge = frame.maxY
         persistAnchor()
         // Child windows follow a drag, but their preferred side can become
         // offscreen. Recompute preview placement on the new parent frame.
@@ -596,6 +602,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
                 display: isPresented
             )
         }
+        contentFitTopEdge = frame.maxY
         persistAnchor()
         applyContentFit()
         isSettlingLiveResize = false
@@ -644,7 +651,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         guard fitted != frame.height else { return }
         var newFrame = NSRect(
             x: frame.minX,
-            y: frame.maxY - fitted,
+            y: (contentFitTopEdge ?? frame.maxY) - fitted,
             width: frame.width,
             height: fitted
         )

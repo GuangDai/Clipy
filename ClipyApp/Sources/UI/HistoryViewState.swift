@@ -265,7 +265,7 @@ final class HistoryViewState {
     /// never republishes it, so the composition connects them directly.
     var onCommittedSurfacePurge:
         @MainActor @Sendable (HistorySurfacePurge, ChangePosition?) -> Void = { _, _ in }
-    var onCommittedRetention: @MainActor @Sendable (ChangePosition) -> Void = { _ in }
+    var onCommittedRetention: @MainActor @Sendable (ChangePosition, Bool) -> Void = { _, _ in }
 
     /// Content-free accessibility handoff for one settled search intent.
     /// Only the current query generation's first authoritative observation
@@ -383,6 +383,7 @@ final class HistoryViewState {
     /// first page while the observer catches up to continuing writes.
     private var latestInvalidatingReceiptPosition: ChangePosition?
     private(set) var retentionChangePosition: ChangePosition?
+    private(set) var revisionPrunePosition: ChangePosition?
 
     /// Rows-epoch counter. Bumped on every observation restart AND on every
     /// applied observed page, so a one-shot pagination result captured against
@@ -1022,7 +1023,10 @@ final class HistoryViewState {
         publishRetentionChange(for: commit)
     }
 
-    func acceptPeerRetention(at position: ChangePosition) {
+    func acceptPeerRetention(at position: ChangePosition, prunedRevisions: Bool) {
+        if prunedRevisions, revisionPrunePosition.map({ position > $0 }) ?? true {
+            revisionPrunePosition = position
+        }
         guard retentionChangePosition.map({ position > $0 }) ?? true else { return }
         recordCommittedPosition(position)
         // Retention does not identify any specific row. Continue publishing
@@ -1145,11 +1149,11 @@ final class HistoryViewState {
             guard !Task.isCancelled,
                   await self?.prepareSearchConditions() == true, !Task.isCancelled,
                   let kind = self?.admittedKind, let filter = self?.historyFilter else { return }
-            let condition = self?.admittedCondition
-            let stream = await history.observe(
-                HistoryObservationRequest(kind: kind, limit: limit, filter: filter, sortOrder: order,
-                                          conditionExpression: condition)
+            let request = HistoryObservationRequest(
+                kind: kind, limit: limit, filter: filter, sortOrder: order,
+                conditionExpression: self?.admittedCondition
             )
+            let stream = await history.observe(request)
             do {
                 var restoreTarget = itemID
                 var restoredPosition: ChangePosition?
@@ -1163,57 +1167,39 @@ final class HistoryViewState {
                     // replace the just-restored reading position.
                     if let restoredPosition, page.position <= restoredPosition { continue }
                     guard self?.allowsObservedPosition(page.position) == true else { continue }
-                    if let target = restoreTarget ?? self?.readingAnchorBeyondFirstPage {
+                    if var target = restoreTarget ?? self?.readingAnchorBeyondFirstPage {
                         let isOpeningAtAnchor = restoreTarget != nil
-                        let restoredPage: HistoryPage
-                        let targetWasRemoved: Bool
-                        do {
-                            restoredPage = try await history.browse(HistoryBrowseRequest(
-                                kind: kind, limit: limit, filter: filter, sortOrder: order,
-                                startAround: target, conditionExpression: condition
-                            ))
-                            targetWasRemoved = false
-                        } catch HistoryFailure.notFound(_) {
-                            if isOpeningAtAnchor {
-                                restoredPage = try await history.browse(HistoryBrowseRequest(
-                                    kind: kind, limit: limit, filter: filter, sortOrder: order,
-                                    conditionExpression: condition
-                                ))
-                            } else {
-                                restoredPage = page
+                        for attempt in 0..<2 {
+                            let (restoredPage, anchorFound) = try await Self.browseReadingAnchor(
+                                target, request: request, history: history,
+                                firstPage: page, isOpening: isOpeningAtAnchor
+                            )
+                            guard !Task.isCancelled, let self else { return }
+                            if !isOpeningAtAnchor, self.readingAnchorBeyondFirstPage != target {
+                                // The latest reading position supersedes an older in-flight seek.
+                                if let newerAnchor = self.readingAnchorBeyondFirstPage, attempt == 0 {
+                                    target = newerAnchor
+                                    continue
+                                }
+                                if self.readingAnchorBeyondFirstPage == nil {
+                                    self.applyObservedPage(page, forSearchGeneration: queryGeneration)
+                                }
+                                break
                             }
-                            targetWasRemoved = true
-                        } catch where !isOpeningAtAnchor {
-                            // Keep a successful observation usable even when
-                            // an optional background seek fails.
-                            guard !Task.isCancelled else { return }
-                            if let self, self.readingAnchorBeyondFirstPage == target {
-                                self.applyObservedPage(page, forSearchGeneration: queryGeneration)
+                            guard restoredPage.position >= page.position,
+                                  self.allowsObservedPosition(restoredPage.position) else { break }
+                            self.applyObservedPage(restoredPage, forSearchGeneration: queryGeneration)
+                            self.didLoseReadingPosition = !anchorFound && isOpeningAtAnchor
+                            if anchorFound {
+                                self.hasKnownRowOffset = restoredPage.previous == nil
+                                self.hasWindowedPages = restoredPage.previous != nil
+                                self.visibleRowIDs = [target]
+                                if isOpeningAtAnchor { self.restoredReadingItemID = target }
                             }
-                            continue
+                            restoreTarget = nil
+                            restoredPosition = restoredPage.position
+                            break
                         }
-                        guard !Task.isCancelled, let self else { return }
-                        if !isOpeningAtAnchor, self.readingAnchorBeyondFirstPage != target {
-                            // The user moved while the seek was in flight.
-                            // Their newer position owns the current window.
-                            if self.readingAnchorBeyondFirstPage == nil {
-                                self.applyObservedPage(page, forSearchGeneration: queryGeneration)
-                            }
-                            continue
-                        }
-                        guard restoredPage.position >= page.position,
-                              self.allowsObservedPosition(restoredPage.position)
-                        else { continue }
-                        self.applyObservedPage(restoredPage, forSearchGeneration: queryGeneration)
-                        self.didLoseReadingPosition = targetWasRemoved
-                        if !targetWasRemoved {
-                            self.hasKnownRowOffset = restoredPage.previous == nil
-                            self.hasWindowedPages = restoredPage.previous != nil
-                            self.visibleRowIDs = [target]
-                            if isOpeningAtAnchor { self.restoredReadingItemID = target }
-                        }
-                        restoreTarget = nil
-                        restoredPosition = restoredPage.position
                         continue
                     }
                     self?.applyObservedPage(
@@ -1232,6 +1218,29 @@ final class HistoryViewState {
                 self?.publishFailure(failure, from: .observation)
                 self?.isLoadingFirstPage = false
             }
+        }
+    }
+
+    private static func browseReadingAnchor(
+        _ target: HistoryItemID, request: HistoryObservationRequest, history: any ClipboardHistory,
+        firstPage: HistoryPage, isOpening: Bool
+    ) async throws -> (HistoryPage, anchorFound: Bool) {
+        do {
+            let anchored = try await history.browse(HistoryBrowseRequest(
+                kind: request.kind, limit: request.limit, filter: request.filter, sortOrder: request.sortOrder,
+                startAround: target, conditionExpression: request.conditionExpression
+            ))
+            return (anchored, true)
+        } catch HistoryFailure.notFound(_) where isOpening {
+            let replacement = try await history.browse(HistoryBrowseRequest(
+                kind: request.kind, limit: request.limit, filter: request.filter, sortOrder: request.sortOrder,
+                conditionExpression: request.conditionExpression
+            ))
+            return (replacement, false)
+        } catch where !isOpening {
+            // Background continuity may fall back to the already-read page
+            // without terminating observation if the seek fails.
+            return (firstPage, false)
         }
     }
 
@@ -1485,8 +1494,14 @@ final class HistoryViewState {
 
     private func publishRetentionChange(for commit: HistoryCommit) {
         guard commit.hasDestructiveRetentionEffects else { return }
-        acceptPeerRetention(at: commit.position)
-        onCommittedRetention(commit.position)
+        let prunedRevisions: Bool
+        if case .retentionPoliciesSet(_, let pruned) = commit.outcome {
+            prunedRevisions = pruned > 0
+        } else {
+            prunedRevisions = false
+        }
+        acceptPeerRetention(at: commit.position, prunedRevisions: prunedRevisions)
+        onCommittedRetention(commit.position, prunedRevisions)
     }
 
     private func recordCommittedPosition(_ position: ChangePosition) {

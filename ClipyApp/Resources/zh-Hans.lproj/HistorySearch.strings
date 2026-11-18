@@ -62,9 +62,8 @@
 "Return Retry · Esc Dismiss" = "Return 重试 · Esc 关闭";
 "Esc Dismiss" = "Esc 关闭";
 "Sort results" = "结果排序";
-"Match" = "匹配";
 "Regex" = "正则";
-"Sort" = "排序";
+"Pinned, then relevance" = "先置顶，再按相关度";
 "Date" = "日期";
 "Newest" = "最新";
 "Oldest" = "最早";

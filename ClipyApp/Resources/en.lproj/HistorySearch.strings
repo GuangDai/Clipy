@@ -62,9 +62,8 @@
 "Return Retry · Esc Dismiss" = "Return Retry · Esc Dismiss";
 "Esc Dismiss" = "Esc Dismiss";
 "Sort results" = "Sort results";
-"Match" = "Match";
 "Regex" = "Regex";
-"Sort" = "Sort";
+"Pinned, then relevance" = "Pinned, then relevance";
 "Date" = "Date";
 "Newest" = "Newest";
 "Oldest" = "Oldest";
