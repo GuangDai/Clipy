@@ -33,6 +33,7 @@
 "Clear recent searches…" = "清空最近搜索…";
 "Favorites and clipboard history will remain unchanged." = "收藏和剪贴板历史不会改变。";
 "Applies the saved query, filters and sort order." = "应用保存的查询、筛选条件和排序方式。";
+"A date in this search does not exist in your current time zone." = "当前时区跳过了这组搜索条件中的某个日期，无法应用。";
 "Rename…" = "重命名…";
 "Remove favorite" = "删除收藏";
 "Save as favorite" = "加入收藏";

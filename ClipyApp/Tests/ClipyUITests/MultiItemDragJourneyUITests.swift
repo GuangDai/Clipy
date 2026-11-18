@@ -193,7 +193,8 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         let finished = NSPredicate { _, _ in
             if FileManager.default.fileExists(atPath: receivedURL.path) { return true }
             let source = try? String(contentsOf: traceURL, encoding: .utf8)
-            return source?.contains("session-ended operation=\(NSDragOperation.none.rawValue) ") == true
+            let noOperation: NSDragOperation = []
+            return source?.contains("session-ended operation=\(noOperation.rawValue) ") == true
         }
         let delivery = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: finished, object: nil)], timeout: 10)
         let trace = (try? String(contentsOf: traceURL, encoding: .utf8)) ?? "no source trace"

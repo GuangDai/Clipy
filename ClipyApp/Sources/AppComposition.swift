@@ -233,13 +233,8 @@ final class AppComposition {
     private let filePreviewLoader = LocalFilePreviewLoader()
 
 #if DEBUG
-    /// App-internal deterministic results used by hosted composition tests
-    /// (REVIEW Card 5D). They are sanitized typed outcomes, not adapter state,
-    /// clipboard payloads, step closures, or a second pasteboard abstraction.
-    /// Production construction cannot set either value, and both declarations
-    /// are absent from Release.
+    /// Lets the hosted copy tests hold the clipboard unchanged on write refusal.
     private var pasteWriteFailureForTesting: PasteboardWriteFailure?
-    private var nextCaptureFailureForTesting: ClipyCaptureFailure?
     private var captureAccessBehaviorForTesting:
         (@MainActor () -> PasteboardAccessBehavior)?
     /// One deadline-sleep substitution for deterministic hosted lifecycle
@@ -843,7 +838,6 @@ final class AppComposition {
         observerPollInterval: TimeInterval = 60,
         captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes,
         pasteWriteFailure: PasteboardWriteFailure? = nil,
-        initialCaptureFailure: ClipyCaptureFailure? = nil,
         initialCaptureAccessBehavior: PasteboardAccessBehavior? = nil,
         capturePauseDuration: Duration = CapturePausePolicy.standardDuration,
         captureAccessBehaviorProvider:
@@ -864,7 +858,6 @@ final class AppComposition {
         )
         if let workflowRunner { composition.workflowRunner = workflowRunner }
         composition.pasteWriteFailureForTesting = pasteWriteFailure
-        composition.nextCaptureFailureForTesting = initialCaptureFailure
         composition.captureAccessBehaviorForTesting =
             captureAccessBehaviorProvider
         composition.capturePauseSleepForTesting = capturePauseSleep
@@ -1073,13 +1066,6 @@ final class AppComposition {
     /// concealed content stays the one intentional quiet decision. Only a
     /// complete freeze may enter the active slot or FIFO.
     private func receiveCaptureOutcome(_ outcome: CaptureOutcome) {
-#if DEBUG
-        if let failure = nextCaptureFailureForTesting {
-            nextCaptureFailureForTesting = nil
-            recordCaptureFailure(failure)
-            return
-        }
-#endif
         switch outcome {
         case let .complete(complete):
             admitCapture(complete.capture, runAutomaticWorkflows: !observer.isDeliveringInitialCapture)
@@ -1239,6 +1225,7 @@ final class AppComposition {
 
         let history = self.history
         let adapter = self.adapter
+        let expectedChangeCount = adapter.changeCount
 #if DEBUG
         let pasteWriteFailureForTesting = self.pasteWriteFailureForTesting
 #else
@@ -1249,6 +1236,7 @@ final class AppComposition {
                 item,
                 history: history,
                 adapter: adapter,
+                expectedChangeCount: expectedChangeCount,
                 pasteWriteFailureForTesting: pasteWriteFailureForTesting
             )
             guard !Task.isCancelled, let self else { return }
@@ -1294,6 +1282,7 @@ final class AppComposition {
         _ item: HistoryItemReference,
         history: any ClipboardHistory,
         adapter: PasteboardAdapter,
+        expectedChangeCount: Int,
         pasteWriteFailureForTesting: PasteboardWriteFailure?
     ) async -> PasteExecutionOutcome {
         guard !Task.isCancelled else { return .cancelled }
@@ -1321,7 +1310,7 @@ final class AppComposition {
         }
 
         do {
-            try adapter.write(payload)
+            try adapter.write(payload, ifChangeCountIs: expectedChangeCount)
             return .completed
         } catch let failure as PasteboardWriteFailure {
             return .failed(.write(failure))

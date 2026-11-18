@@ -34,6 +34,7 @@ enum SearchLibraryCopy {
     /// query, without retaining or displaying old search results.
     static func summary(
         _ definition: HistorySearchDefinition, locale: Locale = .current,
+        timeZone: TimeZone = .current,
         bundle: Bundle = AppLocalization.bundle
     ) -> String {
         var parts: [String] = []
@@ -52,7 +53,10 @@ enum SearchLibraryCopy {
         if definition.pinnedOnly { parts.append(PanelActionsCopy.text("Pinned Only", bundle: bundle)) }
         if let source = definition.filters.source { parts.append(source) }
         if definition.filters.dateRange == .custom {
-            let style = Date.FormatStyle(date: .abbreviated, time: .omitted).locale(locale)
+            let style = Date.FormatStyle(
+                date: .abbreviated, time: .omitted, locale: locale,
+                timeZone: definition.customDateTimeZone ?? timeZone
+            )
             parts.append(definition.filters.startDate.formatted(style)
                 + " – " + definition.filters.endDate.formatted(style))
         } else if definition.filters.dateRange != .anyTime {

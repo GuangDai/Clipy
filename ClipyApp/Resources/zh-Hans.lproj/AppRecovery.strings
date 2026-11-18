@@ -14,3 +14,4 @@
 "Dismiss copy failure" = "关闭复制失败提示";
 "A copy is already in progress. Try again when it finishes." = "正在进行复制，请完成后重试。";
 "The pasteboard refused this copy. Try again." = "剪贴板拒绝了此次复制，请重试。";
+"The clipboard changed. Copy the history item again to replace it." = "剪贴板已有新内容。如需替换，请重新复制这条历史记录。";

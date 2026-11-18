@@ -276,12 +276,8 @@ struct AppPasteOrchestrationTests {
         )
     }
 
-    /// Once History has returned the selected v1 payload, a v2 revision committed while that
-    /// immutable payload is parked cannot silently replace its bytes. The
-    /// accepted operation writes the tagged v1 exactly once while History
-    /// remains current at v2.
-    @Test @MainActor
-    func revisionAfterPayloadResolutionDoesNotReplaceTheResolvedSnapshot() async throws {
+    @Test(arguments: [false, true]) @MainActor
+    func pendingCopyKeepsItsSelectedSnapshotAndDefersToNewClipboardOwnership(newOwner: Bool) async throws {
         try ComposedSupport.requireUsablePasteboard()
         let history = try await ComposedSupport.openMemoryHistory()
         let version1Text = "resolved version one"
@@ -334,20 +330,23 @@ struct AppPasteOrchestrationTests {
         )
         #expect(pasteboard.pasteboardItems?.isEmpty ?? true)
 
-        await pausingHistory.resumePastePayload()
-        let version1Written = await ComposedSupport.waitFor {
-            pasteboard.pasteboardItems?.first?.data(forType: .string)
-                == Data(version1Text.utf8)
+        let pending = try #require(composition.pendingPasteForTesting)
+        if newOwner {
+            ComposedSupport.setPasteboardContents("new external clipboard content", on: pasteboard)
         }
-        #expect(version1Written)
-        #expect(
-            await ComposedSupport.waitFor { completionCount == 1 }
-        )
-        #expect(failures.isEmpty)
-        #expect(
-            pasteboard.pasteboardItems?.first?.data(forType: .string)
-                != Data(version2Text.utf8)
-        )
+        let ownershipBeforeResume = pasteboard.changeCount
+        await pausingHistory.resumePastePayload()
+        await pending.value
+        if newOwner {
+            #expect(pasteboard.changeCount == ownershipBeforeResume)
+            #expect(pasteboard.string(forType: .string) == "new external clipboard content")
+            #expect(completionCount == 0)
+            #expect(failures == [.write(.ownershipChanged)])
+        } else {
+            #expect(pasteboard.pasteboardItems?.first?.data(forType: .string) == Data(version1Text.utf8))
+            #expect(completionCount == 1)
+            #expect(failures.isEmpty)
+        }
     }
 
     /// App shutdown cancels the owned slot. Even when the underlying History

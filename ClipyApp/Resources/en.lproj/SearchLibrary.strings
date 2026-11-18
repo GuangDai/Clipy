@@ -33,6 +33,7 @@
 "Clear recent searches…" = "Clear recent searches…";
 "Favorites and clipboard history will remain unchanged." = "Favorites and clipboard history will remain unchanged.";
 "Applies the saved query, filters and sort order." = "Applies the saved query, filters and sort order.";
+"A date in this search does not exist in your current time zone." = "A date in this search does not exist in your current time zone.";
 "Rename…" = "Rename…";
 "Remove favorite" = "Remove favorite";
 "Save as favorite" = "Save as favorite";

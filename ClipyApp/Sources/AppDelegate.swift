@@ -389,12 +389,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.statusItem?.menu = nil
         }
     )
-#if DEBUG
-    /// Set only after the production updater assigns the requested symbol to
-    /// the real status-bar button. Hosted evidence can therefore distinguish
-    /// an applied image change from merely recomputing state in the test.
-    private var appliedStatusItemSymbolNameForTesting: String?
-#endif
     private var panel: FloatingPanel?
     /// AppDelegate owns the only NSWorkspace lifecycle registrations. Tokens
     /// are retained only to remove those exact registrations at termination;
@@ -1398,14 +1392,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             accessibilityDescription: accessibilityLabel
         )
         statusItem?.button?.image = image
-#if DEBUG
-        if let image,
-           statusItem?.button?.image === image {
-            appliedStatusItemSymbolNameForTesting = symbolName
-        } else {
-            appliedStatusItemSymbolNameForTesting = nil
-        }
-#endif
         // The image description gives assistive technology a fallback, while
         // the status-bar button's explicit label is the stable AX surface.
         statusItem?.button?.setAccessibilityLabel(accessibilityLabel)
@@ -1427,7 +1413,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let statusItem else { return }
         NSStatusBar.system.removeStatusItem(statusItem)
         self.statusItem = nil
-        appliedStatusItemSymbolNameForTesting = nil
     }
 
     var statusItemAccessibilityLabelForTesting: String? {
@@ -1436,10 +1421,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var statusItemHasImageForTesting: Bool {
         statusItem?.button?.image != nil
-    }
-
-    var statusItemSymbolNameForTesting: String? {
-        appliedStatusItemSymbolNameForTesting
     }
 
     /// Hosted evidence reads the lazily built secondary-click menu WITHOUT

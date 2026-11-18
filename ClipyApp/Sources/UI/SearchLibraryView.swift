@@ -17,6 +17,7 @@ struct SearchLibraryView: View {
     @State private var renameText = ""
     @State private var showsRename = false
     @State private var confirmsClearRecent = false
+    @State private var unavailableDateSearch: UUID?
 
     let viewState: HistoryViewState
     let store: SearchHistoryStore
@@ -179,9 +180,13 @@ struct SearchLibraryView: View {
     }
 
     private func savedRow(_ item: SavedHistorySearch, isFavorite: Bool) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        let summary = SearchLibraryCopy.summary(item.definition, locale: locale, bundle: copyBundle)
+        return HStack(alignment: .top, spacing: 8) {
             Button {
-                item.definition.apply(to: viewState)
+                guard item.definition.apply(to: viewState) else {
+                    unavailableDateSearch = item.id
+                    return
+                }
                 store.recordSubmittedSearch(item.definition)
                 onApply()
                 dismiss()
@@ -194,9 +199,16 @@ struct SearchLibraryView: View {
                     if !item.name.isEmpty, !item.definition.query.isEmpty, item.name != item.definition.query {
                         Text(item.definition.query).font(.caption).lineLimit(2).foregroundStyle(.secondary)
                     }
-                    Text(SearchLibraryCopy.summary(item.definition, locale: locale, bundle: copyBundle))
+                    Text(summary)
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                        .help(SearchLibraryCopy.summary(item.definition, locale: locale, bundle: copyBundle))
+                        .help(summary)
+                    if unavailableDateSearch == item.id {
+                        Label(text("A date in this search does not exist in your current time zone."),
+                              systemImage: "exclamationmark.circle")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("clipy.search.library.unavailable-date")
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())

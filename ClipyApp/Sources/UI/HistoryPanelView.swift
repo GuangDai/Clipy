@@ -958,7 +958,7 @@ struct HistoryPanelView: View {
             density: appearance.rowDensity,
             fontSize: appearance.rowFontSize,
             showsPaginationControl:
-                viewState.hasNextPage || viewState.isLoadingPage,
+                viewState.hasNextPage || viewState.hasPreviousPage || viewState.isLoadingPage,
             usesPinnedGrouping: viewState.sortOrder == .automatic,
             isFilterChipVisible: viewState.isSearchStatusVisible,
             isFailureBannerVisible: isFailureBannerVisible,

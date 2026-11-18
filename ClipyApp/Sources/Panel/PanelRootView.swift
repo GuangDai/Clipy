@@ -334,6 +334,8 @@ struct PanelRootView: View {
             return AppRecoveryCopy.text("A copy is already in progress. Try again when it finishes.", bundle: bundle)
         case .history(let historyFailure):
             return FailurePresentation.message(for: historyFailure)
+        case .write(.ownershipChanged):
+            return AppRecoveryCopy.text("The clipboard changed. Copy the history item again to replace it.", bundle: bundle)
         case .write:
             return AppRecoveryCopy.text("The pasteboard refused this copy. Try again.", bundle: bundle)
         }

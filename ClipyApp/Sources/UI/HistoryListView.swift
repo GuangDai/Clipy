@@ -289,12 +289,22 @@ struct HistoryListView: View {
     private var paginationControl: some View {
         if viewState.isLoadingPage {
             loadingRow
-        } else if viewState.hasNextPage {
-            Button(HistoryListCopy.text("Load More")) {
-                viewState.loadNextPage()
+        } else if viewState.hasNextPage || viewState.hasPreviousPage {
+            HStack {
+                if viewState.hasPreviousPage {
+                    Button(HistoryListCopy.text("Back to first results")) {
+                        viewState.returnToLatest()
+                    }
+                    .accessibilityIdentifier("clipy.history.first-results")
+                }
+                if viewState.hasNextPage {
+                    Button(HistoryListCopy.text("Load More")) {
+                        viewState.loadNextPage()
+                    }
+                    .accessibilityIdentifier("clipy.history.load-more")
+                }
             }
             .frame(maxWidth: .infinity)
-            .accessibilityIdentifier("clipy.history.load-more")
         }
     }
 

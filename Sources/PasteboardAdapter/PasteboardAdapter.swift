@@ -57,8 +57,7 @@ public struct PasteboardAdapter {
     /// Records each real payload accessor immediately before the adapter
     /// calls `NSPasteboardItem.data(forType:)`. Tests use this hook to prove
     /// privacy short-circuits without replacing AppKit or adding a second
-    /// provider abstraction. Simulated-unavailable reads do not call the
-    /// framework accessor and therefore do not notify this observer.
+    /// provider abstraction.
     package var payloadReadObserver: (@MainActor (String) -> Void)?
 
     /// Runs immediately after each real payload accessor. Adapter tests use
@@ -247,22 +246,13 @@ public struct PasteboardAdapter {
             for typeIdentifier in itemTypeIdentifiers[pasteboardItemIndex] {
                 guard shouldContinue() else { return nil }
                 #if DEBUG
-                // The Debug seam forces the documented declared-but-unavailable
-                // outcome (SPEC-IMPL-005).
-                let data: Data?
-                if failureSimulation.unavailableTypeIdentifiers.contains(typeIdentifier) {
-                    data = nil
-                } else {
-                    payloadReadObserver?(typeIdentifier)
-                    data = item.data(
-                        forType: NSPasteboard.PasteboardType(typeIdentifier)
-                    )
-                    payloadReadCompletionHook?(typeIdentifier)
-                }
-                #else
+                payloadReadObserver?(typeIdentifier)
+                #endif
                 let data = item.data(
                     forType: NSPasteboard.PasteboardType(typeIdentifier)
                 )
+                #if DEBUG
+                payloadReadCompletionHook?(typeIdentifier)
                 #endif
                 guard shouldContinue() else { return nil }
                 // A promised-data accessor may yield to another pasteboard
@@ -430,6 +420,9 @@ public struct PasteboardAdapter {
         ))
     }
 
+    /// Current pasteboard ownership generation. This does not read clipboard contents.
+    public var changeCount: Int { pasteboard.changeCount }
+
     /// Writes the payload's Effective Content representations plus the
     /// lineage hint equal to the item ID (docs/architecture.md;
     /// docs/storage.md; docs/architecture.md).
@@ -452,7 +445,7 @@ public struct PasteboardAdapter {
     /// result is reported separately. One framework write attempt narrows
     /// the partial-write window; Apple does not document it as a cross-process
     /// atomic transaction, so this API makes no atomicity claim.
-    public func write(_ payload: PastePayload) throws {
+    public func write(_ payload: PastePayload, ifChangeCountIs expectedChangeCount: Int? = nil) throws {
         let grouped = Dictionary(grouping: payload.representations, by: \.pasteboardItemIndex)
         var items: [NSPasteboardItem] = []
         var rejectedTypeIdentifiers: [String] = []
@@ -498,6 +491,9 @@ public struct PasteboardAdapter {
             )
         }
 
+        if let expectedChangeCount, expectedChangeCount != pasteboard.changeCount {
+            throw PasteboardWriteFailure.ownershipChanged
+        }
         pasteboard.clearContents()
         #if DEBUG
         let itemAccepted = !failureSimulation.rejectCompletedItem
@@ -516,16 +512,13 @@ public struct PasteboardAdapter {
 /// and its initializer are package-only and absent from Release; they are not
 /// a product capability or a general provider abstraction (REVIEW Card 5D).
 package struct PasteboardFailureSimulation: Sendable {
-    package let unavailableTypeIdentifiers: Set<String>
     package let rejectedWriteTypeIdentifiers: Set<String>
     package let rejectCompletedItem: Bool
 
     package init(
-        unavailableTypeIdentifiers: Set<String> = [],
         rejectedWriteTypeIdentifiers: Set<String> = [],
         rejectCompletedItem: Bool = false
     ) {
-        self.unavailableTypeIdentifiers = unavailableTypeIdentifiers
         self.rejectedWriteTypeIdentifiers = rejectedWriteTypeIdentifiers
         self.rejectCompletedItem = rejectCompletedItem
     }
@@ -634,6 +627,8 @@ public enum CaptureOutcome: Sendable, Equatable {
 
 /// The typed failure of a paste write (03b §9; 04 §8; audit SPEC-IMPL-005).
 public enum PasteboardWriteFailure: Error, Sendable, Equatable {
+    /// Another copy replaced the pasteboard between admission and writing.
+    case ownershipChanged
     /// One or more setters rejected a representation while building the
     /// unbound items. Carries every refused type identifier in item order:
     /// each item's payload representations followed by its lineage marker.
