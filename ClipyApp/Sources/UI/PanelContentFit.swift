@@ -103,12 +103,15 @@ enum PanelContentFit {
     static let searchFieldHeight: CGFloat =
         searchFieldTextHeight + 2 * PanelTheme.spacingXXSmall
 
-    /// The complete search-header strip: the field plus the
-    /// HistoryPanelView header padding (`PanelTheme.headerTopPadding` /
-    /// `headerBottomPadding`).
-    static let headerHeight: CGFloat =
+    /// The top strip remains the lower bound for legacy saved heights.
+    static let searchStripHeight: CGFloat =
         PanelTheme.headerTopPadding + searchFieldHeight
             + PanelTheme.headerBottomPadding
+
+    /// The mode, sort, and date controls live below the native editor.
+    static let searchControlsHeight: CGFloat = 24
+    static let headerHeight: CGFloat =
+        searchStripHeight + PanelTheme.spacingXSmall + searchControlsHeight
 
     /// The active-filter chip's contribution when visible: the header
     /// VStack's `spacingXSmall` gap plus the caption-sized label.

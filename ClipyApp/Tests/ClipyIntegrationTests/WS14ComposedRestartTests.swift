@@ -3,11 +3,8 @@
 /// after insert, coalesce, pin reorder, and multiple revisions on a DURABLE
 /// temp store, reopen the facade and assert the composed surfaces — the
 /// reopened `HistoryViewState`, detail reads, and paste payload — match the
-/// pre-restart public results: complete rebuilt Signature Index (a fresh
-/// capture of the revised item's CANONICAL bytes coalesces instead of
-/// duplicating), current position, Effective Content, occurrences, and pin
-/// order (the storage-side suite additionally asserts row/blob internals
-/// through an independent `ModelContainer`).
+/// pre-restart public results. Copy the unedited item's bytes again to check
+/// the restored signature index, occurrence update and pin order.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -109,6 +106,7 @@ struct WS14ComposedRestartTests {
         )
         let viewState = HistoryViewState(history: restarted)
         defer { viewState.deactivate() }
+        viewState.sortOrder = .automatic
         viewState.activate()
 
         // The observed page names the latest position; the pinned lane kept
@@ -144,12 +142,11 @@ struct WS14ComposedRestartTests {
         #expect(postRestartPayload == preRestartPayload)
         #expect(postRestartPayload.item.contentVersion == currentVersion)
 
-        // The rebuilt Signature Index is COMPLETE: a fresh capture of A's
-        // CANONICAL bytes coalesces into A at the preserved Content Version
-        // instead of inserting a duplicate row.
+        // Copy the untouched pinned item again. The rebuilt signature index
+        // must recover that item and keep its original content version.
         let postRestartCapture = try await restarted.perform(.capture(
             ComposedSupport.textCapture(
-                textA,
+                textB,
                 observedAt: base.addingTimeInterval(500),
                 source: "com.example.ws14composed.restart"
             )
@@ -164,12 +161,13 @@ struct WS14ComposedRestartTests {
         let coalesced = try #require(
             ComposedSupport.coalescedReference(from: postRestartCapture, "WS14 index proof")
         )
-        #expect(coalesced.id == referenceA.id)
-        #expect(coalesced.contentVersion == currentVersion)
+        #expect(coalesced.id == idB)
+        #expect(coalesced.contentVersion.rawValue == 1)
 
-        // The composed panel reflects the coalesce (copyCount moves to 3).
+        // The composed panel updates the count without reordering the pins.
         let recoalesced = await ComposedSupport.waitFor {
-            viewState.pinnedRows.first?.copyCount == 3
+            viewState.pinnedRows.map(\.item.id) == [referenceA.id, idB]
+                && viewState.pinnedRows.last?.copyCount == 2
         }
         #expect(recoalesced, "WS14: the reopened panel tracks the post-restart coalesce")
         #expect(viewState.failure == nil)

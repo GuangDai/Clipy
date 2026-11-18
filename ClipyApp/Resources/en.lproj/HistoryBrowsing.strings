@@ -10,3 +10,4 @@
 "History workspace" = "History workspace";
 "Remembers the list and preview widths, sort order, and row density. Turning this off keeps the current layout until the workspace closes and removes its saved layout." = "Remembers the list and preview widths, sort order, and row density. Turning this off keeps the current layout until the workspace closes and removes its saved layout.";
 "Saved reading position is unavailable in these results. Showing the start of the list." = "Saved reading position is unavailable in these results. Showing the start of the list.";
+"The previous reading position is unavailable. Showing the start of the list." = "The previous reading position is unavailable. Showing the start of the list.";

@@ -172,8 +172,6 @@ final class AppComposition {
     /// page window, so opening a workspace never changes the floating panel.
     let historyWorkspaceViewState: HistoryViewState
     let historyWorkspaceCopyState = HistoryWorkspaceCopyState()
-    let searchHistoryStore = SearchHistoryStore(defaults: .standard)
-    let historyBrowsingPreferences = HistoryBrowsingPreferences(defaults: .standard)
 
     /// App-local synchronous consumer for the one real panel surface. The
     /// ingress and user-receipt announcement paths both await/apply here
@@ -233,13 +231,8 @@ final class AppComposition {
     private let filePreviewLoader = LocalFilePreviewLoader()
 
 #if DEBUG
-    /// App-internal deterministic results used by hosted composition tests
-    /// (REVIEW Card 5D). They are sanitized typed outcomes, not adapter state,
-    /// clipboard payloads, step closures, or a second pasteboard abstraction.
-    /// Production construction cannot set either value, and both declarations
-    /// are absent from Release.
+    /// Lets the hosted copy tests hold the clipboard unchanged on write refusal.
     private var pasteWriteFailureForTesting: PasteboardWriteFailure?
-    private var nextCaptureFailureForTesting: ClipyCaptureFailure?
     private var captureAccessBehaviorForTesting:
         (@MainActor () -> PasteboardAccessBehavior)?
     /// One deadline-sleep substitution for deterministic hosted lifecycle
@@ -265,6 +258,7 @@ final class AppComposition {
     private var droppedCaptureCount = 0
     private var failedCaptureCount = 0
     private var lastCaptureFailure: ClipyCaptureFailure?
+    private var pendingCaptureFailureChangeCount: Int?
     private var acceptsCaptures = false
     private var isStarted = false
     /// Sleep stops new observation/admission but does not erase complete
@@ -386,9 +380,9 @@ final class AppComposition {
         appIntentHistoryIngress = appIntentsHistoryFacade.map { facade in
             AppIntentHistoryIngress(
                 facade: facade,
-                onCommittedRemoval: { [panelSurfacePurgeRelay] itemID in
+                onCommittedRemoval: { [panelSurfacePurgeRelay] itemID, position in
                     panelSurfacePurgeRelay
-                        .acceptCommittedExternalRemoval(itemID)
+                        .acceptCommittedExternalRemoval(itemID, position: position)
                 }
             )
         }
@@ -551,8 +545,8 @@ final class AppComposition {
             let relay = composition.panelSurfacePurgeRelay
             let controller = LocalAutomationController(
                 ingress: history.localAutomationIngress(
-                    onCommittedRemoval: { itemID in
-                        await relay.acceptCommittedExternalRemoval(itemID)
+                    onCommittedRemoval: { itemID, position in
+                        await relay.acceptCommittedExternalRemoval(itemID, position: position)
                     },
                     onCommittedRevision: { old, commit in
                         await relay.acceptCommittedExternalRevision(from: old, commit: commit)
@@ -622,6 +616,12 @@ final class AppComposition {
             let received = viewState.acceptPeerSurfacePurge(purge, position: position)
             panelSurfacePurgeRelay.apply(received)
         }
+        viewState.onCommittedRetention = { [weak self] position, prunedRevisions in
+            self?.historyWorkspaceViewState.acceptPeerRetention(at: position, prunedRevisions: prunedRevisions)
+        }
+        historyWorkspaceViewState.onCommittedRetention = { [weak self] position, prunedRevisions in
+            self?.viewState.acceptPeerRetention(at: position, prunedRevisions: prunedRevisions)
+        }
         viewState.onCommittedUserRemoval = { [weak self] purge in
             self?.panelSurfacePurgeRelay.apply(purge)
             self?.onHistoryItemRemoved?()
@@ -678,11 +678,13 @@ final class AppComposition {
         viewState.onExportRepresentation = { _ in .failure(.unavailable) }
         viewState.onCommittedUserRemoval = { _ in }
         viewState.onCommittedSurfacePurge = { _, _ in }
+        viewState.onCommittedRetention = { _, _ in }
         historyWorkspaceViewState.deactivate()
         historyWorkspaceViewState.onPaste = { _ in }
         historyWorkspaceViewState.filePreviewSettings = nil
         historyWorkspaceViewState.onExportRepresentation = { _ in .failure(.unavailable) }
         historyWorkspaceViewState.onCommittedSurfacePurge = { _, _ in }
+        historyWorkspaceViewState.onCommittedRetention = { _, _ in }
         discardPendingCaptures()
         drainsPreInactivityPendingCapture = false
         captureTask?.cancel()
@@ -704,6 +706,11 @@ final class AppComposition {
     func cancelPendingPaste() {
         guard pasteSource == .panel else { return }
         cancelAllPendingPastes()
+    }
+
+    func refreshDateFiltersIfNeeded() {
+        viewState.refreshDateFiltersIfNeeded()
+        historyWorkspaceViewState.refreshDateFiltersIfNeeded()
     }
 
     private func cancelWorkspaceCopy() {
@@ -830,7 +837,6 @@ final class AppComposition {
         observerPollInterval: TimeInterval = 60,
         captureByteLimit: Int = HistoryLimits.standard.maximumCaptureBytes,
         pasteWriteFailure: PasteboardWriteFailure? = nil,
-        initialCaptureFailure: ClipyCaptureFailure? = nil,
         initialCaptureAccessBehavior: PasteboardAccessBehavior? = nil,
         capturePauseDuration: Duration = CapturePausePolicy.standardDuration,
         captureAccessBehaviorProvider:
@@ -851,7 +857,6 @@ final class AppComposition {
         )
         if let workflowRunner { composition.workflowRunner = workflowRunner }
         composition.pasteWriteFailureForTesting = pasteWriteFailure
-        composition.nextCaptureFailureForTesting = initialCaptureFailure
         composition.captureAccessBehaviorForTesting =
             captureAccessBehaviorProvider
         composition.capturePauseSleepForTesting = capturePauseSleep
@@ -1013,7 +1018,8 @@ final class AppComposition {
             viewState.acceptCaptureReceipt(receipt)
             guard !Task.isCancelled else { return }
             if let capture, acceptsCaptures { workflowRunner.submit(capture) }
-            if failureCountAtAdmission == failedCaptureCount {
+            if failureCountAtAdmission == failedCaptureCount,
+               pendingCaptureFailureChangeCount == nil {
                 lastCaptureFailure = nil
             }
         case .cancelled:
@@ -1025,6 +1031,7 @@ final class AppComposition {
         case .failed(let failure):
             failedCaptureCount += 1
             lastCaptureFailure = failure
+            pendingCaptureFailureChangeCount = nil
             if failure == .temporarilyUnavailable(.insufficientDiskSpace) {
                 // A full volume is not made healthier by immediately
                 // replaying bytes observed while the failed transaction was
@@ -1060,23 +1067,19 @@ final class AppComposition {
     /// concealed content stays the one intentional quiet decision. Only a
     /// complete freeze may enter the active slot or FIFO.
     private func receiveCaptureOutcome(_ outcome: CaptureOutcome) {
-#if DEBUG
-        if let failure = nextCaptureFailureForTesting {
-            nextCaptureFailureForTesting = nil
-            recordCaptureFailure(failure)
-            return
-        }
-#endif
         switch outcome {
         case let .complete(complete):
             admitCapture(complete.capture, runAutomaticWorkflows: !observer.isDeliveringInitialCapture)
         case .concealed:
             return
+        case let .unsupportedMultiItem(value) where value.awaitsConstituentContent:
+            recordCaptureFailure(.declaredContentUnavailable, pendingChangeCount: value.changeCount)
         case .unsupportedMultiItem:
             recordCaptureFailure(.unsupportedClipboardShape)
-        case .changedDuringRead,
-             .declaredUnavailable:
-            recordCaptureFailure(.declaredContentUnavailable)
+        case .changedDuringRead(let race):
+            recordCaptureFailure(.declaredContentUnavailable, pendingChangeCount: race.endChangeCount)
+        case .declaredUnavailable(let partial):
+            recordCaptureFailure(.declaredContentUnavailable, pendingChangeCount: partial.changeCount)
         }
     }
 
@@ -1101,9 +1104,17 @@ final class AppComposition {
         )
     }
 
-    private func recordCaptureFailure(_ failure: ClipyCaptureFailure) {
+    private func recordCaptureFailure(_ failure: ClipyCaptureFailure, pendingChangeCount: Int? = nil) {
         failedCaptureCount += 1
         lastCaptureFailure = failure
+        pendingCaptureFailureChangeCount = pendingChangeCount
+        publishCaptureHealthIfChanged()
+    }
+
+    private func finishPendingCapture(_ changeCount: Int) {
+        guard pendingCaptureFailureChangeCount == changeCount else { return }
+        pendingCaptureFailureChangeCount = nil
+        lastCaptureFailure = nil
         publishCaptureHealthIfChanged()
     }
 
@@ -1146,12 +1157,18 @@ final class AppComposition {
                 onAccessBehaviorChanged: { [weak self] behavior in
                     self?.receiveCaptureAccessBehavior(behavior)
                 },
+                onPendingCaptureEnded: { [weak self] changeCount in
+                    self?.finishPendingCapture(changeCount)
+                },
                 handler: { [weak self] outcome in
                     self?.receiveCaptureOutcome(outcome)
                 }
             )
         } else {
             observer.stop()
+            if let pendingCaptureFailureChangeCount {
+                finishPendingCapture(pendingCaptureFailureChangeCount)
+            }
         }
     }
 
@@ -1226,6 +1243,7 @@ final class AppComposition {
 
         let history = self.history
         let adapter = self.adapter
+        let expectedChangeCount = adapter.changeCount
 #if DEBUG
         let pasteWriteFailureForTesting = self.pasteWriteFailureForTesting
 #else
@@ -1236,6 +1254,7 @@ final class AppComposition {
                 item,
                 history: history,
                 adapter: adapter,
+                expectedChangeCount: expectedChangeCount,
                 pasteWriteFailureForTesting: pasteWriteFailureForTesting
             )
             guard !Task.isCancelled, let self else { return }
@@ -1274,14 +1293,14 @@ final class AppComposition {
         case cancelled
     }
 
-    /// Runs one accepted request as one structured sequence: resolve the
-    /// item's CURRENT Effective Content by ID, then perform the synchronous
-    /// AppKit write. It never spawns work and never invokes UI hooks itself.
+    /// Resolve Effective Content and require the exact version the user selected
+    /// before writing its immutable payload to the pasteboard.
     /// `.completed` is the sole verified-success outcome.
     private static func executePaste(
         _ item: HistoryItemReference,
         history: any ClipboardHistory,
         adapter: PasteboardAdapter,
+        expectedChangeCount: Int,
         pasteWriteFailureForTesting: PasteboardWriteFailure?
     ) async -> PasteExecutionOutcome {
         guard !Task.isCancelled else { return .cancelled }
@@ -1299,13 +1318,17 @@ final class AppComposition {
         }
 
         guard !Task.isCancelled else { return .cancelled }
+        guard payload.item == item else {
+            return .failed(.history(.staleContent(expected: item.contentVersion,
+                                                   current: payload.item.contentVersion)))
+        }
 
         if let pasteWriteFailureForTesting {
             return .failed(.write(pasteWriteFailureForTesting))
         }
 
         do {
-            try adapter.write(payload)
+            try adapter.write(payload, ifChangeCountIs: expectedChangeCount)
             return .completed
         } catch let failure as PasteboardWriteFailure {
             return .failed(.write(failure))

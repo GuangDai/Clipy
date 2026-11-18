@@ -10,6 +10,80 @@ struct HistorySearchQueryCompilation: Sendable {
     let expression: HistorySearchExpression?
 }
 
+/// Finds the places where Clipy's condition delimiter can sit outside a
+/// regexp token. The editor uses UTF-16 and the compiler uses UTF-8. Only
+/// ASCII syntax changes this state, so both can scan their native units.
+struct HistorySearchRegexpBoundary {
+    private var characterClassDepth = 0
+    private var isQuoted = false
+    private var previousWasEscaped = false
+    private var isInComment = false
+
+    var allowsCondition: Bool {
+        characterClassDepth == 0 && !isQuoted && !previousWasEscaped && !isInComment
+    }
+
+    /// Advance over a regexp unit or an escape and its complete scalar.
+    mutating func advance(
+        _ unit: UInt16, followedBy next: UInt16?, nextScalarWidth: Int,
+        thirdUnit: UInt16?, thirdScalarWidth: Int
+    ) -> Int {
+        if isQuoted {
+            if unit == 92, next == 69 { // \E
+                isQuoted = false
+                return 2
+            }
+            return 1
+        }
+        if unit == 92 { // Backslash
+            if next == 81 { isQuoted = true } // \Q
+            if isInComment, next == 41 { isInComment = false } // \) ends an ICU comment.
+            previousWasEscaped = !isQuoted
+            if next == 99 { return 2 + thirdScalarWidth } // \cX owns its control operand.
+            return next == nil ? 1 : 1 + nextScalarWidth
+        }
+        previousWasEscaped = false
+        if isInComment {
+            if unit == 41 { isInComment = false }
+            return 1
+        }
+        if characterClassDepth == 0, unit == 40, next == 63, thirdUnit == 35 { // (?#…)
+            isInComment = true
+            return 3
+        }
+        switch unit {
+        case 91: characterClassDepth += 1 // [
+        case 93 where characterClassDepth > 0: characterClassDepth -= 1 // ]
+        default: break
+        }
+        return 1
+    }
+
+    /// A space-separated dollar followed by a nonempty condition gives that
+    /// condition its own opening delimiter and keeps this dollar in the regex.
+    static func isAnchorBeforeCondition(
+        at index: Int, end: Int, unitAt: (Int) -> UInt16, whitespaceWidth: (Int) -> Int
+    ) -> Bool {
+        func skipWhitespace(from start: Int) -> Int {
+            var cursor = start
+            while cursor < end {
+                let width = whitespaceWidth(cursor)
+                guard width > 0 else { break }
+                cursor += width
+            }
+            return cursor
+        }
+
+        let opening = skipWhitespace(from: index + 1)
+        guard opening > index + 1, opening < end, unitAt(opening) == 36 else { return false }
+        let value = skipWhitespace(from: opening + 1)
+        // Preserve an intentionally empty wrapper unless the later dollar
+        // also has text and a closing delimiter of its own.
+        guard value < end, unitAt(value) != 36 else { return false }
+        return (value + 1..<end).contains { unitAt($0) == 36 }
+    }
+}
+
 enum HistorySearchQueryCompiler {
     static func compile(_ text: String, mode: SearchMode = .fuzzy) throws(HistorySearchExpressionError) -> HistorySearchQueryCompilation {
         let limit = HistoryLimits.standard.maximumSearchTermUTF8Bytes
@@ -29,6 +103,7 @@ enum HistorySearchQueryCompiler {
         var soleExpression: HistorySearchExpression?
         var literal: [UInt8] = []
         var cursor = 0
+        var regexpBoundary = HistorySearchRegexpBoundary()
 
         func flushLiteral() {
             guard !literal.isEmpty else { return }
@@ -37,10 +112,29 @@ enum HistorySearchQueryCompiler {
         }
 
         while cursor < bytes.count {
-            if bytes[cursor] == 92, cursor + 1 < bytes.count, bytes[cursor + 1] == 36 {
-                // This escape blocks wrapper admission in every mode. A
-                // regexp still needs its backslash to match a literal dollar.
-                if mode == .regexp { literal.append(92) }
+            if mode == .regexp {
+                // Dollar anchors, class members and quoted/escaped dollars
+                // belong to the regexp. Only an outside separator can open
+                // a Clipy condition.
+                let unit = bytes[cursor]
+                if unit != 36 || !regexpBoundary.allowsCondition
+                    || (cursor > 0 && !hasWhitespaceBefore(cursor, in: bytes))
+                    || HistorySearchRegexpBoundary.isAnchorBeforeCondition(
+                        at: cursor, end: bytes.count, unitAt: { UInt16(bytes[$0]) },
+                        whitespaceWidth: { whitespaceWidth(at: $0, in: bytes) }
+                    ) {
+                    let next = cursor + 1 < bytes.count ? bytes[cursor + 1] : nil
+                    let third = cursor + 2 < bytes.count ? bytes[cursor + 2] : nil
+                    let end = cursor + regexpBoundary.advance(
+                        UInt16(unit), followedBy: next.map { UInt16($0) },
+                        nextScalarWidth: next.map(utf8ScalarWidth) ?? 0,
+                        thirdUnit: third.map { UInt16($0) }, thirdScalarWidth: third.map(utf8ScalarWidth) ?? 0
+                    )
+                    literal.append(contentsOf: bytes[cursor..<end])
+                    cursor = end
+                    continue
+                }
+            } else if bytes[cursor] == 92, cursor + 1 < bytes.count, bytes[cursor + 1] == 36 {
                 literal.append(36)
                 cursor += 2
                 continue
@@ -50,14 +144,6 @@ enum HistorySearchQueryCompiler {
                 cursor += 1
                 continue
             }
-            // Regexp dollar anchors belong to the pattern. Conditions begin
-            // at the input start or after whitespace in that matching mode.
-            if mode == .regexp, cursor > 0, !hasWhitespaceBefore(cursor, in: bytes) {
-                literal.append(36)
-                cursor += 1
-                continue
-            }
-
             let opening = cursor
             cursor += 1
             let conditionStart = cursor
@@ -101,9 +187,12 @@ enum HistorySearchQueryCompiler {
             let numericText = conditionText.trimmingCharacters(in: .whitespacesAndNewlines)
             if isAmount(numericText) {
                 // A paired numeric amount is still ordinary clipboard text.
-                literal.append(36)
-                literal.append(contentsOf: condition)
-                literal.append(36)
+                if mode == .regexp { literal.append(contentsOf: bytes[opening..<cursor]) }
+                else {
+                    literal.append(36)
+                    literal.append(contentsOf: condition)
+                    literal.append(36)
+                }
                 continue
             }
             let parsed: HistorySearchExpression
@@ -172,6 +261,21 @@ enum HistorySearchQueryCompiler {
         )
     }
 
+    /// Explicit completion appends a block only if the same compiler can
+    /// recover the original regexp byte for byte. A trailing escape, open
+    /// class or unfinished wrapper can otherwise absorb the new block.
+    static func regexpConditionInsertionPrefix(for text: String) -> String? {
+        guard let original = try? compile(text, mode: .regexp) else { return nil }
+        let separator = text.unicodeScalars.last.map {
+            CharacterSet.whitespacesAndNewlines.contains($0) ? "" : " "
+        } ?? ""
+        guard let trial = try? compile(text + separator + "$type:all$", mode: .regexp),
+              trial.literalText.utf8.elementsEqual(original.literalText.utf8),
+              trial.expressionText != original.expressionText
+        else { return nil }
+        return separator
+    }
+
     private struct ConditionSegment {
         let text: String
         let opening: Int
@@ -236,16 +340,16 @@ enum HistorySearchQueryCompiler {
         HistorySearchExpressionError(reason: .queryTooLong, offset: 0)
     }
 
-    private static func isAmount(_ text: String) -> Bool {
+    static func isAmount(_ text: String) -> Bool {
         var hasDigit = false
-        var hasPoint = false
+        var hasDecimalSeparator = false
         var endsWithDigit = false
         for scalar in text.unicodeScalars {
             if CharacterSet.decimalDigits.contains(scalar) {
                 hasDigit = true
                 endsWithDigit = true
-            } else if scalar == ".", hasDigit, !hasPoint {
-                hasPoint = true
+            } else if ".,٫．，".unicodeScalars.contains(scalar), hasDigit, !hasDecimalSeparator {
+                hasDecimalSeparator = true
                 endsWithDigit = false
             } else {
                 return false
@@ -258,14 +362,19 @@ enum HistorySearchQueryCompiler {
         guard index < bytes.count else { return false }
         let leading = bytes[index]
         if leading < 128 { return (48...57).contains(leading) }
-        let width = leading < 224 ? 2 : (leading < 240 ? 3 : 4)
         // The delimiter is ASCII, so the next byte starts a complete UTF-8
         // scalar. Decode only that scalar rather than rescanning the tail.
-        let end = min(bytes.count, index + width)
+        let end = min(bytes.count, index + utf8ScalarWidth(leading))
         guard let scalar = String(decoding: bytes[index..<end], as: UTF8.self).unicodeScalars.first else {
             return false
         }
         return CharacterSet.decimalDigits.contains(scalar)
+    }
+
+    private static func utf8ScalarWidth(_ leadingByte: UInt8) -> Int {
+        if leadingByte < 128 { return 1 }
+        if leadingByte < 224 { return 2 }
+        return leadingByte < 240 ? 3 : 4
     }
 
     private static func hasWhitespaceBefore(_ index: Int, in bytes: [UInt8]) -> Bool {
@@ -273,7 +382,17 @@ enum HistorySearchQueryCompiler {
         // Decode only the preceding complete UTF-8 scalar, including Unicode
         // separators; the admitted query is already valid Swift text.
         while start > 0, bytes[start] & 0xC0 == 0x80 { start -= 1 }
-        guard let scalar = String(decoding: bytes[start..<index], as: UTF8.self).unicodeScalars.first else { return false }
-        return CharacterSet.whitespacesAndNewlines.contains(scalar)
+        return whitespaceWidth(at: start, in: bytes) > 0
+    }
+
+    private static func whitespaceWidth(at index: Int, in bytes: [UInt8]) -> Int {
+        let width = utf8ScalarWidth(bytes[index])
+        if width == 1 {
+            let byte = bytes[index]
+            return byte == 32 || (9...13).contains(byte) ? 1 : 0
+        }
+        guard let scalar = String(decoding: bytes[index..<index + width], as: UTF8.self).unicodeScalars.first,
+              CharacterSet.whitespacesAndNewlines.contains(scalar) else { return 0 }
+        return width
     }
 }

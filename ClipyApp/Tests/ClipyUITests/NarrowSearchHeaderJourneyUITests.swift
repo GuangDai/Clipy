@@ -75,6 +75,8 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         }, app.debugDescription)
         let search = app.textFields["clipy.search.field"]
         let mode = panel.descendants(matching: .any)["clipy.search.mode"]
+        let sort = panel.descendants(matching: .any)["clipy.search.sort"]
+        let dates = panel.buttons["clipy.search.date-options"]
         let filter = panel.descendants(matching: .any)["clipy.search.filter"]
         let rows = panel.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "clipy.history.row."
@@ -97,12 +99,14 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         XCTAssertEqual(search.frame.minX, emptySearchFrame.minX, accuracy: 1, app.debugDescription)
         XCTAssertGreaterThanOrEqual(clear.frame.width, 24, app.debugDescription)
         XCTAssertGreaterThanOrEqual(clear.frame.height, 24, app.debugDescription)
-        for control in [search, clear, mode, filter] {
+        for control in [search, clear, mode, sort, dates, filter] {
             XCTAssertTrue(control.isHittable, app.debugDescription)
             XCTAssertTrue(panel.frame.insetBy(dx: -2, dy: -2).contains(control.frame), app.debugDescription)
         }
         XCTAssertFalse(search.frame.intersects(clear.frame), app.debugDescription)
         XCTAssertFalse(search.frame.intersects(mode.frame), app.debugDescription)
+        XCTAssertFalse(search.frame.intersects(sort.frame), app.debugDescription)
+        XCTAssertFalse(search.frame.intersects(dates.frame), app.debugDescription)
         XCTAssertFalse(search.frame.intersects(filter.frame), app.debugDescription)
 
         clear.click()
@@ -113,9 +117,14 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
             search.value as? String == "alpha" && rows.count == 1
                 && search.frame.width >= 140
         }, app.debugDescription)
-        // Compact menu symbols retain full localized choices.
+        // Compact menu labels retain full localized choices.
         mode.click()
         XCTAssertTrue(app.menuItems[language == "en" ? "Exact" : "精确"].waitForExistence(timeout: 5), app.debugDescription)
+        app.typeKey(.escape, modifierFlags: [])
+        sort.click()
+        XCTAssertTrue(app.menuItems[language == "en" ? "Newest first" : "最新优先"].waitForExistence(timeout: 5),
+                      app.debugDescription)
+        XCTAssertTrue(app.menuItems[language == "en" ? "Pinned first" : "置顶优先"].exists, app.debugDescription)
         app.typeKey(.escape, modifierFlags: [])
         filter.click()
         let pinnedOnly = app.menuItems[language == "en" ? "Pinned Only" : "仅置顶"]
@@ -131,6 +140,72 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         // query, and the original RegExp mode still executes the suffix.
         app.typeText("$")
         XCTAssertTrue(waitUntil { search.value as? String == "alpha$" && rows.count == 1 }, app.debugDescription)
+        if language == "en" {
+            exerciseDateConfirmation(in: app, dates: dates)
+            exerciseFuzzyLimit(in: app, search: search, sort: sort, rows: rows, pasteboard: pasteboard)
+        }
+    }
+
+    @MainActor
+    private func exerciseDateConfirmation(in app: XCUIApplication, dates: XCUIElement) {
+        let range = app.descendants(matching: .any)["clipy.search.date.range"]
+        let activeDate = app.buttons["clipy.search.clear-filter.date"]
+
+        for applies in [false, true] {
+            dates.click()
+            XCTAssertTrue(range.waitForExistence(timeout: 5), app.debugDescription)
+            range.click()
+            let recentDays = app.menuItems["Last 7 days"]
+            XCTAssertTrue(recentDays.waitForExistence(timeout: 5), app.debugDescription)
+            recentDays.click()
+            let action = app.buttons[applies ? "clipy.search.options.apply" : "clipy.search.options.cancel"]
+            XCTAssertTrue(action.isHittable, app.debugDescription)
+            action.click()
+            XCTAssertTrue(waitUntil { !range.exists && activeDate.exists == applies }, app.debugDescription)
+        }
+    }
+
+    @MainActor
+    private func exerciseFuzzyLimit(
+        in app: XCUIApplication, search: XCUIElement, sort: XCUIElement,
+        rows: XCUIElementQuery, pasteboard: NSPasteboard
+    ) {
+        let sharedPrefix = String(repeating: "x", count: 64)
+        let longText = sharedPrefix + "a"
+        let distractor = sharedPrefix + "b"
+        app.buttons["clipy.search.clear"].click()
+        XCTAssertTrue(waitUntil { search.value as? String == "" }, app.debugDescription)
+        for sample in [longText, distractor] {
+            pasteboard.clearContents()
+            XCTAssertTrue(pasteboard.setString(sample, forType: .string))
+            XCTAssertTrue(waitUntil { rows.allElementsBoundByIndex.contains { $0.label.contains(sample) } },
+                          app.debugDescription)
+        }
+
+        search.click()
+        app.typeKey("2", modifierFlags: .command)
+        app.typeText(String(sharedPrefix.prefix(8)))
+        XCTAssertTrue(waitUntil { rows.count == 2 }, app.debugDescription)
+        sort.click()
+        let relevance = app.menuItems["Pinned, then relevance"]
+        XCTAssertTrue(relevance.waitForExistence(timeout: 5), app.debugDescription)
+        relevance.click()
+        XCTAssertTrue(waitUntil { sort.value as? String == "Pinned, then relevance" }, app.debugDescription)
+
+        search.click()
+        app.typeKey("a", modifierFlags: .command)
+        app.typeText(longText)
+
+        let useExact = app.links["clipy.search.fuzzy.use-exact"]
+        XCTAssertTrue(useExact.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(search.value as? String, longText)
+        XCTAssertFalse(app.descendants(matching: .any)["clipy.history.query-issue"].exists)
+        useExact.click()
+        XCTAssertTrue(waitUntil {
+            !useExact.exists && search.value as? String == longText
+                && rows.count == 1 && rows.firstMatch.label.contains(longText)
+                && sort.value as? String == "Pinned first"
+        }, app.debugDescription)
     }
 
     @MainActor

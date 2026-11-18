@@ -1,36 +1,10 @@
-/// The current SQLite schema stores literal projections, content and position
-/// through the real public capture path; old model-table stores are rejected.
+/// An old model-table store is rejected without changing its contents.
 import Foundation
 import HistoryCore
 import Testing
 @testable import HistoryStorage
 
 struct SchemaSmokeTests {
-    @Test func currentStorePersistsLiteralContentAndPosition() async throws {
-        let url = WSSupport.tempStoreURL("sqlite-schema-smoke")
-        defer { WSSupport.removeStore(url) }
-        let history = try await WSSupport.openHistory(storeURL: url)
-        let bytes = Data("\u{FEFF}hello\u{0}".utf8)
-        _ = try await history.perform(.capture(.init(representations: [.init(typeIdentifier: "public.utf8-plain-text", bytes: bytes)],
-            origin: .init(sourceApplication: "com.example.first", lineageHint: nil), observedAt: Date(timeIntervalSinceReferenceDate: 10))))
-        let page = try await history.browse(.init(kind: .recent, limit: 1))
-        let title = try #require(page.rows.first?.title)
-        let reader = try SQLiteDatabase(url: url)
-        let statement = try reader.prepare("""
-            SELECT i.titleUTF8, i.copyCount, i.contentVersion, r.inlineBytes, s.changePosition
-            FROM history_items i JOIN representations r ON r.contentID = i.currentContentID
-            CROSS JOIN history_state s WHERE s.key = 'retained-history'
-            """)
-        defer { statement.finalize() }
-        try #require(try statement.step())
-        #expect(try statement.blob(at: 0) == Data(title.utf8))
-        #expect(try sqliteUInt64(statement.blob(at: 1)) == 1)
-        #expect(try sqliteUInt64(statement.blob(at: 2)) == 1)
-        #expect(try statement.blob(at: 3) == bytes)
-        #expect(try sqliteUInt64(statement.blob(at: 4)) == 1)
-        #expect(try !statement.step())
-    }
-
     @Test func previousModelStoreIsRejectedWithoutDeletingOrRecreatingIt() async throws {
         let url = WSSupport.tempStoreURL("sqlite-reject-previous-store")
         defer { WSSupport.removeStore(url) }

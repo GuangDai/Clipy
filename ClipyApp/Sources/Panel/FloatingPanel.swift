@@ -90,6 +90,11 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// The latest content-fit demand (the oracle's ideal height), retained
     /// so the live-resize settle boundary and a later open can re-apply it.
     private var pendingContentFitHeight: CGFloat?
+    /// Desired top edge before temporarily fitting taller content to the screen.
+    private var contentFitTopEdge: CGFloat?
+    /// Center of the selected display until the new session reports its first
+    /// measured fit. Later changes keep the settled top edge in place.
+    private var openingCenterY: CGFloat?
 
     /// Content fit is suspended while the user drags a resize edge; the
     /// settle boundary persists the dragged height as the new ceiling and
@@ -165,9 +170,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         // applied at open. The bounds only constrain interactive resizes.
         applyResizeLimits()
 
-        let hostingView = NSHostingView(rootView: rootView.appLanguage().modifier(
-            AppMotionSurface(presentation: motionPresentation)
-        ))
+        var presentationRoot = rootView
+        presentationRoot.motionPresentation = motionPresentation
+        let hostingView = NSHostingView(rootView: presentationRoot.appLanguage())
         hostingView.sizingOptions = []
         hostingView.wantsLayer = true
         contentView = hostingView
@@ -200,9 +205,20 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         let responder = firstResponder
         let hasMarkedText = (responder as? NSTextInputClient)?
             .hasMarkedText() ?? false
-        let isCompletionCommand = event.keyCode == UInt16(kVK_Return)
+        let isReturn = event.keyCode == UInt16(kVK_Return)
             || event.keyCode == UInt16(kVK_ANSI_KeypadEnter)
-            || event.keyCode == UInt16(kVK_Escape)
+        let isCompletionCommand = isReturn || event.keyCode == UInt16(kVK_Escape)
+        if isCompletionCommand, attachedSheet != nil || NSApp.modalWindow != nil {
+            super.sendEvent(event)
+            return
+        }
+        if isReturn, !hasMarkedText,
+           event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
+           previewState.isInformationPresented || previewState.isFileConfirmationPresented {
+            // The popover or confirmation owns Return. An event delivered to
+            // the window behind it must never invoke a hidden Copy shortcut.
+            return
+        }
         if !hasMarkedText, isCompletionCommand,
            event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
            isSearchCompletionActive(), let responder, responder !== self {
@@ -239,7 +255,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
                 super.sendEvent(event)
             }
         case .submitSelection:
-            onSubmitSelection()
+            // A held key is still one Copy. Leave key repetition available
+            // to the editors and completion list that own other Return events.
+            if !event.isARepeat { onSubmitSelection() }
         case .forwardToWindow:
             super.sendEvent(event)
         }
@@ -300,7 +318,10 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             screens: screens,
             lastPositionAnchor: Self.savedAnchor()
         )
-        setFrameProgrammatically(NSRect(origin: origin, size: size), display: false)
+        let openingFrame = NSRect(origin: origin, size: size)
+        openingCenterY = mode == .center ? openingFrame.midY : nil
+        contentFitTopEdge = openingFrame.maxY
+        setFrameProgrammatically(openingFrame, display: false)
         if !isPresented {
             motionPresentation.play(duration: presentationDuration(screen))
         }
@@ -327,6 +348,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// (the floating preview pane) order out with it.
     override func close() {
         guard isPresented else { return }
+        openingCenterY = nil
         motionPresentation.cancel()
         deferredFocusLossCloseTask?.cancel()
         deferredFocusLossCloseTask = nil
@@ -382,6 +404,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
             height: size.height
         )
         guard fitted != frame else { return }
+        contentFitTopEdge = fitted.maxY
         setFrameProgrammatically(fitted, display: isPresented)
     }
 
@@ -497,6 +520,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// own child window and never enters this frame.
     func windowDidMove(_ notification: Notification) {
         guard !isProgrammaticMove else { return }
+        openingCenterY = nil
+        contentFitTopEdge = frame.maxY
         persistAnchor()
         // Child windows follow a drag, but their preferred side can become
         // offscreen. Recompute preview placement on the new parent frame.
@@ -517,6 +542,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// active the retained demand is kept but not applied.
     func windowWillStartLiveResize(_ notification: Notification) {
         guard isPresented else { return }
+        openingCenterY = nil
         isLiveResizeActive = true
         liveResizeStartingSize = frame.size
     }
@@ -585,6 +611,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
                 display: isPresented
             )
         }
+        contentFitTopEdge = frame.maxY
         persistAnchor()
         applyContentFit()
         isSettlingLiveResize = false
@@ -609,17 +636,16 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// and the next open re-apply it.
     func fitToContent(idealHeight: CGFloat) {
         pendingContentFitHeight = idealHeight
-        applyContentFit()
+        applyContentFit(settlingOpeningFrame: true)
     }
 
     /// Applies the retained fit demand with an INSTANT, non-animated
     /// `setFrame` (the layout-storm rationale above: window frames never
     /// animate). The new height is the ideal clamped to
-    /// [PanelContentFit floor, persisted ceiling] and the screen's visible
-    /// frame; the panel's TOP edge stays pinned unless that would push the
-    /// bottom offscreen, in which case the frame shifts up just enough to
-    /// stay inside (the same clamp family PopupPositionGeometry uses).
-    private func applyContentFit() {
+    /// [PanelContentFit floor, persisted ceiling] and the visible screen.
+    /// The first measured fit settles a centered opening. Other fits keep
+    /// the top edge as far as the visible screen allows.
+    private func applyContentFit(settlingOpeningFrame: Bool = false) {
         guard isPresented,
               !isLiveResizeActive,
               let idealHeight = pendingContentFitHeight
@@ -630,10 +656,12 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         if let visibleFrame {
             fitted = min(fitted, visibleFrame.height)
         }
-        guard fitted != frame.height else { return }
+        let centerY = settlingOpeningFrame ? openingCenterY.map { visibleFrame?.midY ?? $0 } : nil
+        if settlingOpeningFrame { openingCenterY = nil }
+        guard fitted != frame.height || centerY != nil else { return }
         var newFrame = NSRect(
             x: frame.minX,
-            y: frame.maxY - fitted,
+            y: centerY.map { $0 - fitted / 2 } ?? (contentFitTopEdge ?? frame.maxY) - fitted,
             width: frame.width,
             height: fitted
         )
@@ -645,6 +673,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
                 newFrame.origin.y = visibleFrame.minY
             }
         }
+        if centerY != nil { contentFitTopEdge = newFrame.maxY }
         setFrameProgrammatically(newFrame, display: true)
     }
 

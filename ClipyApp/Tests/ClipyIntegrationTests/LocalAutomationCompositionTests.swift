@@ -99,7 +99,7 @@ struct LocalAutomationCompositionTests {
         let ingress = LocalAutomationIngress(
             authority: history.authority, gateway: history.externalGateway,
             credentialStore: CredentialStore(directoryURL: directory.appendingPathComponent("server")),
-            onCommittedRemoval: { _ in await boundary.park() }
+            onCommittedRemoval: { _, _ in await boundary.park() }
         )
         let controller = LocalAutomationController(
             ingress: ingress, endpointURL: endpoint, clientDirectory: clientDirectory

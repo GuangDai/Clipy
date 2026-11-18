@@ -12,8 +12,9 @@ import SwiftUI
 struct GeneralSettingsTab: View {
 
     @Environment(\.locale) private var interfaceLocale
-    private let viewState: HistoryViewState
+    private let viewState: HistoryViewState?
     private let launchAtLogin: LaunchAtLoginSettings?
+    private let storeRecovery: SettingsStoreRecoveryView?
 
     @AppStorage(AppLanguageSettings.defaultsKey) private var language: AppLanguage = .system
 
@@ -24,11 +25,13 @@ struct GeneralSettingsTab: View {
     @State private var isShowingClearActions = false
 
     init(
-        viewState: HistoryViewState,
-        launchAtLogin: LaunchAtLoginSettings?
+        viewState: HistoryViewState?,
+        launchAtLogin: LaunchAtLoginSettings?,
+        storeRecovery: SettingsStoreRecoveryView?
     ) {
         self.viewState = viewState
         self.launchAtLogin = launchAtLogin
+        self.storeRecovery = storeRecovery
     }
 
     var body: some View {
@@ -53,65 +56,75 @@ struct GeneralSettingsTab: View {
                 }
             }
             CapturePrivacySettingsView()
-            Section {
-                DisclosureGroup(
-                    AdaptiveSettingsCopy.text("Clear History"),
-                    isExpanded: $isShowingClearActions
-                ) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Button(SettingsCopy.text("Clear Unpinned Items…"), role: .destructive) {
-                            isConfirmingClearUnpinned = true
-                        }
-                        .disabled(isWorking)
-                        .confirmationDialog(
-                            SettingsCopy.text("Remove all unpinned items?"),
-                            isPresented: $isConfirmingClearUnpinned,
-                            titleVisibility: .visible
-                        ) {
-                            Button(SettingsCopy.text("Clear Unpinned Items"), role: .destructive) {
-                                Task { await performClear(.unpinned) }
-                            }
-                            Button(SettingsCopy.text("Cancel"), role: .cancel) {}
-                        }
-                        Button(SettingsCopy.text("Clear All History…"), role: .destructive) {
-                            isConfirmingClearAll = true
-                        }
-                        .disabled(isWorking)
-                        .confirmationDialog(
-                            SettingsCopy.text("Remove every item, including pinned items?"),
-                            isPresented: $isConfirmingClearAll,
-                            titleVisibility: .visible
-                        ) {
-                            Button(SettingsCopy.text("Clear All History"), role: .destructive) {
-                                Task { await performClear(.all) }
-                            }
-                            Button(SettingsCopy.text("Cancel"), role: .cancel) {}
-                        }
-                        if isWorking {
-                            HStack(spacing: 8) {
-                                ProgressView()
-                                    .controlSize(.small)
-                                Text(SettingsCopy.text("Clearing history…"))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .accessibilityElement(children: .combine)
-                            .accessibilityIdentifier("clipy.settings.general.clear-progress")
-                        }
-                        if let status {
-                            SettingStatusView(status: status)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 8)
+            if viewState != nil {
+                clearHistorySection
+            } else if let storeRecovery {
+                Section(AdaptiveSettingsCopy.text("Clear History")) {
+                    storeRecovery
                 }
-                .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.general.clear-history"))
-            } footer: {
-                Text(AdaptiveSettingsCopy.text("Clearing history permanently removes saved clipboard content."))
             }
         }
         .formStyle(.grouped)
         .onAppear {
             launchAtLogin?.refresh()
+        }
+    }
+
+    private var clearHistorySection: some View {
+        Section {
+            DisclosureGroup(
+                AdaptiveSettingsCopy.text("Clear History"),
+                isExpanded: $isShowingClearActions
+            ) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Button(SettingsCopy.text("Clear Unpinned Items…"), role: .destructive) {
+                        isConfirmingClearUnpinned = true
+                    }
+                    .disabled(isWorking)
+                    .confirmationDialog(
+                        SettingsCopy.text("Remove all unpinned items?"),
+                        isPresented: $isConfirmingClearUnpinned,
+                        titleVisibility: .visible
+                    ) {
+                        Button(SettingsCopy.text("Clear Unpinned Items"), role: .destructive) {
+                            Task { await performClear(.unpinned) }
+                        }
+                        Button(SettingsCopy.text("Cancel"), role: .cancel) {}
+                    }
+                    Button(SettingsCopy.text("Clear All History…"), role: .destructive) {
+                        isConfirmingClearAll = true
+                    }
+                    .disabled(isWorking)
+                    .confirmationDialog(
+                        SettingsCopy.text("Remove every item, including pinned items?"),
+                        isPresented: $isConfirmingClearAll,
+                        titleVisibility: .visible
+                    ) {
+                        Button(SettingsCopy.text("Clear All History"), role: .destructive) {
+                            Task { await performClear(.all) }
+                        }
+                        Button(SettingsCopy.text("Cancel"), role: .cancel) {}
+                    }
+                    if isWorking {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text(SettingsCopy.text("Clearing history…"))
+                                .foregroundStyle(.secondary)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("clipy.settings.general.clear-progress")
+                    }
+                    if let status {
+                        SettingStatusView(status: status)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 8)
+            }
+            .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.settings.general.clear-history"))
+        } footer: {
+            Text(AdaptiveSettingsCopy.text("Clearing history permanently removes saved clipboard content."))
         }
     }
 
@@ -183,7 +196,7 @@ struct GeneralSettingsTab: View {
     /// receipt state maps to deliberate feedback in `clearStatusFeedback` —
     /// no blanket "Done." catch-all (deep review Card 10).
     private func performClear(_ scope: ClearScope) async {
-        guard !isWorking else { return }
+        guard let viewState, !isWorking else { return }
         isWorking = true
         status = nil
         defer { isWorking = false }

@@ -102,6 +102,36 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         try require(!workspace.buttons["clipy.history.workspace.copy"].isEnabled)
         try require(workspace.exists, "Batch removal must keep the Settings workspace open.")
 
+        let clearedTitle = "Workspace batch title retired by clear"
+        NSPasteboard.general.clearContents()
+        try require(NSPasteboard.general.setString(clearedTitle, forType: .string))
+        let clearedRow = row(named: clearedTitle, in: workspace)
+        try require(clearedRow.waitForExistence(timeout: 10), app.debugDescription)
+        let clearedID = String(clearedRow.identifier.dropFirst("clipy.history.workspace.row.".count))
+        workspace.buttons["clipy.history.workspace.select-page"].click()
+        workspace.buttons["clipy.history.workspace.batch.pin"].click()
+        try assertBatchCompleted(1, operation: "Pin", in: workspace, app: app)
+        let status = workspace.descendants(matching: .any)["clipy.history.workspace.status"]
+        let itemResultsID = "clipy.history.workspace.batch.items"
+        let itemResults = status.descendants(matching: .any)[itemResultsID]
+        let toggle = itemResults.disclosureTriangles[itemResultsID + ".toggle"]
+        let completed = itemResults.descendants(matching: .any)["clipy.history.workspace.batch.completed." + clearedID]
+        try require(toggle.waitForExistence(timeout: 5) && toggle.isHittable, app.debugDescription)
+        if !completed.exists { toggle.click() }
+        try require(waitUntil {
+            completed.exists && (completed.label == clearedTitle || completed.value as? String == clearedTitle)
+        }, app.debugDescription)
+        workspace.descendants(matching: .any)["clipy.history.workspace.actions"].firstMatch.click()
+        app.menuItems["Clear all history…"].click()
+        let clear = app.buttons["clipy.history.workspace.confirm-clear"].firstMatch
+        try require(clear.waitForExistence(timeout: 5) && clear.isHittable, app.debugDescription)
+        clear.click()
+        try require(waitUntil {
+            workspace.staticTexts["History is empty"].exists
+                && completed.exists && (completed.label == "History item" || completed.value as? String == "History item")
+        }, app.debugDescription)
+        try assertBatchCompleted(1, operation: "Pin", in: workspace, app: app)
+
         // Terminating releases the app's Authority before checking durable
         // public History facts. A filtered/hidden row is not deletion evidence.
         app.terminate()
@@ -118,7 +148,7 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         let storeURL = directory.appendingPathComponent("history.sqlite")
         let fixtures = try await seedPagingHistory(at: storeURL)
         NSPasteboard.general.clearContents()
-        let app = launch(storeURL: storeURL, captureAccess: "denied")
+        let app = launch(storeURL: storeURL, captureAccess: "allowed")
         defer { app.terminate(); NSPasteboard.general.clearContents() }
         try require(app.descendants(matching: .any)["clipy.panel.root"].waitForExistence(timeout: 20), app.debugDescription)
         let workspace = try openWorkspace(in: app)
@@ -162,6 +192,16 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         }, "An empty replacement query must retire the previous page.\n" + app.debugDescription)
         try assertSelectionCount(0, in: workspace, app: app)
 
+        search.click()
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey(.delete, modifierFlags: [])
+        app.typeText("$type:missing$")
+        let issue = workspace.descendants(matching: .any)["clipy.history.workspace.query-issue"]
+        try require(waitUntil {
+            issue.exists && !workspace.staticTexts["No matching items"].exists
+                && workspaceRows.count == 0 && !next.isEnabled && !previous.isEnabled
+        }, "A rejected query must explain its error instead of reporting an empty result.\n" + app.debugDescription)
+
         let clearSearch = workspace.buttons["clipy.search.clear"]
         try require(clearSearch.exists && clearSearch.isHittable, app.debugDescription)
         clearSearch.click()
@@ -173,7 +213,7 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         next.click()
         try assertPage(2, range: "Items 51–55", in: workspace, app: app)
 
-        try chooseSort("Oldest copied first", in: workspace, app: app)
+        try chooseSort("Oldest first", in: workspace, app: app)
         try assertPage(1, range: "Items 1–50", in: workspace, app: app)
         try require(waitUntil {
             let oldest = self.row(for: fixtures[0].id, in: workspace)
@@ -192,14 +232,24 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         let selectedPosition = firstVisible.frame.minY
         try require(abs(selectedPosition - position) <= 1,
                        "Selecting a later row moved the first row from \(position) to \(selectedPosition).")
+        let backgroundCopy = "Unrelated background copy"
+        NSPasteboard.general.clearContents()
+        try require(NSPasteboard.general.setString(backgroundCopy, forType: .string))
+        try require(waitUntil {
+            page.exists && ((page.value as? String) ?? page.label) == "Near your reading position"
+                && self.row(named: backgroundCopy, in: workspace).exists
+        }, app.debugDescription)
+        try assertSelectionCount(1, in: workspace, app: app)
+        try assertPreview(fixtures[54].text, in: workspace, app: app)
         try require(!next.isEnabled)
         previous.click()
         try assertPage(1, range: "Items 1–50", in: workspace, app: app)
         try require(row(for: fixtures[0].id, in: workspace).isHittable, app.debugDescription)
+        try assertSelectionCount(0, in: workspace, app: app)
 
         next.click()
-        try assertPage(2, range: "Items 51–55", in: workspace, app: app)
-        try chooseSort("Most copied first", in: workspace, app: app)
+        try assertPage(2, range: "Items 51–56", in: workspace, app: app)
+        try chooseSort("Most copied", in: workspace, app: app)
         try require(waitUntil {
             let frequent = self.row(for: fixtures[22].id, in: workspace)
             return frequent.exists && frequent.isHittable
@@ -337,7 +387,7 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
 
     @MainActor
     private func chooseSort(_ title: String, in workspace: XCUIElement, app: XCUIApplication) throws {
-        let sort = workspace.popUpButtons["clipy.history.workspace.sort"]
+        let sort = workspace.descendants(matching: .any)["clipy.search.sort"].firstMatch
         try require(sort.exists && sort.isHittable, app.debugDescription)
         sort.click()
         app.menuItems[title].click()

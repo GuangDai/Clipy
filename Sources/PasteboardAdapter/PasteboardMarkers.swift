@@ -41,12 +41,4 @@ enum PasteboardMarkers {
         "com.agilebits.onepassword",
         "com.typeit4me.clipping",
     ]
-
-    /// Whether a pasteboard item carrying exactly `types` must be excluded
-    /// from History as concealed/private/transient content. Any single
-    /// marker excludes the whole item (whole-capture semantics,
-    /// docs/storage.md step 3).
-    static func marksConcealed(_ types: [String]) -> Bool {
-        types.contains { concealedTypeIdentifiers.contains($0) }
-    }
 }

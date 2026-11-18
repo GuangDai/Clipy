@@ -29,7 +29,7 @@ struct PanelSessionSelectionTests {
         surface.handleRowHover(rows[0].item.id)
         surface.reconcileSessionSelection(rows: rows)
         #expect(surface.selection == nil)
-        surface.notePointerMovement()
+        surface.notePointerMovement(over: rows[0].item.id)
         #expect(surface.selection == rows[0].item.id)
         surface.endSession()
         surface.beginSession(rows: [])
@@ -54,7 +54,7 @@ struct PanelSessionSelectionTests {
         #expect(surface.selection == rows[1].item.id)
         #expect(surface.keyboardNavigationGeneration == initial + 2)
         surface.handleRowHover(rows[2].item.id)
-        surface.notePointerMovement()
+        surface.notePointerMovement(over: rows[2].item.id)
         #expect(surface.selection == rows[2].item.id)
         #expect(surface.keyboardNavigationGeneration == initial + 2)
     }
@@ -368,15 +368,14 @@ struct PanelSessionSelectionTests {
         let surface = makeSurface()
         surface.beginSession(rows: rows)
         surface.moveSelection(in: rows, direction: .next)
-        surface.notePointerMovement()
+        surface.notePointerMovement(over: nil)
         #expect(surface.inputMode == .mouse)
 
         surface.handleRowHover(rows[2].item.id)
         #expect(surface.selection == rows[2].item.id)
-        #expect(surface.deferredHoverSelection == nil)
     }
 
-    @Test func hoverDefersDuringKeyboardNavigationAndAppliesOnNextMouseMovement() {
+    @Test func realPointerMovementSelectsTheHitRowDuringKeyboardNavigation() {
         let surface = makeSurface()
         surface.beginSession(rows: rows)
         surface.moveSelection(in: rows, direction: .next)
@@ -385,21 +384,18 @@ struct PanelSessionSelectionTests {
         #expect(surface.inputMode == .keyboard)
         surface.handleRowHover(rows[1].item.id)
         #expect(surface.selection == rows[0].item.id)
-        #expect(surface.deferredHoverSelection == rows[1].item.id)
 
-        // Only a real mouse movement flips back to pointer control and
-        // applies the deferral — never a scroll.
-        surface.notePointerMovement()
+        // A real mouse event selects the row currently under the pointer.
+        surface.notePointerMovement(over: rows[1].item.id)
         #expect(surface.inputMode == .mouse)
         #expect(surface.selection == rows[1].item.id)
-        #expect(surface.deferredHoverSelection == nil)
     }
 
     @Test func arrowMovementRestoresKeyboardMode() {
         let surface = makeSurface()
         surface.beginSession(rows: rows)
         surface.moveSelection(in: rows, direction: .next)
-        surface.notePointerMovement()
+        surface.notePointerMovement(over: nil)
         #expect(surface.inputMode == .mouse)
 
         surface.moveSelection(in: rows, direction: .next)
@@ -409,24 +405,21 @@ struct PanelSessionSelectionTests {
         surface.handleRowHover(rows[2].item.id)
         #expect(
             surface.selection == rows[1].item.id,
-            "hover only defers while keyboard-navigating"
+            "layout hover does not take over keyboard selection"
         )
-        surface.notePointerMovement()
+        surface.notePointerMovement(over: rows[2].item.id)
         #expect(surface.selection == rows[2].item.id)
     }
 
-    @Test func endSessionRetiresInputModeAndDeferredHover() {
+    @Test func movementOverBlankSpaceKeepsTheKeyboardSelectionAndReopenResetsInputMode() {
         let surface = makeSurface()
         surface.beginSession(rows: rows)
         surface.moveSelection(in: rows, direction: .next)
         surface.handleRowHover(rows[1].item.id)
-        #expect(surface.deferredHoverSelection == rows[1].item.id)
+        surface.notePointerMovement(over: nil)
+        #expect(surface.selection == rows[0].item.id)
 
         surface.endSession()
-        #expect(surface.deferredHoverSelection == nil)
-
-        // The next session restarts in keyboard mode with no stale
-        // deferral able to jump the fresh preselection.
         surface.beginSession(rows: rows)
         surface.moveSelection(in: rows, direction: .next)
         #expect(surface.inputMode == .keyboard)
@@ -444,7 +437,7 @@ struct PanelSessionSelectionTests {
         // The hover → selection → dwell → show chain: hover drives the
         // ID-only selection, then the panel's selection onChange forwards
         // the exact reference (mirrored here) and the dwell opens the pane.
-        surface.notePointerMovement()
+        surface.notePointerMovement(over: nil)
         surface.handleRowHover(rows[1].item.id)
         #expect(surface.selection == rows[1].item.id)
 
@@ -475,7 +468,7 @@ struct PanelSessionSelectionTests {
 
         // Hovering the first row changes the selection and schedules its
         // preview. Forward the actual HistoryPanelView.onChange boundary.
-        surface.notePointerMovement()
+        surface.notePointerMovement(over: nil)
         surface.handleRowHover(rows[0].item.id)
         previewState.handleSelectionChange(
             PreviewSelectionResolution.resolve(selectedID: surface.selection, rows: rows).reference

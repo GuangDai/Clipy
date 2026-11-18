@@ -156,7 +156,7 @@ final class HistoryViewState {
 
     /// The search evaluation mode (docs/architecture.md). A change
     /// restarts observation immediately.
-    var searchMode: SearchMode = .fuzzy {
+    var searchMode: SearchMode = .exact {
         didSet {
             guard searchMode != oldValue else { return }
             validateSearchExpression()
@@ -165,7 +165,7 @@ final class HistoryViewState {
         }
     }
 
-    var sortOrder: HistorySortOrder = .automatic {
+    var sortOrder: HistorySortOrder = .newestFirst {
         didSet {
             guard sortOrder != oldValue else { return }
             advanceSearchQueryGeneration()
@@ -206,10 +206,17 @@ final class HistoryViewState {
 
     var hasWrappedSearchConditions: Bool { parsedSearchExpression != nil }
 
+    var fuzzyQueryExceedsLimit: Bool {
+        guard searchMode == .fuzzy || searchMode == .expression,
+              let text = compiledSearchQuery?.literalText else { return false }
+        let limit = HistoryLimits.standard.maximumFuzzyQueryCharacters
+        return text.prefix(limit + 1).count > limit
+    }
+
     /// The status row and the native content-height calculation use the
     /// same visibility, including rejected closed conditions with no AST.
     var isSearchStatusVisible: Bool {
-        hasActiveFilters || hasWrappedSearchConditions || sortOrder != .automatic
+        hasActiveFilters || hasWrappedSearchConditions
             || HistorySearchCopy.issue(for: self) != nil
     }
 
@@ -258,6 +265,7 @@ final class HistoryViewState {
     /// never republishes it, so the composition connects them directly.
     var onCommittedSurfacePurge:
         @MainActor @Sendable (HistorySurfacePurge, ChangePosition?) -> Void = { _, _ in }
+    var onCommittedRetention: @MainActor @Sendable (ChangePosition, Bool) -> Void = { _, _ in }
 
     /// Content-free accessibility handoff for one settled search intent.
     /// Only the current query generation's first authoritative observation
@@ -304,24 +312,73 @@ final class HistoryViewState {
     private var loadedPages: [LoadedPage] = []
     private var rowsBeforeWindow = 0
     private var visibleRowIDs: Set<HistoryItemID> = []
+    private var workspacePageFirstItemID: HistoryItemID?
 
     /// Seeking by item identity does not enumerate preceding rows to invent
     /// an absolute ordinal. The loaded range is local until Newer reaches
     /// the query's actual first page.
     private(set) var hasKnownRowOffset = true
     private(set) var restoredReadingItemID: HistoryItemID?
-    private(set) var didLoseReadingPosition = false
+
+    enum ReadingPositionLoss: Equatable {
+        case saved, live
+    }
+
+    private(set) var readingPositionLoss: ReadingPositionLoss?
+    var didLoseReadingPosition: Bool { readingPositionLoss != nil }
+
+    private enum FirstPageAnchor {
+        case automatic
+        case restoring(HistoryItemID)
+        case preserving(HistoryItemID?)
+
+        var itemID: HistoryItemID? {
+            switch self {
+            case .automatic: nil
+            case .restoring(let id): id
+            case .preserving(let id): id
+            }
+        }
+
+        var restoresBookmark: Bool {
+            if case .restoring = self { return true }
+            return false
+        }
+    }
+
+    private var firstPageAnchor = FirstPageAnchor.automatic
+
+    var isPreservingReadingPosition: Bool {
+        if case .preserving = firstPageAnchor { return true }
+        return false
+    }
 
     /// Remember a visible row, rather than a selection left behind by a
     /// mouse scroll. Only this opaque ID is handed to browsing preferences.
     var readingItemID: HistoryItemID? {
         let displayed = displayedRows
+        if let workspacePageFirstItemID,
+           let start = displayed.firstIndex(where: { $0.item.id == workspacePageFirstItemID }) {
+            let page = displayed[start...].prefix(pageLimit)
+            return page.first(where: { visibleRowIDs.contains($0.item.id) })?.item.id
+                ?? workspacePageFirstItemID
+        }
         return displayed.first(where: { visibleRowIDs.contains($0.item.id) })?.item.id
             ?? displayed.first?.item.id
     }
 
-    /// Workspace pagination reports its rendered page without triggering the
-    /// floating panel's viewport-driven prefetch policy.
+    private var readingAnchorBeyondFirstPage: HistoryItemID? {
+        guard let first = loadedPages.first, let anchor = readingItemID else { return nil }
+        if first.previous != nil || rowsBeforeWindow > 0 { return anchor }
+        return rows.prefix(first.rowCount).contains { $0.item.id == anchor } ? nil : anchor
+    }
+
+    /// The numbered page supplies a fallback before its row geometry arrives.
+    /// Older pages can remain loaded and report their last geometry late.
+    func recordWorkspacePage(startingAt itemID: HistoryItemID?) {
+        workspacePageFirstItemID = itemID
+    }
+
     func recordReadingPosition(visibleRowIDs ids: [HistoryItemID]) {
         visibleRowIDs = Set(ids)
     }
@@ -340,6 +397,9 @@ final class HistoryViewState {
 
     var hasPreviousPage: Bool { loadedPages.first?.previous != nil }
     var loadedPageCount: Int { loadedPages.count }
+    var hasUnalignedLeadingPage: Bool {
+        hasKnownRowOffset && loadedPages.count > 1 && (loadedPages.first?.rowCount ?? pageLimit) < pageLimit
+    }
     /// Remains true when Newer returns to the first three pages: dropping
     /// the tail still needs visible-selection reconciliation and Latest.
     private(set) var hasWindowedPages = false
@@ -364,6 +424,12 @@ final class HistoryViewState {
     /// position. Buffered observations/one-shot reads may predate its delivery.
     /// Query changes and panel closure do not erase that already-known fact.
     private var latestReceiptPosition: ChangePosition?
+    /// The minimum position that can safely expose executable rows after a
+    /// deletion or content revision. Ordinary captures permit an older coherent
+    /// first page while the observer catches up to continuing writes.
+    private var latestInvalidatingReceiptPosition: ChangePosition?
+    private(set) var retentionChangePosition: ChangePosition?
+    private(set) var revisionPrunePosition: ChangePosition?
 
     /// Rows-epoch counter. Bumped on every observation restart AND on every
     /// applied observed page, so a one-shot pagination result captured against
@@ -438,7 +504,7 @@ final class HistoryViewState {
     var typeFilter: HistoryTypeFilter = .all {
         didSet {
             guard typeFilter != oldValue else { return }
-            advanceSearchQueryGeneration()
+            advanceSearchQueryGeneration(wasFiltering: oldValue != .all)
             replaceObservationImmediately()
         }
     }
@@ -446,7 +512,7 @@ final class HistoryViewState {
     var showsPinnedOnly = false {
         didSet {
             guard showsPinnedOnly != oldValue else { return }
-            advanceSearchQueryGeneration()
+            advanceSearchQueryGeneration(wasFiltering: oldValue)
             replaceObservationImmediately()
         }
     }
@@ -454,12 +520,23 @@ final class HistoryViewState {
     var searchFilters = HistorySearchFilters() {
         didSet {
             guard searchFilters != oldValue else { return }
-            advanceSearchQueryGeneration()
+            advanceSearchQueryGeneration(wasFiltering: oldValue.isActive)
             replaceObservationImmediately()
         }
     }
 
     private var searchDateBounds: (after: Date?, before: Date?) = (nil, nil)
+    private(set) var hasInvalidDateFilter = false
+
+    func refreshDateFiltersIfNeeded(now: Date = Date(), calendar: Calendar = .current) {
+        guard searchFilters.dateRange != .anyTime, observationTask != nil || hasInvalidDateFilter else { return }
+        let bounds = searchFilters.dateBounds(now: now, calendar: calendar)
+        guard bounds != searchDateBounds else { return }
+        let anchor = (isLoadingFirstPage || hasInvalidDateFilter) && firstPageAnchor.itemID != nil
+            ? firstPageAnchor : .preserving(readingItemID)
+        beginFirstPageLoad(dateBounds: bounds, anchor: anchor)
+        startObservation()
+    }
 
     var hasActiveFilters: Bool {
         typeFilter != .all || showsPinnedOnly || searchFilters.isActive
@@ -519,6 +596,25 @@ final class HistoryViewState {
         rows.first { $0.item.id == id && isDisplayed($0) }
     }
 
+    /// Details may remain open after its item moves off the current page or
+    /// falls outside the query. Reuse the browse snapshot when it has the
+    /// row, otherwise seek it directly without reading revisions or payloads.
+    func detailRow(for id: HistoryItemID, atLeast position: ChangePosition) async throws -> HistoryRow {
+        if let observedPosition, observedPosition >= position,
+           let row = rows.first(where: { $0.item.id == id }) {
+            return row
+        }
+        let page = try await history.browse(.init(kind: .recent, limit: 1, startAround: id))
+        guard page.position >= position else {
+            throw HistoryFailure.snapshotExpired(current: page.position)
+        }
+        guard let row = page.rows.first else {
+            throw HistoryFailure.notFound(id)
+        }
+        guard row.item.id == id else { throw HistoryFailure.persistence(.invariantViolation) }
+        return row
+    }
+
     private func isDisplayed(_ row: HistoryRow) -> Bool {
         (!showsPinnedOnly || row.pinnedPosition != nil) && typeFilter.admits(row)
     }
@@ -571,10 +667,13 @@ final class HistoryViewState {
         !searchText.isEmpty
     }
 
-    /// The admitted query shape derived atomically from raw draft + mode.
-    /// Exact/regexp use the compiled outside text. Fuzzy admission is a
-    /// bounded view of that text, leaving the raw draft intact for a later
-    /// mode switch (03b §8; 06 §2).
+    var isFuzzyTextSearch: Bool {
+        if case .search(_, .fuzzy) = admittedKind { return true }
+        return false
+    }
+
+    /// The query uses the full compiled text. When a fuzzy draft exceeds its
+    /// matcher limit, preparation keeps the draft editable without issuing a query.
     private var admittedKind: HistoryBrowseKind {
         guard !searchText.isEmpty else { return .recent }
         let literalText = compiledSearchQuery?.literalText ?? searchText
@@ -585,8 +684,7 @@ final class HistoryViewState {
         case .fuzzy, .expression:
             // Old saved mode values follow the current wrapped syntax too;
             // they never re-enable interpretation of bare source:/type: text.
-            let limit = HistoryLimits.standard.maximumFuzzyQueryCharacters
-            return .search(text: String(literalText.prefix(limit)), mode: .fuzzy)
+            return .search(text: literalText, mode: .fuzzy)
         }
     }
 
@@ -606,8 +704,8 @@ final class HistoryViewState {
             guard itemID != nil, !activationHasRequestedRestore else { return }
         }
         activationHasRequestedRestore = itemID != nil
-        beginFirstPageLoad()
-        startObservation(restoring: itemID)
+        beginFirstPageLoad(anchor: itemID.map(FirstPageAnchor.restoring) ?? .automatic)
+        startObservation()
     }
 
     /// Cancels browsing and releases this closed surface's rows/cursors.
@@ -624,6 +722,8 @@ final class HistoryViewState {
         observedPosition = nil
         rows = []
         resetPageWindow()
+        firstPageAnchor = .automatic
+        hasInvalidDateFilter = false
         isLoadingFirstPage = false
     }
 
@@ -644,6 +744,11 @@ final class HistoryViewState {
         debounceTask?.cancel()
         debounceTask = nil
         startObservation()
+    }
+
+    func resetSearchForOpening() {
+        clearFilters()
+        clearSearch()
     }
 
     /// Appends the next older page, retiring the newest page when the window
@@ -694,10 +799,8 @@ final class HistoryViewState {
                       self.observationGeneration == generation
                 else { return }
                 guard self.latestReceiptPosition.map({ page.position >= $0 }) ?? true else {
-                    // Neither edge of this older snapshot remains usable.
-                    // Keep the partial display, not an invented exact total.
-                    self.loadedPages = []
-                    self.observedPosition = nil
+                    // Keep the window and reading anchor until observation
+                    // can seek it in the new snapshot.
                     self.finishPagination(requestToken)
                     return
                 }
@@ -745,11 +848,9 @@ final class HistoryViewState {
                       self.observationGeneration == generation
                 else { return }
                 if case .snapshotExpired = failure {
-                    // Reobserve this exact query: the first page may already
-                    // have left the bounded window, and its old cursor is no
-                    // longer an authoritative recovery point (04 §6).
-                    self.publishFailure(failure, from: .pagination)
-                    self.replaceObservationImmediately()
+                    let anchor = self.readingAnchorBeyondFirstPage
+                    self.beginFirstPageLoad(anchor: .preserving(anchor))
+                    self.startObservation()
                     return
                 }
                 self.publishFailure(failure, from: .pagination)
@@ -969,22 +1070,34 @@ final class HistoryViewState {
         return receipt
     }
 
-    /// Composition-root receipt handoff for clipboard captures. Capture has
-    /// no panel-owned action method, but its same-commit retention victims
-    /// must retire derived surface state before observation catches up.
+    /// A capture can retire other records. Its receipt supplies the ordering
+    /// fence, while the observation and exact reads establish the victims.
     func acceptCaptureReceipt(_ receipt: HistoryReceipt) {
-        publishDestructiveRetentionPurge(receipt)
+        guard case .committed(let commit) = receipt else { return }
+        recordCommittedPosition(commit.position)
+        publishRetentionChange(for: commit)
+    }
+
+    func acceptPeerRetention(at position: ChangePosition, prunedRevisions: Bool) {
+        if prunedRevisions, revisionPrunePosition.map({ position > $0 }) ?? true {
+            revisionPrunePosition = position
+        }
+        guard retentionChangePosition.map({ position > $0 }) ?? true else { return }
+        recordCommittedPosition(position)
+        // Retention does not identify any specific row. Continue publishing
+        // coherent pages while exact preview and copy reads verify their targets.
+        retentionChangePosition = position
     }
 
     /// Composition-root removal handoff. The app-owned ingress calls this
     /// after the real Gateway has committed a positive remove and before
     /// replying; pin/unpin/no-op/failure never enter this seam (Card 9B).
-    /// This ID-only callback proves an exact purge, not a snapshot position;
-    /// it cannot reject buffered observations using the receipt floor.
     func acceptCommittedExternalRemoval(
-        _ itemID: HistoryItemID
+        _ itemID: HistoryItemID, position: ChangePosition
     ) -> HistorySurfacePurge {
-        publishExactItemPurge(itemID)
+        let purge = publishCommittedSurfacePurge(.item(itemID), position: position)
+        onCommittedSurfacePurge(purge, position)
+        return purge
     }
 
     /// The automation ingress forwards the real revision commit and its
@@ -995,9 +1108,8 @@ final class HistoryViewState {
         commit: HistoryCommit
     ) -> HistorySurfacePurge? {
         guard case .revised(let new) = commit.outcome else { return nil }
-        let scope: HistorySurfacePurge.Scope = commit.hasDestructiveRetentionEffects
-            ? .all : .revision(old: old, new: new)
-        let purge = publishCommittedSurfacePurge(scope, position: commit.position)
+        publishRetentionChange(for: commit)
+        let purge = publishCommittedSurfacePurge(.revision(old: old, new: new), position: commit.position)
         onCommittedSurfacePurge(purge, commit.position)
         return purge
     }
@@ -1046,7 +1158,9 @@ final class HistoryViewState {
     /// Synchronously retires all state owned by the previous browse intent.
     /// This is the single invalidation path for immediate and debounced
     /// replacement, not a general loading-state reducer.
-    private func beginFirstPageLoad() {
+    private func beginFirstPageLoad(
+        dateBounds: (after: Date?, before: Date?)? = nil, anchor: FirstPageAnchor = .automatic
+    ) {
         debounceTask?.cancel()
         debounceTask = nil
         observationTask?.cancel()
@@ -1070,16 +1184,19 @@ final class HistoryViewState {
         unresolvedSearchSources = []
         isSourceSearchTooBroad = false
         restoredReadingItemID = nil
-        didLoseReadingPosition = false
+        readingPositionLoss = nil
+        firstPageAnchor = anchor
         sourceResolutionError = nil
         // Relative days refresh with each query, and stay fixed while paging.
-        searchDateBounds = searchFilters.dateBounds(now: Date(), calendar: .current)
-        isLoadingFirstPage = expressionValidationError == nil
+        searchDateBounds = dateBounds ?? searchFilters.dateBounds(now: Date(), calendar: .current)
+        hasInvalidDateFilter = searchFilters.dateRange == .custom
+            && (searchDateBounds.after == nil || searchDateBounds.before == nil)
+        isLoadingFirstPage = expressionValidationError == nil && !fuzzyQueryExceedsLimit && !hasInvalidDateFilter
     }
 
     /// Starts observation for the already-invalidated current intent.
-    private func startObservation(restoring itemID: HistoryItemID? = nil) {
-        guard expressionValidationError == nil else {
+    private func startObservation() {
+        guard expressionValidationError == nil, !fuzzyQueryExceedsLimit, !hasInvalidDateFilter else {
             isLoadingFirstPage = false
             return
         }
@@ -1087,18 +1204,19 @@ final class HistoryViewState {
         let history = self.history
         let queryGeneration = searchQueryGeneration
         let order = sortOrder
+        let initialAnchor = firstPageAnchor
 
         observationTask = Task { [weak self] in
             guard !Task.isCancelled,
                   await self?.prepareSearchConditions() == true, !Task.isCancelled,
                   let kind = self?.admittedKind, let filter = self?.historyFilter else { return }
-            let condition = self?.admittedCondition
-            let stream = await history.observe(
-                HistoryObservationRequest(kind: kind, limit: limit, filter: filter, sortOrder: order,
-                                          conditionExpression: condition)
+            let request = HistoryObservationRequest(
+                kind: kind, limit: limit, filter: filter, sortOrder: order,
+                conditionExpression: self?.admittedCondition
             )
+            let stream = await history.observe(request)
             do {
-                var restoreTarget = itemID
+                var initialTarget = initialAnchor.itemID
                 var restoredPosition: ChangePosition?
                 for try await page in stream {
                     // A superseded loop must not apply pages over its
@@ -1109,38 +1227,54 @@ final class HistoryViewState {
                     // buffered observation. Never let that older first page
                     // replace the just-restored reading position.
                     if let restoredPosition, page.position <= restoredPosition { continue }
-                    if let target = restoreTarget {
-                        let restoredPage: HistoryPage
-                        let targetWasRemoved: Bool
-                        do {
-                            restoredPage = try await history.browse(HistoryBrowseRequest(
-                                kind: kind, limit: limit, filter: filter, sortOrder: order,
-                                startAround: target, conditionExpression: condition
-                            ))
-                            targetWasRemoved = false
-                        } catch HistoryFailure.notFound(_) {
-                            // Missing, retained-away, or excluded by current
-                            // conditions all return the same explicit result.
-                            // Read a fresh first page, without relaxing filters.
-                            restoredPage = try await history.browse(HistoryBrowseRequest(
-                                kind: kind, limit: limit, filter: filter, sortOrder: order,
-                                conditionExpression: condition
-                            ))
-                            targetWasRemoved = true
+                    guard self?.allowsObservedPosition(page.position) == true else { continue }
+                    if var target = initialTarget ?? self?.readingAnchorBeyondFirstPage {
+                        let isInitialSeek = initialTarget != nil
+                        let isRestoringBookmark = isInitialSeek && initialAnchor.restoresBookmark
+                        for attempt in 0..<2 {
+                            let restoredPage: HistoryPage
+                            if isInitialSeek, !isRestoringBookmark, page.rows.contains(where: { $0.item.id == target }) {
+                                restoredPage = page
+                            } else {
+                                restoredPage = try await Self.browseReadingAnchor(
+                                    target, request: request, history: history,
+                                    firstPage: page, isRestoringBookmark: isRestoringBookmark
+                                )
+                            }
+                            guard !Task.isCancelled, let self else { return }
+                            let currentAnchor = isInitialSeek ? target : self.readingAnchorBeyondFirstPage
+                            if let currentAnchor, currentAnchor != target, attempt == 0 {
+                                target = currentAnchor
+                                continue
+                            }
+                            // If the user moves again, keep the last anchor when the
+                            // completed seek contains it. Otherwise admit the
+                            // observed first page without waiting for another write.
+                            let restoredAnchor = currentAnchor.flatMap { id in
+                                restoredPage.rows.first { $0.item.id == id }?.item.id
+                            }
+                            let useRestoredPage = restoredPage.position >= page.position
+                                && self.allowsObservedPosition(restoredPage.position)
+                                && (restoredAnchor != nil || isRestoringBookmark)
+                            let replacement = useRestoredPage ? restoredPage : page
+                            guard self.allowsObservedPosition(replacement.position) else { break }
+                            let retainedAnchor = currentAnchor.flatMap { id in
+                                replacement.rows.first { $0.item.id == id }?.item.id
+                            }
+                            self.applyObservedPage(replacement, forSearchGeneration: queryGeneration)
+                            if let retainedAnchor {
+                                self.visibleRowIDs = [retainedAnchor]
+                            }
+                            if isRestoringBookmark {
+                                self.readingPositionLoss = retainedAnchor == nil ? .saved : nil
+                                self.restoredReadingItemID = retainedAnchor
+                            } else if !isInitialSeek {
+                                self.readingPositionLoss = currentAnchor != nil && retainedAnchor == nil ? .live : nil
+                            }
+                            initialTarget = nil
+                            restoredPosition = replacement.position
+                            break
                         }
-                        guard !Task.isCancelled, let self else { return }
-                        guard restoredPage.position >= page.position,
-                              self.latestReceiptPosition.map({ restoredPage.position >= $0 }) ?? true
-                        else { continue }
-                        self.applyObservedPage(restoredPage, forSearchGeneration: queryGeneration)
-                        self.didLoseReadingPosition = targetWasRemoved
-                        if !targetWasRemoved {
-                            self.hasKnownRowOffset = restoredPage.previous == nil
-                            self.hasWindowedPages = restoredPage.previous != nil
-                            self.restoredReadingItemID = target
-                        }
-                        restoreTarget = nil
-                        restoredPosition = restoredPage.position
                         continue
                     }
                     self?.applyObservedPage(
@@ -1159,6 +1293,27 @@ final class HistoryViewState {
                 self?.publishFailure(failure, from: .observation)
                 self?.isLoadingFirstPage = false
             }
+        }
+    }
+
+    private static func browseReadingAnchor(
+        _ target: HistoryItemID, request: HistoryObservationRequest, history: any ClipboardHistory,
+        firstPage: HistoryPage, isRestoringBookmark: Bool
+    ) async throws -> HistoryPage {
+        do {
+            return try await history.browse(HistoryBrowseRequest(
+                kind: request.kind, limit: request.limit, filter: request.filter, sortOrder: request.sortOrder,
+                startAround: target, conditionExpression: request.conditionExpression
+            ))
+        } catch HistoryFailure.notFound(_) where isRestoringBookmark {
+            return try await history.browse(HistoryBrowseRequest(
+                kind: request.kind, limit: request.limit, filter: request.filter, sortOrder: request.sortOrder,
+                conditionExpression: request.conditionExpression
+            ))
+        } catch where !isRestoringBookmark {
+            // Background continuity may fall back to the already-read page
+            // without terminating observation if the seek fails.
+            return firstPage
         }
     }
 
@@ -1190,6 +1345,10 @@ final class HistoryViewState {
             } catch {
                 return false
             }
+        }
+        guard !fuzzyQueryExceedsLimit else {
+            isLoadingFirstPage = false
+            return false
         }
         let expression = parsedSearchExpression
         let filters = searchFilters
@@ -1223,7 +1382,8 @@ final class HistoryViewState {
             isSourceSearchTooBroad = true
         }
         unresolvedSearchSources = Array(Set(unresolved)).sorted()
-        guard unresolvedSearchSources.isEmpty, !isSourceSearchTooBroad, sourceResolutionError == nil else {
+        let hasUnresolvedSourceFilter = resolvedSourceApplicationIDs?.isEmpty == true
+        guard !hasUnresolvedSourceFilter, !isSourceSearchTooBroad, sourceResolutionError == nil else {
             isLoadingFirstPage = false
             return false
         }
@@ -1237,30 +1397,31 @@ final class HistoryViewState {
         _ page: HistoryPage,
         forSearchGeneration queryGeneration: Int
     ) {
-        guard latestReceiptPosition.map({ page.position >= $0 }) ?? true else { return }
+        guard allowsObservedPosition(page.position) else { return }
         invalidatePagination()
         observationGeneration += 1
         rows = page.rows
         loadedPages = [LoadedPage(page)]
-        hasWindowedPages = false
+        hasWindowedPages = page.previous != nil
         rowsBeforeWindow = 0
-        hasKnownRowOffset = true
+        hasKnownRowOffset = page.previous == nil
         observedPosition = page.position
         hasAuthoritativeFirstPage = true
         clearQueryFailure()
+        firstPageAnchor = .automatic
         isLoadingFirstPage = false
         if pendingSearchAnnouncementGeneration == queryGeneration {
             pendingSearchAnnouncementGeneration = nil
-            onSettledSearchResultCount(displayedRows.count, page.next != nil)
+            onSettledSearchResultCount(displayedRows.count, page.previous != nil || page.next != nil)
         }
     }
 
     /// Advances only the user's admitted query/mode generation. Generic
     /// observation restarts intentionally do not re-arm an announcement for
     /// an identical settled search (REVIEW Card 15D).
-    private func advanceSearchQueryGeneration() {
+    private func advanceSearchQueryGeneration(wasFiltering: Bool = false) {
         searchQueryGeneration += 1
-        pendingSearchAnnouncementGeneration = isSearchActive
+        pendingSearchAnnouncementGeneration = isSearchActive || hasActiveFilters || wasFiltering
             ? searchQueryGeneration
             : nil
     }
@@ -1270,6 +1431,7 @@ final class HistoryViewState {
         hasWindowedPages = false
         rowsBeforeWindow = 0
         visibleRowIDs = []
+        workspacePageFirstItemID = nil
         hasKnownRowOffset = true
     }
 
@@ -1348,29 +1510,21 @@ final class HistoryViewState {
     ) {
         guard case .committed(let commit) = receipt else { return }
         recordCommittedPosition(commit.position)
+        publishRetentionChange(for: commit)
 
         let scope: HistorySurfacePurge.Scope?
-        if commit.hasDestructiveRetentionEffects {
+        switch (action, commit.outcome) {
+        case (.clear(.all), .cleared(let count)) where count > 0:
             scope = .all
-        } else {
-            switch (action, commit.outcome) {
-            case (.clear(.all), .cleared(let count)) where count > 0:
-                scope = .all
-            case (.clear(.unpinned), .cleared(let count)) where count > 0:
-                scope = .unpinned
-            case (.remove(let id), .removed(let count)) where count > 0:
-                scope = .item(id)
-            case (.revise(let request), .revised(let newReference)):
-                scope = .revision(
-                    old: HistoryItemReference(
-                        id: request.itemID,
-                        contentVersion: request.expected
-                    ),
-                    new: newReference
-                )
-            default:
-                scope = nil
-            }
+        case (.clear(.unpinned), .cleared(let count)) where count > 0:
+            scope = .unpinned
+        case (.remove(let id), .removed(let count)) where count > 0:
+            scope = .item(id)
+        case (.revise(let request), .revised(let newReference)):
+            scope = .revision(old: HistoryItemReference(id: request.itemID, contentVersion: request.expected),
+                              new: newReference)
+        default:
+            scope = nil
         }
 
         guard let scope else { return }
@@ -1396,6 +1550,7 @@ final class HistoryViewState {
         position: ChangePosition
     ) -> HistorySurfacePurge {
         recordCommittedPosition(position)
+        recordInvalidatingPosition(position)
         let hasObservedCommit = observedPosition.map {
             $0 >= position
         } ?? false
@@ -1412,14 +1567,16 @@ final class HistoryViewState {
         return purge
     }
 
-    /// Capture receipts have no local action-to-outcome scope. Only the
-    /// authoritative retention-effect bit can invalidate their surfaces.
-    private func publishDestructiveRetentionPurge(_ receipt: HistoryReceipt) {
-        guard case .committed(let commit) = receipt else { return }
-        recordCommittedPosition(commit.position)
+    private func publishRetentionChange(for commit: HistoryCommit) {
         guard commit.hasDestructiveRetentionEffects else { return }
-        let purge = publishCommittedSurfacePurge(.all, position: commit.position)
-        onCommittedSurfacePurge(purge, commit.position)
+        let prunedRevisions: Bool
+        if case .retentionPoliciesSet(_, let pruned) = commit.outcome {
+            prunedRevisions = pruned > 0
+        } else {
+            prunedRevisions = false
+        }
+        acceptPeerRetention(at: commit.position, prunedRevisions: prunedRevisions)
+        onCommittedRetention(commit.position, prunedRevisions)
     }
 
     private func recordCommittedPosition(_ position: ChangePosition) {
@@ -1427,19 +1584,14 @@ final class HistoryViewState {
         latestReceiptPosition = position
     }
 
-    private func publishExactItemPurge(
-        _ itemID: HistoryItemID
-    ) -> HistorySurfacePurge {
-        let scope = HistorySurfacePurge.Scope.item(itemID)
-        applyReceiptConfirmedRowPurge(scope)
-        let generation = (surfacePurge?.generation ?? 0) + 1
-        let purge = HistorySurfacePurge(
-            generation: generation,
-            scope: scope
-        )
-        surfacePurge = purge
-        onCommittedSurfacePurge(purge, nil)
-        return purge
+    private func recordInvalidatingPosition(_ position: ChangePosition) {
+        guard latestInvalidatingReceiptPosition.map({ position > $0 }) ?? true else { return }
+        latestInvalidatingReceiptPosition = position
+    }
+
+    private func allowsObservedPosition(_ position: ChangePosition) -> Bool {
+        (observedPosition.map { position > $0 } ?? true)
+            && (latestInvalidatingReceiptPosition.map { position >= $0 } ?? true)
     }
 
     /// Retires executable list state for precise destructive scopes. Clear
@@ -1449,6 +1601,11 @@ final class HistoryViewState {
         _ scope: HistorySurfacePurge.Scope
     ) {
         purgeRetainedRows(scope)
+        switch scope {
+        case .item(let id) where !rows.contains(where: { $0.item.id == id }): return
+        case .revision(let old, _) where !rows.contains(where: { $0.item == old }): return
+        default: break
+        }
         invalidatePagination()
         observationGeneration += 1
         resetPageWindow()

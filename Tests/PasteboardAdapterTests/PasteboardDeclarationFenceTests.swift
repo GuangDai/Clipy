@@ -131,32 +131,7 @@ struct PasteboardDeclarationFenceTests {
     }
 
     @Test
-    func optionalLineageWithoutContentWaitsForDeclarationsWithoutPayloadRetry() throws {
-        let pasteboard = makePasteboard()
-        defer { pasteboard.releaseGlobally() }
-        let item = NSPasteboardItem()
-        let hintID = HistoryItemID(rawValue: UUID())
-        try #require(item.setData(
-            PasteboardLineageHint.encode(hintID),
-            forType: .init(PasteboardLineageHint.typeIdentifier)
-        ))
-        try #require(pasteboard.writeObjects([item]))
-        let generation = pasteboard.changeCount
-        var emptyDeclarations: [Int] = []
-        var emptyContent: [Int] = []
-        let outcome = PasteboardAdapter(pasteboard: pasteboard).captureOutcome(
-            shouldContinue: { true },
-            didObserveEmptyPasteboard: { emptyDeclarations.append($0) },
-            didObserveNoRetainableContent: { emptyContent.append($0) }
-        )
-
-        #expect(outcome == nil)
-        #expect(emptyDeclarations == [generation])
-        #expect(emptyContent.isEmpty)
-    }
-
-    @Test
-    func incompleteConstituentContentRecoversWithoutPublishingPartialBytes() throws {
+    func incompleteConstituentContentReportsOnePendingOutcomeThenCompletes() throws {
         let pasteboard = makePasteboard()
         defer { pasteboard.releaseGlobally() }
         let observer = PasteboardObserver(
@@ -165,7 +140,10 @@ struct PasteboardDeclarationFenceTests {
         observer.setAccessBehaviorProviderForTesting { .allowed }
         defer { observer.stop() }
         var received: [CaptureOutcome] = []
-        observer.start(captureCurrent: false) { received.append($0) }
+        var endedGenerations: [Int] = []
+        observer.start(captureCurrent: false, onPendingCaptureEnded: { endedGenerations.append($0) }) {
+            received.append($0)
+        }
         let first = NSPasteboardItem()
         let second = NSPasteboardItem()
         let firstBytes = Data("first published item".utf8)
@@ -177,12 +155,22 @@ struct PasteboardDeclarationFenceTests {
         let generation = pasteboard.changeCount
 
         observer.pollForTesting()
-        #expect(received.isEmpty)
+        try #require(received.count == 1)
+        guard case let .unsupportedMultiItem(pending) = received[0] else {
+            Issue.record("An incomplete gesture must report a pending outcome without bytes")
+            return
+        }
+        #expect(pending.awaitsConstituentContent)
+        #expect(pending.changeCount == generation)
+        for _ in 0..<6 { observer.pollForTesting() }
+        #expect(received.count == 1)
+        #expect(endedGenerations.isEmpty)
         try #require(second.setData(secondBytes, forType: .string))
         try #require(pasteboard.changeCount == generation)
-        observer.pollForTesting()
+        for _ in 0..<3 where received.count == 1 { observer.pollForTesting() }
 
-        guard case let .complete(value) = try #require(received.first) else {
+        try #require(received.count == 2)
+        guard case let .complete(value) = received[1] else {
             Issue.record("Every constituent item must be present before History receives the gesture")
             return
         }
@@ -196,9 +184,10 @@ struct PasteboardDeclarationFenceTests {
                 bytes: secondBytes, pasteboardItemIndex: 1
             ),
         ])
-        #expect(received.count == 1)
+        #expect(endedGenerations == [generation])
         observer.pollForTesting()
-        #expect(received.count == 1)
+        #expect(received.count == 2)
+        #expect(endedGenerations == [generation])
     }
 
     @Test

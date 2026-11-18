@@ -131,9 +131,9 @@ struct AccessibilityAnnouncementTests {
         #expect(appDelegate.captureHealth.failedCaptureCount == 1)
     }
 
-    @Test("queue overflow and authoritative recovery do not announce")
+    @Test("queue overflow remains until dismissed after a transient failure")
     @MainActor
-    func nonfailureCaptureHealthIsSilent() {
+    func overflowSurvivesTransientCaptureFailure() {
         let recorder = AccessibilityAnnouncementRecorder()
         let appDelegate = AppDelegate(
             accessibilityAnnouncementOperations: recorder.operations
@@ -146,15 +146,22 @@ struct AccessibilityAnnouncementTests {
         appDelegate.receiveCaptureHealthForTesting(Self.health(
             droppedCaptureCount: 1,
             failedCaptureCount: 1,
-            lastFailure: .invalidInput
+            lastFailure: .declaredContentUnavailable
         ))
-        appDelegate.receiveCaptureHealthForTesting(Self.health(
+        #expect(appDelegate.captureNotice == .failed(.declaredContentUnavailable))
+        let recovered = Self.health(
             droppedCaptureCount: 1,
             failedCaptureCount: 1,
             lastFailure: nil
-        ))
+        )
+        appDelegate.receiveCaptureHealthForTesting(recovered)
 
         #expect(recorder.records.count == 1)
+        #expect(appDelegate.captureNotice == .droppedCapture(totalDropped: 1))
+        appDelegate.dismissCaptureNotice(.failed(.declaredContentUnavailable))
+        #expect(appDelegate.captureNotice == .droppedCapture(totalDropped: 1))
+        appDelegate.dismissCaptureNotice(.droppedCapture(totalDropped: 1))
+        appDelegate.receiveCaptureHealthForTesting(recovered)
         #expect(appDelegate.captureNotice == nil)
     }
 

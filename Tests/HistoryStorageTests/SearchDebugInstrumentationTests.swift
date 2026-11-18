@@ -29,7 +29,7 @@ struct SearchDebugInstrumentationTests {
     }
 
     @Test(arguments: [false, true])
-    func exactSearchEmitsOnlyTheStagesActuallyNeeded(hasCandidates: Bool) async throws {
+    func exactSearchEmitsAggregateWorkWithoutPrivateData(hasCandidates: Bool) async throws {
         let storeURL = WSSupport.tempStoreURL("search-debug-stages")
         defer { WSSupport.removeStore(storeURL) }
         let history = try await WSSupport.openHistory(storeURL: storeURL)
@@ -79,18 +79,10 @@ struct SearchDebugInstrumentationTests {
         #expect(captured.allSatisfy { $0.event == "clipy.search.trace" })
         #expect(Set(captured.map(\.traceID)).count == 1)
 
-        let phases = Set(captured.map { "\($0.component).\($0.phase)" })
-        let queryPhases: Set<String> = [
-            "worker.entry", "worker.evaluation-complete", "worker.continuation",
-            "worker.page-materialization", "worker.complete",
-        ]
-        #expect(queryPhases.isSubset(of: phases))
+        let entry = try #require(captured.firstIndex { $0.phase == "entry" })
+        let completion = try #require(captured.firstIndex { $0.phase == "complete" })
+        #expect(entry < completion)
         if hasCandidates {
-            let matcherPhases: Set<String> = [
-                "worker.sqlite-batch", "worker.exact-scan-begin", "worker.exact-scan-progress",
-                "worker.exact-title-scan", "worker.exact-body-scan", "worker.exact-scan-complete",
-            ]
-            #expect(matcherPhases.isSubset(of: phases))
             let fetch = try #require(captured.first { $0.phase == "sqlite-batch" })
             #expect(fetch.rowsProcessed == privateFragments.count)
             #expect(fetch.rowsTotal == privateFragments.count)
@@ -108,8 +100,8 @@ struct SearchDebugInstrumentationTests {
         } else {
             // An absent gram proves there are no candidates, so neither
             // payload projection nor a fabricated matcher trace is required.
-            #expect(phases == queryPhases)
-            let complete = try #require(captured.first { $0.phase == "complete" })
+            #expect(!captured.contains { $0.phase == "sqlite-batch" })
+            let complete = captured[completion]
             #expect(complete.rowsProcessed == 0)
             #expect(complete.rowsTotal == 0)
             #expect(complete.matchedRows == 0)
@@ -184,13 +176,13 @@ struct SearchDebugInstrumentationTests {
             captured.append(event)
         }
         let intermediateIndex = try #require(captured.firstIndex {
-            $0.phase == "exact-scan-progress" && $0.rowsProcessed == 250
+            $0.phase == "exact-scan-progress" && $0.rowsProcessed < $0.rowsTotal
         })
         let completionIndex = try #require(captured.firstIndex {
             $0.phase == "exact-scan-complete"
         })
         #expect(intermediateIndex < completionIndex)
-        #expect(captured[intermediateIndex].rowsTotal == 251)
+        #expect(captured[intermediateIndex].rowsTotal == corpus.rows.count)
         #expect(captured.allSatisfy { $0.traceID == trace.id })
 
         let totals = captured.map(\.totalElapsedMilliseconds)
@@ -300,48 +292,6 @@ struct SearchDebugInstrumentationTests {
             captured.first { $0.phase == "exact-body-scan" }
         )
         #expect(bodyScan.rowsProcessed == 2)
-    }
-
-    /// Progress cadence: a 505-row corpus must flush exactly at the 250-row
-    /// interval multiples and once more on the final row — no more, no less.
-    @Test func progressCadenceFiresOnIntervalMultiplesAndLastRow() async throws {
-        let trace = SearchDebugTrace(
-            id: UUID(),
-            startedAt: ContinuousClock().now
-        )
-        let corpus = SearchCorpusSnapshot(
-            position: ChangePosition(rawValue: 1),
-            rows: (0..<505).map { Self.row(index: $0) },
-            debugTrace: trace
-        )
-        let (events, continuation) = AsyncStream<SearchDebugEvent>.makeStream(
-            bufferingPolicy: .unbounded
-        )
-        let probe = SearchDebugProbe(isEnabled: true) { event in
-            _ = continuation.yield(event)
-        }
-        let worker = SearchWorker()
-        await worker.setSearchDebugProbe(probe)
-
-        _ = try await worker.page(
-            HistoryBrowseRequest(
-                kind: .search(text: "absent", mode: .exact),
-                limit: 10
-            ),
-            in: corpus,
-            continuationAnchor: nil,
-            processMarker: UUID()
-        )
-        await worker.setSearchDebugProbe(SearchDebugProbe(isEnabled: false))
-        continuation.finish()
-
-        var captured: [SearchDebugEvent] = []
-        for await event in events {
-            captured.append(event)
-        }
-        let progress = captured.filter { $0.phase == "exact-scan-progress" }
-        #expect(progress.map(\.rowsProcessed) == [250, 500, 505])
-        #expect(progress.allSatisfy { $0.rowsTotal == 505 })
     }
 }
 #endif

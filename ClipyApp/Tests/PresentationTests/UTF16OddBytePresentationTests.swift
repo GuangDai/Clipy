@@ -39,7 +39,7 @@ struct UTF16OddBytePresentationTests {
         )
         #expect(EditorTextCodec.matching(malformed) == nil)
         #expect(codec.decode(malformed.bytes) == nil)
-        #expect(await renderDetailsRepresentationForTest(malformed) == .metadataOnly)
+        #expect(await renderDetailsRepresentationForTest(malformed) == .failure(.malformedRepresentation))
         let malformedPreview = await renderer.renderHistoryPane([
             PreviewRepresentation(typeIdentifier: fixture.type, bytes: malformed.bytes),
         ])

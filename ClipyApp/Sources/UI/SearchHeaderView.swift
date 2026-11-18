@@ -15,9 +15,8 @@ import SwiftUI
 /// shortcuts away from the text field (01 §6: selection and keyboard behavior
 /// are main-actor UI concerns).
 ///
-/// The field always preserves the user's raw draft. `HistoryViewState` owns
-/// mode-specific admission, including fuzzy's 64-character execution view,
-/// so switching modes never truncates clipboard syntax typed by the user.
+/// The field preserves the raw draft. `HistoryViewState` owns mode-specific
+/// input limits, so the user can switch modes without re-entering their query.
 struct SearchHeaderView: View {
     @Environment(\.locale) private var locale
     @Environment(\.searchHistoryStore) private var searchHistoryStore
@@ -56,14 +55,13 @@ struct SearchHeaderView: View {
             HStack(spacing: PanelTheme.spacingXSmall) {
                 searchField
                     .frame(maxWidth: .infinity)
-                modeMenu
-                    .frame(width: 24, height: 24)
                 filterMenu
                     .frame(width: 24, height: 24)
             }
             // Candidates extend below this row over the status controls.
             // The outer header's ordering does not order these siblings.
             .zIndex(completion.isPresented ? 1 : 0)
+            queryControls
             if viewState.isSearchStatusVisible {
                 searchStatusRow.frame(height: 15)
             }
@@ -123,13 +121,29 @@ struct SearchHeaderView: View {
     @ViewBuilder
     private var searchStatusRow: some View {
         if let issue = HistorySearchCopy.issue(for: viewState, bundle: copyBundle) {
-            Button { openOptions(expressionGuide: true) } label: {
-                Label(issue, systemImage: "exclamationmark.circle")
-                    .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 5) {
+                if viewState.fuzzyQueryExceedsLimit {
+                    searchIssueLabel(issue)
+                        .accessibilityIdentifier("clipy.search.fuzzy.limit")
+                    Button(HistorySearchCopy.text("Use Exact", bundle: copyBundle)) {
+                        viewState.searchMode = .exact
+                        searchFieldFocused.wrappedValue = true
+                    }
+                    .buttonStyle(.link)
+                    .fixedSize()
+                    .accessibilityIdentifier("clipy.search.fuzzy.use-exact")
+                } else if viewState.hasInvalidDateFilter, viewState.expressionValidationError == nil {
+                    Button { openOptions(expressionGuide: false) } label: { searchIssueLabel(issue) }
+                        .buttonStyle(AppMotionPressStyle())
+                        .accessibilityIdentifier("clipy.search.date.issue")
+                } else {
+                    Button { openOptions(expressionGuide: true) } label: { searchIssueLabel(issue) }
+                        .buttonStyle(AppMotionPressStyle())
+                        .accessibilityIdentifier("clipy.search.expression.error")
+                }
+                if hasActiveFilters { clearFiltersButton }
             }
-            .font(.caption).buttonStyle(AppMotionPressStyle()).foregroundStyle(.red)
-            .help(issue)
-            .accessibilityIdentifier("clipy.search.expression.error")
+            .font(.caption)
         } else {
             HStack(spacing: 5) {
                 ScrollView(.horizontal) {
@@ -140,12 +154,6 @@ struct SearchHeaderView: View {
                             }
                             .buttonStyle(AppMotionPressStyle()).foregroundStyle(.secondary)
                             .accessibilityIdentifier("clipy.search.expression.help")
-                        }
-                        if viewState.sortOrder != .automatic {
-                            filterChip(HistorySearchCopy.sortTitle(viewState.sortOrder, bundle: copyBundle),
-                                       symbol: "arrow.up.arrow.down", id: "sort") {
-                                viewState.sortOrder = .automatic
-                            }
                         }
                         if viewState.typeFilter != .all {
                             filterChip(typeFilterTitle, symbol: "line.3.horizontal.decrease", id: "type") {
@@ -170,20 +178,33 @@ struct SearchHeaderView: View {
                     }
                 }
                 .scrollIndicators(.hidden)
-                if hasActiveFilters {
-                    Button {
-                        viewState.clearFilters()
-                        searchFieldFocused.wrappedValue = true
-                    } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(AppMotionPressStyle()).foregroundStyle(.secondary)
-                        .accessibilityIdentifier("clipy.search.clear-filters")
-                        .accessibilityLabel(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
-                        .accessibilityValue(filterSummary)
-                        .help(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
-                }
+                if hasActiveFilters { clearFiltersButton }
             }
             .font(.caption)
         }
+    }
+
+    private func searchIssueLabel(_ issue: String) -> some View {
+        let isWarning = viewState.isLoadingFirstPage || viewState.hasAuthoritativeFirstPage
+        return Label(issue, systemImage: isWarning ? "exclamationmark.triangle" : "exclamationmark.circle")
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .font(.caption)
+            .foregroundStyle(isWarning ? Color.secondary : .red)
+            .help(issue)
+    }
+
+    private var clearFiltersButton: some View {
+        Button {
+            viewState.clearFilters()
+            searchFieldFocused.wrappedValue = true
+        } label: { Image(systemName: "xmark.circle.fill") }
+            .buttonStyle(AppMotionPressStyle())
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("clipy.search.clear-filters")
+            .accessibilityLabel(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
+            .accessibilityValue(filterSummary)
+            .help(PanelChromeCopy.text("Clear filters", bundle: copyBundle))
     }
 
     private func filterChip(_ title: String, symbol: String, id: String, clear: @escaping () -> Void) -> some View {
@@ -217,8 +238,7 @@ struct SearchHeaderView: View {
     private var dateFilterTitle: String {
         let filters = viewState.searchFilters
         if filters.dateRange == .custom {
-            let style = Date.FormatStyle(date: .abbreviated, time: .omitted).locale(locale)
-            return filters.startDate.formatted(style) + " – " + filters.endDate.formatted(style)
+            return filters.customDateTitle(locale: locale, calendar: filters.dateSelectionCalendar ?? .current)
         }
         return HistorySearchCopy.text(filters.dateRange.title, bundle: copyBundle)
     }
@@ -319,7 +339,7 @@ struct SearchHeaderView: View {
     }
 
     /// Counts include traversed rows in the complete filtered query. A
-    /// remaining cursor means older matching rows have not yet been counted.
+    /// remaining cursor means more matching rows have not yet been counted.
     internal static func resultCountText(
         for viewState: HistoryViewState,
         locale: Locale = .current,
@@ -328,6 +348,14 @@ struct SearchHeaderView: View {
         if viewState.isLoadingFirstPage {
             return HistorySearchCopy.text("Updating results…", bundle: bundle)
         }
+        if viewState.fuzzyQueryExceedsLimit { return "" }
+        if !viewState.hasAuthoritativeFirstPage, HistorySearchCopy.issue(for: viewState, bundle: bundle) != nil {
+            return HistorySearchCopy.text("Check search conditions", bundle: bundle)
+        }
+        if let failure = HistorySearchCopy.resultsFailure(for: viewState) {
+            return HistorySearchCopy.resultsFailureTitle(failure, bundle: bundle)
+        }
+        guard viewState.hasAuthoritativeFirstPage else { return "" }
         return HistoryCountCopy.results(
             count: viewState.displayedCount,
             hasNextPage: viewState.displayedCountIsLowerBound,
@@ -336,7 +364,33 @@ struct SearchHeaderView: View {
         )
     }
 
-    // MARK: Mode picker
+    // MARK: Query controls
+
+    private var queryControls: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: PanelTheme.spacingXSmall) {
+                modeMenu
+                sortMenu
+                Button { openOptions() } label: {
+                    Label(HistorySearchCopy.text("Date", bundle: copyBundle), systemImage: "calendar")
+                        .fixedSize()
+                        .padding(.horizontal, 4)
+                        .frame(height: PanelContentFit.searchControlsHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(AppMotionPressStyle())
+                .foregroundStyle(viewState.searchFilters.dateRange == .anyTime ? Color.primary : .accentColor)
+                .help(HistorySearchCopy.text("Date and application…", bundle: copyBundle))
+                .accessibilityLabel(HistorySearchCopy.text("Date and application filters", bundle: copyBundle))
+                .accessibilityValue(dateFilterTitle)
+                .accessibilityIdentifier("clipy.search.date-options")
+            }
+        }
+        .scrollIndicators(.hidden)
+        .scrollBounceBehavior(.basedOnSize)
+        .font(.caption)
+        .frame(height: PanelContentFit.searchControlsHeight)
+    }
 
     private var modeMenu: some View {
         Menu {
@@ -357,24 +411,69 @@ struct SearchHeaderView: View {
                 openOptions(expressionGuide: true)
             }
         } label: {
-            Group {
-                switch viewState.searchMode {
-                case .exact: Image(systemName: "equal")
-                case .fuzzy: Image(systemName: "text.magnifyingglass")
-                case .regexp: Text(".*").font(.system(.body, design: .monospaced).weight(.semibold))
-                case .expression: Image(systemName: "text.magnifyingglass")
-                }
-            }
-            .frame(width: 24, height: 24)
+            queryMenuLabel(viewState.searchMode == .regexp
+                ? HistorySearchCopy.text("Regex", bundle: copyBundle) : modeName(viewState.searchMode))
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
-        .foregroundStyle(viewState.searchMode == .fuzzy ? Color.secondary : Color.accentColor)
         .fixedSize()
         .help(PanelActionsCopy.text("Search Mode", bundle: copyBundle) + ": " + modeName(viewState.searchMode))
         .accessibilityIdentifier("clipy.search.mode")
         .accessibilityLabel(PanelActionsCopy.text("Search Mode", bundle: copyBundle))
         .accessibilityValue(modeName(viewState.searchMode))
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Picker(HistorySearchCopy.text("Sort results", bundle: copyBundle), selection: sortBinding) {
+                ForEach([HistorySortOrder.newestFirst, .oldestFirst, .mostCopied, .automatic], id: \.self) { order in
+                    Text(sortTitle(order)).tag(order)
+                }
+            }
+            .pickerStyle(.inline)
+            Divider()
+            Text(HistorySearchCopy.text("Pinned first preserves your pin order.", bundle: copyBundle))
+            Text(HistorySearchCopy.text(
+                viewState.isFuzzyTextSearch
+                    ? "Unpinned results are ranked by fuzzy match relevance."
+                    : "With Pinned first, unpinned results are sorted by latest copy.",
+                bundle: copyBundle
+            ))
+        } label: {
+            queryMenuLabel(compactSortName)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(HistorySearchCopy.text("Sort results", bundle: copyBundle))
+        .accessibilityLabel(HistorySearchCopy.text("Sort results", bundle: copyBundle))
+        .accessibilityValue(sortTitle(viewState.sortOrder))
+        .accessibilityIdentifier("clipy.search.sort")
+    }
+
+    private func queryMenuLabel(_ value: String) -> some View {
+        HStack(spacing: 3) {
+            Text(value).fontWeight(.medium)
+            Image(systemName: "chevron.down").font(.caption2).accessibilityHidden(true)
+        }
+        .padding(.horizontal, 4)
+        .frame(height: PanelContentFit.searchControlsHeight)
+        .contentShape(Rectangle())
+    }
+
+    private var compactSortName: String {
+        switch viewState.sortOrder {
+        case .newestFirst: HistorySearchCopy.text("Newest", bundle: copyBundle)
+        case .oldestFirst: HistorySearchCopy.text("Oldest", bundle: copyBundle)
+        case .automatic, .mostCopied: sortTitle(viewState.sortOrder)
+        }
+    }
+
+    private func sortTitle(_ order: HistorySortOrder) -> String {
+        if order == .automatic, viewState.isFuzzyTextSearch {
+            return HistorySearchCopy.text("Pinned, then relevance", bundle: copyBundle)
+        }
+        return HistorySearchCopy.sortTitle(order, bundle: copyBundle)
     }
 
     private func modeName(_ mode: SearchMode) -> String {
@@ -442,6 +541,10 @@ struct SearchHeaderView: View {
             get: { viewState.searchMode == .expression ? .fuzzy : viewState.searchMode },
             set: { viewState.searchMode = $0 }
         )
+    }
+
+    private var sortBinding: Binding<HistorySortOrder> {
+        Binding(get: { viewState.sortOrder }, set: { viewState.sortOrder = $0 })
     }
 
     private var typeFilterBinding: Binding<HistoryTypeFilter> {

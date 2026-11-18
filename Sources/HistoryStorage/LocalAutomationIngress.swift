@@ -57,7 +57,7 @@ public actor LocalAutomationIngress {
     internal var enrollmentCompletion: Task<Void, Never>?
     private let authenticator: LocalAutomationCredentialAuthenticator
     private let gateway: ExternalGateway
-    private let onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)?
+    private let onCommittedRemoval: (@Sendable (HistoryItemID, ChangePosition) async -> Void)?
     private let onCommittedRevision: (@Sendable (HistoryItemReference, HistoryCommit) async -> Void)?
 
     private struct LocatorTarget: Hashable {
@@ -89,7 +89,7 @@ public actor LocalAutomationIngress {
         authority: HistoryAuthority,
         gateway: ExternalGateway,
         credentialStore: CredentialStore,
-        onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)? = nil,
+        onCommittedRemoval: (@Sendable (HistoryItemID, ChangePosition) async -> Void)? = nil,
         onCommittedRevision: (@Sendable (HistoryItemReference, HistoryCommit) async -> Void)? = nil
     ) {
         self.authority = authority
@@ -169,12 +169,9 @@ public actor LocalAutomationIngress {
                 throw ExternalFailure.persistence(.invariantViolation)
             }
             let result = try await gateway.performLocalAutomation(
-                mutation, asAuthenticated: connection
+                mutation, asAuthenticated: connection, onCommittedRemoval: onCommittedRemoval
             )
             if case .unchanged = result { return .unchanged }
-            if case .removed = result {
-                await onCommittedRemoval?(itemID)
-            }
             return .changed
         }
     }
@@ -269,7 +266,7 @@ public actor LocalAutomationIngress {
 public extension SQLiteHistory {
     /// Call once per running app and share with its transport and Settings.
     func localAutomationIngress(
-        onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)? = nil,
+        onCommittedRemoval: (@Sendable (HistoryItemID, ChangePosition) async -> Void)? = nil,
         onCommittedRevision: (@Sendable (HistoryItemReference, HistoryCommit) async -> Void)? = nil
     ) -> LocalAutomationIngress {
         LocalAutomationIngress(

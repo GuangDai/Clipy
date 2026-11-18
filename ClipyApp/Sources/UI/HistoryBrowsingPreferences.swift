@@ -16,7 +16,7 @@ enum HistoryBrowsingSurface: Equatable, Sendable {
 
 struct HistoryWorkspaceLayout: Equatable, Sendable {
     var listWidth: Double = 350
-    var sortOrder: HistorySortOrder = .automatic
+    var sortOrder: HistorySortOrder = .newestFirst
     var compactRows = false
 
     /// A smaller window fits this preference temporarily; it never replaces
@@ -182,5 +182,16 @@ extension EnvironmentValues {
 enum HistoryBrowsingCopy {
     static func text(_ english: String, bundle: Bundle = AppLocalization.bundle) -> String {
         bundle.localizedString(forKey: english, value: english, table: "HistoryBrowsing")
+    }
+
+    static func readingPositionUnavailable(
+        _ loss: HistoryViewState.ReadingPositionLoss, bundle: Bundle = AppLocalization.bundle
+    ) -> String {
+        switch loss {
+        case .saved:
+            text("Saved reading position is unavailable in these results. Showing the start of the list.", bundle: bundle)
+        case .live:
+            text("The previous reading position is unavailable. Showing the start of the list.", bundle: bundle)
+        }
     }
 }

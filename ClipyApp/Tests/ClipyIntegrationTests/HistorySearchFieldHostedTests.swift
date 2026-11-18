@@ -46,7 +46,7 @@ struct HistorySearchFieldHostedTests {
     }
 
     @Test
-    func candidateHeightTracksNativeWindowResizeWithoutAnotherInputEvent() async throws {
+    func candidateViewportTracksNativeGeometryAndOnlyVisibleCandidatesOwnKeys() async throws {
         let (panel, field) = makePanel()
         defer { panel.close() }
         let content = try #require(panel.contentView)
@@ -54,10 +54,22 @@ struct HistorySearchFieldHostedTests {
                               width: panel.frame.width, height: 420), display: true)
         field.frame.origin.y = content.bounds.maxY - field.frame.height - 12
         field.autoresizingMask = [.minYMargin]
+        let completion = HistorySearchCompletionState()
         var available: CGFloat?
-        field.onAvailableHeightChange = { available = $0 }
-        field.update(text: "$", isFocused: true)
-        try #require(await ComposedSupport.waitFor { available != nil })
+        var submissions = 0
+        field.onFocusChange = { completion.setFocused($0) }
+        field.onInputChange = { completion.update($0) }
+        field.onCompletionCommand = { completion.command($0) }
+        field.onAvailableHeightChange = {
+            available = $0
+            completion.setAvailableHeight(Double($0))
+        }
+        field.onSubmit = { submissions += 1 }
+        field.update(text: "", isFocused: true)
+        let editor = try #require(field.currentEditor() as? NSTextView)
+        let draft = "$ty"
+        editor.insertText(draft, replacementRange: NSRange(location: 0, length: 0))
+        try #require(await ComposedSupport.waitFor { completion.candidates.first?.id == "type:" && completion.isPresented })
         let before = try #require(available)
         let changedFrame = NSRect(x: panel.frame.minX, y: panel.frame.maxY - 220,
                                   width: panel.frame.width, height: 220)
@@ -72,11 +84,38 @@ struct HistorySearchFieldHostedTests {
         for height in heights {
             panel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.maxY - height,
                                   width: panel.frame.width, height: height), display: true)
-            field.update(text: "$source:Saf", isFocused: true)
+            field.update(text: draft, isFocused: true)
         }
         let finalExpected = max(0, field.convert(field.bounds, to: content).minY - content.bounds.minY - 8)
         try #require(finalExpected != expected)
         try #require(await ComposedSupport.waitFor { available == finalExpected })
+
+        // More chrome above the field can leave room for part of the popup,
+        // but no candidate row. Move the field and resize without editing.
+        field.autoresizingMask = []
+        field.frame.origin.y = content.bounds.minY + 9
+        panel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.maxY - 280,
+                              width: panel.frame.width, height: 280), display: true)
+        try #require(await ComposedSupport.waitFor { available == 1 })
+        #expect(!completion.isPresented)
+        #expect(!completion.consumesPanelCommands)
+        #expect(!field.control(field, textView: editor, doCommandBy: #selector(NSResponder.cancelOperation(_:))))
+        #expect(!field.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:))))
+        #expect(field.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        #expect(submissions == 1)
+        #expect(editor.string == draft)
+        #expect(completion.candidates.first?.id == "type:")
+        #expect(field.control(field, textView: editor, doCommandBy: #selector(NSResponder.complete(_:))))
+        #expect(!completion.isPresented)
+
+        field.frame.origin.y = content.bounds.maxY - field.frame.height - 12
+        panel.setFrame(NSRect(x: panel.frame.minX, y: panel.frame.maxY - 300,
+                              width: panel.frame.width, height: 300), display: true)
+        try #require(await ComposedSupport.waitFor { completion.isPresented })
+        #expect(completion.consumesPanelCommands)
+        #expect(field.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertTab(_:))))
+        #expect(editor.string == "$type:$")
+        #expect(submissions == 1)
     }
 
     @Test
@@ -116,8 +155,10 @@ struct HistorySearchFieldHostedTests {
         defer { panel.close() }
         var moves: [Int] = []
         var submits = 0
+        var publishedSearches: [String] = []
         field.onMoveSelection = { moves.append($0) }
         field.onSubmit = { submits += 1 }
+        field.onTextChange = { publishedSearches.append($0) }
         field.update(text: "", isFocused: true)
         let editor = try #require(field.currentEditor() as? NSTextView)
         editor.setMarkedText(
@@ -125,6 +166,9 @@ struct HistorySearchFieldHostedTests {
             replacementRange: NSRange(location: NSNotFound, length: 0)
         )
         try #require(editor.hasMarkedText())
+        let change = Notification(name: NSControl.textDidChangeNotification, object: field)
+        field.controlTextDidChange(change)
+        #expect(publishedSearches.isEmpty)
         field.update(text: "", isFocused: true)
         #expect(editor.hasMarkedText())
         #expect(editor.string == "ni")
@@ -138,7 +182,11 @@ struct HistorySearchFieldHostedTests {
         }
         #expect(moves.isEmpty)
         #expect(submits == 0)
-        editor.unmarkText()
+        editor.insertText("你", replacementRange: editor.markedRange())
+        try #require(!editor.hasMarkedText())
+        field.controlTextDidChange(change)
+        #expect(publishedSearches.last == "你")
+        #expect(!publishedSearches.contains("ni"))
         #expect(field.control(field, textView: editor, doCommandBy: #selector(NSResponder.moveDown(_:))))
         #expect(field.control(field, textView: editor, doCommandBy: #selector(NSResponder.moveUp(_:))))
         #expect(field.control(field, textView: editor, doCommandBy: #selector(NSResponder.insertNewline(_:))))

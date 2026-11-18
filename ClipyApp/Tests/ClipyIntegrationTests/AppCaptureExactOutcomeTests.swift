@@ -75,14 +75,13 @@ struct AppCaptureExactOutcomeTests {
         }
     }
 
-    /// REVIEW Card 5B: an item that publicly declares content but whose real
-    /// provider refuses the bytes reaches the app as one terminal,
-    /// content-free failure. It never occupies either bounded lane slot and
-    /// never becomes partial Canonical Content in History.
-    @Test @MainActor
-    func declaredButUnavailableProviderNeverEntersHistory() async throws {
+    /// A pending provider does not write partial content, and replacing its
+    /// generation clears the waiting notice even without a new History commit.
+    @Test(arguments: [false, true]) @MainActor
+    func unavailableProviderNoticeEndsWhenReplaced(withConcealedContent: Bool) async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         let pasteboard = ComposedSupport.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
         let unavailableType = NSPasteboard.PasteboardType(
             "com.clipy.fixture.declared-unavailable"
         )
@@ -106,7 +105,8 @@ struct AppCaptureExactOutcomeTests {
         )
         let composition = AppComposition.makeForTesting(
             history: history,
-            adapter: adapter
+            adapter: adapter,
+            observerPollInterval: 0.02
         )
         let appDelegate = AppDelegate()
         appDelegate.installCompositionForTesting(composition)
@@ -132,5 +132,18 @@ struct AppCaptureExactOutcomeTests {
         )
         #expect(page.rows.isEmpty)
         #expect(page.position.rawValue == 0)
+
+        pasteboard.clearContents()
+        if withConcealedContent {
+            let concealed = NSPasteboardItem()
+            try #require(concealed.setString("concealed replacement", forType: .string))
+            try #require(concealed.setData(Data([1]), forType: .init("org.nspasteboard.ConcealedType")))
+            try #require(pasteboard.writeObjects([concealed]))
+        }
+        try #require(await ComposedSupport.waitFor { appDelegate.captureNotice == nil })
+        #expect(appDelegate.captureHealth.failedCaptureCount == 1)
+        let afterReplacement = try await history.browse(.init(kind: .recent, limit: 10))
+        #expect(afterReplacement.rows.isEmpty)
+        #expect(afterReplacement.position == page.position)
     }
 }

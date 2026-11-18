@@ -120,7 +120,7 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     }
 
     func stopMonitoring() {
-        trace("monitor-stopped")
+        trace("monitor-stopped with-session=\(session != nil)")
         if let eventMonitor { NSEvent.removeMonitor(eventMonitor) }
         eventMonitor = nil
         hovered = nil
@@ -177,6 +177,7 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
                           self.pressed?.event === pressed.event,
                           NSEvent.pressedMouseButtons & 1 != 0 else { return }
                     let writers = try Self.pasteboardItems(for: payload)
+                    self.trace("staged-type-counts=\(writers.map { $0.types.count }) text-item-count=\(writers.filter { $0.types.contains(.string) }.count)")
                     let point = self.convert(pressed.event.locationInWindow, from: nil)
                     let image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: nil)
                         ?? NSImage(size: NSSize(width: 32, height: 32))
@@ -229,7 +230,8 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-        .copy
+        trace("source-operation-mask context=\(context.rawValue) operation=\(NSDragOperation.copy.rawValue)")
+        return .copy
     }
 
     func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
@@ -237,7 +239,7 @@ final class HistoryListDraggingView: NSView, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        trace("session-ended operation=\(operation.rawValue) point=\(screenPoint)")
+        trace("session-ended operation=\(operation.rawValue) point=\(screenPoint) source-attached=\(window != nil)")
         self.session = nil
         activeSource = nil
         cancelPreparation()

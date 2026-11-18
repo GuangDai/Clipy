@@ -21,6 +21,41 @@ struct HistorySearchCompletionEngineTests {
         #expect(compilation.expression == (try HistorySearchExpression.parse("type:text")))
         #expect(HistorySearchCompletionEngine.context(for: pattern, mode: .exact) != nil)
     }
+
+    @Test func regexpExplicitCompletionAppendsWithoutEditingThePatternAtTheCaret() throws {
+        for draft in ["foo| bar", "f|oo bar", "^[ $|]$", #"^\Q $source:Saf|ari$ \E$"#] {
+            let current = input(draft)
+            #expect(HistorySearchCompletionEngine.context(for: current, mode: .regexp) == nil)
+            let context = try #require(HistorySearchCompletionEngine.context(for: current, explicit: true, mode: .regexp))
+            let choice = HistorySearchCompletionEngine.candidate(id: "type:text", title: "Text", term: "type:text", context: context)
+            let result = try HistorySearchQueryCompiler.compile(replacing(current.text, with: choice), mode: .regexp)
+            #expect(result.literalText.utf8.elementsEqual(current.text.utf8))
+            #expect(result.expression == (try HistorySearchExpression.parse("type:text")))
+        }
+
+        for unsafeDraft in ["^[ $|", #"foo\|"#, #"\Q $source:Safari$|"#] {
+            #expect(HistorySearchCompletionEngine.context(for: input(unsafeDraft), explicit: true, mode: .regexp) == nil)
+        }
+    }
+
+    @Test func regexpCompletionRespectsCommentsAndWhitespaceBeforeAnAnchor() throws {
+        let commented = input("^(?# note [ $type:im|ages$)memo$")
+        #expect(HistorySearchCompletionEngine.context(for: commented, mode: .regexp) == nil)
+
+        let anchored = input("^report $\u{3000}$type:te|$")
+        let context = try #require(HistorySearchCompletionEngine.context(for: anchored, mode: .regexp))
+        let choice = try #require(HistorySearchCompletionEngine.candidates(for: context).first { $0.id == "type:text" })
+        let result = try HistorySearchQueryCompiler.compile(replacing(anchored.text, with: choice), mode: .regexp)
+        #expect(result.literalText == "^report $")
+        #expect(result.expression == (try HistorySearchExpression.parse("type:text")))
+    }
+
+    @Test func localizedAmountsDoNotBecomeConditionSuggestions() {
+        for draft in ["$10,|50$", "$١٠٫|٥٠$", "$１０．|５０$"] {
+            #expect(HistorySearchCompletionEngine.context(for: input(draft), explicit: true, mode: .exact) == nil)
+        }
+    }
+
     @Test func ordinaryTextAndEmptyFocusLeaveHistoryArrowNavigationAvailable() throws {
         for draft in ["|", "source:Saf|", "普通🧪文字|", "$ |", #"\$ty|"#, #"\\$ty|"#] {
             #expect(HistorySearchCompletionEngine.context(for: input(draft)) == nil)

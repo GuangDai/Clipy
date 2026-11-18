@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct HistoryViewStateReceiptOrderingTests {
     enum Mutation: CaseIterable, Equatable, Sendable {
-        case remove, revision, externalRevision, clearAll, clearUnpinned, retention
+        case remove, revision, externalRevision, clearAll, clearUnpinned
     }
 
     @Test(arguments: Mutation.allCases)
@@ -27,12 +27,9 @@ struct HistoryViewStateReceiptOrderingTests {
         case .remove: outcome = .removed(count: 1)
         case .revision, .externalRevision: outcome = .revised(current)
         case .clearAll, .clearUnpinned: outcome = .cleared(count: 1)
-        case .retention:
-            outcome = .retentionPoliciesSet(retiredItems: 1, prunedRevisions: 0)
         }
         let commit = HistoryCommit(
-            position: ChangePosition(rawValue: 2), outcome: outcome,
-            hasDestructiveRetentionEffects: mutation == .retention
+            position: ChangePosition(rawValue: 2), outcome: outcome
         )
         let history = ReceiptOrderedHistory(backing: ScriptedHistory(
             performReceipt: .committed(commit)
@@ -55,10 +52,6 @@ struct HistoryViewStateReceiptOrderingTests {
             _ = state.acceptCommittedExternalRevision(from: old.item, commit: commit)
         case .clearAll: _ = try await state.clearAwaitingReceipt(.all)
         case .clearUnpinned: _ = try await state.clearAwaitingReceipt(.unpinned)
-        case .retention:
-            _ = try await state.applyRetentionPolicies(HistoryRetentionPolicies(
-                age: AgeRetention(maxAge: 60), storage: nil, revisions: nil
-            ))
         }
         let expectedRows = state.rows
         #expect(!expectedRows.contains(old))
@@ -96,7 +89,7 @@ struct HistoryViewStateReceiptOrderingTests {
         await history.finishObservations()
     }
 
-    @Test func receiptFloorSurvivesCloseAndQueryAndNeverMovesBackwards() async throws {
+    @Test func ordinaryCaptureReceiptsDoNotPreventFirstPaintAfterReopening() async throws {
         let row = fixtureRow(
             id: "00000000-0000-0000-0000-00000000B603", title: "matching", pinned: 0
         )
@@ -123,10 +116,9 @@ struct HistoryViewStateReceiptOrderingTests {
         state.activate()
         try #require(await pollUntil { await history.observations.count == 2 })
         let reopened = await history.observations[1]
-        try await deliver(page([row], position: 9, next: "closed-stale"), to: reopened)
-        #expect(state.rows.isEmpty)
-        #expect(state.isLoadingFirstPage)
-        #expect(!state.hasNextPage)
+        try await deliver(page([row], position: 9, next: "catching-up"), to: reopened)
+        #expect(state.rows == [row])
+        #expect(!state.isLoadingFirstPage)
         try await deliver(page([row], position: 10), to: reopened)
         #expect(state.rows == [row])
         #expect(state.showsPinnedOnly)
@@ -137,10 +129,6 @@ struct HistoryViewStateReceiptOrderingTests {
         state.refresh()
         try #require(await pollUntil { await history.observations.count == 3 })
         let searched = await history.observations[2]
-        try await deliver(page([row], position: 9, next: "query-stale"), to: searched)
-        #expect(state.rows.isEmpty)
-        #expect(state.isLoadingFirstPage)
-        #expect(announcements == 0)
         try await deliver(page([row], position: 10), to: searched)
         #expect(state.displayedRows == [row])
         #expect(announcements == 1)
@@ -186,9 +174,9 @@ struct HistoryViewStateReceiptOrderingTests {
         await backing.resumeBrowse(cursor: oldCursor)
         try #require(await pollUntil { !state.isLoadingPage })
         #expect(state.rows == [first])
-        #expect(!state.hasNextPage)
+        #expect(state.hasNextPage)
         #expect(!state.hasPreviousPage)
-        #expect(state.loadedPageCount == 0)
+        #expect(state.loadedPageCount == 1)
         #expect(state.displayedCountIsLowerBound)
         #expect(state.failure == nil)
 

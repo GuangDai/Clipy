@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import HistoryCore
 
@@ -47,6 +48,52 @@ internal final class HistoryStoreLocation: Sendable {
             rootURL = directory.appendingPathComponent("content", isDirectory: true)
             databaseURL = directory.appendingPathComponent("history.sqlite")
             disposableRoot = directory
+        }
+    }
+
+    /// A missing or empty database may be initialized only when no companion
+    /// files survive. Bootstrap would otherwise treat their content as orphaned.
+    internal func permitsDatabaseCreation() throws -> Bool {
+        guard disposableRoot == nil else { return true }
+        let databasePath = databaseURL.path
+        var status = stat()
+        let databaseExists = Darwin.lstat(databasePath, &status) == 0
+        guard databaseExists || errno == ENOENT else {
+            throw HistoryFailure.persistence(.openStore)
+        }
+        if databaseExists && status.st_size > 0 { return false }
+
+        for path in [rootURL.path, databasePath + "-wal", databasePath + "-shm", databasePath + "-journal"] {
+            guard Darwin.lstat(path, &status) != 0, errno == ENOENT else {
+                throw HistoryFailure.persistence(.openStore)
+            }
+        }
+        return !databaseExists
+    }
+
+    /// A cancelled first startup can leave these two directories empty. Any
+    /// entry inside them may belong to an earlier database and must survive.
+    internal func requireEmptyContentDirectories() throws {
+        guard disposableRoot == nil else { return }
+        for name in ["blobs", "staging"] {
+            let directory = rootURL.appendingPathComponent(name, isDirectory: true)
+            var status = stat()
+            if Darwin.lstat(directory.path, &status) != 0 {
+                guard errno == ENOENT else { throw HistoryFailure.persistence(.openStore) }
+                continue
+            }
+            var enumerationFailed = false
+            guard status.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
+                  let entries = FileManager.default.enumerator(
+                    at: directory, includingPropertiesForKeys: nil,
+                    options: .skipsSubdirectoryDescendants,
+                    errorHandler: { _, _ in
+                        enumerationFailed = true
+                        return false
+                    }
+                  ), entries.nextObject() == nil, !enumerationFailed else {
+                throw HistoryFailure.persistence(.openStore)
+            }
         }
     }
 

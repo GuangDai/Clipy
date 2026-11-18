@@ -48,27 +48,29 @@ struct HistorySearchCompletionView: View {
                             HStack {
                                 Text(text("Source applications could not be loaded."))
                                     .font(.caption).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Spacer(minLength: 0)
                                 Button(text("Retry")) { _ = completion.command(.request) }
                                     .buttonStyle(.plain).focusable(false)
+                                    .accessibilityHint(text("Return retries when there are no candidates."))
                             }.padding(9)
                         }
                     }
                 }
                 .scrollBounceBehavior(.basedOnSize)
-                .onChange(of: completion.selectedIndex) { _, selected in
+                .onChange(of: completion.selectedIndex, initial: true) { _, selected in
                     if completion.candidates.indices.contains(selected) {
                         proxy.scrollTo(completion.candidates[selected].id)
                     }
                 }
             }
             Divider()
-            Text(text("↑↓ Choose · Tab/Return Insert · Esc Dismiss"))
+            Text(instructions)
                 .font(.caption2).foregroundStyle(.secondary)
                 .padding(.horizontal, 9).padding(.vertical, 5)
         }
         .frame(maxWidth: .infinity)
-        .frame(height: min(completion.availableHeight, Double(completion.candidates.count * 46 + 26 + (completion.isLoadingSources || completion.sourceFailure ? 40 : 0))))
+        .frame(height: completion.presentationHeight)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
         .overlay { RoundedRectangle(cornerRadius: 8).strokeBorder(Color.secondary.opacity(0.25)) }
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
@@ -79,6 +81,12 @@ struct HistorySearchCompletionView: View {
     private func isSelected(_ id: String) -> Bool {
         completion.candidates.indices.contains(completion.selectedIndex)
             && completion.candidates[completion.selectedIndex].id.utf8.elementsEqual(id.utf8)
+    }
+
+    private var instructions: String {
+        if !completion.candidates.isEmpty { return text("↑↓ Choose · Tab/Return Insert · Esc Dismiss") }
+        if completion.sourceFailure { return text("Return Retry · Esc Dismiss") }
+        return text("Esc Dismiss")
     }
 
     private func text(_ key: String) -> String { HistorySearchCopy.text(key, bundle: bundle) }

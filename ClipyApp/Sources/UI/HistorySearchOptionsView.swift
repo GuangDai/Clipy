@@ -8,12 +8,12 @@ import UniformTypeIdentifiers
 
 struct HistorySearchOptionsView: View {
     @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
     @Environment(\.dismiss) private var dismiss
     private let viewState: HistoryViewState
     private let completion: HistorySearchCompletionState
+    private let showsExpressionGuide: Bool
     @State private var draft: HistorySearchFilters
-    @State private var draftSortOrder: HistorySortOrder
-    @State private var showsExpressionGuide: Bool
     @State private var isChoosingApplication = false
     @State private var applicationSelectionFailed = false
     @State private var applications: [SourceApplicationSearchResolver.Application] = []
@@ -24,66 +24,56 @@ struct HistorySearchOptionsView: View {
     init(viewState: HistoryViewState, completion: HistorySearchCompletionState, showsExpressionGuide: Bool) {
         self.viewState = viewState
         self.completion = completion
+        self.showsExpressionGuide = showsExpressionGuide
         _draft = State(initialValue: viewState.searchFilters)
-        _draftSortOrder = State(initialValue: viewState.sortOrder)
-        _showsExpressionGuide = State(initialValue: showsExpressionGuide)
     }
 
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
     private func text(_ value: String) -> String { HistorySearchCopy.text(value, bundle: copyBundle) }
+    private var localDateCalendar: Calendar { HistorySearchFilters.gregorianCalendar(in: timeZone) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text(text("Search options")).font(.headline)
-                Spacer()
-                Button(text("Done")) { dismiss() }
-                    .accessibilityIdentifier("clipy.search.options.done")
-            }
+            Text(text(showsExpressionGuide ? "Advanced expressions" : "Date and application filters"))
+                .font(.headline)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    Picker(text("Sort results"), selection: $draftSortOrder) {
-                        ForEach(HistorySortOrder.allCases, id: \.self) { order in
-                            Text(HistorySearchCopy.sortTitle(order, bundle: copyBundle)).tag(order)
-                        }
+                    if showsExpressionGuide {
+                        expressionGuide
+                            .accessibilityIdentifier("clipy.search.expression.guide")
+                    } else {
+                        dateControls
+                        Divider()
+                        sourceControls
                     }
-                    .accessibilityIdentifier("clipy.search.options.sort")
-                    dateControls
-                    Divider()
-                    sourceControls
-                    HStack {
-                        Button(text("Reset")) {
-                            draft = HistorySearchFilters()
-                            draftSortOrder = .automatic
-                        }
-                        Spacer()
-                        Button(text("Apply search options")) {
-                            let changed = viewState.searchFilters != draft || viewState.sortOrder != draftSortOrder
-                            viewState.searchFilters = draft
-                            viewState.sortOrder = draftSortOrder
-                            if !changed { viewState.refresh() }
-                            dismiss()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!draft.hasValidDates())
-                        .accessibilityIdentifier("clipy.search.options.apply")
-                    }
-                    Divider()
-                    DisclosureGroup(text("Advanced expressions"), isExpanded: $showsExpressionGuide) {
-                        expressionGuide.padding(.top, 8)
-                    }
-                    .accessibilityIdentifier("clipy.search.expression.guide")
                 }
                 .padding(.trailing, 4)
             }
             .scrollBounceBehavior(.basedOnSize)
             .frame(maxHeight: 480)
+            Divider()
+            if showsExpressionGuide {
+                HStack {
+                    Spacer()
+                    Button(text("Done")) { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityIdentifier("clipy.search.options.done")
+                }
+            } else {
+                filterActions
+            }
         }
         .padding(16)
         .frame(width: 360)
-        .accessibilityIdentifier("clipy.search.options")
-        .task { applications = await viewState.sourceApplicationsForCompletion() }
+        .onAppear {
+            if !showsExpressionGuide { draft = viewState.searchFilters }
+        }
+        .task {
+            guard !showsExpressionGuide else { return }
+            applications = await viewState.sourceApplicationsForCompletion()
+        }
         .task(id: SourceSuggestionQuery(prefix: Data(draft.sourceApplication.utf8), position: viewState.sourceCompletionPosition)) {
+            guard !showsExpressionGuide else { return }
             historySources = []
             historySourceReadFailed = false
             isLoadingHistorySources = true
@@ -101,6 +91,25 @@ struct HistorySearchOptionsView: View {
         }
     }
 
+    private var filterActions: some View {
+        HStack {
+            Button(text("Reset")) { draft = HistorySearchFilters() }
+                .accessibilityIdentifier("clipy.search.options.reset")
+            Spacer()
+            Button(text("Cancel"), role: .cancel) { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .accessibilityIdentifier("clipy.search.options.cancel")
+            Button(text("Apply filters")) {
+                if viewState.searchFilters == draft { viewState.refresh() }
+                else { viewState.searchFilters = draft }
+                dismiss()
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!draft.hasValidDates(calendar: localDateCalendar))
+            .accessibilityIdentifier("clipy.search.options.apply")
+        }
+    }
+
     private var dateControls: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(text("Copy date"), systemImage: "calendar").font(.subheadline.weight(.medium))
@@ -111,13 +120,28 @@ struct HistorySearchOptionsView: View {
             }
             .labelsHidden()
             .accessibilityIdentifier("clipy.search.date.range")
+            .onChange(of: draft.dateRange) { _, range in
+                guard range == .custom, draft.dateSelectionTimeZone == nil else { return }
+                let now = Date()
+                draft.startDate = now
+                draft.endDate = now
+                draft.dateSelectionTimeZone = timeZone
+            }
             if draft.dateRange == .custom {
-                DatePicker(text("From"), selection: $draft.startDate, displayedComponents: .date)
-                    .accessibilityIdentifier("clipy.search.date.from")
-                DatePicker(text("Through"), selection: $draft.endDate, displayedComponents: .date)
-                    .accessibilityIdentifier("clipy.search.date.through")
-                if !draft.hasValidDates() {
-                    Label(text("The end date must be on or after the start date."), systemImage: "exclamationmark.circle")
+                let selectionCalendar = draft.dateSelectionCalendar ?? localDateCalendar
+                Group {
+                    DatePicker(text("From"), selection: $draft.startDate, displayedComponents: .date)
+                        .accessibilityIdentifier("clipy.search.date.from")
+                    DatePicker(text("Through"), selection: $draft.endDate, displayedComponents: .date)
+                        .accessibilityIdentifier("clipy.search.date.through")
+                }
+                .environment(\.calendar, selectionCalendar)
+                .environment(\.timeZone, selectionCalendar.timeZone)
+                if !draft.hasValidDates(calendar: localDateCalendar) {
+                    let message = draft.localCustomDates(in: localDateCalendar) == nil
+                        ? "One of the selected dates does not exist in your local time zone."
+                        : "The end date must be on or after the start date."
+                    Label(text(message), systemImage: "exclamationmark.circle")
                         .font(.caption).foregroundStyle(.red)
                         .accessibilityIdentifier("clipy.search.date.error")
                 }

@@ -42,6 +42,16 @@ struct HistoryWorkspaceSplitGeometryTests {
         #expect(restored.previewWidth == 492)
     }
 
+    @Test func theDividerTracksPhysicalMovementInBothReadingDirections() {
+        let layout = HistoryWorkspaceSplitGeometry(preferredListWidth: 400, availableWidth: 1_000)
+        let distance = 60.0
+        let leftToRight = layout.movingDivider(by: distance, layoutDirection: .leftToRight)
+        let rightToLeft = layout.movingDivider(by: distance, layoutDirection: .rightToLeft)
+        #expect(leftToRight.listWidth - layout.listWidth == distance)
+        #expect(rightToLeft.previewWidth - layout.previewWidth == distance)
+        #expect(rightToLeft.movingDivider(by: -distance, layoutDirection: .rightToLeft) == layout)
+    }
+
     @Test func fractionalWidthsRemainExactAndDoNotAccumulateLayoutRounding() {
         let layout = HistoryWorkspaceSplitGeometry(preferredListWidth: 360.25, availableWidth: 900.5)
         #expect(layout.listWidth == 360.25)

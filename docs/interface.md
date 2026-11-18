@@ -4,7 +4,7 @@
 
 [`ClipyAppMain.swift`](../ClipyApp/Sources/ClipyAppMain.swift) 是 SwiftUI 入口，应用作为菜单栏 agent 运行。真实状态项、浮动 `NSPanel`、预览窗口和全局召唤快捷键由 [`AppDelegate.swift`](../ClipyApp/Sources/AppDelegate.swift) 管理。默认全局快捷键为 ⇧⌘C；设置中可录制新组合、重试注册或恢复默认。
 
-面板支持鼠标位置、状态项、屏幕中心与上次位置。尺寸由 [`PanelGeometry.swift`](../ClipyApp/Sources/UI/PanelGeometry.swift) 和 [`PopupPositionGeometry.swift`](../ClipyApp/Sources/Panel/PopupPositionGeometry.swift) 在可用屏幕范围内计算。左侧历史面板的自然下限为 160 pt：34 pt 顶部工具栏、五行默认紧凑记录各 24 pt、6 pt 底部留白；这五行不包含工具栏。内容更多时增高至用户保存的高度上限，内容少时保留这个下限。旧的较小合法上限读取后先按新下限显示，不因为一次打开就重写偏好；用户真正调整稳定尺寸后才保存。短屏的实际窗口仍先满足系统可用区域。
+面板支持鼠标位置、状态项、屏幕中心与上次位置。尺寸由 [`PanelGeometry.swift`](../ClipyApp/Sources/UI/PanelGeometry.swift) 和 [`PopupPositionGeometry.swift`](../ClipyApp/Sources/Panel/PopupPositionGeometry.swift) 在可用屏幕范围内计算。左侧历史面板的自然下限为 190 pt，包含 64 pt 搜索与筛选区、五行各 24 pt 的默认紧凑记录和 6 pt 底部留白。内容更多时增高至用户保存的高度上限，内容少时保留这个下限。旧的较小合法上限读取后先按新下限显示，用户真正调整稳定尺寸后才保存。短屏的实际窗口仍先满足系统可用区域。
 
 右侧预览始终与左侧实际窗口同高，顶部对齐并随左侧移动或调整。预览内容少也不缩窗，长文本、图片和元数据在固定区域内布局及滚动。右侧保留独立宽度调整，空间不足时可放到主面板物理左侧；其内容不再向原生窗口提交测高结果，也没有测高后排队 refit 的任务链。
 

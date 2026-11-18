@@ -1,6 +1,4 @@
 // Panel footer actions and clear confirmation.
-"↑↓ Select · Esc Clear" = "↑↓ Select · Esc Clear";
-"⏎ Paste · Space Quick Look · ⌘I Details" = "⏎ Paste · Space Quick Look · ⌘I Details";
 "Shows the loaded portion of your history. Search to narrow results." = "Shows the loaded portion of your history. Search to narrow results.";
 "Keep Panel Open" = "Keep Panel Open";
 "Pause Clipboard Monitoring for 5 Minutes" = "Pause Clipboard Monitoring for 5 Minutes";

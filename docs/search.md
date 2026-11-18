@@ -11,7 +11,11 @@
 | `fuzzy` | Fuse 1.4.0，查询最多 64 个 Character，标题和正文各前 5,000 个 Character |
 | `expression` | 精确文本条件与来源、UTC 日期、类型、置顶状态的布尔表达式 |
 
-默认排列先置顶区的用户顺序，再未置顶区。exact、regexp 和 expression 的未置顶区按最近复制时间降序，再按项目 ID 升序；fuzzy 的未置顶区先按匹配分数，再按最近时间和 ID。显式元数据排序覆盖未置顶区的相关度排序；置顶区仍保留自己的排列。
+应用新建的浏览状态默认使用精确匹配和最近复制优先。最近优先、最早优先及复制次数排序均对所有结果生效，置顶项也在同一顺序中。选择「置顶优先」时，先按用户的置顶顺序，再排未置顶项。exact、regexp 和 expression 的未置顶项按最近复制时间降序，再按项目 ID 升序；fuzzy 的未置顶项按匹配分数、最近时间和 ID 排序。既有收藏按保存的选项回放。
+
+模糊查询超过 64 个字符时，界面保留完整输入并提示切换精确匹配。用日期按钮可选本地日历区间。界面保持打开时，换日、时区改变或唤醒会重算日期区间，原分页游标随查询失效。
+
+新保存的自定义条件保留选中的自然日。跨时区重放时，按当时的本地时区建立日界。旧条件没有保存原时区，仍按旧格式解释。
 
 过滤在存储查询中执行，界面不能只过滤已经加载的一页冒充完整查询。类型、置顶状态、来源和时间过滤与查询、排序共同参与游标身份。标题命中直接高亮标题；正文命中返回最多 322 个 Character 的片段，省略号计入限额。高亮范围是相对于返回标题 / 片段的 UTF-16 整数范围，支持匹配只覆盖复合 Character 中的完整 Unicode 标量。界面用一次标量遍历解析所有边界，时间为 O(n + r log r)，临时空间为 O(r)；越界或截断 surrogate pair 的范围丢弃，不扩展到其他字符。
 
@@ -96,7 +100,7 @@ fuzzy 的 Fuse 固定参数是 threshold 0.7、location 0、distance 100、忽�
 
 页面 limit 为 1 至 500。按排序 anchor 继续翻页，不把全部结果读入内存再截取。游标封装快照位置、请求身份、方向和排序 anchor；提交后旧位置或改变 query / filter / sort 的游标明确失效。`startAround` 在新的权威快照中定位指定项目；项目不存在或不符合当前查询时失败。fuzzy 目标达到已证明的全局最低分时，前页探测直接使用时间 / ID 反向索引范围；分数较差的目标仍检查其他候选，避免漏掉复制时间更早、分数更好的前项。
 
-`observe` 先注册失效通知再读取，避免提交落在订阅与首读之间；每次输出完整替换第一页。界面收到新快照会重置旧分页窗口，禁止混合不同 `ChangePosition` 的页。界面的默认页长 50，最多留三页；相邻页由一次 `browse` 请求获取。详细实现入口见 [`HistoryViewState.swift`](../ClipyApp/Sources/UI/HistoryViewState.swift) 和 [`HistoryWorkspacePaging.swift`](../ClipyApp/Sources/UI/HistoryWorkspacePaging.swift)。
+`observe` 先注册失效通知再读取。读取期间有提交时，最多重读一次后发布完整一致页，再处理缓冲的更新。收到具体删除或内容修订回执后，界面只接收达到该提交位置的页面。背景刷新时，如果用户已经读到深页，新的快照会先尝试围绕当前位置建立新页面。界面的默认页长 50，最多留三页，不拼接不同 `ChangePosition` 的页。相邻页由一次 `browse` 请求获取。详细实现入口见 [`HistoryViewState.swift`](../ClipyApp/Sources/UI/HistoryViewState.swift) 和 [`HistoryWorkspacePaging.swift`](../ClipyApp/Sources/UI/HistoryWorkspacePaging.swift)。
 
 性能辅助程序会报告读取行数、投影字节、匹配行数和进程资源；实际测量方法见 [testing.md](testing.md)。有界批次和页面空间是源码约束，运行时间和 RSS 改善需要同输入实测。
 

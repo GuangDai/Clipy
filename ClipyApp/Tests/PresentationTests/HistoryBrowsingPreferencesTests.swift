@@ -185,7 +185,7 @@ struct HistoryBrowsingPreferencesTests {
             ], forKey: HistoryBrowsingPreferences.workspaceLayoutKey)
             let loaded = HistoryBrowsingPreferences(defaults: defaults).workspaceLayout
             #expect(loaded.listWidth == 520.5)
-            #expect(loaded.sortOrder == .automatic)
+            #expect(loaded.sortOrder == .newestFirst)
             #expect(loaded.compactRows)
         }
         let invalidBooleans: [Any] = ["true", 1, 0]

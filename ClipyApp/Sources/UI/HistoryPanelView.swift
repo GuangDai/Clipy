@@ -125,27 +125,6 @@ struct PreviewSelectionResolution: Equatable {
     }
 }
 
-/// The footer's context-keyed shortcut cheat-sheet (V2-07 §9): one pure
-/// mapping owns the hint literals so the panel can never advertise a chord
-/// its shortcut surfaces do not implement. Chords verified against
-/// `hiddenShortcuts` (Esc clears an active search before closing the panel)
-/// and HistoryListView's selection shortcuts (⏎ paste, ⌘I details); the
-/// arrows move the selection through SearchHeaderView's arrow-key seam and
-/// bare Space is the quick-look toggle.
-enum PanelFooterShortcutHints {
-    static func text(
-        isSearchActive: Bool,
-        bundle: Bundle? = nil
-    ) -> String {
-        PanelFooterCopy.text(
-            isSearchActive
-                ? "↑↓ Select · Esc Clear"
-                : "⏎ Paste · Space Quick Look · ⌘I Details",
-            bundle: bundle ?? .main
-        )
-    }
-}
-
 /// State owned by one AppDelegate-hosted panel surface and purged only after
 /// `HistoryViewState` publishes a receipt-confirmed destructive/effective
 /// commit (review Card 9B). Keeping the coordination beside the panel avoids
@@ -178,6 +157,13 @@ final class HistoryPanelSurfaceState {
     private(set) var memoryPressure: DisplayMemoryPressure = .normal
     private(set) var memoryPressureGeneration = 0
     var isAtListRoot: Bool { detailsPath.isEmpty }
+    var allowsListKeyboardCommands: Bool {
+        isAtListRoot && quickLookReference == nil && !ownsPreviewModal
+    }
+
+    private var ownsPreviewModal: Bool {
+        previewState.isInformationPresented || previewState.isFileConfirmationPresented
+    }
 
     func respondToMemoryPressure(_ pressure: DisplayMemoryPressure) {
         memoryPressure = pressure
@@ -192,16 +178,8 @@ final class HistoryPanelSurfaceState {
     /// selected row disappearing in a later commit under the same query.
     private var selectionFilter = HistoryFilter.all
 
-    /// Hover selects only in mouse mode; in keyboard mode the hovered row
-    /// is remembered and applied — WITHOUT scrolling — when the mouse next
-    /// moves (Maccy's `hoverSelectionWhileKeyboardNavigating` deferral).
     private(set) var inputMode: PanelInputMode = .keyboard
-    private(set) var deferredHoverSelection: HistoryItemID?
-    var selectsOnHover = true {
-        didSet {
-            if !selectsOnHover { deferredHoverSelection = nil }
-        }
-    }
+    var selectsOnHover = true
 
     init(
         history: any ClipboardHistory,
@@ -253,13 +231,11 @@ final class HistoryPanelSurfaceState {
             detailsPath.removeAll()
             selection = nil
             quickLookReference = nil
-            deferredHoverSelection = nil
         case .unpinned:
             detailsPurgeGeneration += 1
             detailsPath.removeAll()
             selection = nil
             quickLookReference = nil
-            deferredHoverSelection = nil
         case .item(let id):
             if detailsPath.contains(where: { $0.id == id }) {
                 detailsPurgeGeneration += 1
@@ -270,9 +246,6 @@ final class HistoryPanelSurfaceState {
             }
             if quickLookReference?.id == id {
                 quickLookReference = nil
-            }
-            if deferredHoverSelection == id {
-                deferredHoverSelection = nil
             }
         case .revision(let old, _):
             if detailsPath.contains(old) {
@@ -296,7 +269,6 @@ final class HistoryPanelSurfaceState {
         selectionFilter = .all
         inputMode = .keyboard
         previewState.isPointerInteractionActive = false
-        deferredHoverSelection = nil
         thumbnails.isSurfaceActive = true
         detailsPath.removeAll()
         quickLookReference = nil
@@ -315,7 +287,6 @@ final class HistoryPanelSurfaceState {
         selection = nil
         quickLookReference = nil
         inputMode = .keyboard
-        deferredHoverSelection = nil
         previewState.panelClosed()
     }
 
@@ -392,39 +363,25 @@ final class HistoryPanelSurfaceState {
         // for one key would cancel and restart a closed pane's pending dwell.
     }
 
-    /// Arrow/shortcut selection movement is keyboard intent: hover stops
-    /// selecting live and defers until the mouse next moves.
+    /// Arrow and shortcut navigation owns selection until real pointer movement.
     func noteKeyboardNavigation() {
         inputMode = .keyboard
         previewState.isPointerInteractionActive = false
     }
 
-    /// A real mouse-movement event over the list area restores mouse mode
-    /// and applies any hover deferred during keyboard navigation. Hover
-    /// selection never scrolls: this writes the ID-only selection directly
-    /// and the list carries no scroll-to-selection path it could trigger.
-    func notePointerMovement() {
+    /// Switching back to the pointer uses the row at the current location.
+    /// A layout-synthesized hover or a row already left cannot change it.
+    func notePointerMovement(over itemID: HistoryItemID?) {
         previewState.pointerMoved(over: .mainPanel)
-        guard inputMode == .keyboard else { return }
+        guard isSessionActive, inputMode == .keyboard else { return }
         inputMode = .mouse
-        guard selectsOnHover else { return }
-        guard let hovered = deferredHoverSelection else { return }
-        deferredHoverSelection = nil
-        selection = hovered
+        if selectsOnHover, let itemID { selection = itemID }
     }
 
-    /// The pointer entered a row. Mouse mode selects it immediately —
-    /// never scrolling — so selection dwell yields hover-preview. Keyboard
-    /// mode only remembers the row, so arrows and the pointer never fight;
-    /// the deferral applies on the next real mouse movement.
+    /// Hover selects a row only while pointer navigation is active.
     func handleRowHover(_ id: HistoryItemID) {
-        guard isSessionActive, selectsOnHover, selection != id else { return }
-        switch inputMode {
-        case .mouse:
-            selection = id
-        case .keyboard:
-            deferredHoverSelection = id
-        }
+        guard isSessionActive, selectsOnHover, inputMode == .mouse, selection != id else { return }
+        selection = id
     }
 
     /// Retarget a selected row absent from the rendered lanes. The caller
@@ -461,14 +418,24 @@ final class HistoryPanelSurfaceState {
         return quickLookReference
     }
 
-    /// Exact executable list-root selection for both the AppKit Return path
-    /// and the search field's submit callback. A pushed Details/editor owns
-    /// keyboard input; its retained background selection cannot be pasted.
     func selectedReference(
         in rows: [HistoryRow]
     ) -> HistoryItemReference? {
         guard isAtListRoot, let selection else { return nil }
         return rows.first(where: { $0.item.id == selection })?.item
+    }
+
+    /// Quick Look keeps the item it opened with while the pointer can still
+    /// change the list selection from the separate floating preview window.
+    func keyboardCopyReference(in viewState: HistoryViewState) -> HistoryItemReference? {
+        guard isSessionActive, isAtListRoot, !ownsPreviewModal else { return nil }
+        if let quickLookReference {
+            guard viewState.displayedRow(for: quickLookReference.id)?.item == quickLookReference
+            else { return nil }
+            return quickLookReference
+        }
+        guard let selection else { return nil }
+        return viewState.displayedRow(for: selection)?.item
     }
 }
 
@@ -523,7 +490,7 @@ struct HistoryPanelView: View {
     /// coalesces and applies it to the hosting window. Nil in previews and
     /// view-only tests leaves the view frameless as before.
     private let onContentFitChange: ((PanelContentFit.Input) -> Void)?
-    private let topNoticeHeight: CGFloat
+    private let topNoticeHeight: CGFloat?
 
     @State private var surfaceState: HistoryPanelSurfaceState
     @State private var dismissedFailureEpisode: Int?
@@ -549,7 +516,7 @@ struct HistoryPanelView: View {
         keepPanelOpenIsActive: Bool = false,
         onToggleKeepPanelOpen: (() -> Void)? = nil,
         sourceIconProvider: SourceIconProvider = .none,
-        topNoticeHeight: CGFloat = 0,
+        topNoticeHeight: CGFloat? = 0,
         onContentFitChange: ((PanelContentFit.Input) -> Void)? = nil
     ) {
         self.init(
@@ -591,7 +558,7 @@ struct HistoryPanelView: View {
         keepPanelOpenIsActive: Bool = false,
         onToggleKeepPanelOpen: (() -> Void)? = nil,
         sourceIcons: SourceIconStore?,
-        topNoticeHeight: CGFloat = 0,
+        topNoticeHeight: CGFloat? = 0,
         onContentFitChange: ((PanelContentFit.Input) -> Void)? = nil
     ) {
         self.viewState = viewState
@@ -616,10 +583,7 @@ struct HistoryPanelView: View {
     }
 
     var body: some View {
-        let quickLookItem = surfaceState.resolvedQuickLookReference(
-            in: displayedSelectionRows,
-            hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
-        )
+        let quickLookItem = resolvedQuickLookItem
         ZStack {
             mainColumn
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -657,9 +621,9 @@ struct HistoryPanelView: View {
             // The content-fit oracle: any change to the displayed rows,
             // typography, or chrome republishes the analytic height demand;
             // the composition root coalesces and fits the hosting window.
-            .onChange(of: reportedContentFitInput, initial: true) { _, input in
-                guard let input else { return }
-                onContentFitChange?(input)
+            .onChange(of: contentFitReport, initial: true) { _, report in
+                guard let report else { return }
+                onContentFitChange?(report.input)
             }
             .onChange(of: surfaceState.isSessionActive, initial: true) { _, isActive in
                 sourceIcons?.isSurfaceActive = isActive
@@ -708,7 +672,15 @@ struct HistoryPanelView: View {
             // the whole generation, so rows alone cannot trigger reconciliation.
             // The first authoritative page fact must be part of the owner signal.
             .onChange(of: viewState.hasAuthoritativeFirstPage) { _, _ in
+                if !viewState.hasAuthoritativeFirstPage {
+                    previewState.retirePendingSelection()
+                }
                 reconcileSelectionWithDisplayedDefault()
+            }
+            .onChange(of: hasUnavailableResults) { _, unavailable in
+                guard unavailable else { return }
+                surfaceState.quickLookReference = nil
+                previewState.handleSelectionChange(nil)
             }
             // A changed filter may settle before this render. Reconcile
             // with the complete query shape regardless of callback order;
@@ -790,7 +762,7 @@ struct HistoryPanelView: View {
                 viewState: viewState,
                 searchFieldFocused: $isSearchFieldFocused,
                 shortcuts: shortcuts,
-                areShortcutsEnabled: surfaceState.isAtListRoot,
+                areShortcutsEnabled: surfaceState.allowsListKeyboardCommands,
                 onMoveSelection: { offset in
                     surfaceState.moveSelection(
                         in: displayedSelectionRows,
@@ -798,9 +770,8 @@ struct HistoryPanelView: View {
                     )
                 },
                 onSubmitSelection: {
-                    guard let selected = surfaceState.selectedReference(
-                        in: viewState.displayedRows
-                    )
+                    guard surfaceState.allowsListKeyboardCommands,
+                          let selected = surfaceState.keyboardCopyReference(in: viewState)
                     else { return }
                     viewState.requestPasteFromDisplayedRow(selected)
                 },
@@ -873,7 +844,7 @@ struct HistoryPanelView: View {
                 fontSize: appearance.rowFontSize,
                 isSearchFieldFocused: isSearchFieldFocused,
                 shortcuts: shortcuts,
-                areShortcutsEnabled: surfaceState.isAtListRoot,
+                areShortcutsEnabled: surfaceState.allowsListKeyboardCommands,
                 selection: $surfaceState.selection,
                 inputMode: surfaceState.inputMode,
                 keyboardNavigationGeneration: surfaceState.keyboardNavigationGeneration,
@@ -890,7 +861,10 @@ struct HistoryPanelView: View {
                 onKeyboardSelection: { id in
                     surfaceState.selectForKeyboardNavigation(id, in: viewState.displayedRows)
                 },
-                onPointerMovement: { surfaceState.notePointerMovement() },
+                onPointerMovement: { hit in
+                    let itemID = hit.flatMap { viewState.displayedRow(for: $0)?.item.id }
+                    surfaceState.notePointerMovement(over: itemID)
+                },
                 onShowDetails: { item in surfaceState.detailsPath.append(item) }
             )
         }
@@ -915,6 +889,18 @@ struct HistoryPanelView: View {
         )
     }
 
+    private var hasUnavailableResults: Bool {
+        !viewState.hasAuthoritativeFirstPage && !viewState.isLoadingFirstPage
+    }
+
+    private var resolvedQuickLookItem: HistoryItemReference? {
+        guard !hasUnavailableResults else { return nil }
+        return surfaceState.resolvedQuickLookReference(
+            in: displayedSelectionRows,
+            hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
+        )
+    }
+
     /// The analytic height oracle's input: the displayed section rows
     /// mapped to height descriptors, the row typography, and the chrome
     /// flags — the exact conditions the search header, list, and failure
@@ -924,16 +910,22 @@ struct HistoryPanelView: View {
     /// states report the full-height demand instead of the row-derived one
     /// (the overlay condition is the same resolved reference the ZStack
     /// renders with, keeping demand and rendering in lockstep).
-    private var reportedContentFitInput: PanelContentFit.Input? {
-        let input = contentFitInput
+    private struct ContentFitReport: Equatable {
+        let sessionGeneration: Int
+        let input: PanelContentFit.Input
+    }
+
+    private var contentFitReport: ContentFitReport? {
+        guard surfaceState.isSessionActive, let topNoticeHeight else { return nil }
+        let input = contentFitInput(topNoticeHeight: topNoticeHeight)
         // A replacement query clears old rows immediately. Its temporary
         // empty loading surface keeps the current window height; genuine
         // empty results and failures still publish their settled demand.
         guard !viewState.isLoadingFirstPage || input.prefersFullHeight else { return nil }
-        return input
+        return ContentFitReport(sessionGeneration: surfaceState.sessionGeneration, input: input)
     }
 
-    private var contentFitInput: PanelContentFit.Input {
+    private func contentFitInput(topNoticeHeight: CGFloat) -> PanelContentFit.Input {
         let snippetLineLimit = appearance.snippetLineCount.baseLineLimit(
             density: appearance.rowDensity
         )
@@ -950,18 +942,12 @@ struct HistoryPanelView: View {
             },
             density: appearance.rowDensity,
             fontSize: appearance.rowFontSize,
-            showsPaginationControl:
-                viewState.hasNextPage || viewState.isLoadingPage,
+            showsPaginationControl: viewState.hasNextPage || viewState.isLoadingPage,
             usesPinnedGrouping: viewState.sortOrder == .automatic,
             isFilterChipVisible: viewState.isSearchStatusVisible,
             isFailureBannerVisible: isFailureBannerVisible,
             topNoticeHeight: topNoticeHeight,
-            prefersFullHeight:
-                !surfaceState.detailsPath.isEmpty
-                    || surfaceState.resolvedQuickLookReference(
-                        in: displayedSelectionRows,
-                        hasAuthoritativeFirstPage: viewState.hasAuthoritativeFirstPage
-                    ) != nil
+            prefersFullHeight: !surfaceState.detailsPath.isEmpty || resolvedQuickLookItem != nil
         )
     }
 
@@ -1007,6 +993,7 @@ struct HistoryPanelView: View {
     private var isFailureBannerVisible: Bool {
         viewState.failure != nil
             && viewState.failureEpisode != dismissedFailureEpisode
+            && HistorySearchCopy.resultsFailure(for: viewState) == nil
     }
 
     /// Icon + typed-failure message; Retry appears only for
@@ -1015,8 +1002,7 @@ struct HistoryPanelView: View {
     /// value equality. The same failure after recovery therefore reappears.
     @ViewBuilder
     private var failureBanner: some View {
-        if let failure = viewState.failure,
-           viewState.failureEpisode != dismissedFailureEpisode {
+        if isFailureBannerVisible, let failure = viewState.failure {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.secondary)
@@ -1053,6 +1039,18 @@ struct HistoryPanelView: View {
     /// second permanent strip below the content.
     private var panelActions: some View {
         HStack(spacing: PanelTheme.spacingXSmall) {
+            if viewState.hasPreviousPage {
+                let title = HistoryListCopy.text("Back to first results")
+                Button { viewState.returnToLatest() } label: {
+                    Label(title, systemImage: "arrow.up.to.line")
+                        .labelStyle(.iconOnly)
+                        .frame(width: 24, height: PanelContentFit.searchFieldHeight)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(AppMotionPressStyle())
+                .help(title)
+                .accessibilityIdentifier("clipy.history.first-results")
+            }
             Menu {
                 Text(itemCountText)
                 Divider()
@@ -1172,6 +1170,12 @@ struct HistoryPanelView: View {
     ) -> String {
         if viewState.isLoadingFirstPage {
             return HistorySearchCopy.text("Updating results…", bundle: bundle)
+        }
+        if HistorySearchCopy.issue(for: viewState, bundle: bundle) != nil {
+            return HistorySearchCopy.text("Check search conditions", bundle: bundle)
+        }
+        if HistorySearchCopy.resultsFailure(for: viewState) != nil || !viewState.hasAuthoritativeFirstPage {
+            return HistorySearchCopy.text("Results unavailable", bundle: bundle)
         }
         return HistoryCountCopy.items(
             count: viewState.displayedCount,

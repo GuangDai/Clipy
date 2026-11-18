@@ -86,7 +86,12 @@ internal final class SQLiteDatabase {
             throw HistoryFailure.persistence(.openStore)
         }
         var opened: OpaquePointer?
-        let flags = readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+        var flags = readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE
+        // Existing stores must still exist at open time. The persistent
+        // writer already holds its lease when checking whether creation is safe.
+        if !readOnly, try storeLocation?.permitsDatabaseCreation() ?? true {
+            flags |= SQLITE_OPEN_CREATE
+        }
         let result = sqlite3_open_v2(
             url?.path ?? ":memory:", &opened,
             flags | SQLITE_OPEN_NOMUTEX, nil
@@ -111,6 +116,12 @@ internal final class SQLiteDatabase {
             try execute("PRAGMA cache_size = -4096")
             try execute("PRAGMA mmap_size = 0")
             if url != nil, !readOnly {
+                // A nonzero, valid SQLite file can still be a replacement
+                // with no application schema. Reject surviving companion data
+                // before switching journal modes or bootstrapping this file.
+                if let storeLocation, try !SQLiteHistorySchema.containsApplicationSchema(in: self) {
+                    try storeLocation.requireEmptyContentDirectories()
+                }
                 let journal = try prepare("PRAGMA journal_mode = WAL")
                 guard try journal.step(), try journal.text(at: 0) == "wal" else {
                     throw HistoryFailure.persistence(.openStore)

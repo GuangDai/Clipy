@@ -8,26 +8,6 @@ private func retentionID(_ suffix: UInt8) -> HistoryItemID {
     capturePlannerID(suffix)
 }
 
-/// Test-only inventory reference: summary fixtures have one Canonical byte
-/// and no revisions. Production selects this boundary and aggregates in SQL.
-internal func retentionTestPrefix(
-    inventory: [RetainedItemSummary],
-    maximumUnpinnedItems: Int
-) -> RetentionRetirementPrefix? {
-    let eligible = inventory.filter { $0.pinOrdinal == nil }.sorted {
-        RetentionEvictionKey(lastCopiedAt: $0.lastCopiedAt, itemID: $0.id)
-            < RetentionEvictionKey(lastCopiedAt: $1.lastCopiedAt, itemID: $1.id)
-    }
-    let victims = eligible.prefix(max(0, eligible.count - maximumUnpinnedItems))
-    return victims.last.map {
-        RetentionRetirementPrefix(
-            through: RetentionEvictionKey(lastCopiedAt: $0.lastCopiedAt, itemID: $0.id),
-            excludedItemID: nil, itemCount: victims.count,
-            canonicalBytes: victims.count, revisionBytes: 0
-        )
-    }
-}
-
 @Test func exactRetentionPrefixPreservesPolicyAndRemovalSemantics() {
     let policy = RetentionPolicy(maximumUnpinnedItems: 2)
     if case .commit = planRetention(currentPolicy: policy, policy: policy, retirementPrefix: nil) {

@@ -61,7 +61,7 @@ struct FilteredSelectionTests {
         #expect(surface.selectedReference(in: state.displayedRows) == pinned.item)
 
         // The writer omits the now-unpinned item from this filtered snapshot.
-        await history.emitObservedPage(fixturePage(rows: [], next: nil))
+        await history.emitObservedPage(fixturePage(rows: [], next: nil, position: 2))
         try #require(await pollUntil { state.rows.isEmpty })
         #expect(surface.selectedReference(in: state.displayedRows) == nil)
         surface.reconcileSessionSelection(rows: state.rows, hasAuthoritativeFirstPage: true,
@@ -151,7 +151,7 @@ struct FilteredSelectionTests {
 
         // An authoritative removal under the same filter must clear rather
         // than repick; filter replacement and item deletion differ here.
-        await history.emitObservedPage(fixturePage(rows: [], next: nil))
+        await history.emitObservedPage(fixturePage(rows: [], next: nil, position: 2))
         try #require(await pollUntil { state.rows.isEmpty })
         surface.reconcileSessionSelection(rows: state.rows, hasAuthoritativeFirstPage: true, filter: links)
         #expect(surface.selection == nil)
@@ -186,7 +186,7 @@ struct FilteredSelectionTests {
         // A later removal still clears the selection even with other visible
         // rows available under the same filter.
         let remaining = Array(original.dropFirst())
-        await history.emitObservedPage(fixturePage(rows: remaining, next: nil))
+        await history.emitObservedPage(fixturePage(rows: remaining, next: nil, position: 2))
         try #require(await pollUntil { state.rows == remaining })
         surface.reconcileSessionSelection(rows: state.rows, filter: .all)
         #expect(surface.selection == nil)

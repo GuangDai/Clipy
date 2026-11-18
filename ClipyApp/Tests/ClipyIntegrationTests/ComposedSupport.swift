@@ -275,12 +275,17 @@ actor PostInitialObservationSuspendingHistory: ClipboardHistory {
     }
 
     private let base: SQLiteHistory
+    private let observeOverride: (@Sendable () async -> AsyncThrowingStream<HistoryPage, Error>)?
     private var heldObservationContinuation: CheckedContinuation<Void, Never>?
     private var holdWaiters: [CheckedContinuation<Void, Never>] = []
     private var isHoldingPostInitialObservation = false
 
-    init(base: SQLiteHistory) {
+    init(
+        base: SQLiteHistory,
+        observeOverride: (@Sendable () async -> AsyncThrowingStream<HistoryPage, Error>)? = nil
+    ) {
         self.base = base
+        self.observeOverride = observeOverride
     }
 
     func perform(_ action: HistoryAction) async throws -> HistoryReceipt {
@@ -298,6 +303,7 @@ actor PostInitialObservationSuspendingHistory: ClipboardHistory {
     func observe(
         _ request: HistoryObservationRequest
     ) async -> AsyncThrowingStream<HistoryPage, Error> {
+        if let observeOverride { return await observeOverride() }
         let upstream = await base.observe(request)
         return AsyncThrowingStream { continuation in
             let producer = Task {
@@ -339,6 +345,15 @@ actor PostInitialObservationSuspendingHistory: ClipboardHistory {
         await withCheckedContinuation { continuation in
             holdWaiters.append(continuation)
         }
+    }
+
+    func requireHeldPostInitialObservation() async throws {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(2))
+        while !isHoldingPostInitialObservation && clock.now < deadline {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        try #require(isHoldingPostInitialObservation, "The replacement History page never arrived at its delivery gate")
     }
 
     func releasePostInitialObservation() {

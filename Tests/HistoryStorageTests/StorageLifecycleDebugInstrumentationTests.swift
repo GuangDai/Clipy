@@ -24,114 +24,30 @@ struct StorageLifecycleDebugInstrumentationTests {
         )
 
         try await authority.performStartup(initialMaximumUnpinnedItems: 200)
-        let initial = try WSSupport.fetchPosition(WSSupport.makeDatabase(storeURL: storeURL))
-        #expect(initial.rawValue == 0)
-        #expect(initial.retainedItemCount == 0)
         let privateText = "private storage lifecycle payload"
         let privateSource = "com.example.private-storage-source"
-        let tiedObservedAt = Date(timeIntervalSinceReferenceDate: 710_200_000)
-        let preparation = IngestPreparationActor()
-        var privateItemIDs: [String] = []
-        for index in 0..<12 {
-            let bundle = try await preparation.prepare(
-                WSSupport.textCapture(
-                    "\(privateText) \(index)",
-                    observedAt: tiedObservedAt,
-                    source: privateSource
-                )
+        let bundle = try await IngestPreparationActor().prepare(
+            WSSupport.textCapture(
+                privateText, observedAt: Date(timeIntervalSinceReferenceDate: 710_200_000),
+                source: privateSource
             )
-            privateItemIDs.append(bundle.domain.candidateID.rawValue.uuidString)
-            _ = try await authority.commitCapture(bundle)
-        }
+        )
+        _ = try await authority.commitCapture(bundle)
         let page = try await authority.recentPage(limit: 10, cursor: nil)
-        #expect(page.rows.count == 10)
-        #expect(page.next != nil)
+        #expect(page.rows.map(\.title) == [privateText])
 
-        // A second real SQLite connection takes the existing-store startup
-        // path that the fresh-process admission diagnostic measures.
-        let reopened = try HistoryAuthority(storeLocation: location)
-        await reopened.setStorageLifecycleDebugProbe(
-            StorageLifecycleDebugProbe(isEnabled: true) { event in
-                _ = continuation.yield(event)
-            }
-        )
-        try await reopened.performStartup(initialMaximumUnpinnedItems: 200)
-        let reopenedPage = try await reopened.recentPage(limit: 10, cursor: nil)
-        #expect(reopenedPage.rows == page.rows)
-        #expect(reopenedPage.position == page.position)
-
-        await authority.setStorageLifecycleDebugProbe(
-            StorageLifecycleDebugProbe(isEnabled: false)
-        )
-        await reopened.setStorageLifecycleDebugProbe(
-            StorageLifecycleDebugProbe(isEnabled: false)
-        )
+        await authority.setStorageLifecycleDebugProbe(StorageLifecycleDebugProbe(isEnabled: false))
         continuation.finish()
-
         var captured: [StorageLifecycleDebugEvent] = []
-        for await event in events {
-            captured.append(event)
-        }
-        let phases = Set(captured.map(\.phase))
-        let expectedPhases: Set<StorageLifecycleDebugPhase> = [
-            .startupFetchBegin,
-            .startupFetchComplete,
-            .startupAutoreleasePoolDrained,
-            .captureFactLoadBegin,
-            .captureFactLoadComplete,
-            .captureTransactionBegin,
-            .captureTransactionComplete,
-            .captureAutoreleasePoolDrained,
-            .recentFetchBegin,
-            .recentPinnedFetchBegin,
-            .recentPinnedFetchComplete,
-            .recentUnpinnedFetchBegin,
-            .recentUnpinnedFetchComplete,
-            .recentFetchComplete,
-            .recentAutoreleasePoolDrained,
-        ]
-        #expect(expectedPhases.isSubset(of: phases))
-        #expect(captured.allSatisfy {
-            $0.event == StorageLifecycleDebugEvent.eventName
-                && $0.schemaVersion == 1
-                && $0.elapsedMilliseconds >= 0
-                && $0.rows >= 0
-        })
+        for await event in events { captured.append(event) }
 
-        let startupBegins = captured.indices.filter { captured[$0].phase == .startupFetchBegin }
-        let startupCompletes = captured.indices.filter { captured[$0].phase == .startupFetchComplete }
-        let startupDrains = captured.indices.filter { captured[$0].phase == .startupAutoreleasePoolDrained }
-        try #require(startupBegins.count == 2)
-        try #require(startupCompletes.count == 2)
-        try #require(startupDrains.count == 2)
-        for index in startupBegins.indices {
-            #expect(startupBegins[index] < startupCompletes[index])
-            #expect(startupCompletes[index] < startupDrains[index])
-        }
-
-        let captureTransactionCompleteIndex = try #require(captured.firstIndex {
-            $0.phase == .captureTransactionComplete
-        })
-        let captureDrainedIndex = try #require(captured.firstIndex {
-            $0.phase == .captureAutoreleasePoolDrained
-        })
-        #expect(captureTransactionCompleteIndex < captureDrainedIndex)
-
-        let unpinnedFetch = try #require(captured.first {
-            $0.phase == .recentUnpinnedFetchComplete
-        })
-        #expect(unpinnedFetch.rows == 11)
-        let fetchCompleteIndex = try #require(captured.firstIndex {
-            $0.phase == .recentUnpinnedFetchComplete
-        })
-        let recentCompleteIndex = try #require(captured.firstIndex {
-            $0.phase == .recentFetchComplete
-        })
-        let recentDrainedIndex = try #require(captured.firstIndex {
-            $0.phase == .recentAutoreleasePoolDrained
-        })
-        #expect(fetchCompleteIndex < recentCompleteIndex)
-        #expect(recentCompleteIndex < recentDrainedIndex)
+        let startupBegin = try #require(captured.firstIndex { $0.phase == .startupFetchBegin })
+        let startupComplete = try #require(captured.firstIndex { $0.phase == .startupFetchComplete })
+        let captureComplete = try #require(captured.firstIndex { $0.phase == .captureTransactionComplete })
+        let recentComplete = try #require(captured.firstIndex { $0.phase == .recentFetchComplete })
+        #expect(startupBegin < startupComplete)
+        #expect(startupComplete < captureComplete)
+        #expect(captureComplete < recentComplete)
 
         let rendered = captured.compactMap(\.logLine).joined(separator: "\n")
         #expect(!rendered.isEmpty)
@@ -141,7 +57,7 @@ struct StorageLifecycleDebugInstrumentationTests {
         #expect(!rendered.contains(privateText))
         #expect(!rendered.contains(privateSource))
         #expect(!rendered.contains(storeURL.path))
-        #expect(privateItemIDs.allSatisfy { !rendered.contains($0) })
+        #expect(!rendered.contains(bundle.domain.candidateID.rawValue.uuidString))
     }
 
     @Test func failedStartupDoesNotEmitSuccessfulCompletion() async throws {

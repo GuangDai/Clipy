@@ -38,6 +38,7 @@ struct HistoryPreviewView: View {
     @State private var contentWidth: CGFloat = PanelGeometry.floatingPreviewWidth
     @State private var metadataHeight: CGFloat = 0
     @State private var fileHeaderHeight: CGFloat = 0
+    @State private var searchMatchHeight: CGFloat = 0
     @State private var imageFooterHeight: CGFloat = 0
     @State private var textNoticeHeight: CGFloat = 0
     @State private var loader: PreviewContentLoader
@@ -68,6 +69,11 @@ struct HistoryPreviewView: View {
         let retryGeneration: Int
         let maximumTextCharacters: Int
         let isTextLengthLimited: Bool
+    }
+
+    private struct RetentionCheck: Equatable {
+        let item: HistoryItemReference
+        let position: ChangePosition
     }
 
     /// Standalone entry point: PreviewPaneState owns the exact target.
@@ -155,12 +161,19 @@ struct HistoryPreviewView: View {
     }
 
     private var observedRow: HistoryRow? {
-        guard let targetItem else { return nil }
-        return viewState.rows.first { $0.item == targetItem }
+        guard let targetItem, let row = viewState.displayedRow(for: targetItem.id), row.item == targetItem else {
+            return nil
+        }
+        return row
+    }
+
+    private var retentionCheck: RetentionCheck? {
+        guard let targetItem, let position = viewState.retentionChangePosition else { return nil }
+        return RetentionCheck(item: targetItem, position: position)
     }
 
     private var bodyMaximumHeight: CGFloat? {
-        maximumHeight.map { max(0, $0 - metadataHeight - fileHeaderHeight) }
+        maximumHeight.map { max(0, $0 - metadataHeight - fileHeaderHeight - searchMatchHeight) }
     }
 
     private var flexibleHeight: CGFloat? {
@@ -168,7 +181,14 @@ struct HistoryPreviewView: View {
     }
 
     var body: some View {
+        let image = previewImage
+        let showsFileContents = switch loader.phase {
+        case .content(.text): true
+        case .content(.image): image != nil
+        default: false
+        }
         VStack(spacing: 0) {
+            searchMatch
             if loader.requestedItem == targetItem, let file = loader.loadedFileReference {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
@@ -187,12 +207,15 @@ struct HistoryPreviewView: View {
                             .truncationMode(.middle)
                             .help(file.filePath ?? file.address)
                     }
-                    Text(PreviewCopy.text("Showing the file contents loaded for this preview. Copying still copies the original file reference."))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .help(PreviewCopy.text("Showing the file contents loaded for this preview. Copying still copies the original file reference."))
-                        .accessibilityIdentifier("clipy.preview.file.disclosure")
+                    if showsFileContents {
+                        let disclosure = PreviewCopy.text("Showing the file contents loaded for this preview. Copying still copies the original file reference.")
+                        Text(disclosure)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .help(disclosure)
+                            .accessibilityIdentifier("clipy.preview.file.disclosure")
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
@@ -203,7 +226,7 @@ struct HistoryPreviewView: View {
                 .onDisappear { fileHeaderHeight = 0 }
                 Divider()
             }
-            previewBody
+            previewBody(image: image)
                 .frame(maxWidth: .infinity, maxHeight: flexibleHeight)
                 .layoutPriority(1)
             if PreviewFooterMetadata(item: targetItem, row: observedRow) != nil {
@@ -253,6 +276,10 @@ struct HistoryPreviewView: View {
         .task(id: pinRequest) {
             guard let request = pinRequest, !Task.isCancelled else { return }
             await performPin(request)
+        }
+        .task(id: retentionCheck) {
+            guard let retentionCheck else { return }
+            await retirePreviewIfNeeded(retentionCheck)
         }
         .onChange(of: targetItem) { _, target in
             if let informationItem, informationItem != target {
@@ -329,6 +356,22 @@ struct HistoryPreviewView: View {
         .accessibilityIdentifier("clipy.preview.root")
     }
 
+    private func retirePreviewIfNeeded(_ check: RetentionCheck) async {
+        do {
+            let row = try await viewState.detailRow(for: check.item.id, atLeast: check.position)
+            guard row.item != check.item else { return }
+        } catch HistoryFailure.notFound(_) {
+            // The committed retention affected this exact preview.
+        } catch {
+            return
+        }
+        guard !Task.isCancelled, loader.requestedItem == check.item else { return }
+        previewState.isInformationPresented = false
+        setFileConfirmationPresented(false)
+        informationItem = nil
+        loader.clear()
+    }
+
     private func setFileConfirmationPresented(_ presented: Bool) {
         fileConfirmationPresented = presented
         previewState.isFileConfirmationPresented = presented
@@ -354,8 +397,42 @@ struct HistoryPreviewView: View {
 
     // MARK: - Content
 
+    /// Uses the same exact-reference row as the footer and copy controls.
+    /// Query changes retire the old rows immediately, including their excerpts.
     @ViewBuilder
-    private var previewBody: some View {
+    private var searchMatch: some View {
+        if viewState.hasAuthoritativeFirstPage, let row = observedRow, let match = row.search,
+           match.snippet != nil || !match.matchedRanges.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(PreviewCopy.text("Search match"))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(MatchHighlighting.highlighted(match.snippet ?? row.title, ranges: match.matchedRanges,
+                    prioritizesMatch: true))
+                    .font(.callout)
+                    .lineLimit(3)
+                    .accessibilityIdentifier("clipy.preview.search-match")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.quaternary)
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { searchMatchHeight = $0 }
+            .onDisappear { searchMatchHeight = 0 }
+        }
+    }
+
+    private var previewImage: Image? {
+        guard loader.requestedItem == targetItem,
+              case .content(.image) = loader.phase,
+              let raster = loader.raster,
+              let label = loader.imageAccessibilityLabel(locale: locale) else { return nil }
+        return PreviewRasterDisplay.image(raster, scale: 1, label: Text(label))
+    }
+
+    @ViewBuilder
+    private func previewBody(image: Image?) -> some View {
         if targetItem == nil {
             unavailableBody
         } else if loader.requestedItem != targetItem {
@@ -365,14 +442,7 @@ struct HistoryPreviewView: View {
             case .loading:
                 loadingBody
             case .content(.image):
-                if let raster = loader.raster,
-                   let accessibilityLabel =
-                    loader.imageAccessibilityLabel(locale: locale),
-                   let image = PreviewRasterDisplay.image(
-                       raster,
-                       scale: 1,
-                       label: Text(accessibilityLabel)
-                   ) {
+                if let raster = loader.raster, let image {
                     VStack(spacing: 0) {
                         image
                             .resizable()

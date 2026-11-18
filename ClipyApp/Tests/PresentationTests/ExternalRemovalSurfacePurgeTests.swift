@@ -17,11 +17,12 @@ struct ExternalRemovalSurfacePurgeTests {
             )!
         )
 
-        let published = state.acceptCommittedExternalRemoval(removedID)
+        let position = ChangePosition(rawValue: 1)
+        let published = state.acceptCommittedExternalRemoval(removedID, position: position)
 
         let purge = try #require(state.surfacePurge)
         #expect(purge == published)
-        #expect(purge.generation == 1)
         #expect(purge.scope == .item(removedID))
+        #expect(state.sourceCompletionPosition == position)
     }
 }

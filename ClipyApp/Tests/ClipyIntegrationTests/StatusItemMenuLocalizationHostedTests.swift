@@ -7,8 +7,7 @@ import Testing
 @MainActor
 struct StatusItemMenuLocalizationHostedTests {
     private final class CaptureState {
-        var paused = false
-        var canToggle = true
+        var access = CaptureAccessState.allowed
     }
 
     @Test func existingMenuUsesTheNewLanguageOnItsNextPresentation() throws {
@@ -18,16 +17,16 @@ struct StatusItemMenuLocalizationHostedTests {
         AppLanguageSettings.store(.english, in: defaults)
         let state = CaptureState()
         let owner = StatusItemMenu(
-            isCapturePaused: { state.paused },
-            canToggleCapturePause: { state.canToggle },
-            onShowHistory: {}, onToggleCapturePause: {}, onOpenSettings: {}, onQuit: {}, onMenuDidClose: {},
+            captureAccessState: { state.access },
+            onShowHistory: {}, onPauseCapture: {}, onResumeCapture: {},
+            onOpenSettings: {}, onQuit: {}, onMenuDidClose: {},
             languageDefaults: defaults
         )
         let items = owner.menu.items.filter { !$0.isSeparatorItem }
         #expect(items.map(\.title) == ["Show Clipboard History", "Pause Clipboard Monitoring for 5 Minutes", "Settings…", "Quit Clipy"])
 
         AppLanguageSettings.store(.simplifiedChinese, in: defaults)
-        state.paused = true
+        state.access = .userPaused
         owner.menu.delegate?.menuNeedsUpdate?(owner.menu)
 
         #expect(items.map(\.title) == ["显示剪贴板历史记录", "恢复剪贴板监控", "设置…", "退出 Clipy"])
@@ -49,10 +48,10 @@ struct StatusItemMenuLocalizationHostedTests {
         let bundle = try #require(Bundle(url: url))
         let state = CaptureState()
         let owner = StatusItemMenu(
-            isCapturePaused: { state.paused },
-            canToggleCapturePause: { state.canToggle },
+            captureAccessState: { state.access },
             onShowHistory: {},
-            onToggleCapturePause: {},
+            onPauseCapture: {},
+            onResumeCapture: {},
             onOpenSettings: {},
             onQuit: {},
             onMenuDidClose: {},
@@ -65,14 +64,13 @@ struct StatusItemMenuLocalizationHostedTests {
         let items = owner.menu.items.filter { !$0.isSeparatorItem }
         #expect(items.map(\.title) == expected)
 
-        state.paused = true
+        state.access = .userPaused
         owner.menu.delegate?.menuNeedsUpdate?(owner.menu)
         #expect(items[1].title == (language == "en"
             ? "Resume Clipboard Monitoring" : "恢复剪贴板监控"))
         #expect(items[1].isEnabled)
 
-        state.paused = false
-        state.canToggle = false
+        state.access = .denied
         owner.menu.delegate?.menuNeedsUpdate?(owner.menu)
         #expect(items[1].title == expected[1])
         #expect(!items[1].isEnabled)

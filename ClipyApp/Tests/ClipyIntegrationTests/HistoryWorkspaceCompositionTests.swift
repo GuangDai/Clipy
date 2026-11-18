@@ -11,7 +11,7 @@ import Testing
 @MainActor
 struct HistoryWorkspaceCompositionTests {
     @Test
-    func workspaceCopiesCurrentContentWithoutFloatingPanelCallbacks() async throws {
+    func workspaceCopiesTheSelectedRevisionWithoutFloatingPanelCallbacks() async throws {
         try ComposedSupport.requireUsablePasteboard()
         let history = try await ComposedSupport.openMemoryHistory()
         let original = try await Self.capture("workspace original", in: history)
@@ -32,8 +32,7 @@ struct HistoryWorkspaceCompositionTests {
         composition.onPasteCompleted = { completionCount += 1 }
         composition.onPasteFailed = { failures.append($0) }
 
-        // Current-by-ID resolution also applies to the persistent workspace.
-        composition.historyWorkspaceViewState.requestPaste(original)
+        composition.historyWorkspaceViewState.requestPaste(revised)
         #expect(composition.historyWorkspaceCopyState.isCopying)
         #expect(composition.historyWorkspaceCopyState.status == nil)
         let pending = try #require(composition.pendingPasteForTesting)

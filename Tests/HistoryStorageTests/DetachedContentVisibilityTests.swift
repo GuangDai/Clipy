@@ -92,15 +92,18 @@ struct DetachedContentVisibilityTests {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
             #expect(try await history.details(for: revised.id).revisions.map(\.title) == ["third revision"])
-            // A canonical repeat still finds the live owner after pruning.
+            // The live version can still be copied back into its lineage
+            // while the detached revisions await physical cleanup.
+            let payload = try await history.pastePayload(for: revised.id)
             let repeated = try await history.perform(.capture(WSSupport.textCapture(
-                "canonical needle", observedAt: Date(timeIntervalSinceReferenceDate: 850_000_100)
+                "third revision", observedAt: Date(timeIntervalSinceReferenceDate: 850_000_100),
+                lineageHint: payload.lineageHint
             )))
             guard case .committed(let repeatedCommit) = repeated,
                   case .coalesced(let coalesced) = repeatedCommit.outcome else {
                 throw HistoryFailure.persistence(.invariantViolation)
             }
-            #expect(coalesced.id == original.id)
+            #expect(coalesced == revised)
             await resumeCleanup(history, gate: gate)
         } catch {
             await resumeCleanup(history, gate: gate)

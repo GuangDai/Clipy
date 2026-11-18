@@ -236,6 +236,130 @@ struct SearchHistoryStoreTests {
         }
     }
 
+    @Test func savedCustomDateKeepsTheSelectedDayWhenReplayingInAnotherTimeZone() async throws {
+        var shanghai = Calendar(identifier: .gregorian)
+        shanghai.timeZone = try #require(TimeZone(identifier: "Asia/Shanghai"))
+        var losAngeles = Calendar(identifier: .gregorian)
+        losAngeles.timeZone = try #require(TimeZone(identifier: "America/Los_Angeles"))
+        let selectedDay = DateComponents(year: 2026, month: 11, day: 18)
+        let originalStart = try #require(shanghai.date(from: selectedDay))
+        let localStart = try #require(losAngeles.date(from: selectedDay))
+        let nextLocalDay = try #require(losAngeles.dateInterval(of: .day, for: localStart)?.end)
+        var filters = HistorySearchFilters()
+        filters.dateRange = .custom
+        filters.startDate = originalStart
+        filters.endDate = originalStart
+        let saved = try withStore { store, defaults in
+            enableAll(store)
+            let definition = HistorySearchDefinition(filters: filters, customDateTimeZone: shanghai.timeZone)
+            #expect(store.saveFavorite(definition) == .saved)
+            let reopened = SearchHistoryStore(defaults: defaults)
+            let restored = try #require(reopened.favorites.first?.definition)
+            #expect(reopened.recordSubmittedSearch(restored) == .saved)
+            let recent = try #require(SearchHistoryStore(defaults: defaults).recentSearches.first?.definition)
+            #expect(recent == definition)
+            return recent
+        }
+
+        let locale = Locale(identifier: "en_US")
+        let originalSummary = SearchLibraryCopy.summary(saved, locale: locale, timeZone: shanghai.timeZone)
+        let localSummary = SearchLibraryCopy.summary(saved, locale: locale, timeZone: losAngeles.timeZone)
+        #expect(originalSummary == localSummary)
+
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        for (title, date) in [
+            ("Earlier local day", localStart.addingTimeInterval(-1)),
+            ("Selected local day", localStart),
+            ("Following local day", nextLocalDay),
+        ] {
+            _ = try await history.perform(.capture(.init(
+                representations: [.init(typeIdentifier: "public.utf8-plain-text", bytes: Data(title.utf8))],
+                origin: .init(sourceApplication: nil, lineageHint: nil), observedAt: date
+            )))
+        }
+
+        let state = HistoryViewState(history: history)
+        defer { state.deactivate() }
+        var activeFilters = filters
+        activeFilters.dateSelectionTimeZone = shanghai.timeZone
+        state.searchFilters = activeFilters
+        state.refreshDateFiltersIfNeeded(now: originalStart, calendar: shanghai)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.title) == ["Selected local day", "Earlier local day"])
+
+        state.refreshDateFiltersIfNeeded(now: localStart, calendar: losAngeles)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.title) == ["Selected local day"])
+        let savedAfterSwitch = HistorySearchDefinition(viewState: state)
+        #expect(savedAfterSwitch.customDateTimeZone == shanghai.timeZone)
+        #expect(SearchLibraryCopy.summary(savedAfterSwitch, locale: locale, timeZone: losAngeles.timeZone) == localSummary)
+
+        #expect(saved.apply(to: state, timeZone: losAngeles.timeZone))
+        #expect(state.searchFilters.startDate == localStart)
+        #expect(state.searchFilters.endDate == localStart)
+        state.refreshDateFiltersIfNeeded(now: localStart, calendar: losAngeles)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.title) == ["Selected local day"])
+
+        let honolulu = HistorySearchFilters.gregorianCalendar(in: try #require(TimeZone(identifier: "Pacific/Honolulu")))
+        state.refreshDateFiltersIfNeeded(now: localStart, calendar: honolulu)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.title) == ["Following local day"])
+        #expect(SearchLibraryCopy.summary(HistorySearchDefinition(viewState: state), locale: locale,
+                                         timeZone: honolulu.timeZone) == localSummary)
+    }
+
+    @Test func legacyCustomDateReplaysTheOriginalInstantsWithoutGuessingAZone() throws {
+        try withStore { store, defaults in
+            enableAll(store)
+            var filters = HistorySearchFilters()
+            filters.dateRange = .custom
+            filters.startDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
+            filters.endDate = Date(timeIntervalSinceReferenceDate: 800_086_400)
+            #expect(store.saveFavorite(.init(filters: filters)) == .saved)
+
+            let data = try #require(defaults.data(forKey: SearchHistoryStore.defaultsKey))
+            var document = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            var favorites = try #require(document["favorites"] as? [[String: Any]])
+            var definition = try #require(favorites.first?["definition"] as? [String: Any])
+            definition.removeValue(forKey: "customDateTimeZone")
+            favorites[0]["definition"] = definition
+            document["favorites"] = favorites
+            let legacy = try JSONSerialization.data(withJSONObject: document)
+            defaults.set(legacy, forKey: SearchHistoryStore.defaultsKey)
+
+            let reopened = SearchHistoryStore(defaults: defaults)
+            let restored = try #require(reopened.favorites.first?.definition)
+            #expect(defaults.data(forKey: SearchHistoryStore.defaultsKey) == legacy)
+            for identifier in ["Asia/Shanghai", "America/Los_Angeles"] {
+                let zone = try #require(TimeZone(identifier: identifier))
+                #expect(restored.filtersForReplay(in: zone) == filters)
+            }
+            #expect(reopened.recordSubmittedSearch(restored) == .saved)
+            let recent = try #require(SearchHistoryStore(defaults: defaults).recentSearches.first?.definition)
+            #expect(recent.customDateTimeZone == nil)
+            #expect(recent.filters == filters)
+        }
+    }
+
+    @Test func replayRejectsASkippedLocalDayBeforeChangingTheCurrentSearch() async throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = try #require(TimeZone(secondsFromGMT: 0))
+        var filters = HistorySearchFilters()
+        filters.dateRange = .custom
+        filters.startDate = try #require(utc.date(from: DateComponents(year: 2011, month: 12, day: 30)))
+        filters.endDate = filters.startDate
+        let saved = HistorySearchDefinition(query: "new query", filters: filters, customDateTimeZone: utc.timeZone)
+        let apia = try #require(TimeZone(identifier: "Pacific/Apia"))
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let state = HistoryViewState(history: history)
+        state.searchText = "current query"
+        defer { state.deactivate() }
+        #expect(!saved.apply(to: state, timeZone: apia))
+        #expect(state.searchText == "current query")
+        #expect(state.searchFilters.dateRange == .anyTime)
+    }
+
     @Test func emptySearchIsRejectedButWhitespaceAndMetadataOnlySearchesAreUseful() throws {
         try withStore { store, _ in
             enableAll(store)
@@ -260,6 +384,29 @@ struct SearchHistoryStoreTests {
         }
     }
 
+    @Test func aSavedNewestSortStillReopensWhenNewestBecomesTheDefault() throws {
+        try withStore { store, defaults in
+            enableAll(store)
+            #expect(store.saveFavorite(.init(sortOrder: .oldestFirst), name: "Copy order") == .saved)
+            let serialized = try #require(defaults.data(forKey: SearchHistoryStore.defaultsKey))
+            var record = try #require(JSONSerialization.jsonObject(with: serialized) as? [String: Any])
+            var favorites = try #require(record["favorites"] as? [[String: Any]])
+            var definition = try #require(favorites.first?["definition"] as? [String: Any])
+            definition["sortOrder"] = HistorySortOrder.newestFirst.rawValue
+            favorites[0]["definition"] = definition
+            record["favorites"] = favorites
+            let previousPreferences = try JSONSerialization.data(withJSONObject: record)
+            defaults.set(previousPreferences, forKey: SearchHistoryStore.defaultsKey)
+
+            let reopened = SearchHistoryStore(defaults: defaults)
+            #expect(reopened.failure == nil)
+            let restored = try #require(reopened.favorites.first)
+            #expect(restored.definition.query.isEmpty)
+            #expect(restored.definition.sortOrder == .newestFirst)
+            #expect(defaults.data(forKey: SearchHistoryStore.defaultsKey) == previousPreferences)
+        }
+    }
+
     @Test func invalidDefinitionsNeverReplacePreviouslySavedSearches() throws {
         try withStore { store, _ in
             enableAll(store)
@@ -274,6 +421,7 @@ struct SearchHistoryStoreTests {
             nonfinite.startDate = Date(timeIntervalSinceReferenceDate: .infinity)
             let invalid: [HistorySearchDefinition] = [
                 .init(query: "[", mode: .regexp), .init(query: "$(report OR$", mode: .fuzzy),
+                .init(query: String(repeating: "x", count: 1 + HistoryLimits.standard.maximumFuzzyQueryCharacters), mode: .fuzzy),
                 .init(filters: reversed), .init(filters: nonfinite),
                 .init(query: String(repeating: "x", count: 16_385), mode: .exact),
             ]
@@ -479,7 +627,7 @@ struct SearchHistoryStoreTests {
             var dates = HistorySearchFilters()
             dates.dateRange = .today
             let definitions: [HistorySearchDefinition] = [
-                .init(query: "same"), .init(query: "same", mode: .exact),
+                .init(query: "same"), .init(query: "same", mode: .fuzzy),
                 .init(query: "same", typeFilter: .text), .init(query: "same", pinnedOnly: true),
                 .init(query: "same", filters: source), .init(query: "same", filters: alternateSource),
                 .init(query: "same", filters: dates), .init(query: "same", sortOrder: .oldestFirst),
@@ -614,6 +762,7 @@ struct SearchHistoryStoreTests {
         filters.dateRange = .custom
         filters.startDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
         filters.endDate = Date(timeIntervalSinceReferenceDate: 800_259_200)
+        filters.dateSelectionTimeZone = .current
         source.searchFilters = filters
         let captured = HistorySearchDefinition(viewState: source)
         source.deactivate()
@@ -666,12 +815,12 @@ struct SearchHistoryStoreTests {
         }
     }
 
-    private func withStore(
-        _ body: (SearchHistoryStore, UserDefaults) throws -> Void
-    ) throws {
+    private func withStore<Result>(
+        _ body: (SearchHistoryStore, UserDefaults) throws -> Result
+    ) throws -> Result {
         let suite = "SearchHistoryStoreTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        try body(SearchHistoryStore(defaults: defaults), defaults)
+        return try body(SearchHistoryStore(defaults: defaults), defaults)
     }
 }

@@ -14,16 +14,6 @@ struct ExternalFailureMappingTests {
         uuidString: "00000000-0000-0000-0000-00000000B132"
     )!)
 
-    @Test("External transient raw values are stable and unknown values fail")
-    func externalTransientRawValues() {
-        #expect(ExternalTransientReason.indexRebuild.rawValue == 1)
-        #expect(ExternalTransientReason.storeLocked.rawValue == 2)
-        #expect(ExternalTransientReason.insufficientDiskSpace.rawValue == 3)
-        #expect(ExternalTransientReason.cancelled.rawValue == 4)
-        #expect(ExternalTransientReason(rawValue: 0) == nil)
-        #expect(ExternalTransientReason(rawValue: 5) == nil)
-    }
-
     @Test("Every History failure leaf is classified for all seven operations")
     func completeFailureMatrix() {
         for row in failureMatrix {

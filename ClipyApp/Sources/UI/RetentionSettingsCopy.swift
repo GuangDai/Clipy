@@ -51,15 +51,15 @@ internal enum RetentionSettingsCopy {
     ) }
     internal static var confirmItemLimitTitle: String { plain(
         "settings.retention.items.confirm-title",
-        "Apply a stricter item limit?"
+        "Apply this item limit?"
     ) }
     internal static var confirmItemLimitApply: String { plain(
         "settings.retention.items.confirm-apply",
-        "Apply Stricter Limit"
+        "Apply Limit"
     ) }
     internal static var confirmItemLimitMessage: String { plain(
         "settings.retention.items.confirm-message",
-        "A stricter limit can immediately remove unpinned items, and they can't be recovered."
+        "If there are more unpinned items than the new limit allows, the oldest will be removed permanently."
     ) }
 
     // MARK: Item age section
@@ -156,15 +156,19 @@ internal enum RetentionSettingsCopy {
     ) }
     internal static var confirmPoliciesTitle: String { plain(
         "settings.retention.confirm-title",
-        "Apply stricter retention limits?"
+        "Apply retention changes?"
     ) }
     internal static var confirmPoliciesApply: String { plain(
         "settings.retention.confirm-apply",
-        "Apply Stricter Limits"
+        "Apply Changes"
     ) }
     internal static var confirmPoliciesMessage: String { plain(
         "settings.retention.confirm-message",
-        "Stricter limits can permanently remove items or revisions."
+        "Applying these limits may immediately and permanently remove items or revisions."
+    ) }
+    internal static var confirmPoliciesAgeMessage: String { plain(
+        "settings.retention.confirm-age-message",
+        "Clipy will check for expired items now. Applying these limits may immediately and permanently remove items or revisions."
     ) }
     internal static var confirmCancel: String { plain(
         "settings.retention.confirm-cancel",

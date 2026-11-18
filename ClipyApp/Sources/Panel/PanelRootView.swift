@@ -14,9 +14,28 @@ import SwiftUI
 /// back to the delegate (01 §8: PresentationUI never sees AppKit).
 struct PanelRootView: View {
     @State private var readingPositionNoticeDismissed = false
-    @State private var topNoticeHeight: CGFloat = 0
+    @State private var measuredTopNotices: TopNoticeMeasurement?
     let appDelegate: AppDelegate
+    var motionPresentation: AppMotionPresentation?
     @Environment(\.locale) private var locale
+
+    private struct TopNotices: Equatable {
+        let sessionGeneration: Int?
+        let locale: Locale
+        let showsReadingPosition: Bool
+        let captureAccess: CaptureAccessState?
+        let pasteFailure: ClipyPasteFailure?
+        let captureNotice: ClipyCaptureNotice?
+
+        var isEmpty: Bool {
+            !showsReadingPosition && captureAccess == nil && pasteFailure == nil && captureNotice == nil
+        }
+    }
+
+    private struct TopNoticeMeasurement: Equatable {
+        let notices: TopNotices
+        let height: CGFloat
+    }
 
     /// The public Settings-scene presentation action (audit S-5 /
     /// SPEC-IMPL-010, replacing `AppDelegate.openSettingsWindow`'s private
@@ -29,18 +48,28 @@ struct PanelRootView: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        let _ = locale
+        let notices = TopNotices(
+            sessionGeneration: appDelegate.panelSurfaceState?.sessionGeneration,
+            locale: locale,
+            showsReadingPosition: showsReadingPositionNotice,
+            captureAccess: captureAccessNeedsAttention ? appDelegate.captureAccessState : nil,
+            pasteFailure: appDelegate.pasteFailure,
+            captureNotice: appDelegate.captureNotice
+        )
+        let topNoticeHeight: CGFloat? = notices.isEmpty ? 0 : measuredTopNotices.flatMap {
+            $0.notices == notices ? $0.height : nil
+        }
         VStack(spacing: 0) {
-            if hasTopNotices {
+            if !notices.isEmpty {
                 VStack(spacing: 8) {
-                    if showsReadingPositionNotice { readingPositionNotice }
-                    if captureAccessNeedsAttention {
-                        captureAccessBanner(appDelegate.captureAccessState)
+                    if notices.showsReadingPosition { readingPositionNotice }
+                    if let access = notices.captureAccess {
+                        captureAccessBanner(access)
                     }
-                    if let pasteFailure = appDelegate.pasteFailure {
+                    if let pasteFailure = notices.pasteFailure {
                         pasteFailureBanner(pasteFailure)
                     }
-                    if let captureNotice = appDelegate.captureNotice {
+                    if let captureNotice = notices.captureNotice {
                         captureNoticeBanner(captureNotice)
                     }
                 }
@@ -48,33 +77,35 @@ struct PanelRootView: View {
                 // Measure only the notices' natural width-dependent height;
                 // fitting the window must not compress and remeasure them.
                 .fixedSize(horizontal: false, vertical: true)
-                .onGeometryChange(for: CGFloat.self) { geometry in
-                    geometry.size.height
-                } action: { height in
-                    let height = height.isFinite ? max(0, height) : 0
-                    if topNoticeHeight != height { topNoticeHeight = height }
+                .background {
+                    GeometryReader { geometry in
+                        let height = geometry.size.height
+                        let measurement = TopNoticeMeasurement(
+                            notices: notices, height: height.isFinite ? max(0, height) : 0
+                        )
+                        NativePanelBackground().onChange(of: measurement, initial: true) { _, measured in
+                            measuredTopNotices = measured
+                        }
+                    }
                 }
             }
-            panelContent
+            animatedPanelContent(topNoticeHeight: topNoticeHeight)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .onChange(of: hasTopNotices, initial: true) { _, visible in
-            if !visible, topNoticeHeight != 0 { topNoticeHeight = 0 }
-        }
         .environment(\.workflowExecutionQueue, appDelegate.composition?.workflowRunner.executionQueue)
-        .environment(\.searchHistoryStore, appDelegate.composition?.searchHistoryStore)
+        .environment(\.searchHistoryStore, appDelegate.searchHistoryStore)
         .environment(\.openSearchSavingSettings, {
             NSApp.activate()
             openSettings()
         })
-        .environment(\.historyBrowsingPreferences, appDelegate.composition?.historyBrowsingPreferences)
-        // The panel window is transparent; only rounded content corners
-        // remain transparent after the notices take their own layout space.
-        .background { NativePanelBackground() }
-        .onChange(of: appDelegate.composition?.viewState.didLoseReadingPosition) { _, missing in
+        .environment(\.historyBrowsingPreferences, appDelegate.historyBrowsingPreferences)
+        // The notice stack and animated browsing content share one static
+        // window clip. Notice rendering stays independent of the animation.
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .onChange(of: appDelegate.composition?.viewState.readingPositionLoss) { _, loss in
             readingPositionNoticeDismissed = false
-            if missing == true {
-                appDelegate.composition?.historyBrowsingPreferences.clearReadingPosition(for: .panel)
+            if loss == .saved {
+                appDelegate.historyBrowsingPreferences.clearReadingPosition(for: .panel)
             }
         }
         .onAppear {
@@ -86,7 +117,17 @@ struct PanelRootView: View {
     }
 
     @ViewBuilder
-    private var panelContent: some View {
+    private func animatedPanelContent(topNoticeHeight: CGFloat?) -> some View {
+        let content = panelContent(topNoticeHeight: topNoticeHeight).background { NativePanelBackground() }
+        if let motionPresentation {
+            content.modifier(AppMotionSurface(presentation: motionPresentation))
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder
+    private func panelContent(topNoticeHeight: CGFloat?) -> some View {
         Group {
             if let composition = appDelegate.composition,
                let surfaceState = appDelegate.panelSurfaceState {
@@ -137,18 +178,13 @@ struct PanelRootView: View {
         }
     }
 
-    private var hasTopNotices: Bool {
-        appDelegate.pasteFailure != nil || appDelegate.captureNotice != nil
-            || captureAccessNeedsAttention || showsReadingPositionNotice
-    }
-
     private var showsReadingPositionNotice: Bool {
         appDelegate.composition?.viewState.didLoseReadingPosition == true && !readingPositionNoticeDismissed
     }
 
     private var readingPositionNotice: some View {
         HStack(alignment: .top, spacing: 8) {
-            Label(HistoryBrowsingCopy.text("Saved reading position is unavailable in these results. Showing the start of the list."),
+            Label(HistoryBrowsingCopy.readingPositionUnavailable(appDelegate.composition?.viewState.readingPositionLoss ?? .live),
                 systemImage: "info.circle")
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
@@ -176,11 +212,13 @@ struct PanelRootView: View {
     private func showsCaptureAccessEmptyState(
         _ composition: AppComposition?
     ) -> Bool {
-        guard let composition else { return false }
+        guard let viewState = composition?.viewState else { return false }
         return appDelegate.captureAccessState != .allowed
-            && composition.viewState.rows.isEmpty
-            && !composition.viewState.isLoadingFirstPage
-            && !composition.viewState.isSearchActive
+            && viewState.hasAuthoritativeFirstPage
+            && viewState.failure == nil
+            && viewState.rows.isEmpty
+            && !viewState.isSearchActive
+            && !viewState.hasActiveFilters
     }
 
     private var pauseCaptureAction: (() -> Void)? {
@@ -199,12 +237,12 @@ struct PanelRootView: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            Text(Self.failureCategory(for: error))
+            Text(AppRecoveryCopy.failureCategory(for: error))
                 .font(.headline)
                 .accessibilityIdentifier(
                     "clipy.store.open.failure.category"
                 )
-            Text(Self.failureMessage(for: error))
+            Text(AppRecoveryCopy.failureMessage(for: error))
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .accessibilityIdentifier(
@@ -239,54 +277,6 @@ struct PanelRootView: View {
         .accessibilityIdentifier("clipy.store.open.failure")
     }
 
-    /// A stable, content-free diagnostic category derived only from Clipy's
-    /// public typed failure. `.openStore` deliberately stays generic because
-    /// SwiftData construction does not yet distinguish permission, ENOSPC,
-    /// corruption, future schema, and other I/O failures reliably.
-    static func failureCategory(for error: any Error, bundle: Bundle = AppLocalization.bundle) -> String {
-        guard let historyFailure = error as? HistoryFailure else {
-            return error is ClipyCompositionError
-                ? AppRecoveryCopy.text("History Store Already Open", bundle: bundle)
-                : AppRecoveryCopy.text("History Store Open Failed", bundle: bundle)
-        }
-        guard case .persistence(let persistenceFailure) = historyFailure else {
-            return AppRecoveryCopy.text("History Store Open Failed", bundle: bundle)
-        }
-        switch persistenceFailure {
-        case .openStore:
-            return AppRecoveryCopy.text("History Store Open Failed", bundle: bundle)
-        case .storeAlreadyOpen:
-            // DATA-7's cross-process lease denial is distinguishable from a
-            // flat open failure and names the other live instance.
-            return AppRecoveryCopy.text("History Store Already Open", bundle: bundle)
-        case .corruptStoredValue:
-            return AppRecoveryCopy.text("Stored History Unreadable", bundle: bundle)
-        case .invariantViolation:
-            return AppRecoveryCopy.text("History Consistency Check Failed", bundle: bundle)
-        case .transaction:
-            return AppRecoveryCopy.text("History Startup Transaction Failed", bundle: bundle)
-        }
-    }
-
-    /// Maps the open failure to its user-facing message. `HistoryFailure`
-    /// renders through PresentationUI's shared vocabulary so the pane and the
-    /// in-panel banner never disagree (03b §10).
-    static func failureMessage(for error: any Error, bundle: Bundle = AppLocalization.bundle) -> String {
-        if let historyFailure = error as? HistoryFailure {
-            // DATA-7: a live owner in ANOTHER process holds the StoreRoot
-            // lease — the finding's "in use by another instance" wording,
-            // not the generic storage error.
-            if case .persistence(.storeAlreadyOpen) = historyFailure {
-                return AppRecoveryCopy.text("Clipy's history store is already open in another instance. Quit that instance and try again.", bundle: bundle)
-            }
-            return FailurePresentation.message(for: historyFailure)
-        }
-        if error is ClipyCompositionError {
-            return AppRecoveryCopy.text("Clipy's history store is already open in this app. Quit Clipy and try again.", bundle: bundle)
-        }
-        return AppRecoveryCopy.text("Clipy couldn't open its history store.", bundle: bundle)
-    }
-
     private func pasteFailureBanner(_ failure: ClipyPasteFailure) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -295,6 +285,7 @@ struct PanelRootView: View {
             Text(Self.pasteFailureMessage(failure))
                 .font(.callout)
                 .lineLimit(2)
+                .accessibilityIdentifier("clipy.paste.failure.message")
             Spacer(minLength: 8)
             Button {
                 appDelegate.dismissPasteFailure()
@@ -303,11 +294,14 @@ struct PanelRootView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(AppRecoveryCopy.text("Dismiss copy failure"))
+            .accessibilityIdentifier("clipy.paste.failure.dismiss")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         .shadow(radius: 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.paste.failure.banner")
     }
 
     static func pasteFailureMessage(
@@ -318,6 +312,8 @@ struct PanelRootView: View {
             return AppRecoveryCopy.text("A copy is already in progress. Try again when it finishes.", bundle: bundle)
         case .history(let historyFailure):
             return FailurePresentation.message(for: historyFailure)
+        case .write(.ownershipChanged):
+            return AppRecoveryCopy.text("The clipboard changed. Copy the history item again to replace it.", bundle: bundle)
         case .write:
             return AppRecoveryCopy.text("The pasteboard refused this copy. Try again.", bundle: bundle)
         }
@@ -337,7 +333,7 @@ struct PanelRootView: View {
                 .accessibilityIdentifier("clipy.capture.notice.message")
             Spacer(minLength: 8)
             Button {
-                appDelegate.dismissCaptureNotice()
+                appDelegate.dismissCaptureNotice(notice)
             } label: {
                 Image(systemName: "xmark")
             }

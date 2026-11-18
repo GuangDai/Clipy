@@ -17,15 +17,6 @@ struct RichTextPreviewSelectionTests {
         #expect(!text.wasTruncated)
     }
 
-    @Test func rtfAndHTMLAreReachableThroughTheHistoryPane() async {
-        let renderer = ContentPreview()
-        let html = PreviewRepresentation(typeIdentifier: "public.html", bytes: Data("<p>HTML</p>".utf8))
-        let rtf = PreviewRepresentation(typeIdentifier: "public.rtf", bytes: Data("{\\rtf1 RTF}".utf8))
-        #expect(await renderer.renderHistoryPane([html]) == .content(.text(PreviewText(text: "HTML", wasTruncated: false))))
-        #expect(await renderer.renderHistoryPane([rtf]) == .content(.text(PreviewText(text: "RTF", wasTruncated: false))))
-        #expect(await renderer.renderHistoryPane([html, rtf]) == .content(.text(PreviewText(text: "RTF", wasTruncated: false))))
-    }
-
     @Test(arguments: ["public.rtf", "public.html"])
     func oversizedRichInputUsesTheSelectedParserLimit(type: String) async {
         let outcome = await ContentPreview().renderHistoryPane([

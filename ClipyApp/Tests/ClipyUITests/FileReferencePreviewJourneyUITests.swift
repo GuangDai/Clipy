@@ -328,19 +328,48 @@ final class FileReferencePreviewJourneyUITests: XCTestCase {
         }, app.debugDescription)
         let back = preview.buttons["clipy.preview.file.back"]
         XCTAssertTrue(back.exists && back.isHittable, app.debugDescription)
-        XCTAssertTrue(preview.staticTexts["clipy.preview.file.disclosure"].exists)
+        let loadedFileNotice = preview.staticTexts["clipy.preview.file.disclosure"]
+        XCTAssertTrue(loadedFileNotice.exists, app.debugDescription)
         XCTAssertEqual(rows.count, 1)
         back.click()
         XCTAssertTrue(waitUntil(timeout: 5) {
             address.exists && self.text(of: address) == originalAddress && !renderedText.exists
         }, app.debugDescription)
 
-        // Copy remains the original History item even after an explicit file
-        // preview. File contents are never a replacement paste payload.
+        // A fresh read can fail even when this reference previously loaded.
+        // Keep the way back without claiming that the invalid text is shown.
+        try Data([0xFF]).write(to: file)
+        request.hover()
+        request.click()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), app.debugDescription)
+        confirm.click()
+        let failure = preview.staticTexts["clipy.preview.failed"]
+        XCTAssertTrue(failure.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertFalse(loadedFileNotice.exists, app.debugDescription)
+        XCTAssertTrue(back.exists && back.isHittable, app.debugDescription)
+        back.click()
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            address.exists && self.text(of: address) == originalAddress && !failure.exists
+        }, app.debugDescription)
+
+        // A new ignored copy makes the following pasteboard write observable.
+        let sentinel = NSPasteboardItem()
+        let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+        XCTAssertTrue(sentinel.setString("file-preview-before-return-" + UUID().uuidString, forType: .string))
+        XCTAssertTrue(sentinel.setData(Data(), forType: transientType))
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.writeObjects([sentinel]))
+        let beforeReturn = pasteboard.changeCount
+        let addressBytes = Data(originalAddress.utf8)
+        let fileContentsBytes = Data(loadedContents.utf8)
+
         app.typeKey(.return, modifierFlags: [])
         XCTAssertTrue(waitUntil(timeout: 10) {
-            pasteboard.pasteboardItems?.first?.data(forType: fileType) == Data(originalAddress.utf8)
-                && !panel.exists
+            guard pasteboard.changeCount != beforeReturn, let copied = pasteboard.pasteboardItems,
+                  copied.count == 1, let item = copied.first else { return false }
+            return item.data(forType: fileType) == addressBytes
+                && item.data(forType: .string) != fileContentsBytes
+                && !item.types.contains(transientType) && !panel.exists
         }, app.debugDescription)
     }
 

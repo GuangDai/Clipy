@@ -17,6 +17,7 @@ struct FilteredRowAccessTests {
             }
         )
         let state = HistoryViewState(history: history)
+        state.sortOrder = .automatic
         var pasted: [HistoryItemReference] = []
         state.onPaste = { pasted.append($0) }
         state.activate()
@@ -81,6 +82,7 @@ struct FilteredRowAccessTests {
             browseScript: [cursor: .paused(fixturePage(rows: [], next: nil))]
         )
         let state = HistoryViewState(history: history)
+        state.sortOrder = .automatic
         state.typeFilter = .text
         state.showsPinnedOnly = pinnedOnly
         state.activate()

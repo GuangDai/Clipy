@@ -3,7 +3,7 @@ import HistoryCore
 import Observation
 
 enum HistorySearchCompletionCommand: Equatable {
-    case previous, next, accept, dismiss, request
+    case previous, next, accept, acceptTab, dismiss, request
 }
 
 enum HistorySearchCompletionDecision {
@@ -21,11 +21,23 @@ final class HistorySearchCompletionState {
     private(set) var isInputFocused = false
     private(set) var isComposing = false
     private(set) var insertion: HistorySearchCompletionInsertion?
-    private(set) var availableHeight: Double = 240
+    private var availableHeight: Double = 0
     private(set) var isLoadingSources = false
     private(set) var sourceFailure = false
 
-    var isPresented: Bool { !candidates.isEmpty || isLoadingSources || sourceFailure }
+    /// Only grant the popup keyboard ownership when its viewport can display
+    /// one row (or its loading/error message) alongside the instructions.
+    var presentationHeight: Double {
+        let instructionsHeight = 26.0
+        let candidateHeight = 46.0
+        let sourceStatusHeight = isLoadingSources || sourceFailure ? 40.0 : 0.0
+        guard !candidates.isEmpty || sourceStatusHeight > 0 else { return 0 }
+        let minimumHeight = instructionsHeight + (candidates.isEmpty ? sourceStatusHeight : candidateHeight)
+        guard availableHeight >= minimumHeight else { return 0 }
+        return min(availableHeight, instructionsHeight + Double(candidates.count) * candidateHeight + sourceStatusHeight)
+    }
+
+    var isPresented: Bool { presentationHeight > 0 }
     var consumesPanelCommands: Bool { isPresented && isInputFocused && !isComposing }
 
     @ObservationIgnored private var input: HistorySearchCompletionInput?
@@ -112,23 +124,28 @@ final class HistorySearchCompletionState {
     }
 
     func command(_ command: HistorySearchCompletionCommand) -> HistorySearchCompletionDecision {
-        guard isInputFocused, !isComposing else { return .unhandled }
+        guard isInputFocused, !isComposing, command == .request || isPresented else { return .unhandled }
         switch command {
         case .request:
             suppressedText = nil
             refresh(explicit: true)
             return .handled
         case .dismiss:
-            guard isPresented || isLoadingSources else { return .unhandled }
             suppressedText = input?.text
             dismiss()
             return .handled
         case .previous, .next:
-            guard !candidates.isEmpty else { return isPresented ? .handled : .unhandled }
+            guard !candidates.isEmpty else { return .handled }
             selectedIndex = min(candidates.count - 1, max(0, selectedIndex + (command == .next ? 1 : -1)))
             return .handled
         case .accept:
-            guard candidates.indices.contains(selectedIndex) else { return isPresented ? .handled : .unhandled }
+            if candidates.indices.contains(selectedIndex) { return accept(selectedIndex) }
+            if sourceFailure {
+                refresh(explicit: true)
+                return .handled
+            }
+            return isLoadingSources ? .handled : .unhandled
+        case .acceptTab:
             return accept(selectedIndex)
         }
     }
@@ -141,7 +158,7 @@ final class HistorySearchCompletionState {
 
     @discardableResult
     func accept(_ index: Int) -> HistorySearchCompletionDecision {
-        guard isInputFocused, !isComposing, let input,
+        guard consumesPanelCommands, let input,
               candidates.indices.contains(index) else { return .unhandled }
         let candidate = candidates[index]
         insertionGeneration += 1

@@ -188,11 +188,6 @@ final class SearchHistoryStore {
             publish(stored)
             guard stored.preferences.isEnabled else { return finish(.disabled) }
             guard !recent || stored.preferences.recordsRecentSearches else { return finish(.recentSearchesDisabled) }
-            // Normalize only unused draft dates. Query bytes remain unchanged.
-            let definition = HistorySearchDefinition(
-                query: definition.query, mode: definition.mode, typeFilter: definition.typeFilter,
-                pinnedOnly: definition.pinnedOnly, filters: definition.filters, sortOrder: definition.sortOrder
-            )
             let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
             if let rejection = rejection(for: definition, name: name, preferences: stored.preferences) {
                 return finish(rejection)
@@ -235,17 +230,23 @@ final class SearchHistoryStore {
         if definition.mode == .regexp {
             return compilation.literalText.isEmpty || (try? NSRegularExpression(pattern: compilation.literalText)) != nil
         }
+        if definition.mode == .fuzzy || definition.mode == .expression {
+            let limit = HistoryLimits.standard.maximumFuzzyQueryCharacters
+            return compilation.literalText.prefix(limit + 1).count <= limit
+        }
         return true
     }
 
     /// Stored raw drafts survive changes to query syntax. Resource and DTO
     /// checks still protect decoding; execution reports any query diagnostic.
     private static func isWellFormed(_ definition: HistorySearchDefinition, name: String) -> Bool {
+        var dateCalendar = Calendar.current
+        if let selectionZone = definition.customDateTimeZone { dateCalendar.timeZone = selectionZone }
         guard name.utf8.count <= 200,
               definition.query.utf8.count + definition.filters.sourceApplication.utf8.count + name.utf8.count <= maximumDefinitionBytes,
               definition.filters.startDate.timeIntervalSince1970.isFinite,
               definition.filters.endDate.timeIntervalSince1970.isFinite,
-              definition.filters.hasValidDates() else { return false }
+              definition.filters.hasValidDates(calendar: dateCalendar) else { return false }
         return true
     }
 
@@ -274,7 +275,8 @@ final class SearchHistoryStore {
                   Set(stored.favorites.map(\.id)).count == stored.favorites.count,
                   Set(stored.recentSearches.map(\.id)).count == stored.recentSearches.count,
                   (stored.favorites + stored.recentSearches).allSatisfy({
-                      $0.definition.hasCriteria && Self.isWellFormed($0.definition, name: $0.name)
+                      // Today's default can be a deliberately saved sort from an older version.
+                      Self.isWellFormed($0.definition, name: $0.name)
                           && $0.savedAt.timeIntervalSince1970.isFinite
                   }) else { throw SearchHistoryFailure.unreadableStore }
             let original = stored

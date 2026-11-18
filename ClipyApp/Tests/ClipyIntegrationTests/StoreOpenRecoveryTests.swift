@@ -198,10 +198,10 @@ struct StoreOpenRecoveryTests {
         // wording exists on purpose (macOS 26 offers no usable API).
         #expect(failure == .persistence(.openStore))
         #expect(
-            PanelRootView.failureCategory(for: failure)
+            AppRecoveryCopy.failureCategory(for: failure)
                 == AppRecoveryCopy.text("History Store Open Failed")
         )
-        let failureMessage = PanelRootView.failureMessage(for: failure)
+        let failureMessage = AppRecoveryCopy.failureMessage(for: failure)
         #expect(
             failureMessage
                 == FailurePresentation.message(for: .persistence(.openStore))
@@ -250,27 +250,27 @@ struct StoreOpenRecoveryTests {
     @Test("diagnostic categories use only typed content-free failures")
     func diagnosticCategoriesDoNotGuessAnUnderlyingOpenCause() {
         #expect(
-            PanelRootView.failureCategory(
+            AppRecoveryCopy.failureCategory(
                 for: HistoryFailure.persistence(.openStore)
             ) == AppRecoveryCopy.text("History Store Open Failed")
         )
         #expect(
-            PanelRootView.failureCategory(
+            AppRecoveryCopy.failureCategory(
                 for: HistoryFailure.persistence(.corruptStoredValue)
             ) == AppRecoveryCopy.text("Stored History Unreadable")
         )
         #expect(
-            PanelRootView.failureCategory(
+            AppRecoveryCopy.failureCategory(
                 for: HistoryFailure.persistence(.invariantViolation)
             ) == AppRecoveryCopy.text("History Consistency Check Failed")
         )
         #expect(
-            PanelRootView.failureCategory(
+            AppRecoveryCopy.failureCategory(
                 for: HistoryFailure.persistence(.transaction)
             ) == AppRecoveryCopy.text("History Startup Transaction Failed")
         )
         #expect(
-            PanelRootView.failureCategory(
+            AppRecoveryCopy.failureCategory(
                 for: HistoryFailure.persistence(.storeAlreadyOpen)
             ) == AppRecoveryCopy.text("History Store Already Open")
         )
@@ -278,12 +278,12 @@ struct StoreOpenRecoveryTests {
         // "in use by another instance" wording, not the generic storage
         // error the flat `.openStore` dimensions share.
         #expect(
-            PanelRootView.failureMessage(
+            AppRecoveryCopy.failureMessage(
                 for: HistoryFailure.persistence(.storeAlreadyOpen)
             ) == AppRecoveryCopy.text("Clipy's history store is already open in another instance. Quit that instance and try again.")
         )
         #expect(
-            PanelRootView.failureCategory(
+            AppRecoveryCopy.failureCategory(
                 for: ClipyCompositionError.storeAlreadyOpen(
                     URL(fileURLWithPath: "/tmp/clipy-store")
                 )

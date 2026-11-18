@@ -109,7 +109,9 @@ struct LocalAutomationIngressTests {
 
     @Test func organizeCannotDeleteAndSuccessfulRemovalPurgesBeforeReply() async throws {
         let removal = IngressRemovalRecorder()
-        let fixture = try await makeFixture(onCommittedRemoval: { await removal.record($0) })
+        let fixture = try await makeFixture(onCommittedRemoval: { itemID, position in
+            await removal.record(itemID, at: position)
+        })
         let credential = fixture.credentials[0]
         let row = try #require(try await page(fixture).rows.first)
         try await fixture.history.grantCapability(.organize, to: credential.connection)
@@ -135,12 +137,14 @@ struct LocalAutomationIngressTests {
             return
         }
         #expect(try await page(fixture).rows.isEmpty)
-        #expect(await removal.count == 1)
+        let removed = try #require(await removal.entries.first)
+        #expect(await removal.entries.count == 1)
         let audit = try await fixture.history.auditLog(since: 1)
         let writes = audit.filter { [.managePin, .manageUnpin, .manageRemove].contains($0.operationKind) }
         #expect(writes.map(\.capability) == [.organize, .organize, .deleteItem, .deleteItem])
         #expect(writes.map(\.outcome) == [.succeeded, .succeeded, .denied, .succeeded])
-        #expect(writes.last?.changePosition != nil)
+        #expect(writes.last?.affectedItemIDs == [removed.itemID])
+        #expect(writes.last?.changePosition == removed.position)
     }
 
     @Test func pagingTokensAreOpaqueAndBoundToConnectionQueryAndIngressLifetime() async throws {
@@ -415,7 +419,7 @@ struct LocalAutomationIngressTests {
 
     private func makeFixture(
         itemCount: Int = 1, connectionCount: Int = 1,
-        onCommittedRemoval: (@Sendable (HistoryItemID) async -> Void)? = nil
+        onCommittedRemoval: (@Sendable (HistoryItemID, ChangePosition) async -> Void)? = nil
     ) async throws -> Fixture {
         let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(persistence: .temporary))
         var credentials: [LocalAutomationCredential] = []
@@ -447,8 +451,11 @@ struct LocalAutomationIngressTests {
 }
 
 private actor IngressRemovalRecorder {
-    private(set) var count = 0
-    func record(_ itemID: HistoryItemID) { count += 1 }
+    private(set) var entries: [(itemID: HistoryItemID, position: ChangePosition)] = []
+
+    func record(_ itemID: HistoryItemID, at position: ChangePosition) {
+        entries.append((itemID, position))
+    }
 }
 
 private actor IngressSearchSnapshotRace {

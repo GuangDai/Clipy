@@ -19,7 +19,7 @@ struct OptionalCountRetentionSettingsTests {
         #expect(draft.maximumUnpinnedInputIsValid)
         let unchanged = try #require(draft.countSubmission())
         #expect(unchanged.maximumUnpinnedItems == nil)
-        #expect(!draft.maximumUnpinnedRequiresTightening(for: unchanged))
+        #expect(!draft.requiresCountRemovalConfirmation(for: unchanged))
         #expect(try #require(draft.submission()).policies == policies)
         #expect(!draft.hasPolicyChanges)
 
@@ -35,7 +35,7 @@ struct OptionalCountRetentionSettingsTests {
         let enabled = try #require(draft.countSubmission())
         #expect(enabled.maximumUnpinnedItems == 1_000_000)
         #expect(draft.hasCountChanges)
-        #expect(draft.maximumUnpinnedRequiresTightening(for: enabled))
+        #expect(draft.requiresCountRemovalConfirmation(for: enabled))
     }
 
     @Test func disablingCountIsNotDestructiveButReenablingItRequiresConfirmation() throws {
@@ -44,7 +44,7 @@ struct OptionalCountRetentionSettingsTests {
         let off = try #require(draft.countSubmission())
         #expect(off.maximumUnpinnedItems == nil)
         #expect(draft.hasCountChanges)
-        #expect(!draft.maximumUnpinnedRequiresTightening(for: off))
+        #expect(!draft.requiresCountRemovalConfirmation(for: off))
         let accepted = draft.acceptApplied(off, successMessage: "Saved")
         #expect(accepted)
         #expect(!draft.countToggleIsDirty)
@@ -52,7 +52,7 @@ struct OptionalCountRetentionSettingsTests {
         draft.setCountEnabled(true)
         let on = try #require(draft.countSubmission())
         #expect(on.maximumUnpinnedItems == 200)
-        #expect(draft.maximumUnpinnedRequiresTightening(for: on))
+        #expect(draft.requiresCountRemovalConfirmation(for: on))
         draft.setCountEnabled(false)
         #expect(!draft.hasCountChanges)
     }
@@ -78,7 +78,7 @@ struct OptionalCountRetentionSettingsTests {
         #expect(draft.hasCountChanges)
         let latest = try #require(draft.countSubmission())
         #expect(latest.maximumUnpinnedItems == nil)
-        #expect(!draft.maximumUnpinnedRequiresTightening(for: latest))
+        #expect(!draft.requiresCountRemovalConfirmation(for: latest))
     }
 
     @Test(arguments: [("en_US", "1,000,000"), ("de_DE", "1.000.000"), ("ar_EG", "١٬٠٠٠٬٠٠٠")])
@@ -89,7 +89,6 @@ struct OptionalCountRetentionSettingsTests {
         #expect(draft.maximumUnpinnedStepperValue == 1_000_000)
         let submission = try #require(draft.countSubmission())
         #expect(submission.maximumUnpinnedItems == 1_000_000)
-        #expect(!draft.maximumUnpinnedRequiresTightening(for: submission))
     }
 
     @Test @MainActor

@@ -27,6 +27,7 @@ final class ClipboardJourneyUITests: XCTestCase {
     func testSummonSearchArrowReturnWritesGeneralPasteboardAndCloses() throws {
         let alpha = "clipy-ui-journey-alpha"
         let beta = "clipy-ui-journey-beta"
+        let distractor = "clipy-ui-jouney-distractor"
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setString(alpha, forType: .string))
@@ -63,21 +64,25 @@ final class ClipboardJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 })
 
         pasteboard.clearContents()
-        XCTAssertTrue(pasteboard.setString(beta, forType: .string))
+        XCTAssertTrue(pasteboard.setString(distractor, forType: .string))
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 2 })
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString(beta, forType: .string))
+        XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 3 })
 
         // Do not click: successful typing and the filtered rows below prove
         // that panel-open focus reached the search field.
         search.typeText("clipy-ui-journey-")
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 2 })
+        XCTAssertEqual(search.value as? String, "clipy-ui-journey-")
         let renderedRows = rows.allElementsBoundByIndex
         XCTAssertEqual(renderedRows.count, 2)
         XCTAssertTrue(renderedRows.allSatisfy {
             $0.elementType == .button
         })
         let labels = renderedRows.map(\.label)
-        XCTAssertTrue(labels.contains(where: { $0.contains(alpha) }))
-        XCTAssertTrue(labels.contains(where: { $0.contains(beta) }))
+        XCTAssertTrue(labels[0].contains(beta))
+        XCTAssertTrue(labels[1].contains(alpha))
 
         // The replacement search page selects newest beta. Down must move to
         // alpha, making the final byte-exact paste distinguish arrow routing
@@ -297,11 +302,11 @@ final class ClipboardJourneyUITests: XCTestCase {
         ) else { return }
         apply.click()
 
-        let destructiveApply = app.buttons["Apply Stricter Limits"]
+        let destructiveApply = app.buttons["Apply Changes"]
         XCTAssertTrue(destructiveApply.waitForExistence(timeout: 5))
         XCTAssertTrue(
             app.staticTexts[
-                "Stricter limits can permanently remove items or revisions."
+                "Clipy will check for expired items now. Applying these limits may immediately and permanently remove items or revisions."
             ].exists
         )
         app.typeKey(.escape, modifierFlags: [])

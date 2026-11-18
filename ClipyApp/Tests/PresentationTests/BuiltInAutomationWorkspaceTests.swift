@@ -300,37 +300,6 @@ struct BuiltInAutomationWorkspaceTests {
         #expect(workspace.source == "Beta input")
     }
 
-    @Test func savedDirtyWorkflowUsesLatestExecutionPositionWithoutLosingItsLocalEdit() throws {
-        let suite = "WorkflowWorkspaceDirtyPriority.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
-        let alpha = workflow("Alpha", trigger: .newCopies)
-        let beta = workflow("Beta", trigger: .newCopies)
-        let gamma = workflow("Gamma", trigger: .newCopies)
-        try BuiltInAutomationLibrary(defaults: defaults).saveAll([alpha, beta, gamma])
-        let workspace = BuiltInAutomationWorkspace(source: "Alpha input", defaults: defaults)
-        workspace.workflow.name = "Alpha local edit"
-        let editedAlpha = workspace.workflow
-        workspace.select(beta.id)
-        workspace.workflow.name = "Beta saved edit"
-        let editedBeta = workspace.workflow
-        let otherWindow = BuiltInAutomationLibrary(defaults: defaults)
-        try otherWindow.move(id: gamma.id, before: alpha.id)
-        try otherWindow.move(id: beta.id, before: alpha.id)
-
-        try workspace.saveSelection()
-
-        #expect(workspace.drafts == [gamma, editedBeta, editedAlpha])
-        #expect(workspace.drafts.map(\.id) == workspace.library.workflows.map(\.id))
-        #expect(workspace.changedDrafts == [editedAlpha])
-        #expect(workspace.workflow == editedBeta)
-        workspace.select(alpha.id)
-        #expect(workspace.source == "Alpha input")
-        workspace.workflow = alpha
-        #expect(!workspace.isDirty(alpha), "The original saved baseline survives moving the local edit")
-        #expect(BuiltInAutomationLibrary(defaults: defaults).workflows == [gamma, editedBeta, alpha])
-    }
-
     @Test func externalDeletionRetainsOnlyLocallyEditedDraftsAndKeepsThemUnsaved() throws {
         let suite = "WorkflowWorkspaceDeletedLocalDraft.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))

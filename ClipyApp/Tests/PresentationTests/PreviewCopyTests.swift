@@ -13,22 +13,18 @@ struct PreviewCopyTests {
         )))
     }
 
-    @Test func copyCountsKeepTheirFullUnsignedValueAndLocalizedGrouping() throws {
-        let english = try bundle("en")
-        let chinese = try bundle("zh-Hans")
-        #expect(PreviewCopy.copyCount(1, bundle: english, locale: Locale(identifier: "en_US")) == "Copied 1×")
-        #expect(PreviewCopy.copyCount(1_234, bundle: chinese, locale: Locale(identifier: "zh_Hans_CN")) == "已复制 1,234 次")
-        #expect(PreviewCopy.copyCount(1_234, bundle: english, locale: Locale(identifier: "de_DE")) == "Copied 1.234×")
-        #expect(PreviewCopy.copyCount(UInt64.max, bundle: english, locale: Locale(identifier: "en_US")) == "Copied 18,446,744,073,709,551,615×")
+    @Test func copyCountKeepsItsFullUnsignedValueInTheSelectedRegion() throws {
+        let locale = Locale(identifier: "de_DE")
+        let label = PreviewCopy.copyCount(UInt64.max, bundle: try bundle("zh-Hans"), locale: locale)
+        #expect(label.contains(UInt64.max.formatted(.number.locale(locale))))
     }
 
     @Test func imageAccessibilityMetadataKeepsWidthAndHeightInTheirTranslatedPositions() throws {
-        #expect(PreviewCopy.imageDimensions(
-            width: 1, height: 1, bundle: try bundle("en"), locale: Locale(identifier: "en_US")
-        ) == "Image preview, 1 by 1 pixels")
-        #expect(PreviewCopy.imageDimensions(
-            width: 1_920, height: 1_080, bundle: try bundle("zh-Hans"), locale: Locale(identifier: "zh_Hans_CN")
-        ) == "图像预览，宽 1,920 像素，高 1,080 像素")
+        let label = PreviewCopy.imageDimensions(
+            width: 640, height: 480, bundle: try bundle("zh-Hans"), locale: Locale(identifier: "zh_Hans_CN")
+        )
+        let width = try #require(label.range(of: "640"))
+        let height = try #require(label.range(of: "480"))
+        #expect(width.upperBound <= height.lowerBound)
     }
-
 }

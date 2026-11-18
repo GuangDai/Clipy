@@ -28,6 +28,7 @@
 /// semantics; the persisted height is the content-fit CEILING. Reopening
 /// positions the content-fitted frame when a retained demand is available.
 import AppKit
+import PasteboardAdapter
 import Testing
 @testable import ClipyApp
 
@@ -100,6 +101,30 @@ struct FloatingPanelFrameHostedTests {
         #expect(changes.count == 1)
         #expect(changes.savedCeiling == 300)
         #expect(panel.frame.height == PanelGeometry.minimumHeight)
+    }
+
+    @Test
+    func temporaryWarningHeightDoesNotMoveThePanelPermanently() throws {
+        let restoreGeometry = isolatePersistedPanelGeometryKeys()
+        defer { restoreGeometry() }
+        let visible = try #require(NSScreen.main ?? NSScreen.screens.first).visibleFrame
+        try #require(visible.height >= 500)
+        PanelGeometry.persistSize(contentWidth: 360, height: 420, to: .standard)
+        let owner = AppDelegate()
+        let panel = FloatingPanel(rootView: PanelRootView(appDelegate: owner), previewState: owner.previewState,
+                                  onClosed: {})
+        defer { panel.close() }
+        panel.open(at: .center, statusItemButtonScreenFrame: nil)
+        panel.fitToContent(idealHeight: 220)
+        let original = NSRect(x: panel.frame.minX, y: visible.minY + 20, width: panel.frame.width, height: 220)
+        panel.setFrame(original, display: false)
+        panel.windowDidMove(Notification(name: NSWindow.didMoveNotification, object: panel))
+
+        panel.fitToContent(idealHeight: 360)
+        #expect(panel.frame.minY == visible.minY)
+        #expect(panel.frame.maxY > original.maxY)
+        panel.fitToContent(idealHeight: 220)
+        #expect(panel.frame == original)
     }
 
     @Test(arguments: [false, true])
@@ -824,6 +849,57 @@ struct FloatingPanelFrameHostedTests {
         #expect(abs(panel.frame.midX - visible.midX) <= 1)
         #expect(abs(panel.frame.midY - visible.midY) <= 1)
         #expect(PanelGeometry.persistedSize(from: .standard).height == 420)
+    }
+
+    @Test func aCenteredReopenFitsNoticesChangedWhileHidden() async throws {
+        let restore = isolatePersistedPanelGeometryKeys()
+        defer { restore() }
+        let history = try await ComposedSupport.openMemoryHistory()
+        let pasteboard = ComposedSupport.makePasteboard()
+        pasteboard.clearContents()
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            initialCaptureAccessBehavior: .allowed,
+            captureAccessBehaviorProvider: { .allowed }
+        )
+        let owner = AppDelegate()
+        defer { owner.closePanel(); composition.stop(); pasteboard.releaseGlobally() }
+        owner.installCompositionForTesting(composition)
+        owner.openPanelForTesting()
+        let panel = try #require(owner.panelForTesting)
+        let screen = try #require(panel.screen)
+        try #require(screen.visibleFrame.height >= PanelGeometry.height)
+        let center = screen.visibleFrame.midY
+        let compactHeight = PanelGeometry.minimumHeight
+        try #require(await ComposedSupport.waitFor { panel.frame.height == compactHeight })
+
+        func reportCaptureFailure(_ count: Int) {
+            owner.receiveCaptureHealthForTesting(ClipyCaptureHealth(
+                activeCommitCount: 0, activeCaptureBytes: 0,
+                pendingCaptureCount: 0, pendingCaptureBytes: 0,
+                droppedCaptureCount: 0, failedCaptureCount: count, lastFailure: .invalidInput
+            ))
+        }
+
+        owner.closePanel()
+        reportCaptureFailure(1)
+        owner.openPanelForTesting()
+        try #require(await ComposedSupport.waitFor { panel.frame.height > compactHeight })
+        #expect(abs(panel.frame.midY - center) <= 1)
+
+        let top = panel.frame.maxY
+        owner.dismissCaptureNotice()
+        try #require(await ComposedSupport.waitFor { panel.frame.height == compactHeight })
+        #expect(abs(panel.frame.maxY - top) <= 1)
+
+        reportCaptureFailure(2)
+        try #require(await ComposedSupport.waitFor { panel.frame.height > compactHeight })
+        owner.closePanel()
+        owner.dismissCaptureNotice()
+        owner.openPanelForTesting()
+        try #require(await ComposedSupport.waitFor { panel.frame.height == compactHeight })
+        #expect(abs(panel.frame.midY - center) <= 1)
     }
 
     @Test func lastPositionNearTheBottomDoesNotShiftUpToFitAnUnusedCeiling() throws {

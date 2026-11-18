@@ -139,7 +139,6 @@ struct FloatingPanelMarkedTextEventTests {
 
         responder.unmarkText()
         try #require(!responder.hasMarkedText())
-        appDelegate.previewState.isInformationPresented = true
         NSApp.sendEvent(returnKey)
         NSApp.sendEvent(escape)
         #expect(responder.receivedKeyCodes == [
@@ -147,21 +146,32 @@ struct FloatingPanelMarkedTextEventTests {
             UInt16(kVK_Return), UInt16(kVK_Escape),
         ])
         #expect(submissionCount == 0)
-        #expect(appDelegate.previewState.isInformationPresented)
         #expect(panel.isPresented)
 
         responder.isCompletionActive = false
+        appDelegate.previewState.isInformationPresented = true
         NSApp.sendEvent(returnKey)
-        #expect(submissionCount == 1)
+        #expect(submissionCount == 0)
         NSApp.sendEvent(escape)
         #expect(!appDelegate.previewState.isInformationPresented)
         #expect(panel.isPresented)
+        NSApp.sendEvent(returnKey)
+        #expect(submissionCount == 1)
+        let repeatedReturn = try #require(keyDown(
+            keyCode: UInt16(kVK_Return), characters: "\r",
+            windowNumber: panel.windowNumber, isRepeat: true
+        ))
+        NSApp.sendEvent(repeatedReturn)
+        #expect(submissionCount == 1)
+        NSApp.sendEvent(returnKey)
+        #expect(submissionCount == 2)
     }
 
     private func keyDown(
         keyCode: UInt16,
         characters: String,
-        windowNumber: Int
+        windowNumber: Int,
+        isRepeat: Bool = false
     ) -> NSEvent? {
         NSEvent.keyEvent(
             with: .keyDown,
@@ -172,7 +182,7 @@ struct FloatingPanelMarkedTextEventTests {
             context: nil,
             characters: characters,
             charactersIgnoringModifiers: characters,
-            isARepeat: false,
+            isARepeat: isRepeat,
             keyCode: keyCode
         )
     }

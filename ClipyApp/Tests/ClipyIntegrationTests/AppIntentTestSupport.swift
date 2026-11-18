@@ -64,7 +64,7 @@ struct AppIntentTestSupport {
         let facade = history.makeAppIntentsHistoryFacade()
         let ingress = AppIntentHistoryIngress(
             facade: facade,
-            onCommittedRemoval: { _ in }
+            onCommittedRemoval: { _, _ in }
         )
         let manager = AppDependencyManager()
         manager.add(dependency: ingress)

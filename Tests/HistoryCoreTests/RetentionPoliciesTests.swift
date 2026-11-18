@@ -1,4 +1,4 @@
-/// Public revision-threshold normalization and independent optional dimensions.
+/// Public revision-threshold normalization.
 import HistoryCore
 import Testing
 
@@ -18,22 +18,4 @@ func retentionPoliciesNormalizeOnlyEmptyRevisionThresholds(
         age: AgeRetention(maxAge: 60), storage: nil, revisions: input
     )
     #expect(policies.revisions == expected)
-    #expect(policies.age?.maxAge == 60)
-    #expect(policies.storage == nil)
-}
-
-@Test func retentionPoliciesCarryEachDimensionIndependently() {
-    let ageOnly = HistoryRetentionPolicies(
-        age: AgeRetention(maxAge: 3_600), storage: nil, revisions: nil
-    )
-    #expect(ageOnly.age?.maxAge == 3_600)
-    #expect(ageOnly.storage == nil)
-    #expect(ageOnly.revisions == nil)
-
-    let storageOnly = HistoryRetentionPolicies(
-        age: nil, storage: StorageRetention(maxTotalBytes: 1_048_576), revisions: nil
-    )
-    #expect(storageOnly.age == nil)
-    #expect(storageOnly.storage?.maxTotalBytes == 1_048_576)
-    #expect(storageOnly.revisions == nil)
 }

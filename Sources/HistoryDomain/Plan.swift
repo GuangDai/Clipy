@@ -50,9 +50,8 @@ package enum HistoryMutation: Sendable {
     /// R3 revision pruning (V2-02 §5.3): `removedRevisionIDs` is non-empty
     /// (a no-op prune returns `.unchanged` before planning), lists inactive
     /// revision IDs oldest-first in append order, never contains the active
-    /// revision (D3/D23), and never reorders or rewrites a surviving revision
-    /// — Storage re-encodes the shorter `RevisionStateBlobV1` (same
-    /// `activeRevisionID`, `formatVersion == 1`, §5.3/§6.3).
+    /// revision (D3/D23). Storage removes those rows and keeps the surviving
+    /// revisions and current content reference in place.
     case pruneRevisions(
         itemID: HistoryItemID,
         removedRevisionIDs: [RevisionID]

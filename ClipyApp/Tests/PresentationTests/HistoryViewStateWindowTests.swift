@@ -93,10 +93,14 @@ struct HistoryViewStateWindowTests {
         let expectedKind: HistoryBrowseKind = searching ? .search(text: "row ", mode: .exact) : .recent
         #expect(await history.browseRequests.allSatisfy { $0.kind == expectedKind && $0.limit == 2 && $0.filter == HistoryFilter(type: .text) })
         #expect(state.surfacePurge == nil, "DTO eviction is not a History deletion")
-        _ = state.acceptCommittedExternalRemoval(allRows[rowCount - 1].item.id)
+        let position = ChangePosition(rawValue: 2)
+        _ = state.acceptCommittedExternalRemoval(allRows[rowCount - 1].item.id, position: position)
         #expect(state.displayedCountIsLowerBound,
                 "Receipt-purged partial rows cannot become a false exact total before observation")
+        let priorObservations = await history.observeRequests.count
         state.returnToLatest()
+        try #require(await pollUntil { await history.observeRequests.count > priorObservations })
+        await history.emitObservedPage(fixturePage(rows: Array(allRows.prefix(2)), next: "fresh-first", position: 2))
         try #require(await pollUntil { state.rows == Array(allRows.prefix(2)) })
         #expect(!state.hasPreviousPage)
         #expect(!state.hasWindowedPages)
@@ -257,109 +261,86 @@ struct HistoryViewStateWindowTests {
         #expect(state.failure == nil)
     }
 
-    @Test func observedReplacementRetiresTheWindowAndItsBoundaryCursors() async throws {
-        let (history, allRows) = fixture(pausedPage: 5)
+    @Test(arguments: [false, true])
+    func observationRefreshKeepsTheAnchorAndRetiresAnInFlightCursor(readingNewer: Bool) async throws {
+        let stale = fixturePage(rows: [], next: nil)
+        let (history, allRows) = fixture(pausedPage: 5, newerOutcome: .paused(stale))
         let state = HistoryViewState(history: history, pageLimit: 2)
         state.activate()
         defer { state.deactivate() }
-        try #require(await pollUntil { state.rows.count == 2 })
+        try #require(await pollUntil { state.rows == Array(allRows.prefix(2)) })
         for _ in 0..<4 {
             state.loadNextPage()
             try #require(await pollUntil { !state.isLoadingPage })
         }
+        try #require(state.hasPreviousPage && state.hasNextPage)
+        let anchor = allRows[4].item.id
+        state.recordReadingPosition(visibleRowIDs: [anchor])
+        let cursor = fixtureCursor(readingNewer ? "newer-1" : "page-5")
+        if readingNewer { state.loadPreviousPage() } else { state.loadNextPage() }
+        try #require(await pollUntil { await history.isBrowsePaused(cursor: cursor) })
+
+        let anchored = HistoryPage(
+            position: ChangePosition(rawValue: 2), rows: [allRows[4]],
+            previous: fixtureCursor("fresh-newer"), next: nil
+        )
+        await history.scriptSeek(to: anchor, page: anchored)
+        await history.emitObservedPage(fixturePage(rows: Array(allRows.prefix(2)), next: "fresh-first", position: 2))
+        let refreshed = await pollUntil { state.rows == anchored.rows && !state.isLoadingPage }
+        await history.resumeBrowse(cursor: cursor)
+        try #require(refreshed)
+        try #require(await pollUntil { await history.completedPausedBrowseCursors.contains(cursor) })
+        #expect(state.rows == anchored.rows)
+        #expect(await history.browseRequests.last?.startAround == anchor)
+        #expect(state.readingItemID == anchor)
         #expect(state.hasPreviousPage)
-        state.loadNextPage()
-        try #require(await pollUntil { await history.isBrowsePaused(cursor: fixtureCursor("page-5")) })
-        await history.emitObservedPage(fixturePage(rows: [allRows[0]], next: nil))
-        try #require(await pollUntil { state.rows == [allRows[0]] })
-        #expect(!state.hasPreviousPage)
         #expect(!state.hasNextPage)
-        #expect(!state.hasWindowedPages)
         #expect(state.loadedPageCount == 1)
-        #expect(state.traversedRowCount == 1)
-        await history.resumeBrowse(cursor: fixtureCursor("page-5"))
-        try #require(await pollUntil { await history.completedPausedBrowseCursors.contains(fixtureCursor("page-5")) })
-        #expect(state.rows == [allRows[0]])
-        #expect(!state.hasPreviousPage)
-        #expect(!state.isLoadingPage)
     }
 
-    @Test func expiredNewerCursorRestartsTheSameSearchAtPageOne() async throws {
+    @Test func expiredNewerCursorRestoresTheAnchorInTheSameSearch() async throws {
         let currentPosition = ChangePosition(rawValue: 2)
         let (history, allRows) = fixture(
             newerOutcome: .failure(.snapshotExpired(current: currentPosition)),
             repeatsObservedFirstPage: false
         )
         let state = HistoryViewState(history: history, pageLimit: 2)
-        state.searchMode = .exact
         state.searchText = "row "
         state.typeFilter = .text
         state.activate()
         defer { state.deactivate() }
-        try #require(await pollUntil {
-            await history.observeRequests.last?.kind == .search(text: "row ", mode: .exact)
-        })
-        // The fixture publishes its first page once. Publishing it again
-        // races pagination: that replacement legitimately retires the window
-        // whose newer cursor this test is about to expire.
-        try #require(await pollUntil { state.rows.count == 2 })
+        try #require(await pollUntil { state.rows == Array(allRows.prefix(2)) })
         for _ in 0..<3 {
             state.loadNextPage()
             try #require(await pollUntil { !state.isLoadingPage })
         }
         try #require(state.hasPreviousPage)
+        let anchor = allRows[2].item.id
+        state.recordReadingPosition(visibleRowIDs: [anchor])
+        let anchored = HistoryPage(
+            position: currentPosition, rows: Array(allRows[2..<4]),
+            previous: fixtureCursor("fresh-newer"), next: fixtureCursor("fresh-older")
+        )
+        await history.scriptSeek(to: anchor, page: anchored)
         let observedCount = await history.observeRequests.count
         state.loadPreviousPage()
         try #require(await pollUntil { await history.observeRequests.count > observedCount })
         #expect(state.rows.isEmpty)
         #expect(state.isLoadingFirstPage)
-        // The cursor belongs to position 1. A commit expired it at 2, so
-        // the replacement read must not replay the older fixture snapshot.
-        await history.emitObservedPage(HistoryPage(
-            position: currentPosition,
-            rows: Array(allRows.prefix(2)),
-            next: fixtureCursor("current-page-1")
-        ))
-        try #require(await pollUntil { state.rows == Array(allRows.prefix(2)) })
-        #expect(await history.browseRequests.last?.cursor == fixtureCursor("newer-0"))
-        #expect(await history.observeRequests.last?.kind == .search(text: "row ", mode: .exact))
-        #expect(state.typeFilter == .text)
-        #expect(await history.observeRequests.last?.filter == HistoryFilter(type: .text))
+        await history.emitObservedPage(fixturePage(rows: Array(allRows.prefix(2)), next: "fresh-first", position: 2))
+        try #require(await pollUntil { state.rows == anchored.rows && !state.isLoadingFirstPage })
+        let requests = await history.browseRequests.suffix(2)
+        #expect(requests.first?.cursor == fixtureCursor("newer-0"))
+        #expect(requests.last?.startAround == anchor)
+        #expect(requests.last?.kind == .search(text: "row ", mode: .exact))
+        #expect(requests.last?.filter == HistoryFilter(type: .text))
+        #expect(state.readingItemID == anchor)
         #expect(state.loadedPageCount == 1)
-        #expect(!state.hasPreviousPage)
-        #expect(!state.hasWindowedPages)
-        #expect(state.hasNextPage)
+        #expect(state.hasPreviousPage && state.hasNextPage)
+        #expect(state.failure == nil)
     }
 
-    @Test func replacementObservationRetiresAnInFlightNewerPage() async throws {
-        let (_, allRows) = fixture()
-        let (history, _) = fixture(newerOutcome: .paused(
-            fixturePage(rows: Array(allRows.prefix(2)), next: "page-1")
-        ))
-        let state = HistoryViewState(history: history, pageLimit: 2)
-        state.activate()
-        defer { state.deactivate() }
-        try #require(await pollUntil { state.rows.count == 2 })
-        for _ in 0..<3 {
-            state.loadNextPage()
-            try #require(await pollUntil { !state.isLoadingPage })
-        }
-        let cursor = fixtureCursor("newer-0")
-        state.loadPreviousPage()
-        try #require(await pollUntil { await history.isBrowsePaused(cursor: cursor) })
-        await history.emitObservedPage(fixturePage(rows: [allRows[0]], next: nil))
-        try #require(await pollUntil { state.rows == [allRows[0]] })
-        await history.resumeBrowse(cursor: cursor)
-        try #require(await pollUntil { await history.completedPausedBrowseCursors.contains(cursor) })
-        await Task.yield()
-        #expect(state.rows == [allRows[0]])
-        #expect(state.loadedPageCount == 1)
-        #expect(!state.hasPreviousPage)
-        #expect(!state.hasNextPage)
-        #expect(!state.isLoadingPage)
-    }
-
-    @Test func receiptOutdatingAnOwnedNewerPageRetiresBothEdgesAndKeepsAPartialCount() async throws {
+    @Test func copyReceiptRejectsAnOlderCursorResultAndObservationReplacesTheWindow() async throws {
         let (_, allRows) = fixture()
         let (history, _) = fixture(newerOutcome: .paused(
             fixturePage(rows: Array(allRows.prefix(2)), next: "page-1")
@@ -382,17 +363,10 @@ struct HistoryViewStateWindowTests {
         await history.resumeBrowse(cursor: cursor)
         try #require(await pollUntil { !state.isLoadingPage })
         #expect(state.rows == Array(allRows[2..<8]))
-        #expect(state.loadedPageCount == 0)
-        #expect(!state.hasPreviousPage)
-        #expect(!state.hasNextPage)
-        #expect(state.hasWindowedPages, "Latest stays reachable for the partial window")
+        #expect(state.hasPreviousPage && state.hasNextPage)
         #expect(state.displayedCount == 8)
         #expect(state.displayedCountIsLowerBound)
         #expect(HistoryPanelView.itemCountText(for: state, locale: Locale(identifier: "en_US")) == "8+ items")
-        let priorRequests = await history.browseRequests.count
-        state.loadPreviousPage()
-        state.loadNextPage()
-        #expect(await history.browseRequests.count == priorRequests)
         await history.emitObservedPage(HistoryPage(
             position: ChangePosition(rawValue: 2), rows: [allRows[0]], next: nil
         ))

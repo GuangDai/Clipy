@@ -40,6 +40,7 @@ final class HistoryWorkspaceEntryJourneyUITests: XCTestCase {
             "clipy.history.workspace.row.", "History workspace", "History workspace"
         )).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
+        XCTAssertTrue(row.label.contains("Last Copied") || (row.value as? String)?.contains("Last Copied") == true)
         row.click()
 
         let list = workspace.descendants(matching: .any)["clipy.history.workspace.list"]

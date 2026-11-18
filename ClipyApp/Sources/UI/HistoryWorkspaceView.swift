@@ -135,38 +135,48 @@ struct HistoryWorkspaceView: View {
         .onChange(of: viewState.isLoadingPage) { _, _ in reconcilePage() }
         .onChange(of: viewState.isLoadingFirstPage) { _, loading in
             if loading {
-                if !isMutating { selectedIDs = [] }
+                if !isMutating, !viewState.isPreservingReadingPosition { selectedIDs = [] }
             } else {
                 // An empty result or failed preparation leaves rows == []
                 // across the whole load. Its completion still retires the
                 // previous page and any pending navigation.
+                paging.reset()
                 reconcilePage()
             }
         }
-        .onChange(of: paging.startOrdinal) { _, _ in if !isMutating { selectedIDs = [] } }
         .onChange(of: listWidth) { _, _ in saveLayout() }
         .onChange(of: compactRows) { _, _ in saveLayout() }
         .onChange(of: viewState.sortOrder) { _, _ in saveLayout() }
         .onChange(of: viewState.restoredReadingItemID) { _, item in
             if let item { selectedIDs = [item] }
         }
-        .onChange(of: viewState.didLoseReadingPosition) { _, lost in
-            if lost { browsingPreferences?.clearReadingPosition(for: .workspace) }
+        .onChange(of: viewState.readingPositionLoss) { _, loss in
+            if loss == .saved { browsingPreferences?.clearReadingPosition(for: .workspace) }
         }
-        .onChange(of: viewState.hasKnownRowOffset) { old, new in
-            // A keyset restore can leave a short first cache page when it
-            // reaches the start. Reopen the same query with its standard page
-            // boundaries before presenting fixed-size numbered pages.
-            if isActive, viewState.hasAuthoritativeFirstPage,
-               HistoryWorkspacePaging.shouldRestartAtKnownBoundary(wasKnown: old, isKnown: new,
-                                                                   isLoadingFirstPage: viewState.isLoadingFirstPage) {
+        .onChange(of: viewState.hasUnalignedLeadingPage) { _, unaligned in
+            // Prepending a short leading chunk can split a numbered page
+            // across storage cursors. An observed first page is already aligned.
+            if isActive, unaligned, !viewState.isLoadingFirstPage {
                 refresh()
             }
         }
-        .onChange(of: viewState.surfacePurge) { _, purge in
+        .onChange(of: viewState.surfacePurge) { previous, purge in
             guard let purge else { return }
             thumbnails.purge(purge.scope)
             previewState.purge(purge.scope)
+            if purge.generation != (previous?.generation ?? 0) + 1 {
+                // SwiftUI may combine several purges into one notification.
+                batchTitles.removeAll()
+                return
+            }
+            switch purge.scope {
+            case .all, .unpinned: batchTitles.removeAll()
+            case .item(let id): batchTitles.removeValue(forKey: id)
+            case .revision(let old, _): batchTitles.removeValue(forKey: old.id)
+            }
+        }
+        .onChange(of: viewState.retentionChangePosition) { _, position in
+            if position != nil { batchTitles.removeAll() }
         }
         .onChange(of: memoryPressureGeneration) { _, _ in applyMemoryPressure() }
         .task(id: action) { await performAction() }
@@ -176,12 +186,9 @@ struct HistoryWorkspaceView: View {
         observedWorkspace.sheet(isPresented: detailsPresented) {
             if let detailsItem {
                 NavigationStack {
-                    HistoryDetailsView(viewState: viewState, item: detailsItem)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button(text("Done")) { self.detailsItem = nil }
-                            }
-                        }
+                    HistoryDetailsView(viewState: viewState, item: detailsItem, onFinishWorkspace: {
+                        self.detailsItem = nil
+                    })
                 }
                 .frame(minWidth: 580, idealWidth: 740, minHeight: 500, idealHeight: 650)
             }
@@ -208,6 +215,7 @@ struct HistoryWorkspaceView: View {
                 if let clearScope { submit(.clear(clearScope)) }
                 clearScope = nil
             }
+            .accessibilityIdentifier("clipy.history.workspace.confirm-clear")
             Button(text("Cancel"), role: .cancel) { clearScope = nil }
         } message: {
             Text(text(clearScope == .all
@@ -277,19 +285,10 @@ struct HistoryWorkspaceView: View {
             SearchHeaderView(viewState: viewState, searchFieldFocused: $isSearchFocused,
                              areShortcutsEnabled: detailsItem == nil,
                              onMoveSelection: moveSelection, onSubmitSelection: copySelection)
-            HStack(spacing: 12) {
-                Picker(text("Sort"), selection: Binding(get: { viewState.sortOrder }, set: { viewState.sortOrder = $0 })) {
-                    ForEach(HistorySortOrder.allCases, id: \.self) { order in
-                        Text(text(sortTitle(order))).tag(order)
-                    }
-                }
-                .fixedSize()
-                .accessibilityIdentifier("clipy.history.workspace.sort")
-                Spacer(minLength: 0)
-                Text(SearchHeaderView.resultCountText(for: viewState, locale: locale, bundle: copyBundle))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("clipy.history.workspace.count")
-            }
+            Text(SearchHeaderView.resultCountText(for: viewState, locale: locale, bundle: copyBundle))
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityIdentifier("clipy.history.workspace.count")
         }
     }
 
@@ -302,12 +301,7 @@ struct HistoryWorkspaceView: View {
             if viewState.isLoadingFirstPage && rows.isEmpty {
                 Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if rows.isEmpty {
-                ContentUnavailableView {
-                    Label(text(viewState.isSearchActive || viewState.hasActiveFilters ? "No matching items" : "History is empty"),
-                          systemImage: "clipboard")
-                } description: {
-                    Text(text("Copied items appear here. Change the search or filters to see other items."))
-                }
+                workspaceEmptyState
             } else {
                 List(selection: $selectedIDs) {
                     ForEach(rows, id: \.item.id) { row in
@@ -336,7 +330,7 @@ struct HistoryWorkspaceView: View {
                 .listStyle(.inset)
                 .coordinateSpace(name: "history-workspace-list")
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listViewportHeight = $0 }
-                .id(paging.startOrdinal)
+                .id(paging.navigationGeneration)
                 .accessibilityIdentifier("clipy.history.workspace.list")
                 .onKeyPress(.return) {
                     guard !isSearchFocused else { return .ignored }
@@ -346,6 +340,42 @@ struct HistoryWorkspaceView: View {
             }
             Divider()
             pageNavigation.padding(10)
+        }
+    }
+
+    @ViewBuilder private var workspaceEmptyState: some View {
+        if let failure = HistorySearchCopy.resultsFailure(for: viewState) {
+            ContentUnavailableView {
+                Label(HistorySearchCopy.resultsFailureTitle(failure, bundle: copyBundle),
+                      systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(FailurePresentation.message(for: failure, bundle: copyBundle))
+            } actions: {
+                if HistorySearchCopy.canRetryResults(failure) {
+                    Button(text("Retry")) { refresh() }
+                        .accessibilityIdentifier("clipy.history.workspace.results-retry")
+                }
+            }
+            .accessibilityIdentifier("clipy.history.workspace.results-failure")
+        } else if !viewState.hasAuthoritativeFirstPage {
+            if !viewState.fuzzyQueryExceedsLimit, let issue = HistorySearchCopy.issue(for: viewState, bundle: copyBundle) {
+                ContentUnavailableView {
+                    Label(HistorySearchCopy.text("Check search conditions", bundle: copyBundle),
+                          systemImage: "exclamationmark.magnifyingglass")
+                } description: {
+                    Text(issue)
+                }
+                .accessibilityIdentifier("clipy.history.workspace.query-issue")
+            } else {
+                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        } else {
+            ContentUnavailableView {
+                Label(text(viewState.isSearchActive || viewState.hasActiveFilters ? "No matching items" : "History is empty"),
+                      systemImage: "clipboard")
+            } description: {
+                Text(text("Copied items appear here. Change the search or filters to see other items."))
+            }
         }
     }
 
@@ -490,15 +520,15 @@ struct HistoryWorkspaceView: View {
     }
 
     @ViewBuilder private var statusFooter: some View {
-        if viewState.failure != nil || copyState.isCopying || copyState.status != nil || mutationStatus != nil || isMutating || showsBatchResult || viewState.didLoseReadingPosition {
+        let failure = HistorySearchCopy.resultsFailure(for: viewState) == nil ? viewState.failure : nil
+        if failure != nil || copyState.isCopying || copyState.status != nil || mutationStatus != nil || isMutating || showsBatchResult || viewState.didLoseReadingPosition {
             Divider()
             VStack(alignment: .leading, spacing: 6) {
-                if viewState.didLoseReadingPosition {
-                    Label(HistoryBrowsingCopy.text("Saved reading position is unavailable in these results. Showing the start of the list.",
-                                                   bundle: copyBundle), systemImage: "info.circle")
+                if let loss = viewState.readingPositionLoss {
+                    Label(HistoryBrowsingCopy.readingPositionUnavailable(loss, bundle: copyBundle), systemImage: "info.circle")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if let failure = viewState.failure {
+                if let failure {
                     HStack {
                         SettingStatusView(status: .failure(FailurePresentation.message(for: failure, bundle: copyBundle)))
                         Spacer()
@@ -549,7 +579,10 @@ struct HistoryWorkspaceView: View {
                     }
                     .accessibilityIdentifier("clipy.history.workspace.batch.retry")
                 }
-                Button { showsBatchResult = false } label: { Image(systemName: "xmark.circle") }
+                Button {
+                    showsBatchResult = false
+                    batchTitles.removeAll()
+                } label: { Image(systemName: "xmark.circle") }
                     .buttonStyle(.plain).accessibilityLabel(text("Dismiss"))
             }
             if let first = batchModel.failures.first {
@@ -567,6 +600,7 @@ struct HistoryWorkspaceView: View {
                         ForEach(batchModel.succeeded, id: \.id) { item in
                             Label(batchTitles[item.id] ?? text("History item"), systemImage: "checkmark.circle")
                                 .lineLimit(2)
+                                .accessibilityIdentifier("clipy.history.workspace.batch.completed." + item.id.description)
                         }
                         ForEach(batchModel.failures, id: \.item.id) { failure in
                             VStack(alignment: .leading, spacing: 3) {
@@ -587,6 +621,7 @@ struct HistoryWorkspaceView: View {
                 }
                 .frame(maxHeight: 150)
             }
+            .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.history.workspace.batch.items"))
             .font(.caption)
         }
         .accessibilityElement(children: .contain)
@@ -599,15 +634,6 @@ struct HistoryWorkspaceView: View {
         case .some(.unpin): text("Unpin")
         case .some(.remove): text("Remove")
         case .none: text("History actions")
-        }
-    }
-
-    private func sortTitle(_ order: HistorySortOrder) -> String {
-        switch order {
-        case .automatic: "Default order"
-        case .newestFirst: "Newest copied first"
-        case .oldestFirst: "Oldest copied first"
-        case .mostCopied: "Most copied first"
         }
     }
 
@@ -634,6 +660,7 @@ struct HistoryWorkspaceView: View {
     private func reconcilePage() {
         guard !viewState.isLoadingFirstPage else { return }
         paging.reconcile(loadedRange: viewState.loadedRowRange, isLoadingPage: viewState.isLoadingPage)
+        recordReadingPosition()
         guard !isMutating else { return }
         var allowed = Set(pageRows.map(\.item.id))
         if showsBatchResult { allowed.formUnion(batchModel.retryReferences.map(\.id)) }
@@ -728,10 +755,7 @@ struct HistoryWorkspaceView: View {
 
     private func recordReadingPosition() {
         guard isActive else { return }
-        // Explicit page navigation mounts its list at the top. Subsequent
-        // row geometry supplies exact visible membership without rescanning
-        // or copying every row whenever one edge crosses the viewport.
-        viewState.recordReadingPosition(visibleRowIDs: pageRows.first.map { [$0.item.id] } ?? [])
+        viewState.recordWorkspacePage(startingAt: pageRows.first?.item.id)
     }
 }
 
@@ -739,6 +763,7 @@ struct HistoryWorkspaceView: View {
 /// the workspace's explicit Copy command owns the clipboard handoff.
 private struct HistoryWorkspaceRow: View {
     @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
     let row: HistoryRow
     let thumbnails: ThumbnailStore
     let sourceIcons: SourceIconStore
@@ -763,11 +788,14 @@ private struct HistoryWorkspaceRow: View {
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .top, spacing: 6) {
-                    Text(row.title).lineLimit(compact ? 1 : 2).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(title).lineLimit(compact ? 1 : 2).frame(maxWidth: .infinity, alignment: .leading)
+                        .help(row.title)
                     if row.pinnedPosition != nil { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary) }
                 }
-                if !compact, let snippet = row.search?.snippet {
-                    Text(snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                if let match = row.search, let snippet = match.snippet {
+                    Text(MatchHighlighting.highlighted(snippet, ranges: match.matchedRanges,
+                        foreground: nil, prioritizesMatch: true))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(compact ? 1 : 2)
                 }
                 HStack {
                     if let source = row.lastSource {
@@ -780,8 +808,9 @@ private struct HistoryWorkspaceRow: View {
                                          row.copyCount))
                     }
                     Spacer(minLength: 4)
-                    Text(row.lastCopiedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
-                        .lineLimit(1)
+                    HistoryCopyTimeLabel(copyTime: HistoryRowCopyTime(
+                        row.lastCopiedAt, locale: locale, timeZone: timeZone
+                    ))
                 }
                 .font(.caption2).foregroundStyle(.secondary)
             }
@@ -814,6 +843,12 @@ private struct HistoryWorkspaceRow: View {
             if !suspended, let source = row.lastSource { sourceIcons.icon(forBundleID: source) }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var title: AttributedString {
+        guard let match = row.search, match.snippet == nil else { return AttributedString(row.title) }
+        return MatchHighlighting.highlighted(row.title, ranges: match.matchedRanges,
+            foreground: nil, prioritizesMatch: true)
     }
 }
 

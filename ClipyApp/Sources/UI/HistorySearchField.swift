@@ -192,7 +192,8 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
 
     func controlTextDidChange(_ notification: Notification) {
         textRevision += 1
-        onTextChange(stringValue)
+        let editor = currentEditor() as? NSTextView
+        if editor?.hasMarkedText() != true { onTextChange(editor?.string ?? stringValue) }
         reportInput()
     }
 
@@ -302,7 +303,7 @@ final class HistorySearchTextField: NSTextField, NSTextFieldDelegate {
             if handleCompletion(.accept) { return true }
             onSubmit()
         case #selector(NSResponder.insertTab(_:)):
-            return handleCompletion(.accept)
+            return handleCompletion(.acceptTab)
         case #selector(NSResponder.cancelOperation(_:)):
             return handleCompletion(.dismiss)
         case #selector(NSResponder.complete(_:)):

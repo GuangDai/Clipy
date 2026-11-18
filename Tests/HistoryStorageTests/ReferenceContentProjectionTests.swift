@@ -145,12 +145,12 @@ struct ReferenceContentProjectionTests {
         let reference = ("public.file-url", Data("file:///reference.txt".utf8))
         let plain = ("public.utf8-plain-text", Data(" \r\n Text title \r\nbody".utf8))
         let image = ("public.png", Data([0xFF]))
-        expectProjection([reference, plain], title: "Text title", body: " \n Text title \nbody")
+        expectProjection([reference, plain], title: "Text title", body: " \n Text title \nbody\nfile:///reference.txt")
         expectProjection([reference, image], title: "Image", body: "")
         expectProjection([reference, image, plain], title: "Text title", body: " \n Text title \nbody")
         expectProjection(
             [reference, ("public.utf8-plain-text", Data("e\u{301}".utf8))],
-            title: "", body: "e\u{301}", limits: limits(titleBytes: 2, bodyBytes: 8)
+            title: "", body: "e\u{301}\nfile", limits: limits(titleBytes: 2, bodyBytes: 8)
         )
     }
 

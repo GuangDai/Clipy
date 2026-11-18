@@ -6,6 +6,7 @@ struct HistoryWorkspacePaging: Equatable, Sendable {
 
     let pageLimit: Int
     private(set) var startOrdinal = 1
+    private(set) var navigationGeneration = 0
     private(set) var pendingTarget: Int?
     private var waitingForPreviousAtOrigin = false
 
@@ -15,14 +16,6 @@ struct HistoryWorkspacePaging: Equatable, Sendable {
     }
 
     var pageNumber: Int { (startOrdinal - 1) / pageLimit + 1 }
-
-    /// A seek can reach the true beginning through a short preceding page.
-    /// Re-browsing from that beginning restores pageLimit-aligned boundaries;
-    /// query refresh already does so while its first page is loading.
-    static func shouldRestartAtKnownBoundary(wasKnown: Bool, isKnown: Bool,
-                                            isLoadingFirstPage: Bool) -> Bool {
-        !wasKnown && isKnown && !isLoadingFirstPage
-    }
 
     func visibleRange(in loadedRange: ClosedRange<Int>?) -> ClosedRange<Int>? {
         guard let loadedRange else { return nil }
@@ -68,6 +61,7 @@ struct HistoryWorkspacePaging: Equatable, Sendable {
         let target = targetOrdinal(for: direction)
         if loadedRange?.contains(target) == true {
             startOrdinal = target
+            navigationGeneration += 1
             return nil
         }
         pendingTarget = target
@@ -91,6 +85,7 @@ struct HistoryWorkspacePaging: Equatable, Sendable {
         }
         if let target = pendingTarget, loadedRange.contains(target) {
             startOrdinal = target
+            navigationGeneration += 1
             pendingTarget = nil
             return
         }
@@ -104,6 +99,7 @@ struct HistoryWorkspacePaging: Equatable, Sendable {
     /// The owning surface also invokes this for explicit refresh/query intents,
     /// before HistoryViewState publishes the replacement window.
     mutating func reset() {
+        if startOrdinal != 1 { navigationGeneration += 1 }
         startOrdinal = 1
         pendingTarget = nil
         waitingForPreviousAtOrigin = false

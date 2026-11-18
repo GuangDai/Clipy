@@ -6,7 +6,7 @@ import Testing
 
 struct ExternalRevisionSurfaceTests {
     @Test(arguments: [false, true]) @MainActor
-    func realRevisionCommitPurgesBeforeReplacementObservation(prunesRevision: Bool) async throws {
+    func realRevisionRetiresOnlyOldVersionBeforeReplacementObservation(prunesRevision: Bool) async throws {
         let base = try await ComposedSupport.openMemoryHistory()
         let target = try await insert("revision-surface-original", into: base, at: 1)
         let survivor = try await insert("revision-surface-survivor", into: base, at: 2)
@@ -36,27 +36,24 @@ struct ExternalRevisionSurfaceTests {
         preview.togglePreview(for: displayed)
 
         let commit = try await revise(displayed, text: "revision-surface-new", in: base)
-        // Pass the actual storage receipt unchanged, including its internal
-        // retention effect. This is the same relay used by the app ingress.
-        relay.acceptCommittedExternalRevision(from: displayed, commit: commit)
-        await observed.waitUntilPostInitialObservationIsHeld()
-        #expect(surface.appliedPurgeGeneration == 1)
         guard case .revised(let new) = commit.outcome else {
             Issue.record("Expected the second committed revision")
             return
         }
-        if prunesRevision {
-            #expect(viewState.rows.isEmpty)
-            #expect(!preview.isOpen)
-            #expect(preview.previewedItem == nil)
-        } else {
-            #expect(viewState.rows.map(\.item) == [survivor])
-            #expect(preview.isOpen)
-            #expect(preview.previewedItem == new)
-        }
+        // Pass the actual storage receipt unchanged, including its internal
+        // retention effect. This is the same relay used by the app ingress.
+        relay.acceptCommittedExternalRevision(from: displayed, commit: commit)
+        await observed.waitUntilPostInitialObservationIsHeld()
+        #expect(viewState.rows.map(\.item) == [survivor])
+        #expect(preview.isOpen)
+        #expect(preview.previewedItem == new)
+
+        let details = try await base.details(for: new.id)
+        #expect(details.item == new)
+        #expect(details.revisions.map(\.isActive) == (prunesRevision ? [true] : [false, true]))
         await observed.releasePostInitialObservation()
         try #require(await ComposedSupport.waitFor {
-            viewState.rows.contains { $0.item == new }
+            Set(viewState.rows.map(\.item)) == Set([survivor, new])
         })
     }
 

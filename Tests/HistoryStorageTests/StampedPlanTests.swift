@@ -47,38 +47,6 @@ struct StampedPlanTests {
     }
 
     @Test
-    func pruneCarriesOnlyRemovedIDsAndSurvivorScalars() throws {
-        let itemID = HistoryItemID(rawValue: UUID())
-        let removed = RevisionRetentionSummary(id: RevisionID(rawValue: UUID()), byteCount: 80_000_000)
-        let active = RevisionRetentionSummary(id: RevisionID(rawValue: UUID()), byteCount: 7)
-        let plan = MutationPlan(
-            outcome: .retentionPoliciesSet(retiredItems: 0, prunedRevisions: 1),
-            mutations: [.pruneRevisions(itemID: itemID, removedRevisionIDs: [removed.id])]
-        )
-        let stamped = try CommitPlanStamper.stamp(
-            plan, currentPosition: ChangePosition(rawValue: 8),
-            inputs: .prune(itemID: itemID, lineage: PruneLineage(revisions: [removed, active], activeRevisionID: active.id)),
-            createdAt: timestamp
-        )
-        guard case .pruneRevisions(let target, let removedIDs, let scalars) = stamped.mutations.first else {
-            Issue.record("Expected an explicit revision removal")
-            return
-        }
-        #expect(target == itemID)
-        #expect(removedIDs == [removed.id])
-        #expect(scalars == RetainedRevisionScalars(count: 1, bytes: 7))
-        #expect(stamped.position.rawValue == 9)
-        #expect(!stamped.requiresFinalPinOrderValidation)
-        #expect(stamped.hasDestructiveRetentionEffects)
-        guard case .retentionPoliciesSet(let retired, let pruned) = stamped.receiptOutcome else {
-            Issue.record("Expected retention policies receipt")
-            return
-        }
-        #expect(retired == 0)
-        #expect(pruned == 1)
-    }
-
-    @Test
     func standalonePruneCannotRemoveActiveRevision() throws {
         let itemID = HistoryItemID(rawValue: UUID())
         let active = RevisionRetentionSummary(id: RevisionID(rawValue: UUID()), byteCount: 7)

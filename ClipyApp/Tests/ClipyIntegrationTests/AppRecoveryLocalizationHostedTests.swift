@@ -20,15 +20,15 @@ struct AppRecoveryLocalizationHostedTests {
     func localizedRecoveryKeepsDistinctStoreOwners(_ language: String) throws {
         let bundle = try appBundle(language)
         let english = language == "en"
-        #expect(PanelRootView.failureCategory(
+        #expect(AppRecoveryCopy.failureCategory(
             for: HistoryFailure.persistence(.openStore), bundle: bundle
         ) == (english ? "History Store Open Failed" : "无法打开历史记录存储"))
-        #expect(PanelRootView.failureMessage(
+        #expect(AppRecoveryCopy.failureMessage(
             for: HistoryFailure.persistence(.storeAlreadyOpen), bundle: bundle
         ) == (english
             ? "Clipy's history store is already open in another instance. Quit that instance and try again."
             : "Clipy 的历史记录存储已在另一个实例中打开。请退出该实例后重试。"))
-        #expect(PanelRootView.failureMessage(
+        #expect(AppRecoveryCopy.failureMessage(
             for: ClipyCompositionError.storeAlreadyOpen(
                 URL(fileURLWithPath: "/private/clipboard-store")
             ), bundle: bundle
@@ -56,7 +56,7 @@ struct AppRecoveryLocalizationHostedTests {
             domain: "/private/clipboard-store", code: 17,
             userInfo: [NSLocalizedDescriptionKey: "private clipboard contents"]
         )
-        #expect(PanelRootView.failureMessage(for: rawError, bundle: bundle) == (english
+        #expect(AppRecoveryCopy.failureMessage(for: rawError, bundle: bundle) == (english
             ? "Clipy couldn't open its history store."
             : "Clipy 无法打开历史记录存储。"))
     }
@@ -68,7 +68,7 @@ struct AppRecoveryLocalizationHostedTests {
         let removed = HistoryFailure.notFound(itemID)
         #expect(PanelRootView.pasteFailureMessage(.history(removed)) ==
             FailurePresentation.message(for: removed))
-        #expect(PanelRootView.failureMessage(for: HistoryFailure.persistence(.transaction)) ==
+        #expect(AppRecoveryCopy.failureMessage(for: HistoryFailure.persistence(.transaction)) ==
             FailurePresentation.message(for: .persistence(.transaction)))
     }
 }

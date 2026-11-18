@@ -76,9 +76,10 @@ struct WS17ComposedSearchModesTests {
 
         let viewState = HistoryViewState(history: history)
         defer { viewState.deactivate() }
-        viewState.activate()
+        viewState.sortOrder = .automatic
         viewState.searchMode = .exact
         viewState.searchText = "alpha"
+        viewState.activate()
 
         // "alpha" matches the two TITLE rows (case-insensitive: "Alpha" and
         // "alpha"); the third row's body carries no "alpha", so exactly two
@@ -135,14 +136,12 @@ struct WS17ComposedSearchModesTests {
 
         let viewState = HistoryViewState(history: history)
         defer { viewState.deactivate() }
-        viewState.activate()
+        viewState.sortOrder = .automatic
+        viewState.searchMode = .fuzzy
         viewState.searchText = "alpa" // typo'd "alpha" — the fuzzy shape
+        viewState.activate()
 
-        // The pinned alpha row leads the RECENT default order too (05
-        // §14.1), so a bare first-row check would be satisfied by the
-        // pre-debounce recent page (whose rows carry `search == nil`).
-        // Wait for the SEARCH-shaped page: every row of a non-empty-term
-        // search page carries its SearchPresentation (03b §8).
+        // Confirm the rows came from the search and carry match information.
         let settled = await ComposedSupport.waitFor(timeout: 3) {
             viewState.rows.first?.item.id == ids.alpha
                 && viewState.rows.allSatisfy { $0.search != nil }
@@ -180,9 +179,10 @@ struct WS17ComposedSearchModesTests {
 
         let viewState = HistoryViewState(history: history)
         defer { viewState.deactivate() }
-        viewState.activate()
+        viewState.sortOrder = .automatic
         viewState.searchMode = .regexp
         viewState.searchText = "^(Alpha|beta)"
+        viewState.activate()
 
         let settled = await ComposedSupport.waitFor(timeout: 3) {
             Set(viewState.rows.map(\.item.id)) == Set([ids.alpha, ids.betaAlpha])

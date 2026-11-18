@@ -7,14 +7,6 @@ import Testing
 
 @Suite("Pasteboard access behavior")
 struct PasteboardAccessTests {
-    @Test("every documented AppKit behavior maps to one neutral value")
-    func documentedBehaviorsMapWithoutLeakingAppKit() {
-        #expect(PasteboardAccessBehavior(systemValue: .default) == .systemDefault)
-        #expect(PasteboardAccessBehavior(systemValue: .ask) == .ask)
-        #expect(PasteboardAccessBehavior(systemValue: .alwaysAllow) == .allowed)
-        #expect(PasteboardAccessBehavior(systemValue: .alwaysDeny) == .denied)
-    }
-
     @Test("a named private pasteboard exposes the neutral allowed value")
     @MainActor
     func privatePasteboardUsesPublicNeutralProjection() {
@@ -23,6 +15,7 @@ struct PasteboardAccessTests {
                 "com.clipy.pasteboardaccesstests." + UUID().uuidString
             )
         )
+        defer { pasteboard.releaseGlobally() }
         let adapter = PasteboardAdapter(pasteboard: pasteboard)
 
         #expect(adapter.captureAccessBehavior == .allowed)

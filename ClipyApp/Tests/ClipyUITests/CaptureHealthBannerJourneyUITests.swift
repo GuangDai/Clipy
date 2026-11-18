@@ -41,6 +41,8 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
             "clipy.capture.notice.message"
         ]
         let dismiss = app.buttons["clipy.capture.notice.dismiss"]
+        let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        let window = app.dialogs.containing(.textField, identifier: "clipy.search.field").firstMatch
 
         stageUnsupportedGeneration(suffix: "first")
         XCTAssertTrue(
@@ -52,6 +54,15 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         XCTAssertTrue(dismiss.waitForExistence(timeout: 5))
         XCTAssertTrue(dismiss.isHittable)
         XCTAssertEqual(dismiss.label, "Dismiss capture warning")
+        let search = app.textFields["clipy.search.field"]
+        XCTAssertTrue(search.exists)
+        XCTAssertLessThanOrEqual(banner.frame.maxY, search.frame.minY,
+                                 "The warning belongs above the search strip")
+        XCTAssertTrue(window.exists && window.frame.contains(banner.frame))
+        let visualEvidence = XCTAttachment(screenshot: window.screenshot())
+        visualEvidence.name = "Capture warning layout"
+        visualEvidence.lifetime = .keepAlways
+        add(visualEvidence)
         dismiss.click()
 
         XCTAssertTrue(
@@ -73,6 +84,19 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         XCTAssertEqual(accessibilityText(of: message), expectedMessage)
         XCTAssertTrue(dismiss.waitForExistence(timeout: 5))
         XCTAssertTrue(dismiss.isHittable)
+
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(waitUntil(timeout: 5) { !panel.exists })
+        app.typeKey("c", modifierFlags: [.command, .shift])
+        XCTAssertTrue(banner.waitForExistence(timeout: 5))
+        XCTAssertTrue(search.isHittable)
+        XCTAssertTrue(dismiss.isHittable)
+        XCTAssertLessThanOrEqual(banner.frame.maxY, search.frame.minY)
+        XCTAssertTrue(window.exists && window.frame.contains(banner.frame))
+        let reopened = XCTAttachment(screenshot: window.screenshot())
+        reopened.name = "Capture warning after reopening the panel"
+        reopened.lifetime = .keepAlways
+        add(reopened)
     }
 
     @MainActor
@@ -90,7 +114,8 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         temporaryDirectory = directory
 
         let app = XCUIApplication()
-        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system"]
+        app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system",
+                                "-clipy.appearance.motionSpeed", "1"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
             .appendingPathComponent("history.store")

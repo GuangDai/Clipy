@@ -14,3 +14,4 @@
 "Dismiss copy failure" = "Dismiss copy failure";
 "A copy is already in progress. Try again when it finishes." = "A copy is already in progress. Try again when it finishes.";
 "The pasteboard refused this copy. Try again." = "The pasteboard refused this copy. Try again.";
+"The clipboard changed. Copy the history item again to replace it." = "The clipboard changed. Copy the history item again to replace it.";

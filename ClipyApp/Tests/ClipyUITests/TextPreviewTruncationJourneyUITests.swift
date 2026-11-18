@@ -1,4 +1,4 @@
-/// The real text preview discloses its display limit while Return copies
+/// Search excerpt and truncation use bounded display data. Return still copies
 /// the complete retained UTF-8 value through the General pasteboard.
 import AppKit
 import XCTest
@@ -12,9 +12,8 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
     @MainActor
     func testTruncationNoticeDoesNotTruncateCopyAndRetiresForShortText() throws {
         let tail = "CLIPY-COMPLETE-TAIL!"
-        let original = String(repeating: "A", count: 50_001 - tail.utf8.count) + tail
+        let original = String(repeating: "A", count: 50_000) + "\n" + tail
         let originalBytes = Data(original.utf8)
-        XCTAssertEqual(originalBytes.count, 50_001)
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         defer { pasteboard.clearContents() }
@@ -61,6 +60,23 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
             format: "identifier == %@", longRowIdentifier
         )).firstMatch
         XCTAssertTrue(longRow.exists && longRow.isHittable)
+        let search = app.textFields["clipy.search.field"]
+        search.click()
+        app.typeText(tail)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            longRow.exists && longRow.label.contains(tail)
+        }, "The result should expose the hit beyond the preview limit")
+        HistoryJourneyControls.select(longRow, in: app)
+        let searchMatch = preview.descendants(matching: .any)["clipy.preview.search-match"]
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            searchMatch.exists && searchMatch.isHittable && self.text(of: searchMatch) == "…" + tail
+                && notice.exists
+        }, "The preview should show the search hit separately from its truncated body")
+
+        let clearSearch = panel.buttons["clipy.search.clear"]
+        clearSearch.click()
+        XCTAssertTrue(waitUntil(timeout: 10) { !searchMatch.exists && longRow.exists && !longRow.label.contains(tail) },
+                      "Clearing the query must retire its excerpt even when the item survives")
         HistoryJourneyControls.select(longRow, in: app)
         // Replace General with an ignored transient sentinel so an unchanged
         // seed cannot masquerade as a successful product copy.
@@ -75,9 +91,9 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { !panel.exists }, "Return did not dismiss the panel")
         XCTAssertTrue(waitUntil(timeout: 10) {
             pasteboard.data(forType: .string) == originalBytes
-        }, "Return must copy all 50,001 original UTF-8 bytes")
+        }, "Return must copy all original UTF-8 bytes")
         let copied = try XCTUnwrap(pasteboard.data(forType: .string))
-        XCTAssertEqual(copied.count, 50_001)
+        XCTAssertEqual(copied.count, originalBytes.count)
         XCTAssertTrue(copied.suffix(tail.utf8.count).elementsEqual(tail.utf8),
                       "The copied value must include its complete tail")
 

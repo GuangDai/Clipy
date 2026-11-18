@@ -8,12 +8,12 @@ import HistoryStorage
 struct AppIntentHistoryIngress: ExternalHistory, Sendable {
     private let facade: ExternalHistoryFacade
     private let onCommittedRemoval:
-        @MainActor @Sendable (HistoryItemID) -> Void
+        @MainActor @Sendable (HistoryItemID, ChangePosition) -> Void
 
     init(
         facade: ExternalHistoryFacade,
         onCommittedRemoval:
-            @escaping @MainActor @Sendable (HistoryItemID) -> Void
+            @escaping @MainActor @Sendable (HistoryItemID, ChangePosition) -> Void
     ) {
         self.facade = facade
         self.onCommittedRemoval = onCommittedRemoval
@@ -23,27 +23,16 @@ struct AppIntentHistoryIngress: ExternalHistory, Sendable {
         _ request: ExternalRequest
     ) async throws -> ExternalResponse {
         try Task.checkCancellation()
-        let response: ExternalResponse
         do {
-            response = try await facade.perform(request)
+            return try await facade.perform(request) { [onCommittedRemoval] itemID, position in
+                await onCommittedRemoval(itemID, position)
+            }
         } catch {
             // Gateway records cancellation with its typed audit vocabulary.
             // Preserve the invocation's cancellation at the App Intents edge.
             try Task.checkCancellation()
             throw error
         }
-        switch request {
-        case .pin, .unpin:
-            break
-        case .remove(let itemID):
-            switch response {
-            case .removed(let count) where count > 0:
-                await onCommittedRemoval(itemID)
-            case .removed, .unchanged, .pin, .unpin:
-                break
-            }
-        }
-        return response
     }
 
     func read(

@@ -110,10 +110,11 @@ struct PanelKeepOpenAndStatusMenuHostedTests {
         #expect(menu.items[4].isSeparatorItem)
     }
 
-    @Test("pause item title flips with the capture-pause state")
-    func pauseItemTitleFlipsWithCapturePauseState() async throws {
+    @Test("the status menu dispatches the displayed capture action, even across resume")
+    func statusMenuDispatchesTheDisplayedCaptureAction() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         let pasteboard = ComposedSupport.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
         let composition = AppComposition.makeForTesting(
             history: history,
@@ -127,7 +128,7 @@ struct PanelKeepOpenAndStatusMenuHostedTests {
         #expect(appDelegate.captureAccessState == .allowed)
 
         let menu = appDelegate.statusItemMenuForTesting
-        let pauseItem = menu.items.filter { !$0.isSeparatorItem }[1]
+        let pauseItem = try #require(menu.item(at: 1))
 
         // `NSMenu.update()` only runs NSMenuValidation enable/disable — it
         // never invokes the delegate's `menuNeedsUpdate`. The production
@@ -139,28 +140,45 @@ struct PanelKeepOpenAndStatusMenuHostedTests {
 
         refreshThroughDelegate()
         #expect(pauseItem.title == "Pause Clipboard Monitoring for 5 Minutes")
-        #expect(pauseItem.isEnabled)
-
-        appDelegate.pauseCapture()
-        #expect(appDelegate.captureAccessState == .userPaused)
+        try #require(pauseItem.isEnabled)
+        menu.performActionForItem(at: 1)
+        try #require(appDelegate.captureAccessState == .userPaused)
         refreshThroughDelegate()
         #expect(pauseItem.title == "Resume Clipboard Monitoring")
-        #expect(pauseItem.isEnabled)
+        try #require(pauseItem.isEnabled)
+        menu.performActionForItem(at: 1)
+        try #require(appDelegate.captureAccessState == .allowed)
 
-        appDelegate.recoverCaptureAccess()
-        #expect(appDelegate.captureAccessState == .allowed)
         refreshThroughDelegate()
-        #expect(pauseItem.title == "Pause Clipboard Monitoring for 5 Minutes")
-        #expect(pauseItem.isEnabled)
+        menu.performActionForItem(at: 1)
+        try #require(appDelegate.captureAccessState == .userPaused)
+        refreshThroughDelegate()
+        try #require(pauseItem.title == "Resume Clipboard Monitoring")
+
+        // The pause expires while the menu still offers the action it built
+        // during the pause. The displayed Resume must not start a new pause.
+        composition.resumeCapture()
+        try #require(appDelegate.captureAccessState == .allowed)
+        menu.performActionForItem(at: 1)
+        #expect(appDelegate.captureAccessState == .allowed)
     }
 
-    @Test("primary status-item click still summons and dismisses the panel")
-    func primaryStatusItemClickStillTogglesThePanel() throws {
+    @Test("the status menu shows the current history session and the primary click still toggles")
+    func statusMenuShowPreservesHistorySessionAndPrimaryClickToggles() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let pasteboard = ComposedSupport.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
+        let composition = AppComposition.makeForTesting(
+            history: history,
+            adapter: PasteboardAdapter(pasteboard: pasteboard)
+        )
         let appDelegate = AppDelegate()
+        appDelegate.installCompositionForTesting(composition)
         appDelegate.installStatusItemForTesting()
         defer {
             appDelegate.closePanel()
             appDelegate.removeStatusItemForTesting()
+            composition.stop()
         }
         #expect(appDelegate.panelForTesting == nil)
 
@@ -168,7 +186,15 @@ struct PanelKeepOpenAndStatusMenuHostedTests {
         // the primary-click routing — the pre-menu summon behavior.
         appDelegate.performStatusItemClickForTesting()
         let panel = try #require(appDelegate.panelForTesting)
+        let surface = try #require(appDelegate.panelSurfaceState)
+        try #require(panel.isPresented && surface.isSessionActive)
+        let session = surface.sessionGeneration
+
+        let menu = appDelegate.statusItemMenuForTesting
+        menu.performActionForItem(at: 0)
         #expect(panel.isPresented)
+        #expect(surface.isSessionActive)
+        #expect(surface.sessionGeneration == session)
 
         appDelegate.performStatusItemClickForTesting()
         #expect(!panel.isPresented)

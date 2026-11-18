@@ -20,7 +20,7 @@ struct DetailsLazyRepresentationTests {
         let presentation = try await DetailsRepresentationPresentation.load(
             request, metadata: metadata, history: history, renderer: ContentPreview()
         )
-        #expect(presentation == .metadataOnly)
+        #expect(presentation == (type == "public.rtf" ? .failure(.resourceLimit) : .metadataOnly))
         #expect(await history.requests.isEmpty)
         let exported = try await history.representation(request)
         #expect(exported.bytes == bytes)
@@ -38,7 +38,7 @@ struct DetailsLazyRepresentationTests {
             metadata: HistoryRepresentationMetadata(typeIdentifier: type, byteCount: 64 * 1_048_576 + 1),
             history: history, renderer: ContentPreview()
         )
-        #expect(presentation == .metadataOnly)
+        #expect(presentation == .failure(.resourceLimit))
         #expect(await history.representationRequests.isEmpty)
     }
 
@@ -123,6 +123,45 @@ struct DetailsLazyRepresentationTests {
             metadata: latest.effective[0], history: store, renderer: ContentPreview()
         )
         #expect(retried.text?.text == "latest")
+    }
+
+    @Test func detailsFindsUpdatedCopyAndPinFactsOutsideTheActiveQuery() async throws {
+        let type = "public.utf8-plain-text"
+        let bytes = Data("off-query details".utf8)
+        let (history, item) = try await capture(type: type, bytes: bytes)
+        let state = HistoryViewState(history: history)
+        state.typeFilter = .images
+        state.activate()
+        defer { state.deactivate() }
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.displayedRow(for: item.id) == nil)
+
+        let latestCopy = Date(timeIntervalSince1970: 2)
+        _ = try await history.perform(.capture(ClipboardCapture(
+            representations: [.init(typeIdentifier: type, bytes: bytes)],
+            origin: .init(sourceApplication: "com.example.copy", lineageHint: nil),
+            observedAt: latestCopy
+        )))
+        let pinned = try await state.pinAwaitingReceipt(item.id)
+        guard case .committed(let pinCommit) = pinned else {
+            Issue.record("Expected a committed pin")
+            return
+        }
+        let updated = try await state.detailRow(for: item.id, atLeast: pinCommit.position)
+        #expect(updated.item == item)
+        #expect(updated.lastCopiedAt == latestCopy)
+        #expect(updated.copyCount == 2)
+        #expect(updated.lastSource == "com.example.copy")
+        #expect(updated.pinnedPosition == 0)
+
+        let removed = try await state.removeAwaitingReceipt(item.id)
+        guard case .committed(let removalCommit) = removed else {
+            Issue.record("Expected a committed removal")
+            return
+        }
+        await #expect(throws: HistoryFailure.notFound(item.id)) {
+            try await state.detailRow(for: item.id, atLeast: removalCommit.position)
+        }
     }
 
     private func capture(type: String, bytes: Data) async throws -> (SQLiteHistory, HistoryItemReference) {

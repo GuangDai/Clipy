@@ -6,11 +6,10 @@
 /// panel, then a new General-pasteboard generation appears as a real row and
 /// application-directed typing reaches the focused search field without a
 /// click or reopen. A second, compressed journey pins the permission
-/// dimension: a read-only StoreRoot produces the SAME pane and controls,
-/// Reveal stays side-effect-free inside it, and once the runner restores the
-/// write permission the visible Retry reaches the real panel (the
-/// pasteboard/typing half is not repeated — the permission dimension adds no
-/// new session-focus fact). Reveal replaces Finder only at the final DEBUG
+/// dimension: a read-only StoreRoot leaves independent settings editable.
+/// After write permission is restored, Retry in the Settings History page
+/// opens that workspace and the regular panel can be summoned again.
+/// Reveal replaces Finder only at the final DEBUG
 /// boundary with a fixed-name, empty, no-overwrite marker; there is no
 /// private AX lookup or arbitrary sleep.
 import AppKit
@@ -278,33 +277,55 @@ final class StoreOpenRecoveryJourneyUITests: XCTestCase {
             XCTAssertEqual(button.label, label)
         }
 
-        // Non-destructive characterization only: after a bounded settle the
-        // marker is absent because its publication into the 0500 StoreRoot
-        // is refused and swallowed by the product. Absence cannot
-        // distinguish "write refused" from "control did not run"; the pinned
-        // fact is that Reveal stays side-effect-free while the pane remains.
-        // Any permission-repairing Reveal would violate DATA-14 and is a
-        // review obligation, not something this absence can encode.
         reveal.click()
-        _ = waitUntil(timeout: 5) { false }
         XCTAssertFalse(
             FileManager.default.fileExists(atPath: revealMarkerURL.path),
             "Reveal must not create anything inside a read-only StoreRoot."
         )
         XCTAssertTrue(failure.exists)
 
-        // Recovery changes only the external permissions, then drives the
-        // visible product Retry control. The post-Retry pasteboard/typing
-        // half of the sibling journey is intentionally NOT repeated: the
-        // permission dimension adds no new fact about session focus, and
-        // dropping it trims CI minutes and flake surface.
+        app.typeKey(",", modifierFlags: .command)
+        let appearanceID = "clipy.settings.category.appearance"
+        let settings = app.windows.containing(.button, identifier: appearanceID).firstMatch
+        let appearance = settings.buttons[appearanceID]
+        XCTAssertTrue(appearance.waitForExistence(timeout: 10), app.debugDescription)
+        appearance.click()
+        let autoOpenID = "clipy.settings.appearance.preview-auto-open"
+        let autoOpen = settings.switches[autoOpenID]
+        XCTAssertTrue(autoOpen.waitForExistence(timeout: 5), app.debugDescription)
+        let form = settings.scrollViews.containing(.any, identifier: autoOpenID).firstMatch
+        SettingsJourneyControls.scroll(autoOpen, into: form, app: app)
+        let initialValue = try XCTUnwrap(autoOpen.value as? Int)
+        autoOpen.click()
+        XCTAssertTrue(waitUntil(timeout: 5) { (autoOpen.value as? Int) == (initialValue == 0 ? 1 : 0) })
+        autoOpen.click()
+        XCTAssertTrue(waitUntil(timeout: 5) { (autoOpen.value as? Int) == initialValue })
+
+        let history = settings.buttons["clipy.settings.category.history"]
+        XCTAssertTrue(history.isHittable, app.debugDescription)
+        history.click()
+        let settingsFailure = settings.descendants(matching: .any)["clipy.settings.store.failure"]
+        let settingsRetry = settings.buttons["clipy.settings.store.failure.retry"]
+        XCTAssertTrue(settingsFailure.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(settingsRetry.isHittable, app.debugDescription)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: storeDirectory.path))
+
         try FileManager.default.setAttributes(
             [.posixPermissions: NSNumber(value: 0o700)],
             ofItemAtPath: guardedRoot.path
         )
-        retry.click()
+        settingsRetry.click()
+        let workspace = settings.descendants(matching: .any)["clipy.history.workspace"]
+        XCTAssertTrue(workspace.waitForExistence(timeout: 20), app.debugDescription)
+        XCTAssertFalse(settingsFailure.exists, app.debugDescription)
 
+        settings.buttons["clipy.settings.category.general"].click()
+        app.typeKey("w", modifierFlags: .command)
+        XCTAssertTrue(waitUntil(timeout: 5) { !settings.exists }, app.debugDescription)
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        if !panel.exists {
+            app.typeKey("c", modifierFlags: [.command, .shift])
+        }
         XCTAssertTrue(
             panel.waitForExistence(timeout: 20),
             diagnostic(app, context: "History panel after permission Retry")

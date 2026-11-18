@@ -156,8 +156,8 @@ struct PanelAppearanceSettingsTests {
         #expect(PanelGeometry.minimumHeight == PanelContentFit.minimumHeight)
         #expect(PanelGeometry.clampedHeight(420) == 420)
         #expect(PanelGeometry.clampedHeight(1_000) == 1_000)
-        #expect(PanelGeometry.clampedHeight(10) == 160)
-        #expect(PanelGeometry.clampedHeight(160) == 160)
+        #expect(PanelGeometry.clampedHeight(10) == PanelGeometry.minimumHeight)
+        #expect(PanelGeometry.clampedHeight(PanelGeometry.minimumHeight) == PanelGeometry.minimumHeight)
         #expect(PanelGeometry.clampedHeight(2_000) == 2_000)
     }
 
@@ -221,7 +221,7 @@ struct PanelAppearanceSettingsTests {
         let size = PanelGeometry.persistedSize(from: defaults)
         #expect(size.contentWidth == PanelGeometry.contentWidth)
         #expect(size.height == PanelGeometry.height)
-        #expect(PanelContentFit.clampedHeight(1, ceiling: size.height) == 160)
+        #expect(PanelContentFit.clampedHeight(1, ceiling: size.height) == PanelContentFit.minimumHeight)
         #expect(PanelContentFit.clampedHeight(200, ceiling: size.height) == 200)
     }
 
@@ -244,8 +244,8 @@ struct PanelAppearanceSettingsTests {
 
         let saved = PanelGeometry.persistedSize(from: defaults)
         #expect(saved.height == 140)
-        #expect(PanelGeometry.clampedHeight(saved.height) == 160)
-        #expect(PanelContentFit.clampedHeight(92, ceiling: saved.height) == 160)
+        #expect(PanelGeometry.clampedHeight(saved.height) == PanelGeometry.minimumHeight)
+        #expect(PanelContentFit.clampedHeight(92, ceiling: saved.height) == PanelContentFit.minimumHeight)
         #expect(defaults.double(forKey: PanelGeometry.panelHeightDefaultsKey) == 140)
 
         PanelGeometry.persistSize(contentWidth: saved.contentWidth, height: 200, to: defaults)

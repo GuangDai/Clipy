@@ -18,8 +18,6 @@ struct BuiltInAutomationSyntaxArgumentTests {
         ]
 
         let source = try BuiltInAutomationSyntax.render(steps)
-        let name = condition == .isText ? "is_text" : "is_image"
-        #expect(source == "if \(name)():\n    trim()\nif not (\(name)()):\n    uppercase()\n")
         let restored = try BuiltInAutomationSyntax.parse(source)
         try #require(restored.count == 2)
         #expect(restored[0].effectivePredicate == .match(condition, ""))

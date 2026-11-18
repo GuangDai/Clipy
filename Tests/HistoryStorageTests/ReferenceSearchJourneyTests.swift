@@ -125,6 +125,105 @@ struct ReferenceSearchJourneyTests {
         try await expectBytes(original, effective: original, item: captured, in: history)
     }
 
+    @Test(arguments: [
+        ("public.url", "https://EXAMPLE.invalid/old%20section?q=1", "/old section"),
+        ("public.file-url", "file:///offline/old%20section/summary.txt", "/offline/old section/summary.txt"),
+    ])
+    func labeledReferenceIsSearchableWithoutChangingItsTitleOrBytes(
+        type: String, address: String, decodedPath: String
+    ) async throws {
+        let history = try await openHistory()
+        let label = "Cafe\u{301} notes"
+        let labelBytes = Data(label.utf8)
+        let original = Data(address.utf8)
+        let textType = "public.utf8-plain-text"
+        let captured = try await capture([
+            .init(typeIdentifier: textType, bytes: labelBytes),
+            .init(typeIdentifier: type, bytes: original),
+        ], in: history)
+
+        let titleHit = try await singleResult(label, in: history)
+        #expect(titleHit.item == captured)
+        #expect(Data(titleHit.title.utf8) == labelBytes)
+        #expect(titleHit.search?.snippet == nil)
+        try expectHighlighted(label, in: titleHit)
+
+        let addressHit = try await singleResult(address, in: history)
+        #expect(addressHit.item == captured)
+        #expect(Data(addressHit.title.utf8) == labelBytes)
+        #expect(addressHit.search?.snippet == label + "\n" + address + "\n" + decodedPath)
+        try expectHighlighted(address, in: addressHit)
+        let pathHit = try await singleResult(decodedPath, in: history)
+        #expect(pathHit.item == captured)
+        try expectHighlighted(decodedPath, in: pathHit)
+
+        let replacementAddress = address.replacingOccurrences(of: "old", with: "new")
+        let replacement = Data(replacementAddress.utf8)
+        let receipt = try await history.perform(.revise(.init(
+            itemID: captured.id,
+            expected: captured.contentVersion,
+            intent: .replace(.init(decisions: [
+                .init(typeIdentifier: textType, action: .inheritCurrent),
+                .init(typeIdentifier: type, action: .replace(bytes: replacement)),
+            ]))
+        )))
+        guard case .committed(let commit) = receipt, case .revised(let revised) = commit.outcome else {
+            Issue.record("expected a reference revision")
+            return
+        }
+        #expect(try await search(address, in: history).rows.isEmpty)
+        #expect(try await search(decodedPath, in: history).rows.isEmpty)
+        let revisedHit = try await singleResult(replacementAddress, in: history)
+        #expect(revisedHit.item == revised)
+        #expect(Data(revisedHit.title.utf8) == labelBytes)
+        try expectHighlighted(replacementAddress, in: revisedHit)
+
+        let canonical = try await history.representation(.init(item: revised, basis: .canonical, typeIdentifier: type))
+        #expect(canonical.bytes == original)
+        let paste = try await history.pastePayload(for: revised.id)
+        #expect(paste.item == revised)
+        #expect(paste.representations.count == 2)
+        #expect(paste.representations.first { $0.typeIdentifier == textType }?.bytes == labelBytes)
+        #expect(paste.representations.first { $0.typeIdentifier == type }?.bytes == replacement)
+        #expect(paste.representations.allSatisfy { $0.pasteboardItemIndex == 0 })
+    }
+
+    @Test func aReferenceAlreadyPresentAsPlainTextDoesNotRepeatInTheExcerpt() async throws {
+        let history = try await openHistory()
+        let address = "https://example.invalid/archive/item"
+        let plaintext = "Notes\n" + address
+        let item = try await capture([
+            .init(typeIdentifier: "public.utf8-plain-text", bytes: Data(plaintext.utf8)),
+            .init(typeIdentifier: "public.url", bytes: Data(address.utf8)),
+        ], in: history)
+
+        let hit = try await singleResult("/archive/item", in: history)
+        #expect(hit.item == item)
+        #expect(hit.title == "Notes")
+        #expect(hit.search?.snippet == plaintext)
+        try expectHighlighted("/archive/item", in: hit)
+    }
+
+    @Test func collectionKeepsLaterReferenceSearchableBesideATextAndImageItem() async throws {
+        let history = try await openHistory()
+        let label = "Saved screenshot"
+        let address = "file:///offline/folder%20for%20notes/summary.txt"
+        let addressBytes = Data(address.utf8)
+        let item = try await capture([
+            .init(typeIdentifier: "public.utf8-plain-text", bytes: Data(label.utf8)),
+            .init(typeIdentifier: "public.png", bytes: Data([0xFF])),
+            .init(typeIdentifier: "public.file-url", bytes: addressBytes, pasteboardItemIndex: 1),
+        ], in: history)
+
+        let hit = try await singleResult("folder for notes", in: history)
+        #expect(hit.item == item)
+        #expect(hit.title == "2 items: " + label)
+        try expectHighlighted("folder for notes", in: hit)
+        let paste = try await history.pastePayload(for: item.id)
+        #expect(paste.representations.map(\.pasteboardItemIndex) == [0, 0, 1])
+        #expect(paste.representations.last?.bytes == addressBytes)
+    }
+
     @Test(arguments: ["public.url.private", "public.file-url.private"])
     func lookalikeTypesKeepOpaqueBytesWithoutReferenceSearch(_ type: String) async throws {
         let history = try await openHistory()
@@ -148,8 +247,14 @@ struct ReferenceSearchJourneyTests {
     private func capture(
         _ bytes: Data, type: String, in history: SQLiteHistory
     ) async throws -> HistoryItemReference {
+        try await capture([.init(typeIdentifier: type, bytes: bytes)], in: history)
+    }
+
+    private func capture(
+        _ representations: [CapturedRepresentation], in history: SQLiteHistory
+    ) async throws -> HistoryItemReference {
         let receipt = try await history.perform(.capture(ClipboardCapture(
-            representations: [CapturedRepresentation(typeIdentifier: type, bytes: bytes)],
+            representations: representations,
             origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
             observedAt: Date(timeIntervalSinceReferenceDate: 1)
         )))

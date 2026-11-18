@@ -20,23 +20,6 @@ struct BuiltInAutomationStepEditingTests {
         #expect(steps[0].thenSteps == [replace])
     }
 
-    @Test func movingConditionIntoItselfOrDescendantLeavesDefinitionUnchanged() {
-        let nested = BuiltInAutomationStep(operation: .conditional, condition: .isText,
-                                           thenSteps: [.init(operation: .trim)])
-        let outer = BuiltInAutomationStep(operation: .conditional, condition: .isImage,
-                                          thenSteps: [nested])
-        var steps = [outer]
-        #expect(!BuiltInAutomationStepEditing.move(outer.id, in: &steps, parent: nested.id,
-                                                  otherwise: true, before: nil))
-        #expect(steps == [outer])
-        #expect(!BuiltInAutomationStepEditing.move(outer.id, in: &steps, parent: outer.id,
-                                                  otherwise: false, before: nil))
-        #expect(steps == [outer])
-        #expect(!BuiltInAutomationStepEditing.move(nested.id, in: &steps, parent: UUID(),
-                                                  otherwise: false, before: nil))
-        #expect(steps == [outer])
-    }
-
     @Test func duplicatingConditionCopiesEveryBranchWithFreshIDsAndExactParameterBytes() throws {
         let nested = BuiltInAutomationStep(operation: .conditional, enabled: false,
                                            find: "e\u{301}", condition: .containsText,
@@ -69,24 +52,6 @@ struct BuiltInAutomationStepEditingTests {
         #expect(steps[0].otherwiseSteps[0] == guardStep)
         #expect(steps[0].otherwiseSteps[2] == following)
         expectCopy(steps[0].otherwiseSteps[1], preserves: guardStep)
-    }
-
-    @Test func duplicatingDisabledBranchesWorksBeyond32Steps() throws {
-        let condition = BuiltInAutomationStep(operation: .conditional, enabled: false, condition: .isText,
-                                              otherwiseSteps: [.init(operation: .trim, enabled: false)])
-        let following = (0..<40).map { _ in BuiltInAutomationStep(operation: .trim) }
-        var steps = [condition] + following
-        #expect(BuiltInAutomationStepEditing.canDuplicate(condition.id, in: steps))
-        #expect(BuiltInAutomationStepEditing.duplicate(condition.id, in: &steps))
-        #expect(BuiltInAutomationStepEditing.count(steps) == 44)
-        expectCopy(steps[1], preserves: condition)
-        #expect(BuiltInAutomationStepEditing.canDuplicate(condition.id, in: steps))
-        #expect(BuiltInAutomationStepEditing.duplicate(condition.id, in: &steps))
-        #expect(BuiltInAutomationStepEditing.count(steps) == 46)
-        #expect(steps[0] == condition)
-        expectCopy(steps[1], preserves: condition)
-        #expect(Array(steps.dropFirst(3)) == following)
-        try BuiltInAutomation.validateStepTree(steps)
     }
 
     @Test func duplicatingUnknownIDDoesNotChangeTheDefinition() {

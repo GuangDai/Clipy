@@ -43,6 +43,7 @@ public final class PasteboardObserver {
     private var handler: (@MainActor (CaptureOutcome) -> Void)?
     private var accessBehaviorHandler:
         (@MainActor (PasteboardAccessBehavior) -> Void)?
+    private var pendingCaptureEndedHandler: (@MainActor (Int) -> Void)?
     private var lastAccessBehavior: PasteboardAccessBehavior
     private var accessBehaviorProvider:
         @MainActor () -> PasteboardAccessBehavior
@@ -91,15 +92,19 @@ public final class PasteboardObserver {
     /// declared representation's bytes unavailable — IS delivered, marked
     /// by `CaptureOutcome.declaredUnavailable`, for the handler owner to
     /// judge. Calling `start` again while running replaces the handler
-    /// without re-capturing.
+    /// without re-capturing. `onPendingCaptureEnded` identifies a reported
+    /// pending generation that completed or was replaced while this observer
+    /// is running, including a replacement that produces no capture outcome.
     public func start(
         captureCurrent: Bool = true,
         onAccessBehaviorChanged:
             (@MainActor (PasteboardAccessBehavior) -> Void)? = nil,
+        onPendingCaptureEnded: (@MainActor (Int) -> Void)? = nil,
         handler: @escaping @MainActor (CaptureOutcome) -> Void
     ) {
         self.handler = handler
         self.accessBehaviorHandler = onAccessBehaviorChanged
+        self.pendingCaptureEndedHandler = onPendingCaptureEnded
         guard timer == nil else { return }
 
         let accessBehavior = accessBehaviorProvider()
@@ -150,8 +155,8 @@ public final class PasteboardObserver {
         }
     }
 
-    /// Stops polling and drops the handler. Safe to call when stopped; safe
-    /// to `start(handler:)` again afterwards.
+    /// Stops polling and drops the handlers without publishing another event.
+    /// Safe to call when stopped or before restarting observation.
     public func stop() {
         timer?.invalidate()
         timer = nil
@@ -160,6 +165,7 @@ public final class PasteboardObserver {
         initialCaptureChangeCount = nil
         handler = nil
         accessBehaviorHandler = nil
+        pendingCaptureEndedHandler = nil
     }
 
     /// One poll tick. New ownership always bypasses an older retry delay.
@@ -204,7 +210,6 @@ public final class PasteboardObserver {
                 return
             }
         } else {
-            pendingCapture = nil
             initialCaptureChangeCount = nil
         }
         lastChangeCount = changeCount
@@ -247,6 +252,15 @@ public final class PasteboardObserver {
         // same-session start only replaces the handler and uses this result.
         guard self.timer === activeTimer,
               lastChangeCount == observedChangeCount else { return }
+        defer {
+            // A generation may be replaced without producing a new outcome,
+            // such as when the pasteboard is cleared while providers are pending.
+            if self.timer === activeTimer, let previousPending,
+               previousPending.failureWasDelivered,
+               pendingCapture?.changeCount != previousPending.changeCount {
+                pendingCaptureEndedHandler?(previousPending.changeCount)
+            }
+        }
 
         guard let attempt else {
             // Access may have been revoked without changing ownership. That
@@ -286,7 +300,11 @@ public final class PasteboardObserver {
             pendingCapture = nil
         case let .unsupportedMultiItem(value):
             lastChangeCount = value.changeCount
-            pendingCapture = nil
+            if value.awaitsConstituentContent {
+                scheduleRetry(changeCount: value.changeCount, after: previousPending)
+            } else {
+                pendingCapture = nil
+            }
         case let .changedDuringRead(value):
             lastChangeCount = value.endChangeCount
             scheduleRetry(changeCount: value.endChangeCount, after: previousPending, immediately: true)

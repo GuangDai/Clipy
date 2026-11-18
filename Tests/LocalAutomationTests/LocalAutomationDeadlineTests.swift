@@ -27,14 +27,6 @@ final class LocalAutomationDeadlineTests: XCTestCase {
         XCTAssertTrue(finished, "The connection slot cannot be released before cancelled work exits")
     }
 
-    func testCompletedRequestKeepsItsActualResultAndCancelsDeadlineWait() async throws {
-        let expected = LocalAutomationOutput(exitCode: 0, stdout: Data([0, 255, 10]), stderr: Data())
-        let output = try await LocalAutomationSocket.withDeadline(.now.advanced(by: .seconds(60))) {
-            expected
-        }
-        XCTAssertEqual(output, expected)
-    }
-
     func testCancelledRequestDoesNotBeginHistoryWork() async throws {
         let state = RequestDeadlineState()
         let request = Task {

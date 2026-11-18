@@ -4,46 +4,53 @@ import HistoryCore
 /// A reusable search intent, never a snapshot of its clipboard results.
 /// Relative dates remain relative when applied on a later day.
 struct HistorySearchDefinition: Codable, Equatable, Sendable {
-    var query: String
-    var mode: SearchMode
-    var typeFilter: HistoryTypeFilter
-    var pinnedOnly: Bool
-    var filters: HistorySearchFilters
-    var sortOrder: HistorySortOrder
+    let query: String
+    let mode: SearchMode
+    let typeFilter: HistoryTypeFilter
+    let pinnedOnly: Bool
+    let filters: HistorySearchFilters
+    let sortOrder: HistorySortOrder
+    /// The zone that gave the stored instants their originally selected days.
+    /// Older definitions have no such fact and keep their original replay rules.
+    let customDateTimeZone: TimeZone?
 
     init(
-        query: String = "", mode: SearchMode = .fuzzy,
+        query: String = "", mode: SearchMode = .exact,
         typeFilter: HistoryTypeFilter = .all, pinnedOnly: Bool = false,
         filters: HistorySearchFilters = HistorySearchFilters(),
-        sortOrder: HistorySortOrder = .automatic
+        sortOrder: HistorySortOrder = .newestFirst,
+        customDateTimeZone: TimeZone? = .current
     ) {
         self.query = query
         self.mode = mode
         self.typeFilter = typeFilter
         self.pinnedOnly = pinnedOnly
-        self.filters = filters
         self.sortOrder = sortOrder
+        self.customDateTimeZone = filters.dateRange == .custom ? customDateTimeZone : nil
+        var normalizedFilters = filters
+        normalizedFilters.dateSelectionTimeZone = nil
         if filters.dateRange != .custom {
             // These unused draft dates must not make the same "Today" search
             // look like a different definition every time it is submitted.
-            self.filters.startDate = Date(timeIntervalSince1970: 0)
-            self.filters.endDate = Date(timeIntervalSince1970: 0)
+            normalizedFilters.startDate = Date(timeIntervalSince1970: 0)
+            normalizedFilters.endDate = Date(timeIntervalSince1970: 0)
         }
+        self.filters = normalizedFilters
     }
 
     var hasCriteria: Bool {
-        !query.isEmpty || typeFilter != .all || pinnedOnly || filters.isActive || sortOrder != .automatic
+        !query.isEmpty || typeFilter != .all || pinnedOnly || filters.isActive || sortOrder != .newestFirst
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.query.utf8.elementsEqual(rhs.query.utf8)
             && lhs.mode == rhs.mode && lhs.typeFilter == rhs.typeFilter
             && lhs.pinnedOnly == rhs.pinnedOnly && lhs.filters == rhs.filters
-            && lhs.sortOrder == rhs.sortOrder
+            && lhs.sortOrder == rhs.sortOrder && lhs.customDateTimeZone == rhs.customDateTimeZone
     }
 
     private enum CodingKeys: String, CodingKey {
-        case query, mode, typeFilter, pinnedOnly, filters, sortOrder
+        case query, mode, typeFilter, pinnedOnly, filters, sortOrder, customDateTimeZone
     }
 
     init(from decoder: any Decoder) throws {
@@ -63,9 +70,20 @@ struct HistorySearchDefinition: Codable, Equatable, Sendable {
             throw DecodingError.dataCorruptedError(forKey: .sortOrder, in: values,
                                                    debugDescription: "Unknown search option")
         }
+        let filters = try values.decode(HistorySearchFilters.self, forKey: .filters)
+        let zone: TimeZone?
+        if let identifier = try values.decodeIfPresent(String.self, forKey: .customDateTimeZone) {
+            guard filters.dateRange == .custom, let parsed = TimeZone(identifier: identifier) else {
+                throw DecodingError.dataCorruptedError(forKey: .customDateTimeZone, in: values,
+                                                       debugDescription: "Invalid saved custom date time zone")
+            }
+            zone = parsed
+        } else {
+            zone = nil
+        }
         self.init(query: try values.decode(String.self, forKey: .query), mode: mode,
                   typeFilter: type, pinnedOnly: try values.decode(Bool.self, forKey: .pinnedOnly),
-                  filters: try values.decode(HistorySearchFilters.self, forKey: .filters), sortOrder: sort)
+                  filters: filters, sortOrder: sort, customDateTimeZone: zone)
     }
 
     func encode(to encoder: any Encoder) throws {
@@ -83,6 +101,22 @@ struct HistorySearchDefinition: Codable, Equatable, Sendable {
         try values.encode(pinnedOnly, forKey: .pinnedOnly)
         try values.encode(filters, forKey: .filters)
         try values.encode(sortOrder.rawValue, forKey: .sortOrder)
+        try values.encodeIfPresent(customDateTimeZone?.identifier, forKey: .customDateTimeZone)
+    }
+
+    /// Project the chosen calendar days into the viewer's local time zone.
+    /// If that zone skipped a selected day, no equivalent range can be applied.
+    func filtersForReplay(in timeZone: TimeZone) -> HistorySearchFilters? {
+        guard let customDateTimeZone, customDateTimeZone != timeZone else { return filters }
+        var replay = filters
+        replay.dateSelectionTimeZone = customDateTimeZone
+        guard let dates = replay.localCustomDates(in: HistorySearchFilters.gregorianCalendar(in: timeZone)) else {
+            return nil
+        }
+        replay.startDate = dates.start
+        replay.endDate = dates.end
+        replay.dateSelectionTimeZone = nil
+        return replay
     }
 }
 
@@ -91,18 +125,22 @@ extension HistorySearchDefinition {
     init(viewState: HistoryViewState) {
         self.init(query: viewState.searchText, mode: viewState.searchMode,
                   typeFilter: viewState.typeFilter, pinnedOnly: viewState.showsPinnedOnly,
-                  filters: viewState.searchFilters, sortOrder: viewState.sortOrder)
+                  filters: viewState.searchFilters, sortOrder: viewState.sortOrder,
+                  customDateTimeZone: viewState.searchFilters.dateSelectionTimeZone ?? .current)
     }
 
     @MainActor
-    func apply(to viewState: HistoryViewState) {
+    @discardableResult
+    func apply(to viewState: HistoryViewState, timeZone: TimeZone = .current) -> Bool {
+        guard var appliedFilters = filtersForReplay(in: timeZone) else { return false }
         // These synchronous edits retire earlier requests before any can
         // begin executing. Refresh submits the final intent without debounce.
         viewState.searchMode = mode == .expression ? .fuzzy : mode
         viewState.typeFilter = typeFilter
         viewState.showsPinnedOnly = pinnedOnly
-        var appliedFilters = filters
-        if appliedFilters.dateRange != .custom {
+        if appliedFilters.dateRange == .custom {
+            appliedFilters.dateSelectionTimeZone = timeZone
+        } else {
             // The stored epoch represents an unused draft field, not a date
             // the user chose. Switching to Custom after replay starts today.
             let now = Date()
@@ -113,5 +151,6 @@ extension HistorySearchDefinition {
         viewState.sortOrder = sortOrder
         viewState.searchText = query
         viewState.refresh()
+        return true
     }
 }

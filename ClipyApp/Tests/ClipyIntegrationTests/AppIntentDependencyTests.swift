@@ -33,7 +33,7 @@ struct AppIntentDependencyTests {
             let history = try await openGate.awaitHistory(historyTask)
             return AppIntentHistoryIngress(
                 facade: history.makeAppIntentsHistoryFacade(),
-                onCommittedRemoval: { _ in }
+                onCommittedRemoval: { _, _ in }
             )
         }
 
@@ -121,7 +121,7 @@ struct AppIntentDependencyTests {
         }
         let resolve = AppIntentDependencyRegistration.register(in: AppDependencyManager()) {
             let history = try await openGate.awaitHistory(historyTask)
-            return AppIntentHistoryIngress(facade: history.makeAppIntentsHistoryFacade(), onCommittedRemoval: { _ in })
+            return AppIntentHistoryIngress(facade: history.makeAppIntentsHistoryFacade(), onCommittedRemoval: { _, _ in })
         }
         let invocation = Task { try await resolve() }
         await openGate.waitUntilParked()

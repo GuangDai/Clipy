@@ -9,7 +9,8 @@ import Testing
 @Suite("Hosted preview through search reload", .serialized)
 @MainActor
 struct PreviewSearchReloadHostedTests {
-    @Test func matchingQueryReloadKeepsPreviewButAuthoritativeMissClosesIt() async throws {
+    @Test(arguments: [false, true])
+    func matchingReloadKeepsPreviewButAMissOrInvalidQueryClosesIt(invalidQuery: Bool) async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         _ = try await history.perform(.capture(ComposedSupport.textCapture(
             "The exact spelling when selected remains unchanged.",
@@ -71,13 +72,17 @@ struct PreviewSearchReloadHostedTests {
         #expect(preview.isOpen)
         #expect(hiddenCount == 0, "The loading placeholder must not close the visible preview")
 
-        viewState.searchText = "this exact query has no matching row"
-        let missed = await ComposedSupport.waitFor {
+        surface.quickLookReference = item
+        viewState.searchText = invalidQuery ? "$type:invalid$" : "this exact query has no matching row"
+        let retired = await ComposedSupport.waitFor {
             host.layoutSubtreeIfNeeded()
-            return viewState.hasAuthoritativeFirstPage && viewState.rows.isEmpty
-                && surface.selection == nil && !preview.isOpen
+            let terminalResult = invalidQuery
+                ? viewState.expressionValidationError != nil && !viewState.isLoadingFirstPage
+                : viewState.hasAuthoritativeFirstPage && surface.selection == nil
+            return terminalResult && viewState.rows.isEmpty
+                && surface.quickLookReference == nil && !preview.isOpen
         }
-        #expect(missed)
-        #expect(hiddenCount == 1, "An authoritative miss still retires the selected preview")
+        #expect(retired)
+        #expect(hiddenCount == 1)
     }
 }

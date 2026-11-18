@@ -331,75 +331,37 @@ extension WS14RestartReconstructionTests {
         "WS14 (effective content): C's Effective Content is its Canonical bytes (docs/architecture.md)"
     )
 
-    // WS14 (iv): persistent Canonical postings remain usable. A post-restart
-    // capture of A's CANONICAL bytes (never rewritten by the revisions,
-    // §2.6) must coalesce into A through the durable candidate query,
-    // not insert a duplicate row.
+    // Recover both versions after reopening. A's original bytes no longer
+    // match what copying the edited item would put on the pasteboard.
     let probeReceipt = try await restartedHistory.perform(.capture(
         WSSupport.textCapture(textA, observedAt: postRestartCopyA, source: sourceA3)
     ))
     guard case let .committed(probeCommit) = probeReceipt,
-          case let .coalesced(probeReference) = probeCommit.outcome
+          case let .inserted(probeReference) = probeCommit.outcome
     else {
-        Issue.record("WS14 (durable candidates): expected .committed(.coalesced) for A's Canonical bytes post-restart, got \(probeReceipt)")
+        Issue.record("Expected a separate original capture after reopening")
         return
     }
-    #expect(
-        probeCommit.position.rawValue == preRestartCommitCount + 1,
-        "WS14 (rebuilt index): the coalesce is the next History Commit after the pre-restart count"
-    )
-    #expect(
-        probeReference.id == idA,
-        "WS14 (rebuilt index): the post-restart capture coalesces into A — no duplicate item"
-    )
-    #expect(
-        probeReference.contentVersion == secondRevision.contentVersion,
-        "WS14 (rebuilt index): coalescing preserves the winner's current Content Version (docs/architecture.md)"
-    )
+    #expect(probeCommit.position.rawValue == preRestartCommitCount + 1)
+    #expect(probeReference.id != idA)
+    let original = try await restartedHistory.pastePayload(for: probeReference.id)
+    let edited = try await restartedHistory.pastePayload(for: idA)
+    #expect(original.item == probeReference)
+    #expect(original.representations.map(\.bytes) == [Data(textA.utf8)])
+    #expect(edited.item == secondRevision)
+    #expect(edited.representations.map(\.bytes) == [Data(replacementTwo.utf8)])
 
-    // WS14 (iv), durable side: still exactly three rows; A's occurrence fold
-    // advanced (count 3, new last time/source, first observation untouched),
-    // Content Version preserved (docs/architecture.md D2), and the singleton
-    // moved exactly once.
+    // The independent connection sees a new copy without changing the
+    // edited item's earlier occurrence history.
     let verification = try WSSupport.makeDatabase(storeURL: storeURL)
     let verifiedRows = try WSSupport.fetchRows(verification)
-    #expect(
-        verifiedRows.count == 3,
-        "WS14 (rebuilt index): no duplicate row — the index mapped A's Canonical signature to A"
-    )
+    #expect(verifiedRows.count == 4)
     let verifiedRowsByID = Dictionary(uniqueKeysWithValues: verifiedRows.map { ($0.id, $0) })
-    let verifiedRowA = try #require(
-        verifiedRowsByID[idA.rawValue],
-        "WS14 (rebuilt index): item A is retained"
-    )
-    #expect(
-        verifiedRowA.copyCount == 3,
-        "WS14 (rebuilt index): the post-restart copy folded into A"
-    )
-    #expect(
-        verifiedRowA.firstCopiedAt == firstCopyA,
-        "WS14 (rebuilt index): A's first copy time is untouched"
-    )
-    #expect(
-        verifiedRowA.lastCopiedAt == postRestartCopyA,
-        "WS14 (rebuilt index): A's last copy time advanced"
-    )
-    #expect(
-        verifiedRowA.firstSource == sourceA1,
-        "WS14 (rebuilt index): A's first source is untouched"
-    )
-    #expect(
-        verifiedRowA.lastSource == sourceA3,
-        "WS14 (rebuilt index): A's last source advanced"
-    )
-    #expect(
-        verifiedRowA.contentVersionRaw == secondRevision.contentVersion.rawValue,
-        "WS14 (rebuilt index): A's Content Version is untouched by coalescing"
-    )
-    let verifiedPosition = try WSSupport.fetchPosition(verification)
-    #expect(
-        verifiedPosition.rawValue == preRestartCommitCount + 1,
-        "WS14 (rebuilt index): the durable singleton matches the probe receipt"
-    )
+    #expect(verifiedRowsByID[idA.rawValue] == rowA)
+    let newRow = try #require(verifiedRowsByID[probeReference.id.rawValue])
+    #expect(newRow.copyCount == 1)
+    #expect(newRow.lastCopiedAt == postRestartCopyA)
+    #expect(newRow.lastSource == sourceA3)
+    #expect(try WSSupport.fetchPosition(verification).rawValue == probeCommit.position.rawValue)
     }
 }

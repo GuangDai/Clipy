@@ -17,6 +17,7 @@
 /// pasteboards and temp stores.
 import AppKit
 import Dispatch
+import Foundation
 import HistoryCore
 import HistoryStorage
 import Observation
@@ -162,6 +163,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let accessibilityAnnouncement: AccessibilityAnnouncement
     private let summonShortcutDefaults: UserDefaults
     let interactionDefaults: UserDefaults
+    let searchHistoryStore = SearchHistoryStore(defaults: .standard)
+    let historyBrowsingPreferences = HistoryBrowsingPreferences(defaults: .standard)
     private let summonShortcutRegistrationFactory:
         SummonShortcutController.RegistrationFactory?
     /// Exact persistent locator this app process attempts to open. Production
@@ -264,10 +267,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// turning the composition root into an observable service object.
     private(set) var captureHealth = ClipyCaptureHealth.inactive
 
-    /// The currently visible capture-health episode. Dismissal clears only
-    /// this presentation value; a later replacement or failed-capture count
-    /// publishes a new episode even when its typed failure equals the old one.
-    private(set) var captureNotice: ClipyCaptureNotice?
+    private var captureFailureNotice: ClipyCaptureFailure?
+    private var captureOverflowNotice: Int?
+
+    /// Show the current failure first. A dropped copy stays visible after the
+    /// failure resolves, until the user acknowledges the overflow itself.
+    var captureNotice: ClipyCaptureNotice? {
+        if let captureFailureNotice { return .failed(captureFailureNotice) }
+        return captureOverflowNotice.map { .droppedCapture(totalDropped: $0) }
+    }
 
     /// Authoritative, content-free pasteboard access posture. It is distinct
     /// from an empty History and controls the access/recovery banner.
@@ -341,10 +349,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var interactionSettings = AdvancedInteractionSettings()
     private var appliedNativeAppearance: NativeAppearance?
 
-    /// The footer keep-open pin. Session state, not a persisted preference:
-    /// while active, FloatingPanel skips ONLY its focus-loss close; every
-    /// explicit close path still retires the panel, and `panelDidClose`
-    /// resets the pin so the next summon starts unpinned.
+    /// Keep Open belongs to one panel session. It suppresses dismissal on
+    /// key focus loss and successful Copy. Any explicit close resets it.
     private(set) var isPanelKeepOpenActive = false
 
     /// The documented public `OpenSettingsAction` captured from the panel's
@@ -366,19 +372,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the duration of one pop-up (see `presentStatusItemMenu`).
     @ObservationIgnored
     private lazy var statusItemMenu: StatusItemMenu = StatusItemMenu(
-        isCapturePaused: { [weak self] in
-            self?.captureAccessState == .userPaused
-        },
-        canToggleCapturePause: { [weak self] in
-            guard let self else { return false }
-            return self.captureAccessState == .allowed
-                || self.captureAccessState == .userPaused
+        captureAccessState: { [weak self] in
+            self?.captureAccessState ?? .systemDefault
         },
         onShowHistory: { [weak self] in
-            self?.togglePanelFromStatusItem()
+            self?.showPanelFromStatusItem()
         },
-        onToggleCapturePause: { [weak self] in
-            self?.toggleCapturePauseFromMenu()
+        onPauseCapture: { [weak self] in
+            self?.pauseCapture()
+        },
+        onResumeCapture: { [weak self] in
+            self?.composition?.resumeCapture()
         },
         onOpenSettings: { [weak self] in
             self?.openSettingsFromStatusMenu()
@@ -390,12 +394,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.statusItem?.menu = nil
         }
     )
-#if DEBUG
-    /// Set only after the production updater assigns the requested symbol to
-    /// the real status-bar button. Hosted evidence can therefore distinguish
-    /// an applied image change from merely recomputing state in the test.
-    private var appliedStatusItemSymbolNameForTesting: String?
-#endif
     private var panel: FloatingPanel?
     /// AppDelegate owns the only NSWorkspace lifecycle registrations. Tokens
     /// are retained only to remove those exact registrations at termination;
@@ -410,6 +408,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 #endif
     @ObservationIgnored
     private var workspaceLifecycleObserverTokens: [NSObjectProtocol] = []
+    @ObservationIgnored
+    private var dateFilterObserverTokens: [NSObjectProtocol] = []
     private var workspaceActivity = WorkspaceActivityState.active
     /// The single `UserDefaults.didChangeNotification` registration feeding
     /// `panelAppearance`. One token, installed by both initializers, removed
@@ -573,9 +573,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             },
         ]
+        let dateChanges: [Notification.Name] = [.NSCalendarDayChanged, .NSSystemTimeZoneDidChange]
+        dateFilterObserverTokens = dateChanges.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.composition?.refreshDateFiltersIfNeeded()
+                }
+            }
+        }
     }
 
     private func removeWorkspaceLifecycleObservation() {
+        for token in dateFilterObserverTokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+        dateFilterObserverTokens.removeAll()
         guard let workspaceLifecycleNotificationCenter else { return }
         for token in workspaceLifecycleObserverTokens {
             workspaceLifecycleNotificationCenter.removeObserver(token)
@@ -602,6 +614,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isSystemAwake: true,
             isLoginSessionActive: workspaceActivity.isLoginSessionActive
         ))
+        composition?.refreshDateFiltersIfNeeded()
     }
 
     private func workspaceSessionDidResignActive() {
@@ -657,14 +670,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The primary-click (and menu "Show Clipboard History") action:
-    /// summon at the status item, or dismiss when already presented.
+    /// The primary click toggles visibility.
     private func togglePanelFromStatusItem() {
         if panel?.isPresented == true {
             closePanel()
         } else {
-            openPanel(at: .statusItem)
+            showPanelFromStatusItem()
         }
+    }
+
+    /// Showing an already open panel preserves its session and position.
+    private func showPanelFromStatusItem() {
+        guard !isTerminating, workspaceActivity.permitsProductActivity else { return }
+        if let panel, panel.isPresented {
+            panel.orderFrontRegardless()
+            panel.makeKey()
+            return
+        }
+        openPanel(at: .statusItem)
     }
 
     /// Secondary click: pop the menu AT the status item. The menu is
@@ -681,18 +704,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let statusItem, let button = statusItem.button else { return }
         statusItem.menu = statusItemMenu.menu
         button.performClick(nil)
-    }
-
-    /// The menu's Pause/Resume entry routes through the SAME
-    /// composition-owned transitions as the panel's `clipy.capture.pause`
-    /// row and the access banner's Resume recovery; the menu owns no pause
-    /// state of its own.
-    private func toggleCapturePauseFromMenu() {
-        if captureAccessState == .userPaused {
-            recoverCaptureAccess()
-        } else {
-            pauseCapture()
-        }
     }
 
     /// The status menu's Settings entry: activate first (an LSUIElement
@@ -728,9 +739,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsOpenOperation = operation
     }
 
-    /// The keep-open pin toggle driven by the panel footer. Explicitly
-    /// user-owned: focus loss consults the flag, and `panelDidClose`
-    /// clears it.
     func togglePanelKeepOpen() {
         isPanelKeepOpenActive.toggle()
     }
@@ -743,12 +751,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !isTerminating, workspaceActivity.permitsProductActivity else { return }
         reloadInteractionSettings()
         if !interactionSettings.remembersSearch {
-            composition?.viewState.clearSearch()
+            composition?.viewState.resetSearchForOpening()
         }
         ensurePanelWindow()
         if let composition {
             composition.viewState.activate(restoring:
-                composition.historyBrowsingPreferences.readingItemID(for: .panel))
+                historyBrowsingPreferences.readingItemID(for: .panel))
         }
         panel?.open(
             at: mode,
@@ -774,17 +782,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rootView: PanelRootView(appDelegate: self),
             previewState: previewState,
             isSelectionSubmissionEnabled: { [weak self] in
-                guard let self,
-                      let composition = self.composition,
-                      let panelSurfaceState = self.panelSurfaceState,
-                      panelSurfaceState.isAtListRoot
-                else { return false }
-                return panelSurfaceState.selectedReference(
-                    in: composition.viewState.displayedRows
-                ) != nil
+                guard let self, let composition = self.composition,
+                      let surface = self.panelSurfaceState else { return false }
+                // An invalidated Quick Look still covers the list until
+                // SwiftUI reconciles. Its Return cannot fall through.
+                return surface.quickLookReference != nil
+                    || surface.keyboardCopyReference(in: composition.viewState) != nil
             },
             isSearchCompletionActive: { [weak self] in
-                self?.panelSurfaceState?.searchCompletion.consumesPanelCommands ?? false
+                guard let surface = self?.panelSurfaceState, surface.allowsListKeyboardCommands else { return false }
+                return surface.searchCompletion.consumesPanelCommands
             },
             onSubmitSelection: { [weak self] in
                 self?.submitPanelSelection()
@@ -812,19 +819,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func submitPanelSelection() {
-        guard let composition,
-              let reference = panelSurfaceState?.selectedReference(
-                  in: composition.viewState.displayedRows
-              )
+        guard let composition, let panelSurfaceState,
+              let reference = panelSurfaceState.keyboardCopyReference(in: composition.viewState)
         else { return }
-        if HistorySearchCopy.issue(for: composition.viewState) == nil,
+        if panelSurfaceState.quickLookReference == nil,
+           HistorySearchCopy.issue(for: composition.viewState) == nil,
            composition.viewState.sourceResolutionError == nil,
            composition.viewState.searchFilters.hasValidDates() {
-            composition.searchHistoryStore.recordSubmittedSearch(
+            searchHistoryStore.recordSubmittedSearch(
                 HistorySearchDefinition(viewState: composition.viewState)
             )
         }
-        composition.viewState.requestPaste(reference)
+        composition.viewState.requestPasteFromDisplayedRow(reference)
     }
 
     /// Closes the panel (idempotent; the panel's close fires
@@ -837,8 +843,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pasteFailure = nil
     }
 
-    func dismissCaptureNotice() {
-        captureNotice = nil
+    func dismissCaptureNotice(_ notice: ClipyCaptureNotice? = nil) {
+        switch notice ?? captureNotice {
+        case .failed(let failure) where captureFailureNotice == failure:
+            captureFailureNotice = nil
+        case .droppedCapture(let count) where captureOverflowNotice == count:
+            captureOverflowNotice = nil
+        default:
+            break
+        }
     }
 
     func recoverCaptureAccess() {
@@ -1007,8 +1020,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panelContentFitTask = nil
         pendingPanelContentFitInput = nil
         composition?.cancelPendingPaste()
+        if pasteFailure == .busy { pasteFailure = nil }
         if let composition {
-            composition.historyBrowsingPreferences.rememberReadingPosition(
+            historyBrowsingPreferences.rememberReadingPosition(
                 composition.viewState.readingItemID ?? panelSurfaceState?.selection, for: .panel
             )
         }
@@ -1218,11 +1232,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.panelSurfaceState = panelSurfaceState
         panelSurfaceState.selectsOnHover = interactionSettings.selectsOnHover
         panelSurfaceState.respondToMemoryPressure(displayMemoryPressure)
-        // Paste ⇒ close the panel (Maccy's paste-dismiss); the panel never
-        // activates the app, so the paste target keeps focus.
+        // Successful Copy normally dismisses the panel. Keep Open applies
+        // to this session's Copy as well as transferring key focus.
         opened.onPasteCompleted = { [weak self] in
-            self?.pasteFailure = nil
-            self?.closePanel()
+            guard let self else { return }
+            self.pasteFailure = nil
+            if !self.isPanelKeepOpenActive { self.closePanel() }
         }
         opened.onPasteFailed = { [weak self] failure in
             self?.pasteFailure = failure
@@ -1239,6 +1254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     hasNextPage: hasNextPage
                 )
         }
+        opened.historyWorkspaceViewState.onSettledSearchResultCount = opened.viewState.onSettledSearchResultCount
         opened.onCaptureHealthChanged = { [weak self] health in
             self?.receiveCaptureHealth(health)
         }
@@ -1253,7 +1269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // authoritative observation without closing/reopening the panel.
         if panel?.isPresented == true {
             opened.viewState.activate(restoring:
-                opened.historyBrowsingPreferences.readingItemID(for: .panel))
+                historyBrowsingPreferences.readingItemID(for: .panel))
             panelSurfaceState.beginSession(rows: opened.viewState.rows)
         }
     }
@@ -1293,19 +1309,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         else { return }
         captureHealth = health
 
+        if health.droppedCaptureCount > previous.droppedCaptureCount {
+            captureOverflowNotice = health.droppedCaptureCount
+        }
         if health.failedCaptureCount > previous.failedCaptureCount,
            let failure = health.lastFailure {
-            captureNotice = .failed(failure)
+            captureFailureNotice = failure
             accessibilityAnnouncement.announceCaptureFailure(failure)
-        } else if health.droppedCaptureCount > previous.droppedCaptureCount {
-            captureNotice = .droppedCapture(
-                totalDropped: health.droppedCaptureCount
-            )
-        } else if health.lastFailure == nil,
-                  case .failed? = captureNotice {
-            // A later successful capture is authoritative recovery for the
-            // failed episode. Queue overflow notices remain until dismissed.
-            captureNotice = nil
+        } else if health.lastFailure == nil {
+            captureFailureNotice = nil
         }
     }
 
@@ -1388,14 +1400,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             accessibilityDescription: accessibilityLabel
         )
         statusItem?.button?.image = image
-#if DEBUG
-        if let image,
-           statusItem?.button?.image === image {
-            appliedStatusItemSymbolNameForTesting = symbolName
-        } else {
-            appliedStatusItemSymbolNameForTesting = nil
-        }
-#endif
         // The image description gives assistive technology a fallback, while
         // the status-bar button's explicit label is the stable AX surface.
         statusItem?.button?.setAccessibilityLabel(accessibilityLabel)
@@ -1417,7 +1421,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let statusItem else { return }
         NSStatusBar.system.removeStatusItem(statusItem)
         self.statusItem = nil
-        appliedStatusItemSymbolNameForTesting = nil
     }
 
     var statusItemAccessibilityLabelForTesting: String? {
@@ -1426,10 +1429,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var statusItemHasImageForTesting: Bool {
         statusItem?.button?.image != nil
-    }
-
-    var statusItemSymbolNameForTesting: String? {
-        appliedStatusItemSymbolNameForTesting
     }
 
     /// Hosted evidence reads the lazily built secondary-click menu WITHOUT
