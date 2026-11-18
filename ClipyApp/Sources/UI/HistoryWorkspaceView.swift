@@ -621,6 +621,7 @@ struct HistoryWorkspaceView: View {
                 }
                 .frame(maxHeight: 150)
             }
+            .disclosureGroupStyle(AppDisclosureGroupStyle(identifier: "clipy.history.workspace.batch.items"))
             .font(.caption)
         }
         .accessibilityElement(children: .contain)
@@ -659,6 +660,7 @@ struct HistoryWorkspaceView: View {
     private func reconcilePage() {
         guard !viewState.isLoadingFirstPage else { return }
         paging.reconcile(loadedRange: viewState.loadedRowRange, isLoadingPage: viewState.isLoadingPage)
+        recordReadingPosition()
         guard !isMutating else { return }
         var allowed = Set(pageRows.map(\.item.id))
         if showsBatchResult { allowed.formUnion(batchModel.retryReferences.map(\.id)) }
@@ -753,10 +755,7 @@ struct HistoryWorkspaceView: View {
 
     private func recordReadingPosition() {
         guard isActive else { return }
-        // Explicit page navigation mounts its list at the top. Subsequent
-        // row geometry supplies exact visible membership without rescanning
-        // or copying every row whenever one edge crosses the viewport.
-        viewState.recordReadingPosition(visibleRowIDs: pageRows.first.map { [$0.item.id] } ?? [])
+        viewState.recordWorkspacePage(startingAt: pageRows.first?.item.id)
     }
 }
 

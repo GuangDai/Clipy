@@ -312,6 +312,7 @@ final class HistoryViewState {
     private var loadedPages: [LoadedPage] = []
     private var rowsBeforeWindow = 0
     private var visibleRowIDs: Set<HistoryItemID> = []
+    private var workspacePageFirstItemID: HistoryItemID?
 
     /// Seeking by item identity does not enumerate preceding rows to invent
     /// an absolute ordinal. The loaded range is local until Newer reaches
@@ -356,6 +357,12 @@ final class HistoryViewState {
     /// mouse scroll. Only this opaque ID is handed to browsing preferences.
     var readingItemID: HistoryItemID? {
         let displayed = displayedRows
+        if let workspacePageFirstItemID,
+           let start = displayed.firstIndex(where: { $0.item.id == workspacePageFirstItemID }) {
+            let page = displayed[start...].prefix(pageLimit)
+            return page.first(where: { visibleRowIDs.contains($0.item.id) })?.item.id
+                ?? workspacePageFirstItemID
+        }
         return displayed.first(where: { visibleRowIDs.contains($0.item.id) })?.item.id
             ?? displayed.first?.item.id
     }
@@ -366,8 +373,12 @@ final class HistoryViewState {
         return rows.prefix(first.rowCount).contains { $0.item.id == anchor } ? nil : anchor
     }
 
-    /// Workspace pagination reports its rendered page without triggering the
-    /// floating panel's viewport-driven prefetch policy.
+    /// The numbered page supplies a fallback before its row geometry arrives.
+    /// Older pages can remain loaded and report their last geometry late.
+    func recordWorkspacePage(startingAt itemID: HistoryItemID?) {
+        workspacePageFirstItemID = itemID
+    }
+
     func recordReadingPosition(visibleRowIDs ids: [HistoryItemID]) {
         visibleRowIDs = Set(ids)
     }
@@ -1420,6 +1431,7 @@ final class HistoryViewState {
         hasWindowedPages = false
         rowsBeforeWindow = 0
         visibleRowIDs = []
+        workspacePageFirstItemID = nil
         hasKnownRowOffset = true
     }
 

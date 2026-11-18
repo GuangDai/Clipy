@@ -105,24 +105,30 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         let clearedTitle = "Workspace batch title retired by clear"
         NSPasteboard.general.clearContents()
         try require(NSPasteboard.general.setString(clearedTitle, forType: .string))
-        try require(row(named: clearedTitle, in: workspace).waitForExistence(timeout: 10), app.debugDescription)
+        let clearedRow = row(named: clearedTitle, in: workspace)
+        try require(clearedRow.waitForExistence(timeout: 10), app.debugDescription)
+        let clearedID = String(clearedRow.identifier.dropFirst("clipy.history.workspace.row.".count))
         workspace.buttons["clipy.history.workspace.select-page"].click()
         workspace.buttons["clipy.history.workspace.batch.pin"].click()
         try assertBatchCompleted(1, operation: "Pin", in: workspace, app: app)
         let status = workspace.descendants(matching: .any)["clipy.history.workspace.status"]
-        let completed = status.descendants(matching: .any).matching(NSPredicate(
-            format: "identifier BEGINSWITH %@", "clipy.history.workspace.batch.completed."
-        )).firstMatch
-        if !completed.exists { status.disclosureTriangles["Item results"].click() }
-        try require(waitUntil { completed.exists && completed.label == clearedTitle }, app.debugDescription)
+        let itemResultsID = "clipy.history.workspace.batch.items"
+        let itemResults = status.descendants(matching: .any)[itemResultsID]
+        let toggle = itemResults.disclosureTriangles[itemResultsID + ".toggle"]
+        let completed = itemResults.descendants(matching: .any)["clipy.history.workspace.batch.completed." + clearedID]
+        try require(toggle.waitForExistence(timeout: 5) && toggle.isHittable, app.debugDescription)
+        if !completed.exists { toggle.click() }
+        try require(waitUntil {
+            completed.exists && (completed.label == clearedTitle || completed.value as? String == clearedTitle)
+        }, app.debugDescription)
         workspace.descendants(matching: .any)["clipy.history.workspace.actions"].firstMatch.click()
         app.menuItems["Clear all history…"].click()
         let clear = app.buttons["clipy.history.workspace.confirm-clear"].firstMatch
-        try require(clear.waitForExistence(timeout: 5), app.debugDescription)
+        try require(clear.waitForExistence(timeout: 5) && clear.isHittable, app.debugDescription)
         clear.click()
         try require(waitUntil {
             workspace.staticTexts["History is empty"].exists
-                && completed.exists && completed.label == "History item"
+                && completed.exists && (completed.label == "History item" || completed.value as? String == "History item")
         }, app.debugDescription)
         try assertBatchCompleted(1, operation: "Pin", in: workspace, app: app)
 
@@ -226,10 +232,12 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         let selectedPosition = firstVisible.frame.minY
         try require(abs(selectedPosition - position) <= 1,
                        "Selecting a later row moved the first row from \(position) to \(selectedPosition).")
+        let backgroundCopy = "Unrelated background copy"
         NSPasteboard.general.clearContents()
-        try require(NSPasteboard.general.setString("Unrelated background copy", forType: .string))
+        try require(NSPasteboard.general.setString(backgroundCopy, forType: .string))
         try require(waitUntil {
             page.exists && ((page.value as? String) ?? page.label) == "Near your reading position"
+                && self.row(named: backgroundCopy, in: workspace).exists
         }, app.debugDescription)
         try assertSelectionCount(1, in: workspace, app: app)
         try assertPreview(fixtures[54].text, in: workspace, app: app)

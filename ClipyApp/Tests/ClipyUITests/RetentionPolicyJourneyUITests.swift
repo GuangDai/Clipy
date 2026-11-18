@@ -273,12 +273,13 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
     /// oldest inactive revision through the destructive confirmation, and
     /// shrinks the retained-usage content size in the same receipt.
     @MainActor
-    func testRevisionTighteningPrunesInactiveRevisionsAndShrinksUsage() throws {
+    func testRevisionTighteningPrunesInactiveRevisionsAndShrinksUsage() async throws {
         let original = "clipy-r3-revision-original"
         let firstRevision = "clipy-r3-revision-first"
         let secondRevision = "clipy-r3-revision-second"
         let app = try launchApp(capturing: original)
         defer { app.terminate() }
+        let storeURL = try XCTUnwrap(temporaryDirectory).appendingPathComponent("history.store")
 
         let rows = historyRows(in: app)
         assertRowCount(
@@ -287,6 +288,14 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             app: app,
             context: "revision journey initial capture"
         )
+
+        let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        let moreActions = panel.descendants(matching: .any)["clipy.panel.more-actions"]
+        assertExists(moreActions, timeout: 5, in: app, context: "More Actions before keeping Details open")
+        moreActions.click()
+        let keepOpen = app.menuItems["Keep Panel Open"]
+        assertExists(keepOpen, timeout: 5, in: app, context: "Keep Panel Open")
+        keepOpen.click()
 
         // Two real revisions through the running Details editor: the
         // canonical capture stays, each replace appends one stored
@@ -299,6 +308,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             waitUntil(timeout: 10) { row.exists && row.isHittable },
             diagnostic(app, context: "revision journey captured row")
         )
+        let rowID = try XCTUnwrap(UUID(uuidString: String(row.identifier.dropFirst("clipy.history.row.".count))))
         row.rightClick()
         let showDetails = app.menuItems["Show Details"]
         XCTAssertTrue(
@@ -308,6 +318,13 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         showDetails.click()
         try appendRevision(firstRevision, in: app)
         try appendRevision(secondRevision, in: app)
+        let details = app.descendants(matching: .any)["clipy.details.root"]
+        let inactiveRevert = details.buttons["Revert to \(firstRevision)"]
+        let activeRevert = details.buttons["Revert to \(secondRevision)"]
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { inactiveRevert.exists && activeRevert.exists },
+            diagnostic(app, context: "both retained revisions in open Details")
+        )
 
         openRetentionSettings(in: app)
         // Usage before: the canonical capture plus both stored revisions.
@@ -408,6 +425,36 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             contentSize: "\(bytesAfter) bytes",
             in: app
         )
+
+        // The Keep Panel Open control lets Settings take focus while the same
+        // Details stays mounted. Require that live view to lose only the old row.
+        XCTAssertTrue(
+            waitUntil(timeout: 10) { details.exists && activeRevert.exists && !inactiveRevert.exists },
+            diagnostic(app, context: "open Details refreshed the pruned revision list")
+        )
+        app.typeKey("w", modifierFlags: .command)
+        let copy = details.buttons["clipy.details.copy"]
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { !owningWindow.exists && copy.exists && copy.isHittable },
+            diagnostic(app, context: "same Details remains copyable after closing Settings")
+        )
+        let pasteboard = NSPasteboard.general
+        let beforeCopy = pasteboard.changeCount
+        copy.click()
+        let effectiveBytes = Data(secondRevision.utf8)
+        XCTAssertTrue(waitUntil(timeout: 10) {
+            pasteboard.changeCount != beforeCopy && pasteboard.data(forType: .string) == effectiveBytes
+        }, diagnostic(app, context: "copied unchanged current bytes after revision pruning"))
+        app.terminate()
+
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .persistent(storeURL: storeURL)))
+        let stored = try await history.details(for: HistoryItemID(rawValue: rowID))
+        XCTAssertEqual(stored.item.contentVersion.rawValue, 3)
+        XCTAssertEqual(stored.revisions.map(\.title), [secondRevision])
+        let canonical = try await history.representation(.init(
+            item: stored.item, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
+        ))
+        XCTAssertEqual(canonical.bytes, Data(original.utf8))
     }
 
     /// Appends one revision through the real Details editor, starting from
