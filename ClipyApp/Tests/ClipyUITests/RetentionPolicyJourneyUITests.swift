@@ -380,6 +380,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             in: app,
             context: "revision-count field"
         )
+        moveDetailsClearOfRetentionControls(details, in: owningWindow, scrollView: retentionScrollView, app: app)
         guard scrollUntilFullyVisible(
             revisionCountField,
             in: retentionScrollView,
@@ -455,6 +456,32 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
             item: stored.item, basis: .canonical, typeIdentifier: "public.utf8-plain-text"
         ))
         XCTAssertEqual(canonical.bytes, Data(original.utf8))
+    }
+
+    @MainActor
+    private func moveDetailsClearOfRetentionControls(
+        _ details: XCUIElement, in settings: XCUIElement, scrollView: XCUIElement, app: XCUIApplication
+    ) {
+        let panel = details.frame
+        let settingsFrame = settings.frame
+        let back = details.buttons["clipy.details.back"]
+        assertExists(back, timeout: 5, in: app, context: "Details header while Settings is open")
+
+        // Keep the always-on-top panel alive while moving it away from the
+        // form's wheel point and the controls near its bottom and right edge.
+        // The empty header space beside Back owns the native window drag.
+        let header = back.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 0.5))
+            .withOffset(CGVector(dx: 28, dy: 0))
+        let upperLeft = CGPoint(x: settingsFrame.minX + 8, y: settingsFrame.minY + 8)
+        header.press(forDuration: 0.1, thenDragTo: header.withOffset(CGVector(
+            dx: upperLeft.x - panel.minX, dy: upperLeft.y - panel.minY
+        )))
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            guard details.exists else { return false }
+            let movedPanel = details.frame
+            let form = scrollView.frame
+            return movedPanel.maxX < form.midX && movedPanel.maxY < form.maxY - 120
+        }, diagnostic(app, context: "moved live Details away from the retention form's controls"))
     }
 
     /// Appends one revision through the real Details editor, starting from
