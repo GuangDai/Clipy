@@ -40,7 +40,8 @@ final class HistoryWorkspaceEntryJourneyUITests: XCTestCase {
             "clipy.history.workspace.row.", "History workspace", "History workspace"
         )).firstMatch
         XCTAssertTrue(row.waitForExistence(timeout: 10), app.debugDescription)
-        XCTAssertTrue(row.label.contains("Last Copied") || (row.value as? String)?.contains("Last Copied") == true)
+        XCTAssertFalse(row.label.localizedCaseInsensitiveContains("Last copied")
+            || (row.value as? String)?.localizedCaseInsensitiveContains("Last copied") == true)
         row.click()
 
         let list = workspace.descendants(matching: .any)["clipy.history.workspace.list"]
@@ -50,6 +51,10 @@ final class HistoryWorkspaceEntryJourneyUITests: XCTestCase {
             text.exists && ((text.value as? String) ?? text.label) == source
                 && preview.frame.minX >= list.frame.maxX - 2
         }, "The workspace must show the selected content beside its list.\n\(app.debugDescription)")
+        let copyTime = preview.staticTexts["clipy.preview.last-copied-at"]
+        XCTAssertTrue(copyTime.waitForExistence(timeout: 10), app.debugDescription)
+        let copyTimeText = (copyTime.value as? String) ?? copyTime.label
+        XCTAssertTrue(copyTime.isHittable && copyTimeText.hasPrefix("Last copied"), app.debugDescription)
 
         let sentinel = NSPasteboardItem()
         XCTAssertTrue(sentinel.setString("before-workspace-copy", forType: .string))

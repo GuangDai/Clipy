@@ -34,7 +34,7 @@ struct AppCaptureLaneTests {
         let states = [composition.viewState, composition.historyWorkspaceViewState]
         for state in states { state.activate() }
         try #require(await ComposedSupport.waitFor {
-            states.allSatisfy { $0.displayedRows.map(\.item) == [victim, pinned] }
+            states.allSatisfy { $0.displayedRows.map(\.item) == [pinned, victim] }
         })
 
         composition.submitCaptureForTesting(Self.capture("new entry", at: 3))
@@ -43,7 +43,7 @@ struct AppCaptureLaneTests {
         try #require(await ComposedSupport.waitFor {
             states.allSatisfy { state in
                 state.retentionChangePosition != nil && state.displayedRow(for: victim.id) == nil
-                    && state.displayedRows.map(\.title) == ["new entry", "keep pinned"]
+                    && state.displayedRows.map(\.title) == ["keep pinned", "new entry"]
             }
         })
         for state in states {

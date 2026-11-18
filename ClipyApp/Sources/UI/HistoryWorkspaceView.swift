@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import HistoryCore
 import SwiftUI
@@ -22,7 +23,7 @@ struct HistoryWorkspaceView: View {
     @State private var previewState = PreviewPaneState()
     @State private var paging: HistoryWorkspacePaging
     @State private var selectedIDs: Set<HistoryItemID> = []
-    @State private var keyboardNavigationGeneration = 0
+    @State private var listScroller = HistoryWorkspaceListScroller()
     @State private var isSearchFocused = false
     @State private var detailsItem: HistoryItemReference?
     @State private var removalItem: HistoryItemReference?
@@ -321,44 +322,45 @@ struct HistoryWorkspaceView: View {
 
     private func historyList(_ rows: ArraySlice<HistoryRow>) -> some View {
         let viewportHeight = listViewportHeight
-        return ScrollViewReader { reader in
-            List(selection: $selectedIDs) {
-                ForEach(rows, id: \.item.id) { row in
-                    HistoryWorkspaceRow(row: row, thumbnails: thumbnails, sourceIcons: sourceIcons,
-                                        compact: compactRows, isSearchResult: viewState.usesSearchResultRows)
-                        .tag(row.item.id)
-                        .contextMenu {
-                            rowContextMenu(for: row).disabled(isMutating || viewState.isLoadingFirstPage)
+        let firstID = rows.first?.item.id
+        return List(selection: $selectedIDs) {
+            ForEach(rows, id: \.item.id) { row in
+                HistoryWorkspaceRow(row: row, thumbnails: thumbnails, sourceIcons: sourceIcons,
+                                    compact: compactRows, isSearchResult: viewState.usesSearchResultRows)
+                    .background {
+                        if row.item.id == firstID {
+                            HistoryWorkspaceListAnchor(scroller: listScroller).accessibilityHidden(true)
                         }
-                        .disabled(isMutating || viewState.isLoadingFirstPage)
-                        .onGeometryChange(for: Bool.self) { proxy in
-                            let frame = proxy.frame(in: .named("history-workspace-list"))
-                            return frame.height > 0 && frame.maxY > 0 && frame.minY < viewportHeight
-                        } action: { visible in
-                            guard isActive else { return }
-                            viewState.recordReadingPosition(for: row.item.id, isVisible: visible)
+                    }
+                    .tag(row.item.id)
+                    .contextMenu {
+                        rowContextMenu(for: row).disabled(isMutating || viewState.isLoadingFirstPage)
+                    }
+                    .disabled(isMutating || viewState.isLoadingFirstPage)
+                    .onGeometryChange(for: Bool.self) { proxy in
+                        let frame = proxy.frame(in: .named("history-workspace-list"))
+                        return frame.height > 0 && frame.maxY > 0 && frame.minY < viewportHeight
+                    } action: { visible in
+                        guard isActive else { return }
+                        viewState.recordReadingPosition(for: row.item.id, isVisible: visible)
+                    }
+                    .onDisappear {
+                        if isActive {
+                            viewState.recordReadingPosition(for: row.item.id, isVisible: false)
                         }
-                        .onDisappear {
-                            if isActive {
-                                viewState.recordReadingPosition(for: row.item.id, isVisible: false)
-                            }
-                        }
-                        .accessibilityIdentifier("clipy.history.workspace.row." + row.item.id.description)
-                }
+                    }
+                    .accessibilityIdentifier("clipy.history.workspace.row." + row.item.id.description)
             }
-            .listStyle(.inset)
-            .coordinateSpace(name: "history-workspace-list")
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listViewportHeight = $0 }
-            .id(paging.navigationGeneration)
-            .accessibilityIdentifier("clipy.history.workspace.list")
-            .onChange(of: keyboardNavigationGeneration) { _, _ in
-                if let id = selectedRow?.item.id { reader.scrollTo(id) }
-            }
-            .onKeyPress(.return) {
-                guard !isSearchFocused else { return .ignored }
-                copySelection()
-                return .handled
-            }
+        }
+        .listStyle(.inset)
+        .coordinateSpace(name: "history-workspace-list")
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listViewportHeight = $0 }
+        .id(paging.navigationGeneration)
+        .accessibilityIdentifier("clipy.history.workspace.list")
+        .onKeyPress(.return) {
+            guard !isSearchFocused else { return .ignored }
+            copySelection()
+            return .handled
         }
     }
 
@@ -699,12 +701,14 @@ struct HistoryWorkspaceView: View {
     }
 
     private func moveSelection(_ offset: Int) {
-        guard !viewState.isLoadingFirstPage, !isMutating else { return }
+        guard !isLoading, !isMutating else { return }
+        let rows = pageRows
         let current = selectedIDs.count == 1 ? selectedIDs.first : nil
-        let next = PanelSessionSelection.movedSelection(current, in: pageRows,
-                                                        direction: offset < 0 ? .previous : .next)
-        selectedIDs = next.map { Set([$0]) } ?? []
-        keyboardNavigationGeneration += 1
+        guard let next = PanelSessionSelection.movedSelection(current, in: rows,
+                                                              direction: offset < 0 ? .previous : .next),
+              let index = rows.firstIndex(where: { $0.item.id == next }) else { return }
+        selectedIDs = [next]
+        listScroller.reveal(row: index - rows.startIndex)
     }
 
     private func submit(_ intent: ItemAction) {
@@ -780,6 +784,48 @@ struct HistoryWorkspaceView: View {
     private func recordReadingPosition() {
         guard isActive else { return }
         viewState.recordWorkspacePage(startingAt: pageRows.first?.item.id)
+    }
+}
+
+@MainActor
+private final class HistoryWorkspaceListScroller {
+    weak var table: NSTableView?
+
+    func reveal(row: Int) {
+        guard let table, table.window != nil, (0..<table.numberOfRows).contains(row) else { return }
+        table.scrollRowToVisible(row)
+    }
+}
+
+/// The native List has one table row per displayed item. A background in
+/// its first cell locates that table without searching the Settings view tree.
+private struct HistoryWorkspaceListAnchor: NSViewRepresentable {
+    let scroller: HistoryWorkspaceListScroller
+
+    func makeNSView(context: Context) -> AnchorView { AnchorView(scroller: scroller) }
+    func updateNSView(_ view: AnchorView, context: Context) { view.registerTable() }
+
+    final class AnchorView: NSView {
+        private let scroller: HistoryWorkspaceListScroller
+
+        init(scroller: HistoryWorkspaceListScroller) {
+            self.scroller = scroller
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            registerTable()
+        }
+
+        func registerTable() {
+            if let table = enclosingScrollView?.documentView as? NSTableView { scroller.table = table }
+        }
     }
 }
 

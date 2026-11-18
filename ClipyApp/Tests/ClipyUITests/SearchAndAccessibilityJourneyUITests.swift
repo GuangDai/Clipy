@@ -75,6 +75,7 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
     @MainActor
     func testChineseSearchDetailsAndEditorUsePackagedTranslations() throws {
         let captured = "clipy-ui-localized-alpha"
+        let captureStartedAt = Date()
         let app = try launchApp(
             capturing: captured, language: "zh-Hans", locale: "zh_CN"
         )
@@ -116,13 +117,21 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         let preview = app.descendants(matching: .any)["clipy.preview.root"]
         let copyTime = preview.staticTexts["clipy.preview.last-copied-at"]
         XCTAssertTrue(waitUntil(timeout: 5) { copyTime.exists && copyTime.isHittable })
-        let copyTimeLabel = copyTime.label
-        XCTAssertTrue(copyTimeLabel.hasPrefix("最近复制"))
-        XCTAssertTrue(copyTimeLabel.contains("年") && copyTimeLabel.contains("月") && copyTimeLabel.contains("日"))
         let timeInPreview = XCTAttachment(screenshot: app.screenshot())
         timeInPreview.name = "localized-copy-time-in-preview"
         timeInPreview.lifetime = .keepAlways
         add(timeInPreview)
+        let copyTimeText = (copyTime.value as? String) ?? copyTime.label
+        XCTAssertTrue(copyTimeText.hasPrefix("最近复制"), copyTimeText)
+        let chinese = Locale(identifier: "zh-Hans")
+        let dateStyles: [Date.FormatStyle.DateStyle] = [.numeric, .long]
+        let captureDates = [captureStartedAt, Date()].flatMap { date in
+            dateStyles.map { style in
+                date.formatted(Date.FormatStyle(date: style, time: .omitted, locale: chinese))
+            }
+        }
+        XCTAssertTrue(captureDates.contains(where: { copyTimeText.contains($0) }), copyTimeText)
+        XCTAssertNotNil(copyTimeText.range(of: #"[0-9]{1,2}:[0-9]{2}"#, options: .regularExpression), copyTimeText)
 
         // Continue through the real row menu and Details/editor surfaces in
         // the same language. The original clipboard text remains literal.

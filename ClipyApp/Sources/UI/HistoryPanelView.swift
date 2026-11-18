@@ -1054,13 +1054,18 @@ struct HistoryPanelView: View {
             Menu {
                 Text(itemCountText)
                 Divider()
+                let wasPreviewOpen = previewState.isOpen
                 Button {
-                    previewState.togglePreview(for: previewSelection.reference)
+                    if wasPreviewOpen {
+                        previewState.dismissPreview()
+                    } else if !previewState.isOpen {
+                        togglePreview()
+                    }
                 } label: {
-                    Label(PanelActionsCopy.text(previewState.isOpen ? "Hide Preview" : "Show Preview"),
-                          systemImage: previewState.isOpen ? "eye.slash" : "eye")
+                    Label(PanelActionsCopy.text(wasPreviewOpen ? "Hide Preview" : "Show Preview"),
+                          systemImage: wasPreviewOpen ? "eye.slash" : "eye")
                 }
-                .disabled(previewSelection.reference == nil)
+                .disabled(!wasPreviewOpen && previewSelection.reference == nil)
                 Button(action: toggleQuickLook) {
                     Label(PanelFooterCopy.text("Quick Look"), systemImage: "magnifyingglass")
                 }
@@ -1242,6 +1247,13 @@ struct HistoryPanelView: View {
         )
     }
 
+    private func togglePreview() {
+        // A native menu can extend beyond both windows. The explicit command
+        // keeps control until the next real pointer movement over a panel.
+        surfaceState.noteKeyboardNavigation()
+        previewState.togglePreview(for: previewSelection.reference)
+    }
+
     private func toggleQuickLook() {
         if surfaceState.quickLookReference != nil {
             surfaceState.quickLookReference = nil
@@ -1281,9 +1293,7 @@ struct HistoryPanelView: View {
                 }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .clearFilters, whileEditingText: isSearchFieldFocused))
 
-                Button(PanelActionsCopy.text("Show Preview")) {
-                    previewState.togglePreview(for: previewSelection.reference)
-                }
+                Button(PanelActionsCopy.text("Show Preview"), action: togglePreview)
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .togglePreview, whileEditingText: isSearchFieldFocused))
                 .disabled(previewSelection.reference == nil)
             }
