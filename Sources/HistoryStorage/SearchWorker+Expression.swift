@@ -17,8 +17,8 @@ internal indirect enum PreparedSearchExpression {
     case copiedDate(from: Date?, until: Date?)
     case type(HistoryContentType)
     case pinned
-    case and(Self, Self)
-    case or(Self, Self)
+    case and([Self])
+    case or([Self])
     case not(Self)
 
     init(_ node: HistorySearchExpression.Node) {
@@ -31,27 +31,22 @@ internal indirect enum PreparedSearchExpression {
         case .copiedDate(let from, let until): self = .copiedDate(from: from, until: until)
         case .type(let type): self = .type(type)
         case .pinned: self = .pinned
-        case .and(let lhs, let rhs), .or(let lhs, let rhs):
-            let left = Self(lhs)
-            if case .text(let leftMatcher) = left, case .text(let rightTerm) = rhs,
-               leftMatcher.literalTerm.utf8.elementsEqual(rightTerm.utf8) {
-                // A left-associated run of identical literal operands keeps
-                // its first matcher without constructing every right copy.
-                self = left
-                return
+        case .and, .or:
+            let conjunction: Bool
+            if case .and = node { conjunction = true } else { conjunction = false }
+            var operands: [Self] = []
+            for child in Self.logicalOperands(of: node, conjunction: conjunction) {
+                if case .text(let term) = child, case .text(let previous)? = operands.last,
+                   previous.literalTerm.utf8.elementsEqual(term.utf8) { continue }
+                let prepared = Self(child)
+                if case .text(let matcher) = prepared, case .text(let previous)? = operands.last,
+                   previous.literalTerm.utf8.elementsEqual(matcher.literalTerm.utf8) { continue }
+                operands.append(prepared)
             }
-            let right = Self(rhs)
-            if case .text(let leftMatcher) = left, case .text(let rightMatcher) = right,
-               leftMatcher.literalTerm.utf8.elementsEqual(rightMatcher.literalTerm.utf8) {
-                // Parenthesized runs can also compile to one text operand.
-                // Idempotence preserves acceptance and the first highlight;
-                // metadata, application and NOT operands remain unchanged.
-                self = left
-            } else if case .and = node {
-                self = .and(left, right)
-            } else {
-                self = .or(left, right)
-            }
+            // Consecutive identical literals keep only their first evidence.
+            // Other operands keep their evaluation and short-circuit order.
+            if operands.count == 1 { self = operands[0] }
+            else { self = conjunction ? .and(operands) : .or(operands) }
         case .not(let child): self = .not(Self(child))
         }
     }
@@ -93,24 +88,24 @@ internal indirect enum PreparedSearchExpression {
             ))
             textSelections[key] = checked
             return checked
-        case .and(let lhs, let rhs):
+        case .and:
             // Every hit must satisfy both operands. A sparse necessary
             // condition on either side therefore bounds candidate decoding,
             // even when the caller wrote a common term first. Do not reorder
             // the matcher: its original left operand still owns presentation.
             // Keep one condition rather than expanding a long AND into a
             // deeply nested FTS intersection or reprobing each dense prefix.
-            let left = try candidateExpression(lhs, in: database, probeResults: &probeResults,
-                                               textSelections: &textSelections)
-            if left?.isSparse == true { return left }
-            let right = try candidateExpression(rhs, in: database, probeResults: &probeResults,
-                                                textSelections: &textSelections)
-            return right?.isSparse == true ? right : (left ?? right)
+            var fallback: SearchCandidateSelection?
+            for operand in logicalOperands(of: node, conjunction: true) {
+                let candidate = try candidateExpression(operand, in: database, probeResults: &probeResults,
+                                                        textSelections: &textSelections)
+                if candidate?.isSparse == true { return candidate }
+                if fallback == nil { fallback = candidate }
+            }
+            return fallback
         case .or:
-            var branches: [HistorySearchExpression.Node] = []
-            collectOrBranches(node, into: &branches)
             var expressions: [String] = []
-            for branch in branches {
+            for branch in logicalOperands(of: node, conjunction: false) {
                 // The union, rather than each leaf or left-associated OR
                 // prefix, needs a posting proof. AND branches still select
                 // their own necessary sparse operand before joining it.
@@ -134,15 +129,23 @@ internal indirect enum PreparedSearchExpression {
         }
     }
 
-    private static func collectOrBranches(
-        _ node: HistorySearchExpression.Node, into branches: inout [HistorySearchExpression.Node]
-    ) {
-        if case .or(let lhs, let rhs) = node {
-            collectOrBranches(lhs, into: &branches)
-            collectOrBranches(rhs, into: &branches)
-        } else {
-            branches.append(node)
+    /// Adjacent terms form a left-associated tree even without parentheses.
+    /// Flatten equal operators in source order so that chain stays on the heap.
+    private static func logicalOperands(
+        of root: HistorySearchExpression.Node, conjunction: Bool
+    ) -> [HistorySearchExpression.Node] {
+        var pending = [root]
+        var ordered: [HistorySearchExpression.Node] = []
+        while let next = pending.popLast() {
+            switch next {
+            case .and(let lhs, let rhs) where conjunction,
+                 .or(let lhs, let rhs) where !conjunction:
+                pending.append(rhs)
+                pending.append(lhs)
+            default: ordered.append(next)
+            }
         }
+        return ordered
     }
 
     func match(_ row: SearchCorpusRow) -> (matches: Bool, presentation: SearchWorker.DeferredSearchPresentation?) {
@@ -181,15 +184,20 @@ internal indirect enum PreparedSearchExpression {
         case .type(let type): return (HistoryFilterSQL.admits(row, filter: HistoryFilter(type: type)), nil)
         case .pinned: return (row.pinOrdinal != nil, nil)
         case .not(let child): return (try !child.match(row, anySource: anySource).matches, nil)
-        case .and(let lhs, let rhs):
-            let left = try lhs.match(row, anySource: anySource)
-            guard left.matches else { return (false, nil) }
-            let right = try rhs.match(row, anySource: anySource)
-            return (right.matches, right.matches ? (left.presentation ?? right.presentation) : nil)
-        case .or(let lhs, let rhs):
-            let left = try lhs.match(row, anySource: anySource)
-            if left.matches { return left }
-            return try rhs.match(row, anySource: anySource)
+        case .and(let operands):
+            var firstPresentation: SearchWorker.DeferredSearchPresentation?
+            for operand in operands {
+                let result = try operand.match(row, anySource: anySource)
+                guard result.matches else { return (false, nil) }
+                if firstPresentation == nil { firstPresentation = result.presentation }
+            }
+            return (true, firstPresentation)
+        case .or(let operands):
+            for operand in operands {
+                let result = try operand.match(row, anySource: anySource)
+                if result.matches { return result }
+            }
+            return (false, nil)
         }
     }
 
