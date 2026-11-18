@@ -384,7 +384,7 @@ struct SearchHistoryStoreTests {
         }
     }
 
-    @Test func aSavedNewestSortStillReopensWhenNewestBecomesTheDefault() throws {
+    @Test func aPreviouslySavedNewestSortKeepsItsExplicitOrder() throws {
         try withStore { store, defaults in
             enableAll(store)
             #expect(store.saveFavorite(.init(sortOrder: .oldestFirst), name: "Copy order") == .saved)

@@ -72,9 +72,20 @@ struct PreviewTextMatches: Sendable, Equatable {
         let range: UTF16TextRange
     }
 
+    private struct MatchStart: Sendable, Equatable {
+        let segment: Int
+        let range: UTF16TextRange
+    }
+
     let input: PreviewTextSearchInput
-    var highlights: [Int: [Highlight]] = [:]
-    var targets: [Int] = []
+    private(set) var highlights: [Int: [Highlight]] = [:]
+    private(set) var targets: [Int] = []
+    private(set) var hasSharedTargets = false
+    private var matchStarts: [MatchStart] = []
+
+    init(input: PreviewTextSearchInput) {
+        self.input = input
+    }
 
     static func prepare(
         input: PreviewTextSearchInput, segments: [Substring], groups: [Range<Int>]
@@ -109,9 +120,15 @@ struct PreviewTextMatches: Sendable, Equatable {
                 let lower = max(match.location, offset)
                 let upper = min(matchEnd, end)
                 if lower < upper {
-                    if match.location >= offset { result.targets.append(groups[groupIndex].lowerBound) }
+                    let range = UTF16TextRange(location: lower - offset, length: upper - lower)
+                    if match.location >= offset {
+                        let target = groups[groupIndex].lowerBound
+                        result.hasSharedTargets = result.hasSharedTargets || result.targets.last == target
+                        result.targets.append(target)
+                        result.matchStarts.append(MatchStart(segment: index, range: range))
+                    }
                     result.highlights[index, default: []].append(Highlight(
-                        occurrence: matchIndex, range: .init(location: lower - offset, length: upper - lower)
+                        occurrence: matchIndex, range: range
                     ))
                 }
                 guard matchEnd <= end else { break }
@@ -120,6 +137,36 @@ struct PreviewTextMatches: Sendable, Equatable {
             offset = end
         }
         return result
+    }
+
+    /// Read only one existing bounded renderer segment. A short prefix keeps
+    /// the actual hit visible even when two occurrences share a tall group.
+    func context(for index: Int, in segments: [Substring], style: SearchMatchStyle) -> AttributedString? {
+        guard hasSharedTargets, matchStarts.indices.contains(index) else { return nil }
+        let match = matchStarts[index]
+        guard segments.indices.contains(match.segment) else { return nil }
+        let text = String(segments[match.segment])
+        let units = text.utf16
+        let scalars = text.unicodeScalars
+        guard let lower = units.index(units.startIndex, offsetBy: match.range.location, limitedBy: units.endIndex),
+              let upper = units.index(lower, offsetBy: match.range.length, limitedBy: units.endIndex),
+              let start = lower.samePosition(in: scalars),
+              let end = upper.samePosition(in: scalars) else { return nil }
+
+        var contextStart = start
+        var leadingUnits = 0
+        for _ in 0..<6 {
+            guard contextStart != scalars.startIndex else { break }
+            let previous = scalars.index(before: contextStart)
+            let scalar = scalars[previous]
+            guard !CharacterSet.newlines.contains(scalar) else { break }
+            contextStart = previous
+            leadingUnits += scalar.value > 0xFFFF ? 2 : 1
+        }
+        let contextEnd = scalars[end...].firstIndex(where: CharacterSet.newlines.contains) ?? scalars.endIndex
+        let range = UTF16TextRange(location: leadingUnits, length: match.range.length)
+        return MatchHighlighting.highlighted(String(scalars[contextStart..<contextEnd]), ranges: [range],
+            style: style, focusedRange: range, flattensLineBreaks: true)
     }
 
     static func displayText(_ text: Substring, highlights matches: [Highlight]?,
@@ -131,29 +178,42 @@ struct PreviewTextMatches: Sendable, Equatable {
 }
 
 struct PreviewSearchMatchNavigator: View {
-    static let height: CGFloat = 24
+    static let controlsHeight: CGFloat = 24
+    static let contextHeight: CGFloat = 20
 
     let count: Int
     let selection: Int
     let accessibilityID: String
+    let showsContext: Bool
+    let context: AttributedString?
     let onSelect: (Int) -> Void
     @Environment(\.locale) private var locale
 
     private var bundle: Bundle { PanelActionsCopy.bundle(for: locale) }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Spacer(minLength: 0)
-            Text(String(format: PreviewCopy.text("%@ of %@ matches shown", bundle: bundle),
-                (selection + 1).formatted(.number.locale(locale)), count.formatted(.number.locale(locale))))
-                .monospacedDigit()
-                .accessibilityIdentifier(accessibilityID + ".position")
-            stepButton("Previous match", symbol: "chevron.backward", delta: -1, suffix: ".previous")
-            stepButton("Next match", symbol: "chevron.forward", delta: 1, suffix: ".next")
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Spacer(minLength: 0)
+                Text(String(format: PreviewCopy.text("%@ of %@ matches shown", bundle: bundle),
+                    (selection + 1).formatted(.number.locale(locale)), count.formatted(.number.locale(locale))))
+                    .monospacedDigit()
+                    .accessibilityIdentifier(accessibilityID + ".position")
+                stepButton("Previous match", symbol: "chevron.backward", delta: -1, suffix: ".previous")
+                stepButton("Next match", symbol: "chevron.forward", delta: 1, suffix: ".next")
+            }
+            .frame(height: Self.controlsHeight)
+            if showsContext {
+                Text(context ?? AttributedString())
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(height: Self.contextHeight)
+                    .accessibilityHidden(context == nil)
+                    .accessibilityIdentifier(accessibilityID + ".context")
+            }
         }
         .font(.caption)
         .controlSize(.small)
-        .frame(height: Self.height)
     }
 
     private func stepButton(_ title: String, symbol: String, delta: Int, suffix: String) -> some View {

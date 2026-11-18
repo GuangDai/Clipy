@@ -18,7 +18,7 @@ struct HistorySearchDefinition: Codable, Equatable, Sendable {
         query: String = "", mode: SearchMode = .exact,
         typeFilter: HistoryTypeFilter = .all, pinnedOnly: Bool = false,
         filters: HistorySearchFilters = HistorySearchFilters(),
-        sortOrder: HistorySortOrder = .newestFirst,
+        sortOrder: HistorySortOrder = .automatic,
         customDateTimeZone: TimeZone? = .current
     ) {
         self.query = query
@@ -39,7 +39,7 @@ struct HistorySearchDefinition: Codable, Equatable, Sendable {
     }
 
     var hasCriteria: Bool {
-        !query.isEmpty || typeFilter != .all || pinnedOnly || filters.isActive || sortOrder != .newestFirst
+        !query.isEmpty || typeFilter != .all || pinnedOnly || filters.isActive || sortOrder != .automatic
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -135,7 +135,7 @@ extension HistorySearchDefinition {
         guard var appliedFilters = filtersForReplay(in: timeZone) else { return false }
         // These synchronous edits retire earlier requests before any can
         // begin executing. Refresh submits the final intent without debounce.
-        viewState.searchMode = mode == .expression ? .fuzzy : mode
+        viewState.applySavedSearchMode(mode)
         viewState.typeFilter = typeFilter
         viewState.showsPinnedOnly = pinnedOnly
         if appliedFilters.dateRange == .custom {
@@ -148,7 +148,7 @@ extension HistorySearchDefinition {
             appliedFilters.endDate = now
         }
         viewState.searchFilters = appliedFilters
-        viewState.sortOrder = sortOrder
+        viewState.applySavedSearchSortOrder(sortOrder)
         viewState.searchText = query
         viewState.refresh()
         return true

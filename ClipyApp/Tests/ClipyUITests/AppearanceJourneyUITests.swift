@@ -215,6 +215,17 @@ final class AppearanceJourneyUITests: XCTestCase {
             preview.exists,
             diagnostic(app, context: "disabled auto-open must stop the dwell")
         )
+        let more = panel.descendants(matching: .any)["clipy.panel.more-actions"]
+        more.click()
+        let showPreview = app.menuItems["Show Preview"]
+        assertExists(showPreview, timeout: 5, in: app, context: "manual preview menu item")
+        showPreview.click()
+        assertExists(preview, timeout: 5, in: app, context: "manually opened preview")
+        more.click()
+        let hidePreview = app.menuItems["Hide Preview"]
+        assertExists(hidePreview, timeout: 5, in: app, context: "hide preview menu item")
+        hidePreview.click()
+        XCTAssertTrue(waitUntil(timeout: 5) { !preview.exists })
 
         // Restore the default-on preference so later journeys relying on the
         // production dwell are not left with auto-open disabled.

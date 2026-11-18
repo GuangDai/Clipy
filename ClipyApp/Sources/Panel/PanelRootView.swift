@@ -59,39 +59,23 @@ struct PanelRootView: View {
         let topNoticeHeight: CGFloat? = notices.isEmpty ? 0 : measuredTopNotices.flatMap {
             $0.notices == notices ? $0.height : nil
         }
-        VStack(spacing: 0) {
-            if !notices.isEmpty {
-                VStack(spacing: 8) {
-                    if notices.showsReadingPosition { readingPositionNotice }
-                    if let access = notices.captureAccess {
-                        captureAccessBanner(access)
-                    }
-                    if let pasteFailure = notices.pasteFailure {
-                        pasteFailureBanner(pasteFailure)
-                    }
-                    if let captureNotice = notices.captureNotice {
-                        captureNoticeBanner(captureNotice)
-                    }
+        GeometryReader { window in
+            VStack(spacing: 0) {
+                if !notices.isEmpty {
+                    // A live resize or a small display can constrain the native
+                    // fit. Keep the search controls and one row below the notices.
+                    let browseHeight = PanelContentFit.headerHeight + PanelContentFit.filterChipDelta
+                        + PanelContentFit.rowHeight(.init(), density: .compact, fontSize: .medium)
+                    let available = max(0, window.size.height - browseHeight)
+                    let height = min(topNoticeHeight ?? available, available)
+                    topNoticeScrollView(notices)
+                        .frame(height: height)
+                        .accessibilityHidden(height == 0)
                 }
-                .padding(8)
-                // Measure only the notices' natural width-dependent height;
-                // fitting the window must not compress and remeasure them.
-                .fixedSize(horizontal: false, vertical: true)
-                .background {
-                    GeometryReader { geometry in
-                        let height = geometry.size.height
-                        let measurement = TopNoticeMeasurement(
-                            notices: notices, height: height.isFinite ? max(0, height) : 0
-                        )
-                        NativePanelBackground().onChange(of: measurement, initial: true) { _, measured in
-                            measuredTopNotices = measured
-                        }
-                    }
-                }
+                animatedPanelContent(topNoticeHeight: topNoticeHeight)
             }
-            animatedPanelContent(topNoticeHeight: topNoticeHeight)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .environment(\.workflowExecutionQueue, appDelegate.composition?.workflowRunner.executionQueue)
         .environment(\.searchHistoryStore, appDelegate.searchHistoryStore)
         .environment(\.openSearchSavingSettings, {
@@ -114,6 +98,33 @@ struct PanelRootView: View {
                 openSettings()
             }
         }
+    }
+
+    private func topNoticeScrollView(_ notices: TopNotices) -> some View {
+        ScrollView {
+            VStack(spacing: 8) {
+                if notices.showsReadingPosition { readingPositionNotice }
+                if let access = notices.captureAccess { captureAccessBanner(access) }
+                if let pasteFailure = notices.pasteFailure { pasteFailureBanner(pasteFailure) }
+                if let captureNotice = notices.captureNotice { captureNoticeBanner(captureNotice) }
+            }
+            .padding(8)
+            // Measure the width-dependent content, including notices outside
+            // the current scroll viewport, for the native window's fit.
+            .background {
+                GeometryReader { geometry in
+                    let height = geometry.size.height
+                    let measurement = TopNoticeMeasurement(
+                        notices: notices, height: height.isFinite ? max(0, height) : 0
+                    )
+                    Color.clear.onChange(of: measurement, initial: true) { _, measured in
+                        measuredTopNotices = measured
+                    }
+                }
+            }
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .background { NativePanelBackground() }
     }
 
     @ViewBuilder

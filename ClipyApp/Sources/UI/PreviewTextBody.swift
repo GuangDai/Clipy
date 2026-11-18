@@ -16,7 +16,10 @@ struct PreviewTextBody: View {
     #endif
 
     var body: some View {
-        let navigationHeight = (matches?.targets.count ?? 0) > 1 ? PreviewSearchMatchNavigator.height : 0
+        let showsContext = matches?.hasSharedTargets == true
+        let navigationHeight = (matches?.targets.count ?? 0) > 1
+            ? PreviewSearchMatchNavigator.controlsHeight + (showsContext ? PreviewSearchMatchNavigator.contextHeight : 0)
+            : 0
         return ScrollViewReader { reader in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -43,7 +46,8 @@ struct PreviewTextBody: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 if let matches, matches.targets.count > 1 {
                     PreviewSearchMatchNavigator(count: matches.targets.count, selection: activeMatch,
-                        accessibilityID: "clipy.preview.matches") { index in
+                        accessibilityID: "clipy.preview.matches", showsContext: showsContext,
+                        context: matches.context(for: activeMatch, in: segments, style: searchMatchStyle)) { index in
                         activeMatch = index
                         reader.scrollTo(matches.targets[index], anchor: .center)
                     }

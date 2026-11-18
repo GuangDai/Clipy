@@ -43,6 +43,10 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         let dismiss = app.buttons["clipy.capture.notice.dismiss"]
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
         let window = app.dialogs.containing(.textField, identifier: "clipy.search.field").firstMatch
+        let search = app.textFields["clipy.search.field"]
+        XCTAssertTrue(window.exists && search.isHittable)
+        let originalHeight = window.frame.height
+        let originalBrowsingHeight = window.frame.maxY - search.frame.minY
 
         stageUnsupportedGeneration(suffix: "first")
         XCTAssertTrue(
@@ -54,11 +58,12 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         XCTAssertTrue(dismiss.waitForExistence(timeout: 5))
         XCTAssertTrue(dismiss.isHittable)
         XCTAssertEqual(dismiss.label, "Dismiss capture warning")
-        let search = app.textFields["clipy.search.field"]
-        XCTAssertTrue(search.exists)
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            search.isHittable && window.frame.contains(banner.frame)
+                && window.frame.maxY - search.frame.minY >= originalBrowsingHeight - 1
+        }, "The warning must keep the history viewport usable.")
         XCTAssertLessThanOrEqual(banner.frame.maxY, search.frame.minY,
                                  "The warning belongs above the search strip")
-        XCTAssertTrue(window.exists && window.frame.contains(banner.frame))
         let visualEvidence = XCTAttachment(screenshot: window.screenshot())
         visualEvidence.name = "Capture warning layout"
         visualEvidence.lifetime = .keepAlways
@@ -66,8 +71,8 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         dismiss.click()
 
         XCTAssertTrue(
-            waitUntil(timeout: 5) { !banner.exists },
-            "Dismiss did not remove the materialized capture warning."
+            waitUntil(timeout: 5) { !banner.exists && abs(window.frame.height - originalHeight) <= 1 },
+            "Dismissing the warning must restore the compact viewport."
         )
         assertRemains(
             { !banner.exists },
@@ -92,7 +97,10 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         XCTAssertTrue(search.isHittable)
         XCTAssertTrue(dismiss.isHittable)
         XCTAssertLessThanOrEqual(banner.frame.maxY, search.frame.minY)
-        XCTAssertTrue(window.exists && window.frame.contains(banner.frame))
+        XCTAssertTrue(waitUntil(timeout: 5) {
+            window.frame.contains(banner.frame)
+                && window.frame.maxY - search.frame.minY >= originalBrowsingHeight - 1
+        })
         let reopened = XCTAttachment(screenshot: window.screenshot())
         reopened.name = "Capture warning after reopening the panel"
         reopened.lifetime = .keepAlways

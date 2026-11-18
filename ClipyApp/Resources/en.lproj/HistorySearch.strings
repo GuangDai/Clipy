@@ -18,6 +18,7 @@
 "Check custom dates. Both days must exist in your local time zone, with the start on or before the end." = "Check custom dates. Both days must exist in your local time zone, with the start on or before the end.";
 "Uses the most recent copy date in your local time zone. Both selected dates are included." = "Uses the most recent copy date in your local time zone. Both selected dates are included.";
 "Source application" = "Source application";
+"Edit source…" = "Edit source…";
 "Match source by" = "Match source by";
 "Application name" = "Application name";
 "Application name contains" = "Application name contains";

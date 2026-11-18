@@ -99,13 +99,14 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
 
         // A different real capture reuses the same panel/preview surface.
         // Wait for its text, not merely the notice disappearing during load.
-        let shortText = "clipy-short-preview first marker, then another marker"
+        let shortTitle = "clipy-short-preview marker FIRST"
+        let shortText = shortTitle + "\n" + String(repeating: "ordinary line\n", count: 15) + "marker SECOND"
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setString(shortText, forType: .string))
         app.typeKey("c", modifierFlags: [.command, .shift])
         XCTAssertTrue(panel.waitForExistence(timeout: 10))
         let shortRow = rows.matching(NSPredicate(
-            format: "label CONTAINS %@", shortText
+            format: "label CONTAINS %@", shortTitle
         )).firstMatch
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 2 && shortRow.exists })
         XCTAssertTrue(shortRow.isHittable)
@@ -120,15 +121,18 @@ final class TextPreviewTruncationJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 && shortRow.exists })
         HistoryJourneyControls.select(shortRow, in: app)
         let position = preview.descendants(matching: .any)["clipy.preview.matches.position"]
+        let context = preview.staticTexts["clipy.preview.matches.context"]
         let previous = preview.buttons["clipy.preview.matches.previous"]
         let next = preview.buttons["clipy.preview.matches.next"]
         XCTAssertTrue(waitUntil(timeout: 10) {
             position.exists && self.text(of: position) == "1 of 2 matches shown" && next.isHittable
+                && context.isHittable && self.text(of: context).contains("marker FIRST")
         }, preview.debugDescription)
         XCTAssertFalse(previous.isEnabled)
         next.click()
         XCTAssertTrue(waitUntil(timeout: 5) {
             self.text(of: position) == "2 of 2 matches shown" && previous.isHittable && !next.isEnabled
+                && context.isHittable && self.text(of: context).contains("marker SECOND")
         }, preview.debugDescription)
         let attachment = XCTAttachment(screenshot: preview.screenshot())
         attachment.name = "Two highlighted occurrences in one expanded search preview"

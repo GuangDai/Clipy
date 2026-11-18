@@ -37,6 +37,12 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         alpha.click()
         try assertSelectionCount(1, in: workspace, app: app)
         try assertPreview(values[0], in: workspace, app: app)
+        try chooseSort("Oldest first", in: workspace, app: app)
+        try require(waitUntil {
+            alpha.frame.minY < beta.frame.minY && beta.frame.minY < gamma.frame.minY
+        }, app.debugDescription)
+        try assertSelectionCount(1, in: workspace, app: app)
+        try assertPreview(values[0], in: workspace, app: app)
         XCUIElement.perform(withKeyModifiers: .command) { beta.click() }
         try assertSelectionCount(2, in: workspace, app: app)
         try require(!workspace.buttons["clipy.history.workspace.copy"].isEnabled,
@@ -154,11 +160,22 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
         let workspace = try openWorkspace(in: app)
         let next = workspace.buttons["clipy.history.workspace.next"]
         let previous = workspace.buttons["clipy.history.workspace.previous"]
+        let newestResult = row(for: fixtures[54].id, in: workspace)
         try require(waitUntil {
-            let newest = self.row(for: fixtures[54].id, in: workspace)
-            return newest.exists && newest.isHittable && next.isEnabled
+            newestResult.exists && newestResult.isHittable && next.isEnabled
         }, app.debugDescription)
         try require(!previous.isEnabled)
+
+        let search = workspace.textFields["clipy.search.field"]
+        try require(search.exists && search.isHittable, app.debugDescription)
+        let oldestResultOnFirstPage = row(for: fixtures[5].id, in: workspace)
+        try require(!oldestResultOnFirstPage.isHittable, app.debugDescription)
+        search.click()
+        search.typeKey(.upArrow, modifierFlags: [])
+        try require(waitUntil { oldestResultOnFirstPage.exists && oldestResultOnFirstPage.isHittable },
+                    "Search arrow selection must bring the selected row into view.\n" + app.debugDescription)
+        try assertPreview(fixtures[5].text, in: workspace, app: app)
+
         workspace.buttons["clipy.history.workspace.select-page"].click()
         try assertSelectionCount(50, in: workspace, app: app)
 
@@ -173,8 +190,6 @@ final class HistoryWorkspaceManagementJourneyUITests: XCTestCase {
 
         // Every fixture has an unknown source, so this closed condition must
         // settle on an authoritative empty page in every matching mode.
-        let search = workspace.textFields["clipy.search.field"]
-        try require(search.exists && search.isHittable, app.debugDescription)
         let missingQuery = "$source-id:\"com.clipy.workspace.no-matches\"$"
         search.click()
         search.typeText(missingQuery)

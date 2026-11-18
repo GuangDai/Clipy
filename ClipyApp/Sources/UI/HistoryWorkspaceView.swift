@@ -22,6 +22,7 @@ struct HistoryWorkspaceView: View {
     @State private var previewState = PreviewPaneState()
     @State private var paging: HistoryWorkspacePaging
     @State private var selectedIDs: Set<HistoryItemID> = []
+    @State private var keyboardNavigationGeneration = 0
     @State private var isSearchFocused = false
     @State private var detailsItem: HistoryItemReference?
     @State private var removalItem: HistoryItemReference?
@@ -66,7 +67,14 @@ struct HistoryWorkspaceView: View {
     }
     private var isLoading: Bool { viewState.isLoadingFirstPage || viewState.isLoadingPage }
     private var isMutating: Bool { action != nil || batchTask != nil || batchModel.isRunning }
+    private var selectionQuery: HistorySearchDefinition {
+        HistorySearchDefinition(query: viewState.searchText, mode: viewState.searchMode,
+                                typeFilter: viewState.typeFilter, pinnedOnly: viewState.showsPinnedOnly,
+                                filters: viewState.searchFilters,
+                                customDateTimeZone: viewState.searchFilters.dateSelectionTimeZone ?? .current)
+    }
     private var selectedReferences: [HistoryItemReference] {
+        guard !viewState.isLoadingFirstPage else { return [] }
         let visible = pageRows.filter { selectedIDs.contains($0.item.id) }.map(\.item)
         let visibleIDs = Set(visible.map(\.id))
         return visible + batchModel.retryReferences.filter { selectedIDs.contains($0.id) && !visibleIDs.contains($0.id) }
@@ -101,7 +109,7 @@ struct HistoryWorkspaceView: View {
                 let layout = preferences.remembersWorkspaceLayout ? preferences.workspaceLayout : HistoryWorkspaceLayout()
                 listWidth = layout.listWidth
                 compactRows = layout.compactRows
-                viewState.sortOrder = layout.sortOrder
+                viewState.restorePreferredSortOrder(layout.sortOrder)
             }
             paging.reset()
             thumbnails.isSurfaceActive = true
@@ -133,20 +141,22 @@ struct HistoryWorkspaceView: View {
         }
         .onChange(of: viewState.rows) { _, _ in reconcilePage() }
         .onChange(of: viewState.isLoadingPage) { _, _ in reconcilePage() }
+        // Sorting keeps the selection until the new page confirms which items
+        // are still visible. Changes to the search itself clear the selection.
+        .onChange(of: selectionQuery) { _, _ in
+            if !isMutating, !viewState.isPreservingReadingPosition { selectedIDs = [] }
+        }
         .onChange(of: viewState.isLoadingFirstPage) { _, loading in
-            if loading {
-                if !isMutating, !viewState.isPreservingReadingPosition { selectedIDs = [] }
-            } else {
-                // An empty result or failed preparation leaves rows == []
-                // across the whole load. Its completion still retires the
-                // previous page and any pending navigation.
-                paging.reset()
-                reconcilePage()
-            }
+            guard !loading else { return }
+            // An empty result or failed preparation leaves rows == []
+            // across the whole load. Its completion still retires the
+            // previous page and any pending navigation.
+            paging.reset()
+            reconcilePage()
         }
         .onChange(of: listWidth) { _, _ in saveLayout() }
         .onChange(of: compactRows) { _, _ in saveLayout() }
-        .onChange(of: viewState.sortOrder) { _, _ in saveLayout() }
+        .onChange(of: viewState.preferredSortOrder) { _, _ in saveLayout() }
         .onChange(of: viewState.restoredReadingItemID) { _, item in
             if let item { selectedIDs = [item] }
         }
@@ -293,7 +303,6 @@ struct HistoryWorkspaceView: View {
     }
 
     private var historyColumn: some View {
-        let viewportHeight = listViewportHeight
         let rows = pageRowsForPresentation
         return VStack(spacing: 0) {
             selectionToolbar.padding(10)
@@ -303,43 +312,53 @@ struct HistoryWorkspaceView: View {
             } else if rows.isEmpty {
                 workspaceEmptyState
             } else {
-                List(selection: $selectedIDs) {
-                    ForEach(rows, id: \.item.id) { row in
-                        HistoryWorkspaceRow(row: row, thumbnails: thumbnails, sourceIcons: sourceIcons,
-                                            compact: compactRows, isSearchResult: viewState.usesSearchResultRows)
-                            .tag(row.item.id)
-                            .contextMenu {
-                                rowContextMenu(for: row).disabled(isMutating || viewState.isLoadingFirstPage)
-                            }
-                            .disabled(isMutating || viewState.isLoadingFirstPage)
-                            .onGeometryChange(for: Bool.self) { proxy in
-                                let frame = proxy.frame(in: .named("history-workspace-list"))
-                                return frame.height > 0 && frame.maxY > 0 && frame.minY < viewportHeight
-                            } action: { visible in
-                                guard isActive else { return }
-                                viewState.recordReadingPosition(for: row.item.id, isVisible: visible)
-                            }
-                            .onDisappear {
-                                if isActive {
-                                    viewState.recordReadingPosition(for: row.item.id, isVisible: false)
-                                }
-                            }
-                            .accessibilityIdentifier("clipy.history.workspace.row." + row.item.id.description)
-                    }
-                }
-                .listStyle(.inset)
-                .coordinateSpace(name: "history-workspace-list")
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listViewportHeight = $0 }
-                .id(paging.navigationGeneration)
-                .accessibilityIdentifier("clipy.history.workspace.list")
-                .onKeyPress(.return) {
-                    guard !isSearchFocused else { return .ignored }
-                    copySelection()
-                    return .handled
-                }
+                historyList(rows)
             }
             Divider()
             pageNavigation.padding(10)
+        }
+    }
+
+    private func historyList(_ rows: ArraySlice<HistoryRow>) -> some View {
+        let viewportHeight = listViewportHeight
+        return ScrollViewReader { reader in
+            List(selection: $selectedIDs) {
+                ForEach(rows, id: \.item.id) { row in
+                    HistoryWorkspaceRow(row: row, thumbnails: thumbnails, sourceIcons: sourceIcons,
+                                        compact: compactRows, isSearchResult: viewState.usesSearchResultRows)
+                        .tag(row.item.id)
+                        .contextMenu {
+                            rowContextMenu(for: row).disabled(isMutating || viewState.isLoadingFirstPage)
+                        }
+                        .disabled(isMutating || viewState.isLoadingFirstPage)
+                        .onGeometryChange(for: Bool.self) { proxy in
+                            let frame = proxy.frame(in: .named("history-workspace-list"))
+                            return frame.height > 0 && frame.maxY > 0 && frame.minY < viewportHeight
+                        } action: { visible in
+                            guard isActive else { return }
+                            viewState.recordReadingPosition(for: row.item.id, isVisible: visible)
+                        }
+                        .onDisappear {
+                            if isActive {
+                                viewState.recordReadingPosition(for: row.item.id, isVisible: false)
+                            }
+                        }
+                        .accessibilityIdentifier("clipy.history.workspace.row." + row.item.id.description)
+                }
+            }
+            .listStyle(.inset)
+            .coordinateSpace(name: "history-workspace-list")
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { listViewportHeight = $0 }
+            .id(paging.navigationGeneration)
+            .accessibilityIdentifier("clipy.history.workspace.list")
+            .onChange(of: keyboardNavigationGeneration) { _, _ in
+                if let id = selectedRow?.item.id { reader.scrollTo(id) }
+            }
+            .onKeyPress(.return) {
+                guard !isSearchFocused else { return .ignored }
+                copySelection()
+                return .handled
+            }
         }
     }
 
@@ -476,6 +495,8 @@ struct HistoryWorkspaceView: View {
                                    sourceIcons: sourceIcons)
                     .id(row.item.id)
                     .disabled(isMutating)
+            } else if viewState.isLoadingFirstPage && selectedIDs.count == 1 {
+                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView {
                     Label(text(selectedIDs.count > 1 ? "Multiple items selected" : "Select an item"),
@@ -678,11 +699,12 @@ struct HistoryWorkspaceView: View {
     }
 
     private func moveSelection(_ offset: Int) {
-        guard !isMutating else { return }
+        guard !viewState.isLoadingFirstPage, !isMutating else { return }
         let current = selectedIDs.count == 1 ? selectedIDs.first : nil
         let next = PanelSessionSelection.movedSelection(current, in: pageRows,
                                                         direction: offset < 0 ? .previous : .next)
         selectedIDs = next.map { Set([$0]) } ?? []
+        keyboardNavigationGeneration += 1
     }
 
     private func submit(_ intent: ItemAction) {
@@ -750,7 +772,9 @@ struct HistoryWorkspaceView: View {
 
     private func saveLayout() {
         guard let preferences = browsingPreferences else { return }
-        preferences.workspaceLayout = .init(listWidth: listWidth, sortOrder: viewState.sortOrder, compactRows: compactRows)
+        preferences.workspaceLayout = .init(
+            listWidth: listWidth, sortOrder: viewState.preferredSortOrder, compactRows: compactRows
+        )
     }
 
     private func recordReadingPosition() {
@@ -763,7 +787,6 @@ struct HistoryWorkspaceView: View {
 /// the workspace's explicit Copy command owns the clipboard handoff.
 private struct HistoryWorkspaceRow: View {
     @Environment(\.locale) private var locale
-    @Environment(\.timeZone) private var timeZone
     @Environment(\.searchMatchStyle) private var searchMatchStyle
     let row: HistoryRow
     let thumbnails: ThumbnailStore
@@ -797,23 +820,21 @@ private struct HistoryWorkspaceRow: View {
                         .accessibilityLabel(Text(verbatim: primaryAccessibilityLabel))
                     if row.pinnedPosition != nil { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary) }
                 }
-                HStack {
-                    if let source = row.lastSource {
-                        Text(sourceIcons.cachedName(forBundleID: source) ?? source)
-                            .lineLimit(1).truncationMode(.middle)
+                if !isSearchResult && (row.lastSource != nil || row.copyCount > 1) {
+                    HStack {
+                        if let source = row.lastSource {
+                            Text(sourceIcons.cachedName(forBundleID: source) ?? source)
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        if row.copyCount > 1 {
+                            Text("×\(row.copyCount)")
+                                .lineLimit(1)
+                                .help(String(format: HistoryWorkspaceCopy.text("Copied %llu times", bundle: PanelActionsCopy.bundle(for: locale)),
+                                             row.copyCount))
+                        }
                     }
-                    if row.copyCount > 1 {
-                        Text("×\(row.copyCount)")
-                            .lineLimit(1)
-                            .help(String(format: HistoryWorkspaceCopy.text("Copied %llu times", bundle: PanelActionsCopy.bundle(for: locale)),
-                                         row.copyCount))
-                    }
-                    Spacer(minLength: 4)
-                    HistoryCopyTimeLabel(copyTime: HistoryRowCopyTime(
-                        row.lastCopiedAt, locale: locale, timeZone: timeZone
-                    ))
+                    .font(.caption2).foregroundStyle(.secondary)
                 }
-                .font(.caption2).foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, compact ? 2 : 6)

@@ -23,10 +23,8 @@ struct PreviewFooterMetadata: Equatable, Sendable {
     }
 }
 
-/// The preview column: a loading indicator while the item's content loads,
-/// the resolved content, and a metadata bar (source, copy count, last
-/// copied time — Maccy's preview footer replicated without AppKit app
-/// icons, which PresentationUI's confinement forbids).
+/// The preview column shows the item's content above its copy information
+/// and actions.
 struct HistoryPreviewView: View {
     private let viewState: HistoryViewState
     private let previewState: PreviewPaneState
@@ -62,6 +60,7 @@ struct HistoryPreviewView: View {
     }
 
     @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
 
     /// Retargets and retries share SwiftUI's view-owned task, so either a
     /// new reference or disappearance cancels the active load (Card 9D).
@@ -247,12 +246,15 @@ struct HistoryPreviewView: View {
             previewBody(image: image, matches: matches)
                 .frame(maxWidth: .infinity, maxHeight: flexibleHeight)
                 .layoutPriority(1)
-            if PreviewFooterMetadata(item: targetItem, row: observedRow) != nil {
+            if let occurrence = PreviewFooterMetadata(item: targetItem, row: observedRow) {
                 VStack(spacing: 0) {
                     Divider().opacity(0.5)
-                    metadataBar
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
+                    VStack(alignment: .leading, spacing: 4) {
+                        lastCopiedTime(occurrence.lastCopiedAt)
+                        metadataBar
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
                     if let pinFailure, pinFailure.item == targetItem {
                         HStack(alignment: .top, spacing: 8) {
                             Label(pinFailure.message, systemImage: "exclamationmark.triangle")
@@ -592,6 +594,23 @@ struct HistoryPreviewView: View {
     }
 
     // MARK: - Metadata bar
+
+    private func lastCopiedTime(_ date: Date) -> some View {
+        let title = PreviewCopy.text("Last Copied", bundle: AppLocalization.bundle(for: locale))
+        let compact = date.formatted(Date.FormatStyle(
+            date: .numeric, time: .shortened, locale: locale, timeZone: timeZone
+        ))
+        let full = date.formatted(Date.FormatStyle(
+            date: .long, time: .complete, locale: locale, timeZone: timeZone
+        ))
+        let fullLabel = "\(title) \(full)"
+        return Text(verbatim: "\(title) \(compact)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .help(fullLabel)
+            .accessibilityLabel(Text(verbatim: fullLabel))
+            .accessibilityIdentifier("clipy.preview.last-copied-at")
+    }
 
     /// One footer intent waits for its receipt (03b §10). Cancelling this
     /// view's task only retires its feedback; an admitted write may still

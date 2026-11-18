@@ -204,15 +204,16 @@ enum PanelContentFit {
             height += failureBannerHeight
         }
         let notices = input.topNoticeHeight.isFinite ? max(0, input.topNoticeHeight) : 0
-        // Notices take space above the reading floor, instead of consuming
-        // its row slots. The existing native owner still applies the ceiling
-        // and the visible-screen limit to this complete demand.
+        // Notices add to the measured demand and leave the normal browsing
+        // floor below them.
         return notices > 0 ? max(height, minimumHeight) + notices : height
     }
 
-    /// Retain the five-row floor even for an older, lower saved ceiling.
-    /// The native owner applies the visible-screen bound after this fit.
-    static func clampedHeight(_ ideal: CGFloat, ceiling: CGFloat) -> CGFloat {
-        min(max(ideal, minimumHeight), max(ceiling, minimumHeight))
+    /// Keep the normal browsing floor below notices, even at the smallest
+    /// saved window height. The native owner then fits to the visible screen.
+    static func clampedHeight(_ ideal: CGFloat, ceiling: CGFloat, topNoticeHeight: CGFloat = 0) -> CGFloat {
+        let notices = topNoticeHeight.isFinite ? max(0, topNoticeHeight) : 0
+        let floor = minimumHeight + notices
+        return min(max(ideal, floor), max(ceiling, floor))
     }
 }

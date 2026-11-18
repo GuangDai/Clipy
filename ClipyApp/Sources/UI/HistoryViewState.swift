@@ -154,23 +154,51 @@ final class HistoryViewState {
         }
     }
 
-    /// The search evaluation mode (docs/architecture.md). A change
-    /// restarts observation immediately.
-    var searchMode: SearchMode = .exact {
+    private var preferredSearchMode: SearchMode = .exact
+    private var activeSearchMode: SearchMode = .exact {
         didSet {
-            guard searchMode != oldValue else { return }
+            guard activeSearchMode != oldValue else { return }
             validateSearchExpression()
             advanceSearchQueryGeneration()
             replaceObservationImmediately()
         }
     }
 
-    var sortOrder: HistorySortOrder = .newestFirst {
-        didSet {
-            guard sortOrder != oldValue else { return }
-            advanceSearchQueryGeneration()
-            replaceObservationImmediately()
+    var searchMode: SearchMode {
+        get { activeSearchMode }
+        set {
+            preferredSearchMode = newValue
+            activeSearchMode = newValue
         }
+    }
+
+    func applySavedSearchMode(_ mode: SearchMode) {
+        activeSearchMode = mode == .expression ? .fuzzy : mode
+    }
+
+    private(set) var preferredSortOrder: HistorySortOrder = .automatic
+    private var savedSearchSortOrder: HistorySortOrder?
+
+    var sortOrder: HistorySortOrder {
+        get { savedSearchSortOrder ?? preferredSortOrder }
+        set { updateSortOrder(preferred: newValue, savedSearch: nil) }
+    }
+
+    func restorePreferredSortOrder(_ order: HistorySortOrder) {
+        updateSortOrder(preferred: order, savedSearch: savedSearchSortOrder)
+    }
+
+    func applySavedSearchSortOrder(_ order: HistorySortOrder) {
+        updateSortOrder(preferred: preferredSortOrder, savedSearch: order)
+    }
+
+    private func updateSortOrder(preferred: HistorySortOrder, savedSearch: HistorySortOrder?) {
+        let previousOrder = sortOrder
+        preferredSortOrder = preferred
+        savedSearchSortOrder = savedSearch
+        guard sortOrder != previousOrder else { return }
+        advanceSearchQueryGeneration()
+        replaceObservationImmediately()
     }
 
     /// Draft expression diagnostics belong beside the input, before any
@@ -178,6 +206,7 @@ final class HistoryViewState {
     private(set) var expressionValidationError: HistorySearchExpressionError?
     private(set) var unresolvedSearchSources: [String] = []
     private(set) var isSourceSearchTooBroad = false
+    var hasUnresolvedSourceFilter: Bool { resolvedSourceApplicationIDs?.isEmpty == true }
     private(set) var sourceResolutionError: HistorySearchExpressionError?
     private var parsedSearchExpression: HistorySearchExpression?
     private var compiledSearchQuery: HistorySearchQueryCompilation?
@@ -754,6 +783,8 @@ final class HistoryViewState {
     }
 
     func resetSearchForOpening() {
+        activeSearchMode = preferredSearchMode
+        updateSortOrder(preferred: preferredSortOrder, savedSearch: nil)
         clearFilters()
         clearSearch()
     }
@@ -1389,7 +1420,6 @@ final class HistoryViewState {
             isSourceSearchTooBroad = true
         }
         unresolvedSearchSources = Array(Set(unresolved)).sorted()
-        let hasUnresolvedSourceFilter = resolvedSourceApplicationIDs?.isEmpty == true
         guard !hasUnresolvedSourceFilter, !isSourceSearchTooBroad, sourceResolutionError == nil else {
             isLoadingFirstPage = false
             return false

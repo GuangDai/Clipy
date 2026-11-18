@@ -929,8 +929,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The panel content's analytic height demand (HistoryPanelView's
     /// `PanelContentFit.Input` reports). Coalesced one MainActor turn, then applied to
-    /// the window through FloatingPanel's instant, top-edge-pinned fit;
-    /// the persisted height is the ceiling, never a fixed size.
+    /// the window through FloatingPanel's instant, top-edge-pinned fit.
     func panelContentFitDidChange(_ input: PanelContentFit.Input) {
         guard !isTerminating, panel?.isPresented == true else { return }
         pendingPanelContentFitInput = input
@@ -941,7 +940,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let input = self.pendingPanelContentFitInput else { return }
             self.pendingPanelContentFitInput = nil
             self.panel?.fitToContent(
-                idealHeight: PanelContentFit.idealHeight(input)
+                idealHeight: PanelContentFit.idealHeight(input), topNoticeHeight: input.topNoticeHeight
             )
         }
     }

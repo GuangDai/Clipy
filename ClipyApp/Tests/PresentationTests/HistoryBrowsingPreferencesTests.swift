@@ -118,7 +118,18 @@ struct HistoryBrowsingPreferencesTests {
     func layoutWidthSortAndDensityRoundTrip(sortOrder: HistorySortOrder) throws {
         let (defaults, suiteName) = try makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set([
+            "listWidth": 527.5,
+            "sortOrder": sortOrder.rawValue,
+            "compactRows": true,
+        ], forKey: HistoryBrowsingPreferences.workspaceLayoutKey)
         let preferences = HistoryBrowsingPreferences(defaults: defaults)
+        #expect(preferences.workspaceLayout == HistoryWorkspaceLayout(
+            listWidth: 527.5,
+            sortOrder: sortOrder == .newestFirst ? .automatic : sortOrder,
+            compactRows: true
+        ))
+
         for width in [HistoryWorkspaceLayout.minimumListWidth, 527.5] {
             for compact in [false, true] {
                 let layout = HistoryWorkspaceLayout(
@@ -185,7 +196,7 @@ struct HistoryBrowsingPreferencesTests {
             ], forKey: HistoryBrowsingPreferences.workspaceLayoutKey)
             let loaded = HistoryBrowsingPreferences(defaults: defaults).workspaceLayout
             #expect(loaded.listWidth == 520.5)
-            #expect(loaded.sortOrder == .newestFirst)
+            #expect(loaded.sortOrder == .automatic)
             #expect(loaded.compactRows)
         }
         let invalidBooleans: [Any] = ["true", 1, 0]

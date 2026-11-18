@@ -1054,6 +1054,18 @@ struct HistoryPanelView: View {
             Menu {
                 Text(itemCountText)
                 Divider()
+                Button {
+                    previewState.togglePreview(for: previewSelection.reference)
+                } label: {
+                    Label(PanelActionsCopy.text(previewState.isOpen ? "Hide Preview" : "Show Preview"),
+                          systemImage: previewState.isOpen ? "eye.slash" : "eye")
+                }
+                .disabled(previewSelection.reference == nil)
+                Button(action: toggleQuickLook) {
+                    Label(PanelFooterCopy.text("Quick Look"), systemImage: "magnifyingglass")
+                }
+                .disabled(previewSelection.reference == nil)
+                Divider()
                 Picker(PanelChromeCopy.text("Row Density"), selection: Binding(
                     get: { appearance.rowDensity },
                     set: { UserDefaults.standard.set($0.rawValue, forKey: PanelAppearanceSettings.rowDensityDefaultsKey) }
@@ -1230,6 +1242,14 @@ struct HistoryPanelView: View {
         )
     }
 
+    private func toggleQuickLook() {
+        if surfaceState.quickLookReference != nil {
+            surfaceState.quickLookReference = nil
+        } else {
+            surfaceState.quickLookReference = previewSelection.reference
+        }
+    }
+
     // MARK: Hidden shortcuts
 
     /// At the list root, one Esc closes the panel, including its passive preview
@@ -1261,7 +1281,7 @@ struct HistoryPanelView: View {
                 }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .clearFilters, whileEditingText: isSearchFieldFocused))
 
-                Button(PanelFooterCopy.text("Show Preview")) {
+                Button(PanelActionsCopy.text("Show Preview")) {
                     previewState.togglePreview(for: previewSelection.reference)
                 }
                 .keyboardShortcut(shortcuts.keyboardShortcut(for: .togglePreview, whileEditingText: isSearchFieldFocused))
@@ -1280,13 +1300,7 @@ struct HistoryPanelView: View {
                 .keyboardShortcut(.cancelAction)
             }
 
-            Button(PanelFooterCopy.text("Quick Look")) {
-                if surfaceState.quickLookReference != nil {
-                    surfaceState.quickLookReference = nil
-                } else {
-                    surfaceState.quickLookReference = previewSelection.reference
-                }
-            }
+            Button(PanelFooterCopy.text("Quick Look"), action: toggleQuickLook)
             .keyboardShortcut(shortcuts.keyboardShortcut(for: .quickLook, whileEditingText: isSearchFieldFocused))
             .disabled(
                 (surfaceState.quickLookReference == nil

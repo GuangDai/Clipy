@@ -4,8 +4,7 @@
 /// the middle position. After each receipt the public order is asserted
 /// through the detail reads (`pinnedPosition` ordinals unique and exactly
 /// `0 ..< count`), Content Versions remain unchanged, and the composed panel
-/// surface (`HistoryViewState.pinnedRows`/`unpinnedRows`) reflects the final
-/// two-lane split.
+/// surface shows pins above ordinary history when browsing in the default order.
 import Foundation
 import HistoryCore
 import HistoryStorage
@@ -131,17 +130,42 @@ struct WS8ComposedPinOrderTests {
         )
 
         // The composed panel surface renders the same split from the real
-        // observe loop: two pinned rows in public order, one unpinned row.
+        // observe loop, with a newer unpinned copy below both pins by default.
+        let idD = try await capture("ws8 composed delta", 300)
         let viewState = HistoryViewState(history: history)
         defer { viewState.deactivate() }
-        viewState.sortOrder = .automatic
         viewState.activate()
-        let settled = await ComposedSupport.waitFor {
-            viewState.pinnedRows.count == 2 && viewState.unpinnedRows.count == 1
-        }
-        #expect(settled, "WS8: the view state observes the final lane split")
-        #expect(viewState.pinnedRows.map(\.item.id) == [idC, idB])
-        #expect(viewState.unpinnedRows.map(\.item.id) == [idA])
+        try #require(await ComposedSupport.waitFor {
+            viewState.rows.count == 4
+        })
+        let pinnedFirst = [idC, idB, idD, idA]
+        #expect(viewState.rows.map(\.item.id) == pinnedFirst)
+
+        let saved = HistorySearchDefinition(query: "ws8 composed", mode: .fuzzy, sortOrder: .newestFirst)
+        try #require(saved.apply(to: viewState))
+        #expect(viewState.searchMode == .fuzzy)
+        try #require(await ComposedSupport.waitFor {
+            viewState.rows.first?.search != nil
+        })
+        #expect(viewState.rows.map(\.item.id) == [idD, idC, idB, idA])
+
+        viewState.resetSearchForOpening()
+        #expect(viewState.searchMode == .exact)
+        try #require(await ComposedSupport.waitFor {
+            viewState.rows.count == 4
+        })
+        #expect(viewState.rows.map(\.item.id) == pinnedFirst)
+
+        viewState.searchMode = .regexp
+        viewState.sortOrder = .oldestFirst
+        try #require(saved.apply(to: viewState))
+        #expect(viewState.preferredSortOrder == .oldestFirst)
+        viewState.resetSearchForOpening()
+        #expect(viewState.searchMode == .regexp)
+        try #require(await ComposedSupport.waitFor {
+            viewState.rows.count == 4
+        })
+        #expect(viewState.rows.map(\.item.id) == [idA, idB, idC, idD])
         #expect(viewState.failure == nil)
     }
 }

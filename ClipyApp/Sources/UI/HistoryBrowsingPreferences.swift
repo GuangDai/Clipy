@@ -16,7 +16,7 @@ enum HistoryBrowsingSurface: Equatable, Sendable {
 
 struct HistoryWorkspaceLayout: Equatable, Sendable {
     var listWidth: Double = 350
-    var sortOrder: HistorySortOrder = .newestFirst
+    var sortOrder: HistorySortOrder = .automatic
     var compactRows = false
 
     /// A smaller window fits this preference temporarily; it never replaces
@@ -34,6 +34,7 @@ final class HistoryBrowsingPreferences {
     static let workspaceReadingItemIDKey = "clipy.browsing.workspaceReadingItemID"
     static let remembersWorkspaceLayoutKey = "clipy.browsing.remembersWorkspaceLayout"
     static let workspaceLayoutKey = "clipy.browsing.workspaceLayout"
+    private static let preferredSortOrderKey = "preferredSortOrder"
 
     private let defaults: UserDefaults
     private var panelReadingItemID: HistoryItemID?
@@ -146,7 +147,7 @@ final class HistoryBrowsingPreferences {
     private func storeWorkspaceLayout() {
         let values: [String: Any] = [
             "listWidth": workspaceLayout.listWidth,
-            "sortOrder": workspaceLayout.sortOrder.rawValue,
+            Self.preferredSortOrderKey: workspaceLayout.sortOrder.rawValue,
             "compactRows": workspaceLayout.compactRows,
         ]
         defaults.set(values, forKey: Self.workspaceLayoutKey)
@@ -160,8 +161,12 @@ final class HistoryBrowsingPreferences {
            width.doubleValue.isFinite, width.doubleValue >= HistoryWorkspaceLayout.minimumListWidth {
             layout.listWidth = width.doubleValue
         }
-        if let rawSort = values["sortOrder"] as? String,
+        if let rawSort = values[preferredSortOrderKey] as? String,
            let sort = HistorySortOrder(rawValue: rawSort) {
+            layout.sortOrder = sort
+        } else if let rawSort = values["sortOrder"] as? String,
+                  let sort = HistorySortOrder(rawValue: rawSort), sort != .newestFirst {
+            // The previous layout saved newest first even when only width or row density changed.
             layout.sortOrder = sort
         }
         layout.compactRows = boolean(values["compactRows"], fallback: false)

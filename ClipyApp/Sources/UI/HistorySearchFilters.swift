@@ -148,16 +148,20 @@ enum HistorySearchCopy {
         if state.hasInvalidDateFilter {
             return text("Check custom dates. Both days must exist in your local time zone, with the start on or before the end.", bundle: bundle)
         }
-        if !state.unresolvedSearchSources.isEmpty {
-            return format("No installed application matches %@. Choose an application or use an exact bundle ID.",
-                          state.unresolvedSearchSources.joined(separator: ", "), bundle: bundle)
-        }
         if state.isSourceSearchTooBroad {
             return text("Too many applications match. Choose an application or use an exact bundle ID.", bundle: bundle)
+        }
+        if state.hasUnresolvedSourceFilter, let source = state.searchFilters.source {
+            return format("No installed application matches %@. Choose an application or use an exact bundle ID.",
+                          source, bundle: bundle)
         }
         if let error = state.sourceResolutionError {
             return format("After resolving application names: %@ Shorten the expression or use exact source IDs.",
                           text(error.message, bundle: bundle), bundle: bundle)
+        }
+        if !state.unresolvedSearchSources.isEmpty {
+            return format("No installed application matches %@. Choose an application or use an exact bundle ID.",
+                          state.unresolvedSearchSources.joined(separator: ", "), bundle: bundle)
         }
         return nil
     }

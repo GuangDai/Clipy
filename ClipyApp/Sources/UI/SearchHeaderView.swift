@@ -21,7 +21,7 @@ struct SearchHeaderView: View {
     @Environment(\.locale) private var locale
     @Environment(\.searchHistoryStore) private var searchHistoryStore
     @State private var showsSearchOptions = false
-    @State private var showsExpressionGuide = false
+    @State private var optionsDestination: HistorySearchOptionsView.Destination = .filters
     @State private var showsSearchLibrary = false
     @State private var completion: HistorySearchCompletionState
 
@@ -71,7 +71,7 @@ struct SearchHeaderView: View {
         .popover(isPresented: $showsSearchOptions, arrowEdge: .bottom) {
             HistorySearchOptionsView(
                 viewState: viewState, completion: completion,
-                showsExpressionGuide: showsExpressionGuide
+                destination: optionsDestination
             )
         }
         .onChange(of: showsSearchOptions) { _, isPresented in
@@ -112,8 +112,8 @@ struct SearchHeaderView: View {
         viewState.hasActiveFilters
     }
 
-    private func openOptions(expressionGuide: Bool = false) {
-        showsExpressionGuide = expressionGuide
+    private func openOptions(_ destination: HistorySearchOptionsView.Destination = .filters) {
+        optionsDestination = destination
         searchFieldFocused.wrappedValue = false
         showsSearchOptions = true
     }
@@ -133,11 +133,18 @@ struct SearchHeaderView: View {
                     .fixedSize()
                     .accessibilityIdentifier("clipy.search.fuzzy.use-exact")
                 } else if viewState.hasInvalidDateFilter, viewState.expressionValidationError == nil {
-                    Button { openOptions(expressionGuide: false) } label: { searchIssueLabel(issue) }
+                    Button { openOptions() } label: { searchIssueLabel(issue) }
                         .buttonStyle(AppMotionPressStyle())
                         .accessibilityIdentifier("clipy.search.date.issue")
+                } else if viewState.expressionValidationError == nil,
+                          viewState.hasUnresolvedSourceFilter || viewState.isSourceSearchTooBroad {
+                    searchIssueLabel(issue)
+                    Button(HistorySearchCopy.text("Edit source…", bundle: copyBundle)) { openOptions(.source) }
+                        .buttonStyle(.link)
+                        .fixedSize()
+                        .accessibilityIdentifier("clipy.search.source.issue")
                 } else {
-                    Button { openOptions(expressionGuide: true) } label: { searchIssueLabel(issue) }
+                    Button { openOptions(.expressions) } label: { searchIssueLabel(issue) }
                         .buttonStyle(AppMotionPressStyle())
                         .accessibilityIdentifier("clipy.search.expression.error")
                 }
@@ -149,7 +156,7 @@ struct SearchHeaderView: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 5) {
                         if viewState.hasWrappedSearchConditions {
-                            Button { openOptions(expressionGuide: true) } label: {
+                            Button { openOptions(.expressions) } label: {
                                 Label(HistorySearchCopy.text("Expression", bundle: copyBundle), systemImage: "chevron.left.forwardslash.chevron.right")
                             }
                             .buttonStyle(AppMotionPressStyle()).foregroundStyle(.secondary)
@@ -408,7 +415,7 @@ struct SearchHeaderView: View {
             }
             .accessibilityIdentifier("clipy.search.completion.request")
             Button(HistorySearchCopy.text("Expression guide…", bundle: copyBundle)) {
-                openOptions(expressionGuide: true)
+                openOptions(.expressions)
             }
         } label: {
             queryMenuLabel(viewState.searchMode == .regexp
@@ -426,7 +433,7 @@ struct SearchHeaderView: View {
     private var sortMenu: some View {
         Menu {
             Picker(HistorySearchCopy.text("Sort results", bundle: copyBundle), selection: sortBinding) {
-                ForEach([HistorySortOrder.newestFirst, .oldestFirst, .mostCopied, .automatic], id: \.self) { order in
+                ForEach([HistorySortOrder.automatic, .newestFirst, .oldestFirst, .mostCopied], id: \.self) { order in
                     Text(sortTitle(order)).tag(order)
                 }
             }

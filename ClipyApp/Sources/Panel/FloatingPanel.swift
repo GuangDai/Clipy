@@ -87,9 +87,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// only USER drag positions as the `.lastPosition` anchor.
     private var isProgrammaticMove = false
 
-    /// The latest content-fit demand (the oracle's ideal height), retained
-    /// so the live-resize settle boundary and a later open can re-apply it.
-    private var pendingContentFitHeight: CGFloat?
+    /// The latest demand and its notice height, retained for live-resize
+    /// completion and the next opening.
+    private var pendingContentFit: (idealHeight: CGFloat, topNoticeHeight: CGFloat)?
     /// Desired top edge before temporarily fitting taller content to the screen.
     private var contentFitTopEdge: CGFloat?
     /// Center of the selected display until the new session reports its first
@@ -292,8 +292,10 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         // Position the actual compact surface, not its taller saved ceiling.
         // Otherwise center placement ends above center, and cursor/last-position
         // placement near the bottom unnecessarily jumps up to fit empty space.
-        if let idealHeight = pendingContentFitHeight {
-            size.height = PanelContentFit.clampedHeight(idealHeight, ceiling: size.height)
+        if let fit = pendingContentFit {
+            size.height = PanelContentFit.clampedHeight(
+                fit.idealHeight, ceiling: size.height, topNoticeHeight: fit.topNoticeHeight
+            )
         }
         let mouseLocation = NSEvent.mouseLocation
         let screens = NSScreen.screens.map { (frame: $0.frame, visibleFrame: $0.visibleFrame) }
@@ -634,25 +636,27 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     /// (`PanelContentFit`) and applies it unless a live user resize is
     /// active; the demand is retained either way so the settle boundary
     /// and the next open re-apply it.
-    func fitToContent(idealHeight: CGFloat) {
-        pendingContentFitHeight = idealHeight
+    func fitToContent(idealHeight: CGFloat, topNoticeHeight: CGFloat = 0) {
+        pendingContentFit = (idealHeight, topNoticeHeight)
         applyContentFit(settlingOpeningFrame: true)
     }
 
     /// Applies the retained fit demand with an INSTANT, non-animated
     /// `setFrame` (the layout-storm rationale above: window frames never
     /// animate). The new height is the ideal clamped to
-    /// [PanelContentFit floor, persisted ceiling] and the visible screen.
+    /// the notice-aware browsing floor, saved ceiling and visible screen.
     /// The first measured fit settles a centered opening. Other fits keep
     /// the top edge as far as the visible screen allows.
     private func applyContentFit(settlingOpeningFrame: Bool = false) {
         guard isPresented,
               !isLiveResizeActive,
-              let idealHeight = pendingContentFitHeight
+              let fit = pendingContentFit
         else { return }
         let ceiling = PanelGeometry.persistedSize(from: .standard).height
         let visibleFrame = screen?.visibleFrame
-        var fitted = PanelContentFit.clampedHeight(idealHeight, ceiling: ceiling)
+        var fitted = PanelContentFit.clampedHeight(
+            fit.idealHeight, ceiling: ceiling, topNoticeHeight: fit.topNoticeHeight
+        )
         if let visibleFrame {
             fitted = min(fitted, visibleFrame.height)
         }

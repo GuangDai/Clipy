@@ -7,12 +7,15 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct HistorySearchOptionsView: View {
+    enum Destination: Equatable { case filters, source, expressions }
+
     @Environment(\.locale) private var locale
     @Environment(\.timeZone) private var timeZone
     @Environment(\.dismiss) private var dismiss
     private let viewState: HistoryViewState
     private let completion: HistorySearchCompletionState
-    private let showsExpressionGuide: Bool
+    private let destination: Destination
+    @FocusState private var isSourceFieldFocused: Bool
     @State private var draft: HistorySearchFilters
     @State private var isChoosingApplication = false
     @State private var applicationSelectionFailed = false
@@ -21,16 +24,17 @@ struct HistorySearchOptionsView: View {
     @State private var isLoadingHistorySources = false
     @State private var historySourceReadFailed = false
 
-    init(viewState: HistoryViewState, completion: HistorySearchCompletionState, showsExpressionGuide: Bool) {
+    init(viewState: HistoryViewState, completion: HistorySearchCompletionState, destination: Destination) {
         self.viewState = viewState
         self.completion = completion
-        self.showsExpressionGuide = showsExpressionGuide
+        self.destination = destination
         _draft = State(initialValue: viewState.searchFilters)
     }
 
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
     private func text(_ value: String) -> String { HistorySearchCopy.text(value, bundle: copyBundle) }
     private var localDateCalendar: Calendar { HistorySearchFilters.gregorianCalendar(in: timeZone) }
+    private var showsExpressionGuide: Bool { destination == .expressions }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -65,6 +69,7 @@ struct HistorySearchOptionsView: View {
         }
         .padding(16)
         .frame(width: 360)
+        .defaultFocus($isSourceFieldFocused, destination == .source)
         .onAppear {
             if !showsExpressionGuide { draft = viewState.searchFilters }
         }
@@ -164,6 +169,7 @@ struct HistorySearchOptionsView: View {
                       text: $draft.sourceApplication,
                       prompt: Text(draft.sourceMatch == .applicationName ? "Telegram" : "com.apple.Safari"))
                 .textFieldStyle(.roundedBorder)
+                .focused($isSourceFieldFocused)
                 .accessibilityIdentifier("clipy.search.source.field")
             VStack(alignment: .leading, spacing: 4) {
                 Text(text("From clipboard history")).font(.caption).foregroundStyle(.secondary)

@@ -1447,7 +1447,8 @@ struct DetailsTextPreview: View {
             } header: {
                 if let matches, matches.targets.count > 1 {
                     PreviewSearchMatchNavigator(count: matches.targets.count, selection: activeMatch,
-                        accessibilityID: accessibilityID + ".matches") { index in
+                        accessibilityID: accessibilityID + ".matches", showsContext: matches.hasSharedTargets,
+                        context: matches.context(for: activeMatch, in: text.displaySegments, style: searchMatchStyle)) { index in
                         activeMatch = index
                         scrollToMatch(anchor(for: matches.targets[index]))
                     }

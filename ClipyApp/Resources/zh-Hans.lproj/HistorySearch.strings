@@ -18,6 +18,7 @@
 "Check custom dates. Both days must exist in your local time zone, with the start on or before the end." = "请检查自定义日期。两个日期都须在当前时区存在，结束日期不能早于开始日期。";
 "Uses the most recent copy date in your local time zone. Both selected dates are included." = "按本地时区的最近一次复制日期筛选，包含所选的开始和结束日期。";
 "Source application" = "来源应用";
+"Edit source…" = "修改来源…";
 "Match source by" = "来源匹配方式";
 "Application name" = "应用名称";
 "Application name contains" = "应用名称包含";

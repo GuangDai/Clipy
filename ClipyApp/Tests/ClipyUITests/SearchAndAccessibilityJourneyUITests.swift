@@ -87,11 +87,7 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 })
         let row = rows.element(boundBy: 0)
         XCTAssertTrue(row.label.contains(captured))
-        XCTAssertTrue(row.label.contains("最近复制"))
-        let timeInList = XCTAttachment(screenshot: app.screenshot())
-        timeInList.name = "localized-copy-time-in-history-list"
-        timeInList.lifetime = .keepAlways
-        add(timeInList)
+        XCTAssertFalse(row.label.contains("最近复制"))
 
         // The default exact search excludes this unrelated query regardless
         // of the current interface language.
@@ -115,6 +111,18 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         XCTAssertTrue(clear.waitForExistence(timeout: 5))
         XCTAssertEqual(search.value as? String, "alpha")
         XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 1 })
+
+        HistoryJourneyControls.select(row, in: app)
+        let preview = app.descendants(matching: .any)["clipy.preview.root"]
+        let copyTime = preview.staticTexts["clipy.preview.last-copied-at"]
+        XCTAssertTrue(waitUntil(timeout: 5) { copyTime.exists && copyTime.isHittable })
+        let copyTimeLabel = copyTime.label
+        XCTAssertTrue(copyTimeLabel.hasPrefix("最近复制"))
+        XCTAssertTrue(copyTimeLabel.contains("年") && copyTimeLabel.contains("月") && copyTimeLabel.contains("日"))
+        let timeInPreview = XCTAttachment(screenshot: app.screenshot())
+        timeInPreview.name = "localized-copy-time-in-preview"
+        timeInPreview.lifetime = .keepAlways
+        add(timeInPreview)
 
         // Continue through the real row menu and Details/editor surfaces in
         // the same language. The original clipboard text remains literal.
@@ -250,7 +258,7 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments += [
             "-AppleLanguages", "(\(language))", "-AppleLocale", locale,
-            "-clipy.language", "system"
+            "-clipy.language", "system", "-clipy.appearance.previewAutoOpen", "YES"
         ]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
         app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory

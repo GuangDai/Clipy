@@ -854,6 +854,8 @@ struct FloatingPanelFrameHostedTests {
     @Test func aCenteredReopenFitsNoticesChangedWhileHidden() async throws {
         let restore = isolatePersistedPanelGeometryKeys()
         defer { restore() }
+        let compactHeight = PanelGeometry.minimumHeight
+        PanelGeometry.persistSize(contentWidth: PanelGeometry.contentWidth, height: compactHeight, to: .standard)
         let history = try await ComposedSupport.openMemoryHistory()
         let pasteboard = ComposedSupport.makePasteboard()
         pasteboard.clearContents()
@@ -871,7 +873,6 @@ struct FloatingPanelFrameHostedTests {
         let screen = try #require(panel.screen)
         try #require(screen.visibleFrame.height >= PanelGeometry.height)
         let center = screen.visibleFrame.midY
-        let compactHeight = PanelGeometry.minimumHeight
         try #require(await ComposedSupport.waitFor { panel.frame.height == compactHeight })
 
         func reportCaptureFailure(_ count: Int) {
@@ -900,6 +901,7 @@ struct FloatingPanelFrameHostedTests {
         owner.openPanelForTesting()
         try #require(await ComposedSupport.waitFor { panel.frame.height == compactHeight })
         #expect(abs(panel.frame.midY - center) <= 1)
+        #expect(PanelGeometry.persistedSize(from: .standard).height == compactHeight)
     }
 
     @Test func lastPositionNearTheBottomDoesNotShiftUpToFitAnUnusedCeiling() throws {

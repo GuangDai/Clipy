@@ -144,6 +144,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         XCTAssertTrue(waitUntil { search.value as? String == "alpha$" && rows.count == 1 }, app.debugDescription)
         if language == "en" {
             exerciseDateConfirmation(in: app, dates: dates)
+            exerciseSourceCorrection(in: app, search: search, dates: dates, rows: rows)
             exerciseFuzzyLimit(in: app, search: search, sort: sort, rows: rows, pasteboard: pasteboard)
             exerciseUniformSearchRows(in: app, panel: panel, search: search, sort: sort, rows: rows, pasteboard: pasteboard)
         }
@@ -166,6 +167,34 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
             action.click()
             XCTAssertTrue(waitUntil { !range.exists && activeDate.exists == applies }, app.debugDescription)
         }
+    }
+
+    @MainActor
+    private func exerciseSourceCorrection(
+        in app: XCUIApplication, search: XCUIElement, dates: XCUIElement, rows: XCUIElementQuery
+    ) {
+        let source = app.textFields["clipy.search.source.field"]
+        let apply = app.buttons["clipy.search.options.apply"]
+        let editSource = app.links["clipy.search.source.issue"]
+        let unavailableSource = "clipy-no-app-40f17"
+
+        dates.click()
+        XCTAssertTrue(waitUntil { source.exists && source.isHittable }, app.debugDescription)
+        source.click()
+        app.typeText(unavailableSource)
+        apply.click()
+        XCTAssertTrue(waitUntil { editSource.exists && editSource.isHittable && rows.count == 0 }, app.debugDescription)
+
+        editSource.click()
+        XCTAssertTrue(waitUntil { source.exists && source.value as? String == unavailableSource }, app.debugDescription)
+        app.typeKey("a", modifierFlags: .command)
+        app.typeKey(.delete, modifierFlags: [])
+        XCTAssertEqual(source.value as? String, "", app.debugDescription)
+        apply.click()
+        XCTAssertTrue(waitUntil {
+            !editSource.exists && search.value as? String == "alpha$" && rows.count == 1
+                && app.buttons["clipy.search.clear-filter.date"].exists
+        }, app.debugDescription)
     }
 
     @MainActor
