@@ -762,6 +762,7 @@ struct SearchHistoryStoreTests {
         filters.dateRange = .custom
         filters.startDate = Date(timeIntervalSinceReferenceDate: 800_000_000)
         filters.endDate = Date(timeIntervalSinceReferenceDate: 800_259_200)
+        filters.dateSelectionTimeZone = .current
         source.searchFilters = filters
         let captured = HistorySearchDefinition(viewState: source)
         source.deactivate()
