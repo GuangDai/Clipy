@@ -160,11 +160,10 @@ public struct PasteboardAdapter {
     /// The observer may be stopped/restarted while a promised-data provider
     /// spins the main run loop. Its existing session identity decides whether
     /// another accessor is still wanted; abandoning a read publishes no bytes.
-    /// Stable declarations without content types and declarations with empty
-    /// constituent content report their generation separately. Ownership can
-    /// be declared before items, types, or bytes are published, without
-    /// advancing that generation again. Optional lineage metadata alone waits
-    /// for content declarations and never requests payload retries.
+    /// An empty pasteboard and a generation with only empty payloads report
+    /// their generation separately. Ownership can be declared before items,
+    /// types, or bytes are published, without advancing that generation again.
+    /// Optional lineage metadata alone waits for content declarations.
     internal func captureOutcome(
         observedAt: Date = Date(),
         shouldContinue: @MainActor () -> Bool,
@@ -349,9 +348,9 @@ public struct PasteboardAdapter {
             // payload model. Never silently drop one from the gesture, but
             // allow its owner to finish publication in this same generation.
             guard shouldContinue() else { return nil }
-            didObserveNoRetainableContent(startChangeCount)
             return .unsupportedMultiItem(.init(
-                itemCount: items.count, changeCount: startChangeCount
+                itemCount: items.count, changeCount: startChangeCount,
+                awaitsConstituentContent: true
             ))
         }
         let capture = ClipboardCapture(
@@ -604,10 +603,13 @@ public enum CaptureOutcome: Sendable, Equatable {
     public struct UnsupportedMultiItem: Sendable, Equatable {
         public let itemCount: Int
         public let changeCount: Int
+        /// An empty constituent may publish bytes within this generation.
+        public let awaitsConstituentContent: Bool
 
-        fileprivate init(itemCount: Int, changeCount: Int) {
+        fileprivate init(itemCount: Int, changeCount: Int, awaitsConstituentContent: Bool = false) {
             self.itemCount = itemCount
             self.changeCount = changeCount
+            self.awaitsConstituentContent = awaitsConstituentContent
         }
     }
 

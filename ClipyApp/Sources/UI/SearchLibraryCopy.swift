@@ -53,12 +53,12 @@ enum SearchLibraryCopy {
         if definition.pinnedOnly { parts.append(PanelActionsCopy.text("Pinned Only", bundle: bundle)) }
         if let source = definition.filters.source { parts.append(source) }
         if definition.filters.dateRange == .custom {
-            let style = Date.FormatStyle(
-                date: .abbreviated, time: .omitted, locale: locale,
-                timeZone: definition.customDateTimeZone ?? timeZone
-            )
-            parts.append(definition.filters.startDate.formatted(style)
-                + " – " + definition.filters.endDate.formatted(style))
+            var calendar = Calendar.current
+            calendar.timeZone = timeZone
+            if let selectionZone = definition.customDateTimeZone {
+                calendar = HistorySearchFilters.gregorianCalendar(in: selectionZone)
+            }
+            parts.append(definition.filters.customDateTitle(locale: locale, calendar: calendar))
         } else if definition.filters.dateRange != .anyTime {
             parts.append(HistorySearchCopy.text(definition.filters.dateRange.title, bundle: bundle))
         }

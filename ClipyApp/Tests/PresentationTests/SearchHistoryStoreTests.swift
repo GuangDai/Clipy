@@ -280,12 +280,33 @@ struct SearchHistoryStoreTests {
 
         let state = HistoryViewState(history: history)
         defer { state.deactivate() }
+        var activeFilters = filters
+        activeFilters.dateSelectionTimeZone = shanghai.timeZone
+        state.searchFilters = activeFilters
+        state.refreshDateFiltersIfNeeded(now: originalStart, calendar: shanghai)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.title) == ["Selected local day", "Earlier local day"])
+
+        state.refreshDateFiltersIfNeeded(now: localStart, calendar: losAngeles)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.title) == ["Selected local day"])
+        let savedAfterSwitch = HistorySearchDefinition(viewState: state)
+        #expect(savedAfterSwitch.customDateTimeZone == shanghai.timeZone)
+        #expect(SearchLibraryCopy.summary(savedAfterSwitch, locale: locale, timeZone: losAngeles.timeZone) == localSummary)
+
         #expect(saved.apply(to: state, timeZone: losAngeles.timeZone))
         #expect(state.searchFilters.startDate == localStart)
         #expect(state.searchFilters.endDate == localStart)
         state.refreshDateFiltersIfNeeded(now: localStart, calendar: losAngeles)
         try #require(await pollUntil { state.hasAuthoritativeFirstPage })
         #expect(state.rows.map(\.title) == ["Selected local day"])
+
+        let honolulu = HistorySearchFilters.gregorianCalendar(in: try #require(TimeZone(identifier: "Pacific/Honolulu")))
+        state.refreshDateFiltersIfNeeded(now: localStart, calendar: honolulu)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.title) == ["Following local day"])
+        #expect(SearchLibraryCopy.summary(HistorySearchDefinition(viewState: state), locale: locale,
+                                         timeZone: honolulu.timeZone) == localSummary)
     }
 
     @Test func legacyCustomDateReplaysTheOriginalInstantsWithoutGuessingAZone() throws {

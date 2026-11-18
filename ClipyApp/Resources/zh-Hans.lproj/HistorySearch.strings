@@ -14,6 +14,8 @@
 "From" = "开始日期";
 "Through" = "结束日期";
 "The end date must be on or after the start date." = "结束日期不能早于开始日期。";
+"One of the selected dates does not exist in your local time zone." = "所选的某个日期在当前时区不存在。";
+"Check custom dates. Both days must exist in your local time zone, with the start on or before the end." = "请检查自定义日期。两个日期都须在当前时区存在，结束日期不能早于开始日期。";
 "Uses the most recent copy date in your local time zone. Both selected dates are included." = "按本地时区的最近一次复制日期筛选，包含所选的开始和结束日期。";
 "Source application" = "来源应用";
 "Match source by" = "来源匹配方式";
@@ -55,7 +57,7 @@
 "No installed application matches %@. Choose an application or use an exact bundle ID." = "未找到名称匹配 %@ 的已安装应用。请选择应用或使用完整 Bundle ID。";
 "Too many applications match. Choose an application or use an exact bundle ID." = "匹配的应用过多，请选择具体应用或使用完整 Bundle ID。";
 "Check search conditions" = "请检查搜索条件";
-"Fuzzy search supports up to %d characters. Use Exact to search the entire text." = "模糊搜索最多支持 %d 个字符。切换到精确搜索可查找完整输入。";
+"Fuzzy search limit (%d characters)" = "模糊搜索最多 %d 个字符";
 "Use Exact" = "切换到精确搜索";
 "Couldn't load results" = "无法加载结果";
 "Return retries when there are no candidates." = "没有候选项时，按 Return 重试。";

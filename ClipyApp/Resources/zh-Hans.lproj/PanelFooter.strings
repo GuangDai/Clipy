@@ -1,6 +1,4 @@
 // Panel footer actions and clear confirmation.
-"↑↓ Select · Esc Clear" = "↑↓ 选择 · Esc 清除";
-"⏎ Paste · Space Quick Look · ⌘I Details" = "⏎ 粘贴 · Space 快速查看 · ⌘I 详情";
 "Shows the loaded portion of your history. Search to narrow results." = "显示已加载的历史记录。可通过搜索缩小结果范围。";
 "Keep Panel Open" = "保持面板打开";
 "Pause Clipboard Monitoring for 5 Minutes" = "暂停剪贴板监测 5 分钟";

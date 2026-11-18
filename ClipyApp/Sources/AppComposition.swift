@@ -172,8 +172,6 @@ final class AppComposition {
     /// page window, so opening a workspace never changes the floating panel.
     let historyWorkspaceViewState: HistoryViewState
     let historyWorkspaceCopyState = HistoryWorkspaceCopyState()
-    let searchHistoryStore = SearchHistoryStore(defaults: .standard)
-    let historyBrowsingPreferences = HistoryBrowsingPreferences(defaults: .standard)
 
     /// App-local synchronous consumer for the one real panel surface. The
     /// ingress and user-receipt announcement paths both await/apply here
@@ -1074,6 +1072,8 @@ final class AppComposition {
             admitCapture(complete.capture, runAutomaticWorkflows: !observer.isDeliveringInitialCapture)
         case .concealed:
             return
+        case let .unsupportedMultiItem(value) where value.awaitsConstituentContent:
+            recordCaptureFailure(.declaredContentUnavailable, pendingChangeCount: value.changeCount)
         case .unsupportedMultiItem:
             recordCaptureFailure(.unsupportedClipboardShape)
         case .changedDuringRead(let race):

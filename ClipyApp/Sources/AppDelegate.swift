@@ -163,6 +163,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let accessibilityAnnouncement: AccessibilityAnnouncement
     private let summonShortcutDefaults: UserDefaults
     let interactionDefaults: UserDefaults
+    let searchHistoryStore = SearchHistoryStore(defaults: .standard)
+    let historyBrowsingPreferences = HistoryBrowsingPreferences(defaults: .standard)
     private let summonShortcutRegistrationFactory:
         SummonShortcutController.RegistrationFactory?
     /// Exact persistent locator this app process attempts to open. Production
@@ -754,7 +756,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ensurePanelWindow()
         if let composition {
             composition.viewState.activate(restoring:
-                composition.historyBrowsingPreferences.readingItemID(for: .panel))
+                historyBrowsingPreferences.readingItemID(for: .panel))
         }
         panel?.open(
             at: mode,
@@ -824,7 +826,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
            HistorySearchCopy.issue(for: composition.viewState) == nil,
            composition.viewState.sourceResolutionError == nil,
            composition.viewState.searchFilters.hasValidDates() {
-            composition.searchHistoryStore.recordSubmittedSearch(
+            searchHistoryStore.recordSubmittedSearch(
                 HistorySearchDefinition(viewState: composition.viewState)
             )
         }
@@ -1020,7 +1022,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         composition?.cancelPendingPaste()
         if pasteFailure == .busy { pasteFailure = nil }
         if let composition {
-            composition.historyBrowsingPreferences.rememberReadingPosition(
+            historyBrowsingPreferences.rememberReadingPosition(
                 composition.viewState.readingItemID ?? panelSurfaceState?.selection, for: .panel
             )
         }
@@ -1267,7 +1269,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // authoritative observation without closing/reopening the panel.
         if panel?.isPresented == true {
             opened.viewState.activate(restoring:
-                opened.historyBrowsingPreferences.readingItemID(for: .panel))
+                historyBrowsingPreferences.readingItemID(for: .panel))
             panelSurfaceState.beginSession(rows: opened.viewState.rows)
         }
     }

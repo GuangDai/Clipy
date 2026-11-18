@@ -188,6 +188,7 @@ final class NarrowSearchHeaderJourneyUITests: XCTestCase {
         let useExact = app.links["clipy.search.fuzzy.use-exact"]
         XCTAssertTrue(useExact.waitForExistence(timeout: 5), app.debugDescription)
         XCTAssertEqual(search.value as? String, longText)
+        XCTAssertFalse(app.descendants(matching: .any)["clipy.history.query-issue"].exists)
         useExact.click()
         XCTAssertTrue(waitUntil {
             !useExact.exists && search.value as? String == longText

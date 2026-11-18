@@ -14,6 +14,8 @@
 "From" = "From";
 "Through" = "Through";
 "The end date must be on or after the start date." = "The end date must be on or after the start date.";
+"One of the selected dates does not exist in your local time zone." = "One of the selected dates does not exist in your local time zone.";
+"Check custom dates. Both days must exist in your local time zone, with the start on or before the end." = "Check custom dates. Both days must exist in your local time zone, with the start on or before the end.";
 "Uses the most recent copy date in your local time zone. Both selected dates are included." = "Uses the most recent copy date in your local time zone. Both selected dates are included.";
 "Source application" = "Source application";
 "Match source by" = "Match source by";
@@ -55,7 +57,7 @@
 "No installed application matches %@. Choose an application or use an exact bundle ID." = "No installed application matches %@. Choose an application or use an exact bundle ID.";
 "Too many applications match. Choose an application or use an exact bundle ID." = "Too many applications match. Choose an application or use an exact bundle ID.";
 "Check search conditions" = "Check search conditions";
-"Fuzzy search supports up to %d characters. Use Exact to search the entire text." = "Fuzzy search supports up to %d characters. Use Exact to search the entire text.";
+"Fuzzy search limit (%d characters)" = "Fuzzy search limit (%d characters)";
 "Use Exact" = "Use Exact";
 "Couldn't load results" = "Couldn't load results";
 "Return retries when there are no candidates." = "Return retries when there are no candidates.";

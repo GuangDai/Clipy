@@ -11,7 +11,7 @@ struct ClipySettingsView: View {
     /// The shared panel view state (step-9 design contract §3); settings
     /// mutations ride the same `ClipboardHistory` seam and its observation
     /// loop refreshes the panel after every commit.
-    private let viewState: HistoryViewState
+    private let viewState: HistoryViewState?
     private let workspaceViewState: HistoryViewState?
     private let workspaceCopyState: HistoryWorkspaceCopyState?
     private let workspaceSourceIconProvider: SourceIconProvider
@@ -30,6 +30,7 @@ struct ClipySettingsView: View {
     private let storageLocation: StorageLocationSettings?
     private let localAutomation: LocalAutomationSettings?
     private let interactionDefaults: UserDefaults
+    private let storeRecovery: SettingsStoreRecoveryView?
 
     /// One panel-owned configured snapshot and edit generation shared by the
     /// v1 count control and all V2 dimensions (DEC-RET-READ / Card 10A).
@@ -42,11 +43,11 @@ struct ClipySettingsView: View {
     @State private var retentionConfigurationRefreshGeneration = 0
 
     /// - Parameters:
-    ///   - viewState: the shared interaction-state object (contract §3).
+    ///   - viewState: the shared history state, available once the store opens.
     ///   - launchAtLogin: when non-`nil`, the General tab shows the
     ///     "Launch at Login" state and controls; `nil` (previews, hosted
     ///     tests) omits the toggle entirely.
-    ///   - summonShortcut: when non-`nil`, the General tab shows the current
+    ///   - summonShortcut: when non-`nil`, the Shortcuts tab shows the current
     ///     binding or unavailable candidate plus Change/Retry/Reset recovery.
     ///   - popupPosition: when non-`nil`, the Appearance tab shows the panel
     ///     position picker bound to it; `nil` omits the picker entirely.
@@ -55,7 +56,7 @@ struct ClipySettingsView: View {
     ///   - localAutomation: when non-`nil`, Automation exposes the app-owned
     ///     explicit enrollment, independent grants and revocation controls.
     init(
-        viewState: HistoryViewState,
+        viewState: HistoryViewState?,
         workspaceViewState: HistoryViewState? = nil,
         workspaceCopyState: HistoryWorkspaceCopyState? = nil,
         workspaceSourceIconProvider: SourceIconProvider = .none,
@@ -64,7 +65,8 @@ struct ClipySettingsView: View {
         popupPosition: Binding<PopupPositionMode>? = nil,
         storageLocation: StorageLocationSettings? = nil,
         localAutomation: LocalAutomationSettings? = nil,
-        interactionDefaults: UserDefaults = .standard
+        interactionDefaults: UserDefaults = .standard,
+        storeRecovery: SettingsStoreRecoveryView? = nil
     ) {
         self.viewState = viewState
         self.workspaceViewState = workspaceViewState
@@ -76,15 +78,20 @@ struct ClipySettingsView: View {
         self.storageLocation = storageLocation
         self.localAutomation = localAutomation
         self.interactionDefaults = interactionDefaults
+        self.storeRecovery = storeRecovery
     }
 
     @AppStorage("clipy.settings.selectedCategory")
     private var savedCategory = SettingsCategory.general.rawValue
 
+    private var showsWorkspace: Bool {
+        storeRecovery != nil || (workspaceViewState != nil && workspaceCopyState != nil)
+    }
+
     private var category: SettingsCategory {
         let saved = SettingsCategory(rawValue: savedCategory) ?? .general
         if saved == .maintenance, storageLocation == nil { return .general }
-        if saved == .history, workspaceViewState == nil || workspaceCopyState == nil { return .general }
+        if saved == .history, !showsWorkspace { return .general }
         return saved
     }
 
@@ -100,7 +107,7 @@ struct ClipySettingsView: View {
         NavigationSplitView {
             List(selection: selection) {
                 categoryRow(.general)
-                if workspaceViewState != nil, workspaceCopyState != nil { categoryRow(.history) }
+                if showsWorkspace { categoryRow(.history) }
                 categoryRow(.appearance)
                 categoryRow(.keyboard)
                 categoryRow(.retention)
@@ -119,7 +126,7 @@ struct ClipySettingsView: View {
         }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: category == .history ? 820 : 560, minHeight: 420)
-        .task(id: retentionConfigurationRefreshGeneration) {
+        .task(id: viewState.map { _ in retentionConfigurationRefreshGeneration }) {
             await loadRetentionConfiguration()
         }
         .onDisappear {
@@ -151,40 +158,56 @@ struct ClipySettingsView: View {
         case .general:
             GeneralSettingsTab(
                 viewState: viewState,
-                launchAtLogin: launchAtLogin
+                launchAtLogin: launchAtLogin,
+                storeRecovery: storeRecovery
             )
         case .history:
             if let workspaceViewState, let workspaceCopyState {
                 HistoryWorkspaceView(viewState: workspaceViewState, copyState: workspaceCopyState,
                     sourceIconProvider: workspaceSourceIconProvider)
+            } else {
+                recoveryPane
             }
         case .appearance:
             AppearanceSettingsTab(popupPosition: popupPosition)
         case .keyboard:
             KeyboardShortcutsSettingsView(summonShortcut: summonShortcut)
         case .retention:
-            RetentionSettingsTab(
-                viewState: viewState,
-                draft: $retentionDraft,
-                hasLoadedRetentionConfiguration: hasLoadedRetentionConfiguration,
-                retentionConfigurationFailure: retentionConfigurationFailure,
-                retryRetentionConfiguration: { retentionConfigurationRefreshGeneration += 1 }
-            )
+            if let viewState {
+                RetentionSettingsTab(
+                    viewState: viewState,
+                    draft: $retentionDraft,
+                    hasLoadedRetentionConfiguration: hasLoadedRetentionConfiguration,
+                    retentionConfigurationFailure: retentionConfigurationFailure,
+                    retryRetentionConfiguration: { retentionConfigurationRefreshGeneration += 1 }
+                )
+            } else {
+                recoveryPane
+            }
         case .automation:
-            if let localAutomation {
+            if let viewState, let localAutomation {
                 LocalAutomationSettingsView(settings: localAutomation, history: viewState.history,
                                             workflowFailure: viewState.automaticWorkflowFailure)
-            } else {
+            } else if let viewState {
                 Form { Section { BuiltInAutomationSettingsView(history: viewState.history, failure: viewState.automaticWorkflowFailure) } }
                     .formStyle(.grouped)
+            } else {
+                recoveryPane
             }
         case .interaction:
             AdvancedInteractionSettingsView(defaults: interactionDefaults)
         case .maintenance:
-            if let storageLocation {
+            if let viewState, let storageLocation {
                 MaintenanceSettingsView(history: viewState.history, location: storageLocation)
+            } else {
+                recoveryPane
             }
         }
+    }
+
+    private var recoveryPane: some View {
+        Form { Section { storeRecovery } }
+            .formStyle(.grouped)
     }
 
     /// One public read supplies both tabs. A response racing a user edit is
@@ -192,7 +215,7 @@ struct ClipySettingsView: View {
     /// completed still unlocks Apply because the authoritative comparison
     /// baseline arrived even when newer text wins the display merge.
     private func loadRetentionConfiguration() async {
-        guard !Task.isCancelled else { return }
+        guard let viewState, !Task.isCancelled else { return }
         let request = retentionDraft.beginLoadRequest()
         hasLoadedRetentionConfiguration = false
         retentionConfigurationFailure = nil
@@ -223,6 +246,48 @@ struct ClipySettingsView: View {
     }
 }
 
+/// Recovery is offered at the point where a settings action needs History.
+struct SettingsStoreRecoveryView: View {
+    @Environment(\.locale) private var locale
+
+    let failure: (any Error)?
+    let retry: () -> Void
+    let reveal: () -> Void
+
+    var body: some View {
+        let _ = locale
+        if let failure {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(AppRecoveryCopy.failureCategory(for: failure))
+                    .font(.headline)
+                    .accessibilityIdentifier("clipy.settings.store.failure.category")
+                Text(AppRecoveryCopy.failureMessage(for: failure))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("clipy.settings.store.failure.message")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { recoveryActions }
+                    VStack(alignment: .leading, spacing: 8) { recoveryActions }
+                }
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("clipy.settings.store.failure")
+        } else {
+            ProgressView(AppRecoveryCopy.text("Opening Clipy…"))
+                .accessibilityIdentifier("clipy.settings.store.opening")
+        }
+    }
+
+    @ViewBuilder
+    private var recoveryActions: some View {
+        Button(AppRecoveryCopy.text("Retry"), action: retry)
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("clipy.settings.store.failure.retry")
+        Button(AppRecoveryCopy.text("Reveal Store Location"), action: reveal)
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("clipy.settings.store.failure.reveal")
+    }
+}
 
 private enum SettingsCategory: String, Hashable {
     case general, history, appearance, keyboard, retention, automation, interaction, maintenance

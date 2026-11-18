@@ -16,12 +16,19 @@ struct HistoryWorkspaceSplitGeometry: Equatable {
         listWidth = min(max(preferred, minimum), content - minimum)
         previewWidth = content - listWidth
     }
+
+    func movingDivider(by horizontalDelta: Double, layoutDirection: LayoutDirection) -> Self {
+        let listDelta = layoutDirection == .leftToRight ? horizontalDelta : -horizontalDelta
+        return Self(preferredListWidth: listWidth + listDelta,
+                    availableWidth: listWidth + dividerWidth + previewWidth)
+    }
 }
 
 /// Settings owns the persisted binding; the divider owns only its active drag.
 struct HistoryWorkspaceSplitView<ListContent: View, PreviewContent: View>: View {
     @Binding private var listWidth: Double
     @Environment(\.locale) private var locale
+    @Environment(\.layoutDirection) private var layoutDirection
     @GestureState private var dragTranslation: CGFloat = 0
     private let list: ListContent
     private let preview: PreviewContent
@@ -37,8 +44,7 @@ struct HistoryWorkspaceSplitView<ListContent: View, PreviewContent: View>: View 
         GeometryReader { geometry in
             let available = Double(geometry.size.width)
             let base = HistoryWorkspaceSplitGeometry(preferredListWidth: listWidth, availableWidth: available)
-            let layout = HistoryWorkspaceSplitGeometry(preferredListWidth: base.listWidth + Double(dragTranslation),
-                                                       availableWidth: available)
+            let layout = base.movingDivider(by: Double(dragTranslation), layoutDirection: layoutDirection)
             HStack(spacing: 0) {
                 list.frame(width: layout.listWidth).frame(maxHeight: .infinity).clipped()
                 Rectangle().fill(Color.secondary.opacity(0.35))
@@ -47,11 +53,17 @@ struct HistoryWorkspaceSplitView<ListContent: View, PreviewContent: View>: View 
                     .gesture(DragGesture(minimumDistance: 3, coordinateSpace: .global)
                         .updating($dragTranslation) { value, translation, _ in translation = value.translation.width }
                         .onEnded { value in
-                            resize(to: base.listWidth + Double(value.translation.width), available: available)
+                            moveDivider(by: Double(value.translation.width), from: base)
                         })
                     .focusable()
-                    .onKeyPress(.leftArrow) { resize(to: base.listWidth - 20, available: available); return .handled }
-                    .onKeyPress(.rightArrow) { resize(to: base.listWidth + 20, available: available); return .handled }
+                    .onKeyPress(.leftArrow) {
+                        moveDivider(by: -20, from: base)
+                        return .handled
+                    }
+                    .onKeyPress(.rightArrow) {
+                        moveDivider(by: 20, from: base)
+                        return .handled
+                    }
                     .accessibilityElement(children: .ignore)
                     .accessibilityLabel(text("History list width"))
                     .accessibilityValue(Text("\(layout.listWidth, format: .number.precision(.fractionLength(0))) pt"))
@@ -67,6 +79,11 @@ struct HistoryWorkspaceSplitView<ListContent: View, PreviewContent: View>: View 
                 preview.frame(width: layout.previewWidth).frame(maxHeight: .infinity).clipped()
             }
         }
+    }
+
+    private func moveDivider(by horizontalDelta: Double, from base: HistoryWorkspaceSplitGeometry) {
+        let width = base.movingDivider(by: horizontalDelta, layoutDirection: layoutDirection).listWidth
+        if width != base.listWidth { listWidth = width }
     }
 
     private func resize(to preferred: Double, available: Double) {

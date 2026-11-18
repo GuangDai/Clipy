@@ -289,21 +289,11 @@ struct HistoryListView: View {
     private var paginationControl: some View {
         if viewState.isLoadingPage {
             loadingRow
-        } else if viewState.hasNextPage || viewState.hasPreviousPage {
-            HStack {
-                if viewState.hasPreviousPage {
-                    Button(HistoryListCopy.text("Back to first results")) {
-                        viewState.returnToLatest()
-                    }
-                    .accessibilityIdentifier("clipy.history.first-results")
-                }
-                if viewState.hasNextPage {
-                    Button(HistoryListCopy.text("Load More")) {
-                        viewState.loadNextPage()
-                    }
-                    .accessibilityIdentifier("clipy.history.load-more")
-                }
+        } else if viewState.hasNextPage {
+            Button(HistoryListCopy.text("Load More")) {
+                viewState.loadNextPage()
             }
+            .accessibilityIdentifier("clipy.history.load-more")
             .frame(maxWidth: .infinity)
         }
     }
@@ -312,10 +302,8 @@ struct HistoryListView: View {
 
     @ViewBuilder
     private var emptyState: some View {
-        if viewState.isLoadingFirstPage {
-            // Search already owns the loading indicator. Keep an empty
-            // viewport until the first page arrives instead of a second
-            // full-surface spinner.
+        if viewState.isLoadingFirstPage || viewState.fuzzyQueryExceedsLimit {
+            // The search header owns progress and the fuzzy-limit action.
             Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let failure = HistorySearchCopy.resultsFailure(for: viewState) {
             emptyMessage(HistorySearchCopy.resultsFailureTitle(failure), symbol: "exclamationmark.triangle",

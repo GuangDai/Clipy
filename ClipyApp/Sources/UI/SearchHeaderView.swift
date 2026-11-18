@@ -132,6 +132,10 @@ struct SearchHeaderView: View {
                     .buttonStyle(.link)
                     .fixedSize()
                     .accessibilityIdentifier("clipy.search.fuzzy.use-exact")
+                } else if viewState.hasInvalidDateFilter, viewState.expressionValidationError == nil {
+                    Button { openOptions(expressionGuide: false) } label: { searchIssueLabel(issue) }
+                        .buttonStyle(AppMotionPressStyle())
+                        .accessibilityIdentifier("clipy.search.date.issue")
                 } else {
                     Button { openOptions(expressionGuide: true) } label: { searchIssueLabel(issue) }
                         .buttonStyle(AppMotionPressStyle())
@@ -234,8 +238,7 @@ struct SearchHeaderView: View {
     private var dateFilterTitle: String {
         let filters = viewState.searchFilters
         if filters.dateRange == .custom {
-            let style = Date.FormatStyle(date: .abbreviated, time: .omitted).locale(locale)
-            return filters.startDate.formatted(style) + " – " + filters.endDate.formatted(style)
+            return filters.customDateTitle(locale: locale, calendar: filters.dateSelectionCalendar ?? .current)
         }
         return HistorySearchCopy.text(filters.dateRange.title, bundle: copyBundle)
     }
@@ -345,6 +348,7 @@ struct SearchHeaderView: View {
         if viewState.isLoadingFirstPage {
             return HistorySearchCopy.text("Updating results…", bundle: bundle)
         }
+        if viewState.fuzzyQueryExceedsLimit { return "" }
         if !viewState.hasAuthoritativeFirstPage, HistorySearchCopy.issue(for: viewState, bundle: bundle) != nil {
             return HistorySearchCopy.text("Check search conditions", bundle: bundle)
         }

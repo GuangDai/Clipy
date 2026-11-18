@@ -32,8 +32,7 @@ internal enum CodecRejection: Error, Sendable, Equatable {
     /// any large allocation").
     case blobExceedsDecodeEnvelope(found: Int, bound: Int)
 
-    /// A list §4 requires to be non-empty is empty (Canonical
-    /// representations, signature entries, or effective type identifiers).
+    /// A stored list of effective type identifiers is empty.
     case emptyList
 
     /// A list count exceeds its Part VI bound (§4: "bounded ... count
@@ -57,21 +56,6 @@ internal enum CodecRejection: Error, Sendable, Equatable {
     /// docs/architecture.md).
     case nonNormalizedOrder
 
-    /// A representation carries zero-length bytes (§4: "no empty-bytes
-    /// representation").
-    case emptyBytes(typeIdentifier: String)
-
-    /// One representation's bytes exceed the Part VI per-representation
-    /// bound.
-    case representationBytesExceedBound(found: Int, bound: Int)
-
-    /// Total representation bytes exceed their Part VI aggregate bound.
-    /// Totals use checked arithmetic — no byte-count calculation wraps
-    /// (docs/testing.md). `found == Int.max` is the deliberate
-    /// diagnostic sentinel when the mathematical overflow total cannot be
-    /// represented by `Int`.
-    case totalBytesExceedBound(found: Int, bound: Int)
-
     /// A stored title exceeds the Part VI UTF-8 byte bound. Projection fields
     /// are durable derived data and are re-validated on every path that reads
     /// them; corruption is never silently truncated at read time (§4).
@@ -86,47 +70,10 @@ internal enum CodecRejection: Error, Sendable, Equatable {
     /// same fail-closed scalar-projection rule as `storedTitleExceedsBound`.
     case storedSearchBodyExceedsBound(found: Int, bound: Int)
 
-    /// A signature entry's `byteCount` is below 1; Canonical bytes are
-    /// non-empty, so a non-positive stored count is corruption (§4).
-    case nonPositiveSignatureByteCount(found: Int)
-
-    /// A signature entry's `byteCount` exceeds the Part VI per-representation
-    /// byte bound (§4: "bounded byte/count values").
-    case signatureByteCountExceedsBound(found: Int, bound: Int)
-
-    /// The signature entry count differs from the Canonical representation
-    /// count (§4: fingerprint/signature coverage is checked bidirectionally).
-    case signatureCoverageCountMismatch(canonicalCount: Int, signatureCount: Int)
-
-    /// A Canonical representation has no signature entry (§4: "every
-    /// Canonical representation has a signature entry").
-    case signatureCoverageMissingEntry(typeIdentifier: String)
-
-    /// A signature entry names no Canonical representation (§4: "no orphan
-    /// entries").
-    case signatureCoverageOrphanedEntry(typeIdentifier: String)
-
-    /// A signature entry's fingerprint differs from the fingerprint evidence
-    /// stored with its Canonical representation. Fingerprint *correctness* —
-    /// recomputing xxh3 over the bytes — is deliberately not re-verified at
-    /// decode (§4, D7); this check only requires the two durable copies of
-    /// the same evidence to agree.
-    case signatureCoverageFingerprintMismatch(typeIdentifier: String)
-
-    /// A signature entry's `byteCount` differs from its Canonical
-    /// representation's byte length (§4: bidirectional coverage).
-    case signatureCoverageByteCountMismatch(typeIdentifier: String)
-
-    // Revision-lineage and row-scalar checks share this same decode
-    // vocabulary so every call site has one exhaustive §16 mapping.
-    case duplicateRevisionID(UUID)
-    case activeRevisionIDNamesNoStoredRevision(UUID)
-    case nonEmptyRevisionListWithNilActiveID
-    case nonCanonicalRevisionType(String)
+    // Copy occurrence, version, and pin scalars decoded from SQLite rows.
     case invalidContentVersion(found: UInt64)
     case zeroCopyCount
     case lastCopiedAtPrecedesFirstCopiedAt
-    case nonFiniteRevisionCreatedAt(UUID)
     case nonFiniteFirstCopiedAt
     case nonFiniteLastCopiedAt
     case sourceObservationExceedsBound(found: Int, bound: Int)
@@ -155,28 +102,13 @@ extension CodecRejection {
              .typeIdentifierExceedsBound,
              .duplicateTypeIdentifier,
              .nonNormalizedOrder,
-             .emptyBytes,
-             .representationBytesExceedBound,
-             .totalBytesExceedBound,
              .storedTitleExceedsBound,
              .invalidStoredTitleUTF8,
              .invalidStoredSearchBodyUTF8,
              .storedSearchBodyExceedsBound,
-             .nonPositiveSignatureByteCount,
-             .signatureByteCountExceedsBound,
-             .signatureCoverageCountMismatch,
-             .signatureCoverageMissingEntry,
-             .signatureCoverageOrphanedEntry,
-             .signatureCoverageFingerprintMismatch,
-             .signatureCoverageByteCountMismatch,
-             .duplicateRevisionID,
-             .activeRevisionIDNamesNoStoredRevision,
-             .nonEmptyRevisionListWithNilActiveID,
-             .nonCanonicalRevisionType,
              .invalidContentVersion,
              .zeroCopyCount,
              .lastCopiedAtPrecedesFirstCopiedAt,
-             .nonFiniteRevisionCreatedAt,
              .nonFiniteFirstCopiedAt,
              .nonFiniteLastCopiedAt,
              .sourceObservationExceedsBound,
@@ -288,66 +220,14 @@ internal enum CodecValidation {
 
 // MARK: - Decode-envelope sizing (docs/storage.md)
 
-/// The single owner of the four durable JSON blob envelope formulas.
-///
-/// These constants deliberately overestimate JSON expansion: base64 is less
-/// than 2×, one identifier scalar needs at most the 8× allowance used by the
-/// v1 proof, per-element structural headroom covers keys/numbers/punctuation,
-/// and the fixed allowance covers each outer container. Exact count and byte
-/// limits are still checked after parsing. Central ownership keeps a future
-/// Part VI limit or wire-shape change from silently drifting one codec's
-/// pre-parse allocation boundary away from the other three.
+/// Bounds the type-summary JSON before parsing. The envelope includes space
+/// for escaping and structure. The decoder checks exact limits afterward.
 internal enum CodecDecodeEnvelope {
-    private static let base64ExpansionAllowance = 2
     private static let identifierExpansionAllowance = 8
     private static let representationStructuralBytes = 256
-    private static let revisionStructuralBytes = 128
     private static let containerStructuralBytes = 4_096
 
-    internal static func canonical(limits: HistoryLimits) -> Int {
-        CodecValidation.clampedEnvelopeSum([
-            CodecValidation.clampedEnvelopeProduct(
-                limits.maximumCaptureBytes,
-                base64ExpansionAllowance
-            ),
-            representationCollection(limits: limits),
-            containerStructuralBytes,
-        ])
-    }
-
-    internal static func signature(limits: HistoryLimits) -> Int {
-        CodecValidation.clampedEnvelopeSum([
-            representationCollection(limits: limits),
-            containerStructuralBytes,
-        ])
-    }
-
     internal static func effectiveTypeIdentifiers(limits: HistoryLimits) -> Int {
-        CodecValidation.clampedEnvelopeSum([
-            representationCollection(limits: limits),
-            containerStructuralBytes,
-        ])
-    }
-
-    internal static func revisionState(limits: HistoryLimits) -> Int {
-        let oneRevision = CodecValidation.clampedEnvelopeSum([
-            representationCollection(limits: limits),
-            revisionStructuralBytes,
-        ])
-        return CodecValidation.clampedEnvelopeSum([
-            CodecValidation.clampedEnvelopeProduct(
-                limits.maximumRevisionsPerItem,
-                oneRevision
-            ),
-            CodecValidation.clampedEnvelopeProduct(
-                limits.maximumTotalRevisionBytesPerItem,
-                base64ExpansionAllowance
-            ),
-            containerStructuralBytes,
-        ])
-    }
-
-    private static func representationCollection(limits: HistoryLimits) -> Int {
         let oneRepresentation = CodecValidation.clampedEnvelopeSum([
             CodecValidation.clampedEnvelopeProduct(
                 limits.maximumTypeIdentifierUTF8Bytes,
@@ -355,31 +235,18 @@ internal enum CodecDecodeEnvelope {
             ),
             representationStructuralBytes,
         ])
-        return CodecValidation.clampedEnvelopeProduct(
+        let representations = CodecValidation.clampedEnvelopeProduct(
             limits.maximumRepresentationsPerCaptureOrRevision,
             oneRepresentation
         )
+        return CodecValidation.clampedEnvelopeSum([representations, containerStructuralBytes])
     }
 }
 
 // MARK: - Container format (docs/storage.md)
 
-/// The one deterministic container format shared by the v1 blob codecs.
-/// docs/storage.md
-///
-/// JSON with sorted keys: a property-list integer is a signed 64-bit value,
-/// so full-range `UInt64` fingerprints are not safely representable there,
-/// while JSON round-trips them exactly; base64 `Data` encoding and a
-/// canonical key order make encoding one validated value twice yield
-/// identical bytes (§4: "Encode ... is deterministic").
-///
-/// Durable decode call sites always apply `CodecDecodeEnvelope` before this
-/// parser. Foundation's `JSONDecoder` materializes an array before the codec
-/// can enforce its semantic element-count bound, so the byte envelope is the
-/// intentional pre-allocation defense and count checks are post-parse. A
-/// streaming/count-prefixed v2 wire format is warranted only if supported-runner
-/// allocation evidence breaches the Part VI resource gates or a future
-/// untrusted import path makes local-store corruption an adversarial surface.
+/// Deterministic JSON for type summaries and page cursors. Each decoder
+/// checks its byte envelope before parsing.
 internal enum CodecWireFormat {
     internal static func makeEncoder() -> JSONEncoder {
         let encoder = JSONEncoder()

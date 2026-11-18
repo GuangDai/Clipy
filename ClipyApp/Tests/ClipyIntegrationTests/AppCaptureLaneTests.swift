@@ -584,44 +584,60 @@ struct AppCaptureLaneTests {
         #expect(page.rows.map(\.title) == ["C", "A"])
     }
 
-    /// One system copy gesture enters the capture lane as one ordered value.
+    /// A delayed second item enters the capture lane with the first item once
+    /// its bytes are available, without committing the partial gesture.
     @Test @MainActor
     func multiItemClipboardCapturesBothItemsThroughTheAppLane() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         let pasteboard = ComposedSupport.makePasteboard()
+        defer { pasteboard.releaseGlobally() }
         pasteboard.clearContents()
-        let first = NSPasteboardItem()
-        let second = NSPasteboardItem()
-        #expect(first.setString("first", forType: .string))
-        #expect(second.setString("second", forType: .string))
-        #expect(pasteboard.writeObjects([first, second]))
-
         let composition = AppComposition.makeForTesting(
             history: history,
-            adapter: PasteboardAdapter(pasteboard: pasteboard)
+            adapter: PasteboardAdapter(pasteboard: pasteboard),
+            observerPollInterval: 0.02
         )
         let appDelegate = AppDelegate()
         appDelegate.installCompositionForTesting(composition)
         defer { composition.stop() }
+        composition.viewState.activate()
 
-        let settled = await ComposedSupport.waitFor {
-            composition.captureHealth.activeCommitCount == 0
-                && composition.captureHealth.pendingCaptureCount == 0
-        }
-        #expect(settled)
-        #expect(appDelegate.captureNotice == nil)
+        let first = NSPasteboardItem()
+        let second = NSPasteboardItem()
+        let firstBytes = Data("first".utf8)
+        let secondBytes = Data("second".utf8)
+        try #require(first.setData(firstBytes, forType: .string))
+        try #require(second.setData(Data(), forType: .string))
+        pasteboard.clearContents()
+        try #require(pasteboard.writeObjects([first, second]))
+        let generation = pasteboard.changeCount
+
+        try #require(await ComposedSupport.waitFor {
+            appDelegate.captureNotice == .failed(.declaredContentUnavailable)
+        })
+        let waiting = try await history.browse(.init(kind: .recent, limit: 10))
+        #expect(waiting.rows.isEmpty)
+        #expect(waiting.position.rawValue == 0)
+
+        try #require(second.setData(secondBytes, forType: .string))
+        try #require(pasteboard.changeCount == generation)
+        try #require(await ComposedSupport.waitFor {
+            composition.viewState.rows.count == 1 && appDelegate.captureNotice == nil
+        })
         let page = try await history.browse(.init(kind: .recent, limit: 10))
-        #expect(page.rows.count == 1)
+        try #require(page.rows.count == 1)
+        #expect(page.position.rawValue == 1)
         let item = try #require(page.rows.first?.item)
         let payload = try await history.pastePayload(for: item.id)
         #expect(payload.representations.map(\.pasteboardItemIndex) == [0, 1])
-        #expect(payload.representations.map(\.bytes) == [Data("first".utf8), Data("second".utf8)])
+        #expect(payload.representations.map(\.bytes) == [firstBytes, secondBytes])
         let destination = ComposedSupport.makePasteboard()
+        defer { destination.releaseGlobally() }
         try PasteboardAdapter(pasteboard: destination).write(payload)
         let pasted = try #require(destination.pasteboardItems)
-        #expect(pasted.count == 2)
-        #expect(pasted[0].data(forType: .string) == Data("first".utf8))
-        #expect(pasted[1].data(forType: .string) == Data("second".utf8))
+        try #require(pasted.count == 2)
+        #expect(pasted[0].data(forType: .string) == firstBytes)
+        #expect(pasted[1].data(forType: .string) == secondBytes)
     }
 
     /// The adapter's early concealment outcome is intentionally quiet at the

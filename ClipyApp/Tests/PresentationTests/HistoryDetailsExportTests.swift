@@ -5,37 +5,6 @@ import Testing
 @testable import ClipyApp
 
 struct HistoryDetailsExportTests {
-    @Test(arguments: [false, true]) @MainActor
-    func lateNoncooperativeFailureCannotPublishAfterDetailsRetires(cancelTask: Bool) async throws {
-        let reference = HistoryItemReference(id: HistoryItemID(rawValue: UUID()), contentVersion: .initial)
-        let fixture = ExportLoadFixture()
-        let loadRequest = fixture.fence.begin()
-        let generation = try #require(loadRequest)
-        var release: CheckedContinuation<Result<Void, RepresentationExportFailure>, Never>?
-        var displayedFailure: RepresentationExportFailure?
-        let request = Task {
-            // This suspension deliberately ignores cancellation, like an
-            // exporter whose underlying filesystem callback finishes late.
-            let result = await withCheckedContinuation { release = $0 }
-            guard fixture.fence.accepts(
-                generation, returned: reference, expected: reference,
-                isCancelled: Task.isCancelled
-            ) else { return }
-            if case .failure(let failure) = result { displayedFailure = failure }
-        }
-        #expect(await pollUntil { release != nil })
-        let continuation = try #require(release)
-        if cancelTask {
-            request.cancel()
-        } else {
-            let purged = fixture.fence.purge(.item(reference.id), item: reference)
-            #expect(purged)
-        }
-        continuation.resume(returning: .failure(.writeFailed))
-        await request.value
-        #expect(displayedFailure == nil)
-    }
-
     @Test func exportSelectsCompleteBytesFromTheDisplayedBasis() async throws {
         let textType = "public.utf8-plain-text"
         let opaqueType = "com.example.opaque"
@@ -81,9 +50,4 @@ struct HistoryDetailsExportTests {
         // exercised directly by RepresentationExportHostedTests, while this
         // real-store test verifies stored bytes and hidden-type selection.
     }
-}
-
-@MainActor
-private final class ExportLoadFixture {
-    var fence = HistoryDetailsLoadFence()
 }

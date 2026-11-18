@@ -135,7 +135,7 @@ struct HistoryWorkspaceView: View {
         .onChange(of: viewState.isLoadingPage) { _, _ in reconcilePage() }
         .onChange(of: viewState.isLoadingFirstPage) { _, loading in
             if loading {
-                if !isMutating { selectedIDs = [] }
+                if !isMutating, !viewState.isPreservingReadingPosition { selectedIDs = [] }
             } else {
                 // An empty result or failed preparation leaves rows == []
                 // across the whole load. Its completion still retires the
@@ -150,8 +150,8 @@ struct HistoryWorkspaceView: View {
         .onChange(of: viewState.restoredReadingItemID) { _, item in
             if let item { selectedIDs = [item] }
         }
-        .onChange(of: viewState.didLoseReadingPosition) { _, lost in
-            if lost { browsingPreferences?.clearReadingPosition(for: .workspace) }
+        .onChange(of: viewState.readingPositionLoss) { _, loss in
+            if loss == .saved { browsingPreferences?.clearReadingPosition(for: .workspace) }
         }
         .onChange(of: viewState.hasUnalignedLeadingPage) { _, unaligned in
             // Prepending a short leading chunk can split a numbered page
@@ -358,7 +358,7 @@ struct HistoryWorkspaceView: View {
             }
             .accessibilityIdentifier("clipy.history.workspace.results-failure")
         } else if !viewState.hasAuthoritativeFirstPage {
-            if let issue = HistorySearchCopy.issue(for: viewState, bundle: copyBundle) {
+            if !viewState.fuzzyQueryExceedsLimit, let issue = HistorySearchCopy.issue(for: viewState, bundle: copyBundle) {
                 ContentUnavailableView {
                     Label(HistorySearchCopy.text("Check search conditions", bundle: copyBundle),
                           systemImage: "exclamationmark.magnifyingglass")
@@ -524,9 +524,8 @@ struct HistoryWorkspaceView: View {
         if failure != nil || copyState.isCopying || copyState.status != nil || mutationStatus != nil || isMutating || showsBatchResult || viewState.didLoseReadingPosition {
             Divider()
             VStack(alignment: .leading, spacing: 6) {
-                if viewState.didLoseReadingPosition {
-                    Label(HistoryBrowsingCopy.text("Saved reading position is unavailable in these results. Showing the start of the list.",
-                                                   bundle: copyBundle), systemImage: "info.circle")
+                if let loss = viewState.readingPositionLoss {
+                    Label(HistoryBrowsingCopy.readingPositionUnavailable(loss, bundle: copyBundle), systemImage: "info.circle")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if let failure {

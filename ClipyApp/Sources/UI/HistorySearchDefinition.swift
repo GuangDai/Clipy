@@ -28,6 +28,7 @@ struct HistorySearchDefinition: Codable, Equatable, Sendable {
         self.sortOrder = sortOrder
         self.customDateTimeZone = filters.dateRange == .custom ? customDateTimeZone : nil
         var normalizedFilters = filters
+        normalizedFilters.dateSelectionTimeZone = nil
         if filters.dateRange != .custom {
             // These unused draft dates must not make the same "Today" search
             // look like a different definition every time it is submitted.
@@ -107,23 +108,14 @@ struct HistorySearchDefinition: Codable, Equatable, Sendable {
     /// If that zone skipped a selected day, no equivalent range can be applied.
     func filtersForReplay(in timeZone: TimeZone) -> HistorySearchFilters? {
         guard let customDateTimeZone, customDateTimeZone != timeZone else { return filters }
-        let dayComponents: Set<Calendar.Component> = [.era, .year, .month, .day]
-        var original = Calendar(identifier: .gregorian)
-        original.timeZone = customDateTimeZone
-        var destination = Calendar(identifier: .gregorian)
-        destination.timeZone = timeZone
-
-        func replayDay(_ value: Date) -> Date? {
-            let day = original.dateComponents(dayComponents, from: value)
-            guard let local = destination.date(from: day),
-                  destination.dateComponents(dayComponents, from: local) == day else { return nil }
-            return destination.startOfDay(for: local)
-        }
-
-        guard let start = replayDay(filters.startDate), let end = replayDay(filters.endDate) else { return nil }
         var replay = filters
-        replay.startDate = start
-        replay.endDate = end
+        replay.dateSelectionTimeZone = customDateTimeZone
+        guard let dates = replay.localCustomDates(in: HistorySearchFilters.gregorianCalendar(in: timeZone)) else {
+            return nil
+        }
+        replay.startDate = dates.start
+        replay.endDate = dates.end
+        replay.dateSelectionTimeZone = nil
         return replay
     }
 }
@@ -133,7 +125,8 @@ extension HistorySearchDefinition {
     init(viewState: HistoryViewState) {
         self.init(query: viewState.searchText, mode: viewState.searchMode,
                   typeFilter: viewState.typeFilter, pinnedOnly: viewState.showsPinnedOnly,
-                  filters: viewState.searchFilters, sortOrder: viewState.sortOrder)
+                  filters: viewState.searchFilters, sortOrder: viewState.sortOrder,
+                  customDateTimeZone: viewState.searchFilters.dateSelectionTimeZone ?? .current)
     }
 
     @MainActor
@@ -145,7 +138,9 @@ extension HistorySearchDefinition {
         viewState.searchMode = mode == .expression ? .fuzzy : mode
         viewState.typeFilter = typeFilter
         viewState.showsPinnedOnly = pinnedOnly
-        if appliedFilters.dateRange != .custom {
+        if appliedFilters.dateRange == .custom {
+            appliedFilters.dateSelectionTimeZone = timeZone
+        } else {
             // The stored epoch represents an unused draft field, not a date
             // the user chose. Switching to Custom after replay starts today.
             let now = Date()

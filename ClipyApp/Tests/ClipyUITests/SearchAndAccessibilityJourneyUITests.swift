@@ -44,6 +44,7 @@ final class SearchAndAccessibilityJourneyUITests: XCTestCase {
         let clear = app.buttons["clipy.search.clear"]
         XCTAssertTrue(clear.waitForExistence(timeout: 5))
         XCTAssertEqual(search.value as? String, "no-such-clipy-value")
+        XCTAssertTrue(waitUntil(timeout: 10) { rows.count == 0 && app.staticTexts["No Results"].exists })
 
         XCTAssertTrue(
             clear.isHittable,

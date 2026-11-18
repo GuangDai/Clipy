@@ -434,6 +434,63 @@ struct HistorySearchFilterTests {
         #expect(state.rows.map(\.item) == [atMidnight])
         #expect(!state.hasNextPage)
         #expect(state.failure == nil)
+        #expect(!state.didLoseReadingPosition)
+        #expect(state.restoredReadingItemID == nil)
+    }
+
+    @Test func passiveDateRefreshKeepsAMatchingReadingRowWithoutRestoringAStoredBookmark() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let calendar = HistorySearchFilters.gregorianCalendar(in: try #require(TimeZone(secondsFromGMT: 0)))
+        let nextDay = try #require(calendar.date(from: DateComponents(year: 2025, month: 6, day: 2)))
+        let justBefore = nextDay.addingTimeInterval(-1)
+        let readingRow = try await capture("before midnight", source: nil, at: justBefore, in: history)
+        _ = try await capture("after midnight", source: nil, at: nextDay, in: history)
+
+        let state = HistoryViewState(history: history, pageLimit: 1)
+        state.searchFilters.dateRange = .lastSevenDays
+        defer { state.deactivate() }
+        state.refreshDateFiltersIfNeeded(now: justBefore, calendar: calendar)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage && state.rows.map(\.item) == [readingRow] })
+        state.recordReadingPosition(visibleRowIDs: [readingRow.id])
+
+        state.refreshDateFiltersIfNeeded(now: nextDay, calendar: calendar)
+        #expect(state.isPreservingReadingPosition)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.item) == [readingRow])
+        #expect(state.hasPreviousPage)
+        #expect(state.restoredReadingItemID == nil)
+        #expect(!state.didLoseReadingPosition)
+    }
+
+    @Test func liveCustomDayDoesNotMatchAnotherDayWhenTheTimeZoneSkippedIt() async throws {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .temporary))
+        let utc = HistorySearchFilters.gregorianCalendar(in: try #require(TimeZone(secondsFromGMT: 0)))
+        let apia = HistorySearchFilters.gregorianCalendar(in: try #require(TimeZone(identifier: "Pacific/Apia")))
+        let selected = try #require(utc.date(from: DateComponents(year: 2011, month: 12, day: 30)))
+        let item = try await capture("December 30 in UTC", source: nil, at: selected, in: history)
+
+        let state = HistoryViewState(history: history)
+        var filters = HistorySearchFilters()
+        filters.dateRange = .custom
+        filters.startDate = selected
+        filters.endDate = selected
+        filters.dateSelectionTimeZone = utc.timeZone
+        state.searchFilters = filters
+        defer { state.deactivate() }
+        state.refreshDateFiltersIfNeeded(now: selected, calendar: utc)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage && state.rows.map(\.item) == [item] })
+
+        state.refreshDateFiltersIfNeeded(now: selected, calendar: apia)
+        #expect(state.hasInvalidDateFilter)
+        #expect(HistorySearchCopy.issue(for: state) != nil)
+        #expect(state.rowsForPresentation.isEmpty)
+        #expect(!state.isLoadingFirstPage)
+        #expect(state.displayedRow(for: item.id) == nil)
+
+        state.refreshDateFiltersIfNeeded(now: selected, calendar: utc)
+        try #require(await pollUntil { state.hasAuthoritativeFirstPage })
+        #expect(state.rows.map(\.item) == [item])
+        #expect(!state.hasInvalidDateFilter)
     }
 
     @Test(arguments: [(3, 8, 23), (11, 1, 25)])

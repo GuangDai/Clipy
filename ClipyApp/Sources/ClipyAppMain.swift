@@ -52,11 +52,8 @@ struct ClipyAppMain: App {
     }
 }
 
-/// The Settings scene body: the real settings once the composition exists,
-/// `EmptyView` until then (the store must open before any view state exists
-/// to drive retention edits). Owns the panel-position preference via
-/// `@AppStorage` — the same defaults key `AppDelegate` reads at summon time
-/// (`AppDelegate.popupPositionDefaultsKey`).
+/// Keep the Settings scene usable while History opens or awaits recovery.
+/// The settings shell retains its current category and drafts when the store opens.
 private struct SettingsRootView: View {
     let appDelegate: AppDelegate
     @Environment(\.locale) private var locale
@@ -67,41 +64,43 @@ private struct SettingsRootView: View {
 
     var body: some View {
         let _ = locale
-        if let composition = appDelegate.composition {
-            ClipySettingsView(
-                viewState: composition.viewState,
-                workspaceViewState: composition.historyWorkspaceViewState,
-                workspaceCopyState: composition.historyWorkspaceCopyState,
-                workspaceSourceIconProvider: SourceIconProviderFactory.makeProvider(),
-                launchAtLogin: appDelegate.launchAtLoginBinding(),
-                summonShortcut: appDelegate.summonShortcutBinding {
-                    isRecordingSummonShortcut = true
-                },
-                popupPosition: $panelPosition,
-                storageLocation: appDelegate.storageLocationSettings(),
-                localAutomation: composition.localAutomation?.settings,
-                interactionDefaults: appDelegate.interactionDefaults
+        let composition = appDelegate.composition
+        ClipySettingsView(
+            viewState: composition?.viewState,
+            workspaceViewState: composition?.historyWorkspaceViewState,
+            workspaceCopyState: composition?.historyWorkspaceCopyState,
+            workspaceSourceIconProvider: SourceIconProviderFactory.makeProvider(),
+            launchAtLogin: appDelegate.launchAtLoginBinding(),
+            summonShortcut: appDelegate.summonShortcutBinding {
+                isRecordingSummonShortcut = true
+            },
+            popupPosition: $panelPosition,
+            storageLocation: appDelegate.storageLocationSettings(),
+            localAutomation: composition?.localAutomation?.settings,
+            interactionDefaults: appDelegate.interactionDefaults,
+            storeRecovery: SettingsStoreRecoveryView(
+                failure: appDelegate.openFailure,
+                retry: { appDelegate.retryCompositionOpen() },
+                reveal: { appDelegate.revealStoreLocation() }
             )
-            .environment(\.workflowExecutionQueue, composition.workflowRunner.executionQueue)
-            .environment(\.searchHistoryStore, composition.searchHistoryStore)
-            .environment(\.historyBrowsingPreferences, composition.historyBrowsingPreferences)
-            .environment(\.displayMemoryPressure, appDelegate.displayMemoryPressure)
-            .environment(\.displayMemoryPressureGeneration, appDelegate.panelSurfaceState?.memoryPressureGeneration ?? 0)
-            .sheet(isPresented: $isRecordingSummonShortcut) {
-                SummonShortcutRecorderView(conflictingPanelAction: { chord in
-                    chord.conflictingPanelAction(in: PanelShortcutSettings.load(from: appDelegate.interactionDefaults))
-                }) { chord in
-                    appDelegate.changeSummonShortcut(to: chord)
-                }
-                .onAppear {
-                    appDelegate.beginSummonShortcutRecording()
-                }
-                .onDisappear {
-                    appDelegate.endSummonShortcutRecording()
-                }
+        )
+        .environment(\.workflowExecutionQueue, composition?.workflowRunner.executionQueue)
+        .environment(\.searchHistoryStore, appDelegate.searchHistoryStore)
+        .environment(\.historyBrowsingPreferences, appDelegate.historyBrowsingPreferences)
+        .environment(\.displayMemoryPressure, appDelegate.displayMemoryPressure)
+        .environment(\.displayMemoryPressureGeneration, appDelegate.panelSurfaceState?.memoryPressureGeneration ?? 0)
+        .sheet(isPresented: $isRecordingSummonShortcut) {
+            SummonShortcutRecorderView(conflictingPanelAction: { chord in
+                chord.conflictingPanelAction(in: PanelShortcutSettings.load(from: appDelegate.interactionDefaults))
+            }) { chord in
+                appDelegate.changeSummonShortcut(to: chord)
             }
-        } else {
-            EmptyView()
+            .onAppear {
+                appDelegate.beginSummonShortcutRecording()
+            }
+            .onDisappear {
+                appDelegate.endSummonShortcutRecording()
+            }
         }
     }
 }

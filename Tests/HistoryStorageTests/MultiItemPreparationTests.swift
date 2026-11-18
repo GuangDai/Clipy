@@ -13,7 +13,7 @@ struct MultiItemPreparationTests {
         )
     }
 
-    @Test func normalizationPreservesItemOrderAndRepeatedTypesThroughEveryCodec() async throws {
+    @Test func normalizationPreservesItemOrderAndRepeatedTypes() async throws {
         let prepared = try await IngestPreparationActor(fingerprint: { _ in 7 }).prepare(capture([
             .init(typeIdentifier: "public.utf8-plain-text", bytes: Data("beta".utf8), pasteboardItemIndex: 1),
             .init(typeIdentifier: "public.utf8-plain-text", bytes: Data("alpha".utf8)),
@@ -29,24 +29,6 @@ struct MultiItemPreparationTests {
         #expect(prepared.projection.effectiveTypeIdentifiers == ["public.html", "public.utf8-plain-text"])
         #expect(prepared.projection.searchBody.contains("alpha"))
         #expect(prepared.projection.searchBody.contains("beta"))
-
-        let decoded = try CanonicalBlobCodec.decode(CanonicalBlobCodec.encode(canonical))
-        #expect(decoded == canonical)
-        let signatures = canonical.representations.map {
-            ContentSignatureEntry(typeIdentifier: $0.content.typeIdentifier, fingerprint: $0.fingerprint,
-                                  byteCount: $0.content.bytes.count, pasteboardItemIndex: $0.content.pasteboardItemIndex)
-        }
-        let entries = try SignatureBlobCodec.decode(SignatureBlobCodec.encode(signatures))
-        #expect(entries == signatures)
-        try SignatureBlobCodec.validateCoverage(canonical: decoded, entries: entries)
-
-        let revisionID = RevisionID(rawValue: UUID())
-        let content = EffectiveContent(representations: canonical.representations.map(\.content))
-        let revision = ContentRevision(id: revisionID, createdAt: Date(), content: content)
-        let wire = try RevisionStateBlobCodec.encode(revisions: [revision], activeRevisionID: revisionID)
-        let restored = try RevisionStateBlobCodec.decode(wire, canonical: decoded)
-        #expect(restored.revisions == [revision])
-        #expect(restored.activeRevisionID == revisionID)
     }
 
     @Test func typeSummaryIsGloballySortedAndUniqueWithoutReorderingConstituentItems() async throws {
@@ -117,23 +99,6 @@ struct MultiItemPreparationTests {
                 .init(typeIdentifier: "public.text", bytes: Data([1])),
                 .init(typeIdentifier: "org.nspasteboard.ConcealedType", bytes: Data([2]), pasteboardItemIndex: 1),
             ]))
-        }
-    }
-
-    @Test func codecsRejectAnItemGapWithoutRepairingThePayload() throws {
-        let wire = CanonicalBlobV1(formatVersion: 1, representations: [
-            .init(typeIdentifier: "public.text", bytes: Data([1]), fingerprint: 7),
-            .init(typeIdentifier: "public.text", bytes: Data([2]), fingerprint: 7, pasteboardItemIndex: 2),
-        ])
-        #expect(throws: CodecRejection.nonNormalizedOrder) {
-            try CanonicalBlobCodec.decode(CanonicalBlobCodec.encodeWire(wire))
-        }
-        let signature = SignatureBlobV1(formatVersion: 1, entries: [
-            .init(typeIdentifier: "public.text", fingerprint: 7, byteCount: 1),
-            .init(typeIdentifier: "public.text", fingerprint: 7, byteCount: 1, pasteboardItemIndex: 2),
-        ])
-        #expect(throws: CodecRejection.nonNormalizedOrder) {
-            try SignatureBlobCodec.decode(SignatureBlobCodec.encodeWire(signature))
         }
     }
 }

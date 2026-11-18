@@ -28,6 +28,13 @@ struct HistorySearchFilters: Codable, Equatable, Sendable {
     var dateRange: HistorySearchDateRange = .anyTime
     var startDate = Date()
     var endDate = Date()
+    /// The local Gregorian calendar that supplied the active draft's dates.
+    /// Saved definitions encode this fact alongside the existing date fields.
+    var dateSelectionTimeZone: TimeZone? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case sourceApplication, sourceMatch, dateRange, startDate, endDate
+    }
 
     var source: String? {
         let value = sourceApplication.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -40,10 +47,49 @@ struct HistorySearchFilters: Codable, Equatable, Sendable {
         lhs.sourceApplication.utf8.elementsEqual(rhs.sourceApplication.utf8)
             && lhs.sourceMatch == rhs.sourceMatch && lhs.dateRange == rhs.dateRange
             && lhs.startDate == rhs.startDate && lhs.endDate == rhs.endDate
+            && lhs.dateSelectionTimeZone == rhs.dateSelectionTimeZone
+    }
+
+    var dateSelectionCalendar: Calendar? {
+        dateSelectionTimeZone.map(Self.gregorianCalendar(in:))
+    }
+
+    static func gregorianCalendar(in timeZone: TimeZone) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return calendar
+    }
+
+    func customDateTitle(locale: Locale, calendar: Calendar) -> String {
+        let style = Date.FormatStyle(date: .abbreviated, time: .omitted, locale: locale,
+                                     calendar: calendar, timeZone: calendar.timeZone)
+        return startDate.formatted(style) + " – " + endDate.formatted(style)
+    }
+
+    /// Converts the selected civil days to local instants. Some zones skip a
+    /// whole local day, so converting back must return the selected components.
+    func localCustomDates(in calendar: Calendar) -> (start: Date, end: Date)? {
+        guard startDate.timeIntervalSinceReferenceDate.isFinite,
+              endDate.timeIntervalSinceReferenceDate.isFinite else { return nil }
+        guard let selected = dateSelectionCalendar else {
+            return (calendar.startOfDay(for: startDate), calendar.startOfDay(for: endDate))
+        }
+        let local = Self.gregorianCalendar(in: calendar.timeZone)
+        let components: Set<Calendar.Component> = [.era, .year, .month, .day]
+        func project(_ date: Date) -> Date? {
+            let day = selected.dateComponents(components, from: date)
+            guard let projected = local.date(from: day),
+                  local.dateComponents(components, from: projected) == day else { return nil }
+            return local.startOfDay(for: projected)
+        }
+        guard let start = project(startDate), let end = project(endDate) else { return nil }
+        return (start, end)
     }
 
     func hasValidDates(calendar: Calendar = .current) -> Bool {
-        dateRange != .custom || calendar.startOfDay(for: startDate) <= calendar.startOfDay(for: endDate)
+        guard dateRange == .custom else { return true }
+        guard let dates = localCustomDates(in: calendar) else { return false }
+        return dates.start <= dates.end
     }
 
     /// Calendar arithmetic keeps local days correct across daylight-saving
@@ -61,7 +107,9 @@ struct HistorySearchFilters: Codable, Equatable, Sendable {
         case .lastSevenDays: return (priorDay(-6), endOfToday)
         case .lastThirtyDays: return (priorDay(-29), endOfToday)
         case .custom:
-            return (calendar.startOfDay(for: startDate), calendar.dateInterval(of: .day, for: endDate)?.end)
+            guard let dates = localCustomDates(in: calendar), dates.start <= dates.end else { return (nil, nil) }
+            let local = dateSelectionTimeZone == nil ? calendar : Self.gregorianCalendar(in: calendar.timeZone)
+            return (dates.start, local.dateInterval(of: .day, for: dates.end)?.end)
         }
     }
 }
@@ -94,8 +142,11 @@ enum HistorySearchCopy {
         if let error = state.expressionValidationError { return expressionError(error, bundle: bundle) }
         if state.fuzzyQueryExceedsLimit {
             return String(format: text(
-                "Fuzzy search supports up to %d characters. Use Exact to search the entire text.", bundle: bundle
+                "Fuzzy search limit (%d characters)", bundle: bundle
             ), HistoryLimits.standard.maximumFuzzyQueryCharacters)
+        }
+        if state.hasInvalidDateFilter {
+            return text("Check custom dates. Both days must exist in your local time zone, with the start on or before the end.", bundle: bundle)
         }
         if !state.unresolvedSearchSources.isEmpty {
             return format("No installed application matches %@. Choose an application or use an exact bundle ID.",

@@ -4,6 +4,7 @@
 /// SQLite connection remains owned by `HistoryAuthority`.
 import Foundation
 import HistoryCore
+import HistoryDomain
 import Testing
 @testable import HistoryStorage
 
@@ -245,13 +246,13 @@ struct PerformanceFixtureSeedingTests {
             throw FixtureTestError.missingStoredRow
         }
         let canonical = try WSSupport.fetchCanonical(itemID: itemID.rawValue, in: database)
-        let signatures = try WSSupport.fetchSignatureEntries(
-            itemID: itemID.rawValue, in: database
-        )
-        try SignatureBlobCodec.validateCoverage(
-            canonical: canonical,
-            entries: signatures
-        )
+        let fixture = capture(index: 0, bodyBytes: batchedFixtureBodyBytes)
+        let expected = try #require(fixture.representations.first)
+        let stored = try #require(canonical.representations.first)
+        #expect(canonical.representations.count == 1)
+        #expect(stored.content.typeIdentifier == expected.typeIdentifier)
+        #expect(stored.content.bytes == expected.bytes)
+        #expect(stored.fingerprint.rawValue == XXH3Fingerprint.digest(expected.bytes))
         let effectiveTypes = try EffectiveTypeIdentifiersBlobCodec.decode(
             row.effectiveTypeIdentifiersBlob
         )

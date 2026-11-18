@@ -318,7 +318,39 @@ final class HistoryViewState {
     /// the query's actual first page.
     private(set) var hasKnownRowOffset = true
     private(set) var restoredReadingItemID: HistoryItemID?
-    private(set) var didLoseReadingPosition = false
+
+    enum ReadingPositionLoss: Equatable {
+        case saved, live
+    }
+
+    private(set) var readingPositionLoss: ReadingPositionLoss?
+    var didLoseReadingPosition: Bool { readingPositionLoss != nil }
+
+    private enum FirstPageAnchor {
+        case automatic
+        case restoring(HistoryItemID)
+        case preserving(HistoryItemID?)
+
+        var itemID: HistoryItemID? {
+            switch self {
+            case .automatic: nil
+            case .restoring(let id): id
+            case .preserving(let id): id
+            }
+        }
+
+        var restoresBookmark: Bool {
+            if case .restoring = self { return true }
+            return false
+        }
+    }
+
+    private var firstPageAnchor = FirstPageAnchor.automatic
+
+    var isPreservingReadingPosition: Bool {
+        if case .preserving = firstPageAnchor { return true }
+        return false
+    }
 
     /// Remember a visible row, rather than a selection left behind by a
     /// mouse scroll. Only this opaque ID is handed to browsing preferences.
@@ -483,14 +515,16 @@ final class HistoryViewState {
     }
 
     private var searchDateBounds: (after: Date?, before: Date?) = (nil, nil)
+    private(set) var hasInvalidDateFilter = false
 
     func refreshDateFiltersIfNeeded(now: Date = Date(), calendar: Calendar = .current) {
-        guard searchFilters.dateRange != .anyTime, observationTask != nil else { return }
+        guard searchFilters.dateRange != .anyTime, observationTask != nil || hasInvalidDateFilter else { return }
         let bounds = searchFilters.dateBounds(now: now, calendar: calendar)
         guard bounds != searchDateBounds else { return }
-        let anchor = readingItemID
-        beginFirstPageLoad(dateBounds: bounds)
-        startObservation(restoring: anchor)
+        let anchor = (isLoadingFirstPage || hasInvalidDateFilter) && firstPageAnchor.itemID != nil
+            ? firstPageAnchor : .preserving(readingItemID)
+        beginFirstPageLoad(dateBounds: bounds, anchor: anchor)
+        startObservation()
     }
 
     var hasActiveFilters: Bool {
@@ -654,8 +688,8 @@ final class HistoryViewState {
             guard itemID != nil, !activationHasRequestedRestore else { return }
         }
         activationHasRequestedRestore = itemID != nil
-        beginFirstPageLoad()
-        startObservation(restoring: itemID)
+        beginFirstPageLoad(anchor: itemID.map(FirstPageAnchor.restoring) ?? .automatic)
+        startObservation()
     }
 
     /// Cancels browsing and releases this closed surface's rows/cursors.
@@ -672,6 +706,8 @@ final class HistoryViewState {
         observedPosition = nil
         rows = []
         resetPageWindow()
+        firstPageAnchor = .automatic
+        hasInvalidDateFilter = false
         isLoadingFirstPage = false
     }
 
@@ -797,8 +833,8 @@ final class HistoryViewState {
                 else { return }
                 if case .snapshotExpired = failure {
                     let anchor = self.readingAnchorBeyondFirstPage
-                    self.beginFirstPageLoad()
-                    self.startObservation(restoring: anchor)
+                    self.beginFirstPageLoad(anchor: .preserving(anchor))
+                    self.startObservation()
                     return
                 }
                 self.publishFailure(failure, from: .pagination)
@@ -1106,7 +1142,9 @@ final class HistoryViewState {
     /// Synchronously retires all state owned by the previous browse intent.
     /// This is the single invalidation path for immediate and debounced
     /// replacement, not a general loading-state reducer.
-    private func beginFirstPageLoad(dateBounds: (after: Date?, before: Date?)? = nil) {
+    private func beginFirstPageLoad(
+        dateBounds: (after: Date?, before: Date?)? = nil, anchor: FirstPageAnchor = .automatic
+    ) {
         debounceTask?.cancel()
         debounceTask = nil
         observationTask?.cancel()
@@ -1130,16 +1168,19 @@ final class HistoryViewState {
         unresolvedSearchSources = []
         isSourceSearchTooBroad = false
         restoredReadingItemID = nil
-        didLoseReadingPosition = false
+        readingPositionLoss = nil
+        firstPageAnchor = anchor
         sourceResolutionError = nil
         // Relative days refresh with each query, and stay fixed while paging.
         searchDateBounds = dateBounds ?? searchFilters.dateBounds(now: Date(), calendar: .current)
-        isLoadingFirstPage = expressionValidationError == nil && !fuzzyQueryExceedsLimit
+        hasInvalidDateFilter = searchFilters.dateRange == .custom
+            && (searchDateBounds.after == nil || searchDateBounds.before == nil)
+        isLoadingFirstPage = expressionValidationError == nil && !fuzzyQueryExceedsLimit && !hasInvalidDateFilter
     }
 
     /// Starts observation for the already-invalidated current intent.
-    private func startObservation(restoring itemID: HistoryItemID? = nil) {
-        guard expressionValidationError == nil, !fuzzyQueryExceedsLimit else {
+    private func startObservation() {
+        guard expressionValidationError == nil, !fuzzyQueryExceedsLimit, !hasInvalidDateFilter else {
             isLoadingFirstPage = false
             return
         }
@@ -1147,6 +1188,7 @@ final class HistoryViewState {
         let history = self.history
         let queryGeneration = searchQueryGeneration
         let order = sortOrder
+        let initialAnchor = firstPageAnchor
 
         observationTask = Task { [weak self] in
             guard !Task.isCancelled,
@@ -1158,7 +1200,7 @@ final class HistoryViewState {
             )
             let stream = await history.observe(request)
             do {
-                var restoreTarget = itemID
+                var initialTarget = initialAnchor.itemID
                 var restoredPosition: ChangePosition?
                 for try await page in stream {
                     // A superseded loop must not apply pages over its
@@ -1170,15 +1212,21 @@ final class HistoryViewState {
                     // replace the just-restored reading position.
                     if let restoredPosition, page.position <= restoredPosition { continue }
                     guard self?.allowsObservedPosition(page.position) == true else { continue }
-                    if var target = restoreTarget ?? self?.readingAnchorBeyondFirstPage {
-                        let isOpeningAtAnchor = restoreTarget != nil
+                    if var target = initialTarget ?? self?.readingAnchorBeyondFirstPage {
+                        let isInitialSeek = initialTarget != nil
+                        let isRestoringBookmark = isInitialSeek && initialAnchor.restoresBookmark
                         for attempt in 0..<2 {
-                            let restoredPage = try await Self.browseReadingAnchor(
-                                target, request: request, history: history,
-                                firstPage: page, isOpening: isOpeningAtAnchor
-                            )
+                            let restoredPage: HistoryPage
+                            if isInitialSeek, !isRestoringBookmark, page.rows.contains(where: { $0.item.id == target }) {
+                                restoredPage = page
+                            } else {
+                                restoredPage = try await Self.browseReadingAnchor(
+                                    target, request: request, history: history,
+                                    firstPage: page, isRestoringBookmark: isRestoringBookmark
+                                )
+                            }
                             guard !Task.isCancelled, let self else { return }
-                            let currentAnchor = isOpeningAtAnchor ? target : self.readingAnchorBeyondFirstPage
+                            let currentAnchor = isInitialSeek ? target : self.readingAnchorBeyondFirstPage
                             if let currentAnchor, currentAnchor != target, attempt == 0 {
                                 target = currentAnchor
                                 continue
@@ -1191,19 +1239,23 @@ final class HistoryViewState {
                             }
                             let useRestoredPage = restoredPage.position >= page.position
                                 && self.allowsObservedPosition(restoredPage.position)
-                                && (restoredAnchor != nil || isOpeningAtAnchor)
+                                && (restoredAnchor != nil || isRestoringBookmark)
                             let replacement = useRestoredPage ? restoredPage : page
                             guard self.allowsObservedPosition(replacement.position) else { break }
                             let retainedAnchor = currentAnchor.flatMap { id in
                                 replacement.rows.first { $0.item.id == id }?.item.id
                             }
                             self.applyObservedPage(replacement, forSearchGeneration: queryGeneration)
-                            self.didLoseReadingPosition = currentAnchor != nil && retainedAnchor == nil
                             if let retainedAnchor {
                                 self.visibleRowIDs = [retainedAnchor]
-                                if isOpeningAtAnchor { self.restoredReadingItemID = retainedAnchor }
                             }
-                            restoreTarget = nil
+                            if isRestoringBookmark {
+                                self.readingPositionLoss = retainedAnchor == nil ? .saved : nil
+                                self.restoredReadingItemID = retainedAnchor
+                            } else if !isInitialSeek {
+                                self.readingPositionLoss = currentAnchor != nil && retainedAnchor == nil ? .live : nil
+                            }
+                            initialTarget = nil
                             restoredPosition = replacement.position
                             break
                         }
@@ -1230,19 +1282,19 @@ final class HistoryViewState {
 
     private static func browseReadingAnchor(
         _ target: HistoryItemID, request: HistoryObservationRequest, history: any ClipboardHistory,
-        firstPage: HistoryPage, isOpening: Bool
+        firstPage: HistoryPage, isRestoringBookmark: Bool
     ) async throws -> HistoryPage {
         do {
             return try await history.browse(HistoryBrowseRequest(
                 kind: request.kind, limit: request.limit, filter: request.filter, sortOrder: request.sortOrder,
                 startAround: target, conditionExpression: request.conditionExpression
             ))
-        } catch HistoryFailure.notFound(_) where isOpening {
+        } catch HistoryFailure.notFound(_) where isRestoringBookmark {
             return try await history.browse(HistoryBrowseRequest(
                 kind: request.kind, limit: request.limit, filter: request.filter, sortOrder: request.sortOrder,
                 conditionExpression: request.conditionExpression
             ))
-        } catch where !isOpening {
+        } catch where !isRestoringBookmark {
             // Background continuity may fall back to the already-read page
             // without terminating observation if the seek fails.
             return firstPage
@@ -1340,6 +1392,7 @@ final class HistoryViewState {
         observedPosition = page.position
         hasAuthoritativeFirstPage = true
         clearQueryFailure()
+        firstPageAnchor = .automatic
         isLoadingFirstPage = false
         if pendingSearchAnnouncementGeneration == queryGeneration {
             pendingSearchAnnouncementGeneration = nil

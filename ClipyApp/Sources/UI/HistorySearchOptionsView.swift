@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 
 struct HistorySearchOptionsView: View {
     @Environment(\.locale) private var locale
+    @Environment(\.timeZone) private var timeZone
     @Environment(\.dismiss) private var dismiss
     private let viewState: HistoryViewState
     private let completion: HistorySearchCompletionState
@@ -29,6 +30,7 @@ struct HistorySearchOptionsView: View {
 
     private var copyBundle: Bundle { PanelActionsCopy.bundle(for: locale) }
     private func text(_ value: String) -> String { HistorySearchCopy.text(value, bundle: copyBundle) }
+    private var localDateCalendar: Calendar { HistorySearchFilters.gregorianCalendar(in: timeZone) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -103,7 +105,7 @@ struct HistorySearchOptionsView: View {
                 dismiss()
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!draft.hasValidDates())
+            .disabled(!draft.hasValidDates(calendar: localDateCalendar))
             .accessibilityIdentifier("clipy.search.options.apply")
         }
     }
@@ -118,13 +120,28 @@ struct HistorySearchOptionsView: View {
             }
             .labelsHidden()
             .accessibilityIdentifier("clipy.search.date.range")
+            .onChange(of: draft.dateRange) { _, range in
+                guard range == .custom, draft.dateSelectionTimeZone == nil else { return }
+                let now = Date()
+                draft.startDate = now
+                draft.endDate = now
+                draft.dateSelectionTimeZone = timeZone
+            }
             if draft.dateRange == .custom {
-                DatePicker(text("From"), selection: $draft.startDate, displayedComponents: .date)
-                    .accessibilityIdentifier("clipy.search.date.from")
-                DatePicker(text("Through"), selection: $draft.endDate, displayedComponents: .date)
-                    .accessibilityIdentifier("clipy.search.date.through")
-                if !draft.hasValidDates() {
-                    Label(text("The end date must be on or after the start date."), systemImage: "exclamationmark.circle")
+                let selectionCalendar = draft.dateSelectionCalendar ?? localDateCalendar
+                Group {
+                    DatePicker(text("From"), selection: $draft.startDate, displayedComponents: .date)
+                        .accessibilityIdentifier("clipy.search.date.from")
+                    DatePicker(text("Through"), selection: $draft.endDate, displayedComponents: .date)
+                        .accessibilityIdentifier("clipy.search.date.through")
+                }
+                .environment(\.calendar, selectionCalendar)
+                .environment(\.timeZone, selectionCalendar.timeZone)
+                if !draft.hasValidDates(calendar: localDateCalendar) {
+                    let message = draft.localCustomDates(in: localDateCalendar) == nil
+                        ? "One of the selected dates does not exist in your local time zone."
+                        : "The end date must be on or after the start date."
+                    Label(text(message), systemImage: "exclamationmark.circle")
                         .font(.caption).foregroundStyle(.red)
                         .accessibilityIdentifier("clipy.search.date.error")
                 }

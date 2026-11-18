@@ -300,7 +300,11 @@ public final class PasteboardObserver {
             pendingCapture = nil
         case let .unsupportedMultiItem(value):
             lastChangeCount = value.changeCount
-            pendingCapture = nil
+            if value.awaitsConstituentContent {
+                scheduleRetry(changeCount: value.changeCount, after: previousPending)
+            } else {
+                pendingCapture = nil
+            }
         case let .changedDuringRead(value):
             lastChangeCount = value.endChangeCount
             scheduleRetry(changeCount: value.endChangeCount, after: previousPending, immediately: true)
