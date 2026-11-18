@@ -80,7 +80,7 @@ struct HistoryDetailsFormatSafetyTests {
         #expect(prepared.effective[1].presentation == .metadataOnly)
         #expect(prepared.effective[2].presentation == .metadataOnly)
         #expect(prepared.title == "Metadata title", "the title comes from the scalar projection, not content hydration")
-        #expect(await renderDetailsRepresentationForTest(effective[1]) == .metadataOnly,
+        #expect(await renderDetailsRepresentationForTest(effective[1]) == .failure(.malformedRepresentation),
                 "an explicit preview still rejects malformed text beyond its display prefix")
     }
 
@@ -96,7 +96,7 @@ struct HistoryDetailsFormatSafetyTests {
         #expect(prepared.canonical[0].presentation == .metadataOnly)
         #expect(prepared.effective[0].presentation == .metadataOnly)
         #expect(prepared.title == "Metadata title")
-        #expect(await renderDetailsRepresentationForTest(representation) == .metadataOnly)
+        #expect(await renderDetailsRepresentationForTest(representation) == .failure(.malformedRepresentation))
     }
 
     @Test(arguments: [false, true])

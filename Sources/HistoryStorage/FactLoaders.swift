@@ -246,8 +246,8 @@ internal enum IngestFactLoader {
     /// A format shared by many items must not force every repeat copy to
     /// probe the full posting list when another format is selective. Sample
     /// at most 33 covering-index entries per format, then use the smallest
-    /// posting list as the anchor. The full signature intersection and byte
-    /// confirmation below are unchanged (V2-09 §4; 02 §9).
+    /// posting list as the anchor. A candidate must subsequently pass byte
+    /// confirmation in both Canonical and current Effective content.
     private static func captureCandidates(
         for incoming: CanonicalContent, in database: SQLiteDatabase
     ) throws -> SQLiteStatement {

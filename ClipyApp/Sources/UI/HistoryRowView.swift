@@ -125,7 +125,8 @@ struct HistoryRowView: View {
                 }
                 if let search = row.search, let snippet = search.snippet {
                     Text(MatchHighlighting.highlighted(snippet, ranges: search.matchedRanges,
-                        foreground: isSelected ? PanelTheme.selectedForeground : .accentColor))
+                        foreground: isSelected ? PanelTheme.selectedForeground : .accentColor,
+                        prioritizesMatch: true))
                         .font(PanelTheme.snippetFont(for: fontSize))
                         .foregroundStyle(secondaryForeground)
                         .lineLimit(rowDescriptor.snippetLineCount)
@@ -461,7 +462,7 @@ struct HistoryRowView: View {
             return AttributedString(row.title)
         }
         return MatchHighlighting.highlighted(row.title, ranges: search.matchedRanges,
-            foreground: isSelected ? PanelTheme.selectedForeground : .accentColor)
+            foreground: isSelected ? PanelTheme.selectedForeground : .accentColor, prioritizesMatch: true)
     }
 
     /// The same count with translated plural-aware VoiceOver copy (§9/§10).

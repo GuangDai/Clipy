@@ -106,6 +106,7 @@ struct RealHistoryViewStateWindowTests {
         #expect(expected.rows.count == (searching ? 15 : 16))
         #expect(expected.rows.filter { $0.pinnedPosition != nil }.count == 2)
         let state = HistoryViewState(history: history, pageLimit: 2)
+        state.sortOrder = .automatic
         if searching {
             state.searchMode = .exact
             state.searchText = "needle"

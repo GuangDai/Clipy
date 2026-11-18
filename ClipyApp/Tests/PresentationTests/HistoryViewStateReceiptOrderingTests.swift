@@ -8,7 +8,7 @@ import Testing
 @MainActor
 struct HistoryViewStateReceiptOrderingTests {
     enum Mutation: CaseIterable, Equatable, Sendable {
-        case remove, revision, externalRevision, clearAll, clearUnpinned, retention
+        case remove, revision, externalRevision, clearAll, clearUnpinned
     }
 
     @Test(arguments: Mutation.allCases)
@@ -27,12 +27,9 @@ struct HistoryViewStateReceiptOrderingTests {
         case .remove: outcome = .removed(count: 1)
         case .revision, .externalRevision: outcome = .revised(current)
         case .clearAll, .clearUnpinned: outcome = .cleared(count: 1)
-        case .retention:
-            outcome = .retentionPoliciesSet(retiredItems: 1, prunedRevisions: 0)
         }
         let commit = HistoryCommit(
-            position: ChangePosition(rawValue: 2), outcome: outcome,
-            hasDestructiveRetentionEffects: mutation == .retention
+            position: ChangePosition(rawValue: 2), outcome: outcome
         )
         let history = ReceiptOrderedHistory(backing: ScriptedHistory(
             performReceipt: .committed(commit)
@@ -55,10 +52,6 @@ struct HistoryViewStateReceiptOrderingTests {
             _ = state.acceptCommittedExternalRevision(from: old.item, commit: commit)
         case .clearAll: _ = try await state.clearAwaitingReceipt(.all)
         case .clearUnpinned: _ = try await state.clearAwaitingReceipt(.unpinned)
-        case .retention:
-            _ = try await state.applyRetentionPolicies(HistoryRetentionPolicies(
-                age: AgeRetention(maxAge: 60), storage: nil, revisions: nil
-            ))
         }
         let expectedRows = state.rows
         #expect(!expectedRows.contains(old))
@@ -181,9 +174,9 @@ struct HistoryViewStateReceiptOrderingTests {
         await backing.resumeBrowse(cursor: oldCursor)
         try #require(await pollUntil { !state.isLoadingPage })
         #expect(state.rows == [first])
-        #expect(!state.hasNextPage)
+        #expect(state.hasNextPage)
         #expect(!state.hasPreviousPage)
-        #expect(state.loadedPageCount == 0)
+        #expect(state.loadedPageCount == 1)
         #expect(state.displayedCountIsLowerBound)
         #expect(state.failure == nil)
 

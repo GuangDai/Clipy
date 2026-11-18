@@ -1395,19 +1395,19 @@ struct RetentionReviseCompositionTests {
         )
         #expect(speculativePrune == [rev1ID])
 
-        // The interference bundle: the SAME canonical text re-captured while
-        // the revise is between phases (the WS20 producer) — Copy
-        // Coalescing folds the occurrence into the same item and preserves
-        // its Content Version (02 §13, D2).
+        // Re-capture the current revised bytes with their lineage hint while
+        // the new revise is between phases. This folds only the occurrence.
         let coalesceObservedAt = Date(timeIntervalSinceReferenceDate: 700_411_500)
         let coalesceSource = "com.example.r5.concur1.second"
-        let coalesce = try await ingest.prepare(
-            WSSupport.textCapture(
-                targetText,
-                observedAt: coalesceObservedAt,
-                source: coalesceSource
-            )
-        )
+        let pasted = try await authority.pastePayload(for: target.id)
+        let coalesce = try await ingest.prepare(ClipboardCapture(
+            representations: pasted.representations.map {
+                CapturedRepresentation(typeIdentifier: $0.typeIdentifier, bytes: $0.bytes,
+                                       pasteboardItemIndex: $0.pasteboardItemIndex)
+            },
+            origin: .init(sourceApplication: coalesceSource, lineageHint: pasted.lineageHint),
+            observedAt: coalesceObservedAt
+        ))
 
         // Park the revise at its commit-entry seam; the coalesce commits in
         // between; the RELOADED lineage is captured before the resume — the

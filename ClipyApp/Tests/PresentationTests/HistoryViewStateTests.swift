@@ -114,7 +114,7 @@ struct HistoryViewStateTests {
             ],
             next: nil
         )
-        let history = ScriptedHistory(observedFirstPage: firstPage)
+        let history = ScriptedHistory(observedFirstPage: firstPage, repeatsObservedFirstPage: false)
         let state = HistoryViewState(history: history)
         state.activate()
         #expect(await pollUntil { state.rows.count == 2 })
@@ -134,21 +134,22 @@ struct HistoryViewStateTests {
         // still receives later pages.
         state.activate()
         #expect(await pollUntil { await history.observeRequests.count == 2 })
-        await history.emitObservedPage(fixturePage(
+        let replacement = fixturePage(
             rows: [fixtureRow(id: "00000000-0000-0000-0000-000000000014", title: "replacement")],
-            next: nil
-        ))
+            next: nil, position: 2
+        )
+        await history.emitObservedPage(replacement)
         #expect(
             await pollUntil {
                 state.rows.count == 1 && state.rows.first?.title == "replacement"
             }
         )
 
-        // refresh() re-observes without debounce (V2-07 §4) and the fresh
-        // stream re-applies the scripted first page.
+        // Explicit refresh may reopen at the same committed position.
         state.refresh()
         #expect(await pollUntil { await history.observeRequests.count == 3 })
-        #expect(await pollUntil { state.rows.count == 2 })
+        await history.emitObservedPage(replacement)
+        #expect(await pollUntil { state.hasAuthoritativeFirstPage && state.rows == replacement.rows })
 
         state.deactivate()
         await history.finishObservation()
@@ -175,7 +176,7 @@ struct HistoryViewStateTests {
 
         let secondPage = fixturePage(
             rows: [fixtureRow(id: "00000000-0000-0000-0000-000000000024", title: "new-only")],
-            next: nil
+            next: nil, position: 2
         )
         await history.emitObservedPage(secondPage)
 
@@ -243,9 +244,7 @@ struct HistoryViewStateTests {
         await history.finishObservation()
     }
 
-    /// A `.snapshotExpired` pagination failure (04 §6) drops the old window,
-    /// reobserves the same query, and continues with its fresh first cursor.
-    @Test func snapshotExpiredReobservesTheCurrentQueryBeforeContinuing() async {
+    @Test func snapshotExpiredRefreshesTheCurrentQueryAndUsesTheNewCursor() async throws {
         let observedPage = fixturePage(
             rows: [
                 fixtureRow(id: "00000000-0000-0000-0000-000000000041", title: "observed-one"),
@@ -260,52 +259,48 @@ struct HistoryViewStateTests {
             ],
             next: "expired-cursor"
         )
+        let refreshedPage = fixturePage(rows: observedPage.rows, next: "refreshed-cursor", position: 9)
+        let refreshedTail = fixturePage(rows: appendedPage.rows, next: nil, position: 9)
         let history = ScriptedHistory(
-            observedFirstPage: observedPage,
+            observedFirstPage: observedPage, repeatsObservedFirstPage: false,
             browseScript: [
                 fixtureCursor("observed-cursor"): .page(appendedPage),
                 fixtureCursor("expired-cursor"): .failure(
                     .snapshotExpired(current: ChangePosition(rawValue: 9))
                 ),
+                fixtureCursor("refreshed-cursor"): .page(refreshedTail),
             ]
         )
         let state = HistoryViewState(history: history)
+        defer { state.deactivate() }
         state.activate()
-        #expect(await pollUntil { state.rows.count == 2 })
+        try #require(await pollUntil { state.rows == observedPage.rows })
 
         // First append succeeds; the second page's cursor is stale.
         state.loadNextPage()
-        #expect(await pollUntil { state.rows.count == 4 })
+        try #require(await pollUntil { state.rows == observedPage.rows + appendedPage.rows })
         state.loadNextPage()
 
-        // Refresh obtains a fresh authoritative first page and retires the
-        // old window and cursor bookmarks before allowing another browse.
-        #expect(await pollUntil { state.rows.count == 2 && state.hasNextPage })
-        #expect(await history.observeRequests.count == 2)
-        #expect(state.rows.map(\.title) == ["observed-one", "observed-two"])
+        try #require(await pollUntil { await history.observeRequests.count == 2 })
+        await history.emitObservedPage(refreshedPage)
+        try #require(await pollUntil { state.rows == refreshedPage.rows && state.hasNextPage })
         #expect(state.failure == nil)
-        #expect(state.failureEpisode == 1)
+        #expect(state.failureEpisode == 0)
 
-        // The retry browses from the OBSERVED cursor again and re-appends.
         state.loadNextPage()
-        #expect(await pollUntil { state.rows.count == 4 })
+        try #require(await pollUntil { state.rows == refreshedPage.rows + refreshedTail.rows })
         #expect(state.failure == nil)
-        #expect(state.failureEpisode == 1)
-        #expect(
-            state.rows.map(\.title)
-                == ["observed-one", "observed-two", "appended-one", "appended-two"]
-        )
+        #expect(!state.hasNextPage)
         let cursors = await history.browseRequests.map(\.cursor)
         #expect(
             cursors
                 == [
                     fixtureCursor("observed-cursor"),
                     fixtureCursor("expired-cursor"),
-                    fixtureCursor("observed-cursor"),
+                    fixtureCursor("refreshed-cursor"),
                 ]
         )
 
-        state.deactivate()
         await history.finishObservation()
     }
 
@@ -1452,115 +1447,7 @@ struct HistoryViewStateTests {
         ))
     }
 
-    /// A retention expansion may delete rows or prune revision bytes while
-    /// its caller-visible outcome remains the primary Revise/Policy result.
-    /// The receipt's authoritative effect bit therefore widens the existing
-    /// exact purge to `.all`; presentation never guesses victims from held
-    /// rows or from outcome counters.
-    @Test func destructiveRetentionEffectsPublishWholeSurfacePurge() async throws {
-        let oldRow = fixtureRow(
-            id: "00000000-0000-0000-0000-000000009C10",
-            title: "possibly-retired"
-        )
-        let history = PausableMutationHistory(
-            observedFirstPage: fixturePage(
-                rows: [oldRow],
-                next: "pre-retention-cursor"
-            )
-        )
-        let state = HistoryViewState(history: history)
-        state.activate()
-        try #require(await pollUntil { state.rows == [oldRow] })
-
-        let policies = Task {
-            try await state.applyRetentionPolicies(
-                HistoryRetentionPolicies(
-                    age: nil,
-                    storage: nil,
-                    revisions: RevisionRetention(
-                        maxRevisionsPerItem: 1,
-                        maxRevisionBytesPerItem: nil
-                    )
-                )
-            )
-        }
-        try #require(await pollUntil { await history.requestCount == 1 })
-        await history.complete(
-            with: .success(.committed(HistoryCommit(
-                position: ChangePosition(rawValue: 20),
-                outcome: .retentionPoliciesSet(
-                    retiredItems: 0,
-                    prunedRevisions: 1
-                ),
-                hasDestructiveRetentionEffects: true
-            )))
-        )
-        _ = try await policies.value
-
-        #expect(state.surfacePurge?.generation == 1)
-        #expect(state.surfacePurge?.scope == .all)
-        #expect(state.rows.isEmpty)
-        #expect(!state.hasNextPage)
-
-        state.deactivate()
-    }
-
-    /// If observation has already delivered a newer authoritative snapshot,
-    /// the older receipt must still purge derived caches but must not erase
-    /// rows containing a concurrent edit that observation already included.
-    @Test func destructiveReceiptPreservesNewerObservedRows() async throws {
-        let oldRow = fixtureRow(
-            id: "00000000-0000-0000-0000-000000009C30",
-            title: "old"
-        )
-        let concurrentRow = fixtureRow(
-            id: "00000000-0000-0000-0000-000000009C31",
-            title: "concurrent"
-        )
-        let history = PausableMutationHistory(
-            observedFirstPage: fixturePage(rows: [oldRow], next: nil)
-        )
-        let state = HistoryViewState(history: history)
-        state.activate()
-        try #require(await pollUntil { state.rows == [oldRow] })
-
-        let policies = Task {
-            try await state.applyRetentionPolicies(
-                HistoryRetentionPolicies(
-                    age: AgeRetention(maxAge: 60),
-                    storage: nil,
-                    revisions: nil
-                )
-            )
-        }
-        try #require(await pollUntil { await history.requestCount == 1 })
-        await history.emitObservedPage(HistoryPage(
-            position: ChangePosition(rawValue: 31),
-            rows: [concurrentRow],
-            next: nil
-        ))
-        try #require(await pollUntil { state.rows == [concurrentRow] })
-        await history.complete(
-            with: .success(.committed(HistoryCommit(
-                position: ChangePosition(rawValue: 30),
-                outcome: .retentionPoliciesSet(
-                    retiredItems: 1,
-                    prunedRevisions: 0
-                ),
-                hasDestructiveRetentionEffects: true
-            )))
-        )
-        _ = try await policies.value
-
-        #expect(state.surfacePurge?.scope == .all)
-        #expect(state.rows == [concurrentRow])
-
-        state.deactivate()
-    }
-
-    /// A composed Revise that also prunes/retires cannot use only the exact
-    /// old-reference purge: other presentation-derived state may be stale.
-    @Test func reviseWithDestructiveRetentionEffectsPublishesWholeSurfacePurge() async throws {
+    @Test func revisionWithRetentionOnlyInvalidatesItsOldReference() async throws {
         let itemID = HistoryItemID(
             rawValue: UUID(uuidString: "00000000-0000-0000-0000-000000009C20")!
         )
@@ -1603,8 +1490,10 @@ struct HistoryViewStateTests {
         )
         _ = try await revision.value
 
-        #expect(state.surfacePurge?.scope == .all)
-        #expect(state.rows.isEmpty)
+        let updated = HistoryItemReference(id: itemID, contentVersion: ContentVersion(rawValue: 2))
+        #expect(state.surfacePurge?.scope == .revision(old: oldRow.item, new: updated))
+        #expect(state.rows == [survivor])
+        #expect(state.retentionChangePosition == ChangePosition(rawValue: 21))
 
         state.deactivate()
     }
@@ -1670,7 +1559,7 @@ struct HistoryViewStateTests {
                 id: "00000000-0000-0000-0000-000000000083",
                 title: "healthy-observation"
             )],
-            next: nil
+            next: nil, position: 2
         )
         let history = ScriptedHistory(
             observedFirstPage: firstPage,

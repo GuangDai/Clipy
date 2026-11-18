@@ -57,6 +57,12 @@
 "Hidden" = "已隐藏";
 "Hidden from effective content" = "已从当前内容中隐藏";
 "Preview unavailable" = "预览不可用";
+"No preview is supported for this format." = "此格式不支持预览。";
+"This representation is too large to preview." = "这种格式的内容过大，无法预览。";
+"This representation could not be decoded." = "无法解码这种格式的内容。";
+"The preview is busy. Try again." = "预览暂时繁忙，请重试。";
+"Item Changed" = "项目已更新";
+"Load the latest content to continue viewing this item." = "加载最新内容以继续查看此项目。";
 "Text preview of %@" = "%@ 的文本预览";
 "Image preview of %@" = "%@ 的图片预览";
 "Preview unavailable for %@" = "%@ 的预览不可用";

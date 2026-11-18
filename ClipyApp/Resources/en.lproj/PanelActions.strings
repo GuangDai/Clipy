@@ -69,6 +69,12 @@
 "Hidden" = "Hidden";
 "Hidden from effective content" = "Hidden from effective content";
 "Preview unavailable" = "Preview unavailable";
+"No preview is supported for this format." = "No preview is supported for this format.";
+"This representation is too large to preview." = "This representation is too large to preview.";
+"This representation could not be decoded." = "This representation could not be decoded.";
+"The preview is busy. Try again." = "The preview is busy. Try again.";
+"Item Changed" = "Item Changed";
+"Load the latest content to continue viewing this item." = "Load the latest content to continue viewing this item.";
 "Text preview of %@" = "Text preview of %@";
 "Image preview of %@" = "Image preview of %@";
 "Preview unavailable for %@" = "Preview unavailable for %@";

@@ -43,7 +43,7 @@ struct RetentionSettingsTab: View {
         RetentionSettingsDraft.CountSubmission?
     @State private var isConfirmingCountTightening = false
     @State private var pendingSubmission: RetentionSettingsDraft.Submission?
-    @State private var isConfirmingTightening = false
+    @State private var isConfirmingPolicyRemoval = false
 
     init(
         viewState: HistoryViewState,
@@ -264,24 +264,23 @@ struct RetentionSettingsTab: View {
                         )
                         .confirmationDialog(
                             RetentionSettingsCopy.confirmPoliciesTitle,
-                            isPresented: $isConfirmingTightening,
-                            titleVisibility: .visible
-                        ) {
+                            isPresented: $isConfirmingPolicyRemoval,
+                            titleVisibility: .visible,
+                            presenting: pendingSubmission
+                        ) { submission in
                             Button(
                                 RetentionSettingsCopy.confirmPoliciesApply,
                                 role: .destructive
                             ) {
-                                guard let submission = pendingSubmission else { return }
                                 startApply { await applyRetention(submission) }
                             }
                             Button(RetentionSettingsCopy.confirmCancel, role: .cancel) {
                                 pendingSubmission = nil
                             }
-                        } message: {
-                            // Deep review `04` Red 10D: only a strict local
-                            // tightening is destructive-confirmed; equal or
-                            // looser policy values apply directly.
-                            Text(RetentionSettingsCopy.confirmPoliciesMessage)
+                        } message: { submission in
+                            Text(submission.policies.age == nil
+                                 ? RetentionSettingsCopy.confirmPoliciesMessage
+                                 : RetentionSettingsCopy.confirmPoliciesAgeMessage)
                         }
                         // Same own-row treatment as the item-limit status above:
                         // a long receipt or failure message must not squeeze the
@@ -341,10 +340,11 @@ struct RetentionSettingsTab: View {
         .task(id: usageRefreshGeneration) {
             await refreshUsage()
         }
-        // Clear can finish after the user has already returned from General.
-        // The existing receipt-confirmed purge also covers destructive Apply
-        // and external removals, without another History subscription.
+        // Clear, external removal and retention can update usage while this tab is open.
         .onChange(of: viewState.surfacePurge?.generation) { _, _ in
+            usageRefreshGeneration += 1
+        }
+        .onChange(of: viewState.retentionChangePosition) { _, _ in
             usageRefreshGeneration += 1
         }
         .onDisappear {
@@ -394,8 +394,7 @@ struct RetentionSettingsTab: View {
     }
 
     private func refreshUsageAfterApply(_ receipt: HistoryReceipt) {
-        // Destructive retention already publishes the purge observed above.
-        // Only non-destructive/no-op Apply needs its own refresh request.
+        // A destructive Apply already advances retentionChangePosition.
         if case .committed(let commit) = receipt,
            commit.hasDestructiveRetentionEffects {
             return
@@ -573,9 +572,9 @@ struct RetentionSettingsTab: View {
     private func requestApply() {
         guard !isWorking, hasLoadedRetentionConfiguration, draft.hasPolicyChanges,
               let submission = draft.submission() else { return }
-        if draft.requiresTighteningConfirmation(for: submission.policies) {
+        if draft.requiresRemovalConfirmation(for: submission.policies) {
             pendingSubmission = submission
-            isConfirmingTightening = true
+            isConfirmingPolicyRemoval = true
         } else {
             startApply { await applyRetention(submission) }
         }

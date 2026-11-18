@@ -435,7 +435,7 @@ struct RetentionSettingsDraftTests {
         #expect(policies.storage?.maxTotalBytes == 15_728_640)
         #expect(policies.revisions?.maxRevisionsPerItem == 19)
         #expect(policies.revisions?.maxRevisionBytesPerItem == 1_048_577)
-        #expect(draft.requiresTighteningConfirmation(for: policies))
+        #expect(draft.requiresRemovalConfirmation(for: policies))
     }
 
     @Test("unedited rounded fields submit the exact configured policy values")
@@ -465,7 +465,7 @@ struct RetentionSettingsDraftTests {
         #expect(policies.storage?.maxTotalBytes == 1_048_577)
         #expect(policies.revisions?.maxRevisionsPerItem == 19)
         #expect(policies.revisions?.maxRevisionBytesPerItem == 1_048_577)
-        #expect(!draft.requiresTighteningConfirmation(for: policies))
+        #expect(!draft.requiresRemovalConfirmation(for: policies))
     }
 
     @Test("editing one rounded field converts only that field to whole units")
@@ -488,168 +488,83 @@ struct RetentionSettingsDraftTests {
         #expect(policies.revisions?.maxRevisionBytesPerItem == 1_048_577)
         #expect(draft.storageValueIsDirty)
         #expect(draft.hasPolicyChanges)
-        #expect(draft.requiresTighteningConfirmation(for: policies))
+        #expect(draft.requiresRemovalConfirmation(for: policies))
     }
 
-    @Test("enabling or lowering any threshold requires destructive confirmation")
-    func onlyStrictTighteningRequiresConfirmation() throws {
-        var disabled = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
-        load(
-            HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
-            into: &disabled
-        )
-        disabled.setAgeEnabled(true)
-        let enabledPolicies = try #require(disabled.submission()?.policies)
-        #expect(disabled.requiresTighteningConfirmation(for: enabledPolicies))
+    @Test("enabling or lowering any threshold requires confirmation")
+    func activeLimitsThatCanRemoveContentRequireConfirmation() throws {
+        let enableEdits: [(inout RetentionSettingsDraft) -> Void] = [
+            { $0.setAgeEnabled(true) },
+            { $0.setStorageEnabled(true) },
+            { $0.setRevisionCountEnabled(true) },
+            { $0.setRevisionBytesEnabled(true) },
+        ]
+        for enable in enableEdits {
+            var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+            enable(&draft)
+            let policies = try #require(draft.submission()?.policies)
+            #expect(draft.requiresRemovalConfirmation(for: policies))
+        }
 
-        var configured = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
+        let lowerEdits: [(inout RetentionSettingsDraft) -> Void] = [
+            { $0.setStorageMiBText("1") },
+            { $0.setRevisionCountText("19") },
+            { $0.setRevisionMiBText("1") },
+        ]
+        for lower in lowerEdits {
+            var draft = configuredDraft(age: nil)
+            lower(&draft)
+            let policies = try #require(draft.submission()?.policies)
+            #expect(draft.requiresRemovalConfirmation(for: policies))
+        }
+    }
+
+    @Test("an active age limit can retire items even when no limit tightens")
+    func ageRemainsADeletionRiskWhenRelaxingLimits() throws {
+        let edits: [(inout RetentionSettingsDraft) -> Void] = [
+            { $0.setAgeDaysText("3") },
+            { $0.setStorageMiBText("3") },
+            { $0.setRevisionCountEnabled(false) },
+        ]
+        for edit in edits {
+            var draft = configuredDraft(age: AgeRetention(maxAge: 172_800))
+            edit(&draft)
+            #expect(draft.hasPolicyChanges)
+            let policies = try #require(draft.submission()?.policies)
+            #expect(draft.requiresRemovalConfirmation(for: policies))
+        }
+    }
+
+    @Test("turning off age alone needs no confirmation")
+    func disablingAgeIsADirectApply() throws {
+        var draft = configuredDraft(age: AgeRetention(maxAge: 172_800))
+        draft.setAgeEnabled(false)
+        #expect(draft.hasPolicyChanges)
+        let policies = try #require(draft.submission()?.policies)
+        #expect(policies.age == nil)
+        #expect(!draft.requiresRemovalConfirmation(for: policies))
+    }
+
+    @Test("tightening storage still needs confirmation when age is turned off")
+    func disablingAgeDoesNotHideOtherRemovalRisk() throws {
+        var draft = configuredDraft(age: AgeRetention(maxAge: 172_800))
+        draft.setAgeEnabled(false)
+        draft.setStorageMiBText("1")
+        let policies = try #require(draft.submission()?.policies)
+        #expect(draft.requiresRemovalConfirmation(for: policies))
+    }
+
+    private func configuredDraft(age: AgeRetention?) -> RetentionSettingsDraft {
+        var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
         load(HistoryRetentionPolicies(
-            age: AgeRetention(maxAge: 172_800),
+            age: age,
             storage: StorageRetention(maxTotalBytes: 2_097_152),
             revisions: RevisionRetention(
                 maxRevisionsPerItem: 20,
                 maxRevisionBytesPerItem: 2_097_152
             )
-        ), into: &configured)
-        configured.setAgeDaysText("3")
-        configured.setStorageMiBText("3")
-        configured.setRevisionCountText("21")
-        configured.setRevisionMiBText("3")
-        let loosenedPolicies = try #require(configured.submission()?.policies)
-        #expect(!configured.requiresTighteningConfirmation(for: loosenedPolicies))
-
-        configured.setRevisionCountText("19")
-        let tightenedPolicies = try #require(configured.submission()?.policies)
-        #expect(configured.requiresTighteningConfirmation(for: tightenedPolicies))
-    }
-
-    @Test("every dimension's enable or lower is strict; every disable is direct")
-    func strictnessMatrixCoversEveryDimension() throws {
-        // The full Card 10D matrix beyond the sampled cells above, pinning
-        // RetentionSettingsDraft's documented rule that mixed edits confirm
-        // when ANY dimension can delete more history: enabling each absent
-        // dimension and lowering each configured one must confirm, and
-        // disabling each configured one must apply directly. The draft's
-        // seeded defaults (30 d / 500 MiB / 20 / 64 MiB) keep every enabled
-        // submission valid without further text edits.
-        let enableEdits: [(String, (inout RetentionSettingsDraft) -> Void)] = [
-            ("age enable", { $0.setAgeEnabled(true) }),
-            ("storage enable", { $0.setStorageEnabled(true) }),
-            ("revision count enable", { $0.setRevisionCountEnabled(true) }),
-            ("revision bytes enable", { $0.setRevisionBytesEnabled(true) }),
-        ]
-        for (dimension, enable) in enableEdits {
-            var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
-            load(
-                HistoryRetentionPolicies(age: nil, storage: nil, revisions: nil),
-                into: &draft
-            )
-            enable(&draft)
-            let policies = try #require(
-                draft.submission()?.policies,
-                "\(dimension): the seeded default must submit"
-            )
-            #expect(
-                draft.requiresTighteningConfirmation(for: policies),
-                "\(dimension): enabling an absent threshold is strict"
-            )
-        }
-
-        let lowerEdits: [(String, (inout RetentionSettingsDraft) -> Void)] = [
-            ("age lower", { $0.setAgeDaysText("1") }),
-            ("storage lower", { $0.setStorageMiBText("1") }),
-            ("revision count lower", { $0.setRevisionCountText("19") }),
-            ("revision bytes lower", { $0.setRevisionMiBText("1") }),
-        ]
-        let configured = {
-            var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
-            load(
-                HistoryRetentionPolicies(
-                    age: AgeRetention(maxAge: 172_800),
-                    storage: StorageRetention(maxTotalBytes: 2_097_152),
-                    revisions: RevisionRetention(
-                        maxRevisionsPerItem: 20,
-                        maxRevisionBytesPerItem: 2_097_152
-                    )
-                ),
-                into: &draft
-            )
-            return draft
-        }
-        for (dimension, lower) in lowerEdits {
-            var draft = configured()
-            lower(&draft)
-            let policies = try #require(draft.submission()?.policies)
-            #expect(
-                draft.requiresTighteningConfirmation(for: policies),
-                "\(dimension): lowering a configured threshold is strict"
-            )
-        }
-
-        let disableEdits: [(String, (inout RetentionSettingsDraft) -> Void)] = [
-            ("age disable", { $0.setAgeEnabled(false) }),
-            ("storage disable", { $0.setStorageEnabled(false) }),
-            ("revision count disable", { $0.setRevisionCountEnabled(false) }),
-            ("revision bytes disable", { $0.setRevisionBytesEnabled(false) }),
-        ]
-        for (dimension, disable) in disableEdits {
-            var draft = configured()
-            disable(&draft)
-            let policies = try #require(draft.submission()?.policies)
-            #expect(
-                !draft.requiresTighteningConfirmation(for: policies),
-                "\(dimension): disabling applies directly"
-            )
-        }
-    }
-
-    @Test("a mixed submission confirms when any dimension tightens")
-    func mixedTightenAndLoosenSubmissionConfirms() throws {
-        // The documented mixed-edit rule (RetentionSettingsDraft doc
-        // comment): one loosened dimension cannot cancel another
-        // dimension's tightening — the destructive confirmation still
-        // gates the submission. All-loose with one untouched dimension
-        // stays on the direct path.
-        var mixed = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
-        load(
-            HistoryRetentionPolicies(
-                age: AgeRetention(maxAge: 172_800),
-                storage: StorageRetention(maxTotalBytes: 2_097_152),
-                revisions: RevisionRetention(
-                    maxRevisionsPerItem: 20,
-                    maxRevisionBytesPerItem: 2_097_152
-                )
-            ),
-            into: &mixed
-        )
-        mixed.setAgeDaysText("3")
-        mixed.setStorageMiBText("1")
-        let mixedPolicies = try #require(mixed.submission()?.policies)
-        #expect(
-            mixed.requiresTighteningConfirmation(for: mixedPolicies),
-            "a submission tightening storage must confirm even while age loosens"
-        )
-
-        var loosened = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
-        load(
-            HistoryRetentionPolicies(
-                age: AgeRetention(maxAge: 172_800),
-                storage: StorageRetention(maxTotalBytes: 2_097_152),
-                revisions: RevisionRetention(
-                    maxRevisionsPerItem: 20,
-                    maxRevisionBytesPerItem: 2_097_152
-                )
-            ),
-            into: &loosened
-        )
-        loosened.setAgeDaysText("3")
-        loosened.setStorageMiBText("3")
-        loosened.setRevisionCountText("21")
-        let loosenedPolicies = try #require(loosened.submission()?.policies)
-        #expect(
-            !loosened.requiresTighteningConfirmation(for: loosenedPolicies),
-            "loosening with one equal dimension stays direct"
-        )
+        ), into: &draft)
+        return draft
     }
 
     @Test("late apply completion cannot overwrite a newer edit")
@@ -698,7 +613,7 @@ struct RetentionSettingsDraftTests {
         #expect(draft.storageMiBText == "15")
         #expect(draft.storageValueIsDirty)
         #expect(draft.acceptedSuccessMessage == nil)
-        #expect(draft.requiresTighteningConfirmation(for: newerPolicies))
+        #expect(draft.requiresRemovalConfirmation(for: newerPolicies))
     }
 
     @Test("count completion clears saved count edits after a policy edit")
@@ -1046,48 +961,22 @@ struct RetentionSettingsDraftTests {
         #expect(!draft.maximumUnpinnedRequiresTightening(for: submission))
     }
 
-    @Test("loosening any single dimension applies without confirmation")
-    func perDimensionLooseningDoesNotRequireConfirmation() throws {
-        // Card 10D's one-dimension-at-a-time table: loosening or disabling
-        // any configured dimension can retire nothing new, so every one
-        // takes the direct Apply path.
-        func draftWithOneEdit(
-            _ edit: (inout RetentionSettingsDraft) -> Void
-        ) -> RetentionSettingsDraft {
-            var draft = RetentionSettingsDraft(locale: Locale(identifier: "en_US"))
-            load(
-                HistoryRetentionPolicies(
-                    age: AgeRetention(maxAge: 172_800),
-                    storage: StorageRetention(maxTotalBytes: 2_097_152),
-                    revisions: RevisionRetention(
-                        maxRevisionsPerItem: 20,
-                        maxRevisionBytesPerItem: 2_097_152
-                    )
-                ),
-                into: &draft
-            )
-            edit(&draft)
-            return draft
-        }
-
-        let edits: [(String, (inout RetentionSettingsDraft) -> Void)] = [
-            ("age", { $0.setAgeDaysText("3") }),
-            ("storage", { $0.setStorageMiBText("3") }),
-            ("revision count", { $0.setRevisionCountText("21") }),
-            ("revision bytes", { $0.setRevisionMiBText("3") }),
-            ("age disable", { $0.setAgeEnabled(false) }),
+    @Test("loosening or disabling non-age thresholds applies directly with age off")
+    func nonAgeRelaxationDoesNotRequireConfirmation() throws {
+        let edits: [(inout RetentionSettingsDraft) -> Void] = [
+            { $0.setStorageMiBText("3") },
+            { $0.setRevisionCountText("21") },
+            { $0.setRevisionMiBText("3") },
+            { $0.setStorageEnabled(false) },
+            { $0.setRevisionCountEnabled(false) },
+            { $0.setRevisionBytesEnabled(false) },
         ]
-        for (dimension, edit) in edits {
-            let draft = draftWithOneEdit(edit)
-            #expect(
-                draft.hasPolicyChanges,
-                "\(dimension): the edit is a pending change"
-            )
+        for edit in edits {
+            var draft = configuredDraft(age: nil)
+            edit(&draft)
+            #expect(draft.hasPolicyChanges)
             let submission = try #require(draft.submission())
-            #expect(
-                !draft.requiresTighteningConfirmation(for: submission.policies),
-                "\(dimension): loosening applies without the strict confirmation"
-            )
+            #expect(!draft.requiresRemovalConfirmation(for: submission.policies))
         }
     }
 }

@@ -379,14 +379,14 @@ internal struct RetentionSettingsDraft {
         Self.tightens(submission.maximumUnpinnedItems, from: configuredMaximumUnpinnedItems)
     }
 
-    /// Returns true when any enabled candidate threshold is stricter than
-    /// the exact configured threshold. Enabling a previously absent threshold
-    /// is tightening; disabling or increasing one is not. Mixed edits still
-    /// confirm when at least one dimension can delete more history.
-    internal func requiresTighteningConfirmation(
+    /// Applying an enabled age policy checks the current time even when
+    /// its value is unchanged or higher. The other limits can remove more
+    /// history when enabled or lowered.
+    internal func requiresRemovalConfirmation(
         for candidate: HistoryRetentionPolicies
     ) -> Bool {
-        Self.tightens(candidate.age?.maxAge, from: configuredPolicies.age?.maxAge)
+        guard candidate != configuredPolicies else { return false }
+        return candidate.age != nil
             || Self.tightens(
                 candidate.storage?.maxTotalBytes,
                 from: configuredPolicies.storage?.maxTotalBytes

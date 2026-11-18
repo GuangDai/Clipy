@@ -176,12 +176,9 @@ struct HistoryWorkspaceView: View {
         observedWorkspace.sheet(isPresented: detailsPresented) {
             if let detailsItem {
                 NavigationStack {
-                    HistoryDetailsView(viewState: viewState, item: detailsItem)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button(text("Done")) { self.detailsItem = nil }
-                            }
-                        }
+                    HistoryDetailsView(viewState: viewState, item: detailsItem, onFinishWorkspace: {
+                        self.detailsItem = nil
+                    })
                 }
                 .frame(minWidth: 580, idealWidth: 740, minHeight: 500, idealHeight: 650)
             }
@@ -778,11 +775,14 @@ private struct HistoryWorkspaceRow: View {
             .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .top, spacing: 6) {
-                    Text(row.title).lineLimit(compact ? 1 : 2).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(title).lineLimit(compact ? 1 : 2).frame(maxWidth: .infinity, alignment: .leading)
+                        .help(row.title)
                     if row.pinnedPosition != nil { Image(systemName: "pin.fill").font(.caption).foregroundStyle(.secondary) }
                 }
-                if !compact, let snippet = row.search?.snippet {
-                    Text(snippet).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                if let match = row.search, let snippet = match.snippet {
+                    Text(MatchHighlighting.highlighted(snippet, ranges: match.matchedRanges,
+                        foreground: nil, prioritizesMatch: true))
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(compact ? 1 : 2)
                 }
                 HStack {
                     if let source = row.lastSource {
@@ -830,6 +830,12 @@ private struct HistoryWorkspaceRow: View {
             if !suspended, let source = row.lastSource { sourceIcons.icon(forBundleID: source) }
         }
         .accessibilityElement(children: .combine)
+    }
+
+    private var title: AttributedString {
+        guard let match = row.search, match.snippet == nil else { return AttributedString(row.title) }
+        return MatchHighlighting.highlighted(row.title, ranges: match.matchedRanges,
+            foreground: nil, prioritizesMatch: true)
     }
 }
 

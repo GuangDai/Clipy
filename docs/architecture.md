@@ -48,7 +48,7 @@ AppKit 窗口、系统剪贴板写入与 SwiftUI 状态属于 MainActor。跨模
 
 类型标识的原始 UTF-8 拼写原样保留。格式事实和 UI 表示键按原始字节比较；领域内容集合则使用 Swift String 的 Unicode 规范等价规则，同一个系统剪贴板项目中两个规范等价的类型视为重复并拒绝，不重写已有拼写。不同系统项目可以各自拥有这种拼写，项目索引参与表示身份。
 
-`HistoryItemID`、`RevisionID` 和内容文件使用独立 UUID。xxh3 只筛选剪贴板去重候选，不决定身份；候选必须再逐表示形式确认字节。有效 lineage 提示要求当前 Effective 表示集合完全匹配。普通 Canonical 去重允许富内容吸收同一系统项目结构的简化复制；胜者依次按额外表示最少、最近复制时间、项目 ID 排序。
+`HistoryItemID`、`RevisionID` 和内容文件使用独立 UUID。xxh3 只筛选剪贴板去重候选，候选必须逐表示形式确认字节。有效 lineage 提示要求当前 Effective 表示集合完全匹配。普通捕获允许富内容吸收同一系统项目结构的简化复制，前提是 Canonical 和当前 Effective 都包含入站表示及其原始字节。符合条件的候选依次按 Canonical 额外表示数、最近复制时间、项目 ID 排序。
 
 `ContentVersion` 只在 Effective 字节变化时增加。`ChangePosition` 每个非空 History Commit 恰好增加一次。二者使用检查溢出的整数运算，不循环归零。无变化操作返回 `.unchanged`，不产生提交位置或无意义观察刷新。
 

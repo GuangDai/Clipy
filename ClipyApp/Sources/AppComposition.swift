@@ -622,6 +622,12 @@ final class AppComposition {
             let received = viewState.acceptPeerSurfacePurge(purge, position: position)
             panelSurfacePurgeRelay.apply(received)
         }
+        viewState.onCommittedRetention = { [weak self] position in
+            self?.historyWorkspaceViewState.acceptPeerRetention(at: position)
+        }
+        historyWorkspaceViewState.onCommittedRetention = { [weak self] position in
+            self?.viewState.acceptPeerRetention(at: position)
+        }
         viewState.onCommittedUserRemoval = { [weak self] purge in
             self?.panelSurfacePurgeRelay.apply(purge)
             self?.onHistoryItemRemoved?()
@@ -678,11 +684,13 @@ final class AppComposition {
         viewState.onExportRepresentation = { _ in .failure(.unavailable) }
         viewState.onCommittedUserRemoval = { _ in }
         viewState.onCommittedSurfacePurge = { _, _ in }
+        viewState.onCommittedRetention = { _ in }
         historyWorkspaceViewState.deactivate()
         historyWorkspaceViewState.onPaste = { _ in }
         historyWorkspaceViewState.filePreviewSettings = nil
         historyWorkspaceViewState.onExportRepresentation = { _ in .failure(.unavailable) }
         historyWorkspaceViewState.onCommittedSurfacePurge = { _, _ in }
+        historyWorkspaceViewState.onCommittedRetention = { _ in }
         discardPendingCaptures()
         drainsPreInactivityPendingCapture = false
         captureTask?.cancel()

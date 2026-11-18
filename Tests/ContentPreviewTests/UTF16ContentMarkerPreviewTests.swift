@@ -28,7 +28,7 @@ struct UTF16ContentMarkerPreviewTests {
         #expect(!text.wasTruncated)
     }
 
-    @Test(arguments: [
+    private static let invalidSources: [(String, Data)] = [
         ("public.utf16-plain-text", Data([0x00, 0xD8])),
         ("public.utf16-plain-text", Data([0x00, 0xDC])),
         ("public.utf16-plain-text", Data([0x00, 0xD8, 0x41, 0x00])),
@@ -46,7 +46,9 @@ struct UTF16ContentMarkerPreviewTests {
         ("public.utf16-plain-text", Data([0xFF, 0xFE])),
         ("public.utf16-external-plain-text", Data([0xFE, 0xFF])),
         ("public.utf16-external-plain-text", Data([0xFF, 0xFE])),
-    ])
+    ]
+
+    @Test(arguments: invalidSources)
     func detailsSizedPreviewRejectsMalformedOrEmptyText(type: String, bytes: Data) async {
         #expect(await renderDetailsExcerpt(type: type, bytes: bytes) == .failed(.malformedRepresentation))
     }

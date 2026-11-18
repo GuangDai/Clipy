@@ -187,6 +187,16 @@ struct MatchHighlightingTests {
         #expect(emphasizedUTF16Ranges(of: result) == [expected])
     }
 
+    @Test func narrowExcerptStartsAtTheHitWithoutSplittingItsGrapheme() {
+        let prefix = "Previous line 🎉\n"
+        let text = prefix + "e\u{301}clair"
+        let result = MatchHighlighting.highlighted(text,
+            ranges: [UTF16TextRange(location: prefix.utf16.count + 1, length: 1)], prioritizesMatch: true)
+
+        #expect(Data(String(result.characters).utf8) == Data("…e\u{301}clair".utf8))
+        #expect(emphasizedUTF16Ranges(of: result) == [UTF16TextRange(location: 2, length: 1)])
+    }
+
     // MARK: - Defensive dropping
 
     @Test func negativeAndOverflowingRangesCannotBreakValidScalarHighlights() {

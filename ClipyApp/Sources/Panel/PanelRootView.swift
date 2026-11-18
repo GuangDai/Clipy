@@ -16,6 +16,7 @@ struct PanelRootView: View {
     @State private var readingPositionNoticeDismissed = false
     @State private var topNoticeHeight: CGFloat = 0
     let appDelegate: AppDelegate
+    var motionPresentation: AppMotionPresentation?
     @Environment(\.locale) private var locale
 
     /// The public Settings-scene presentation action (audit S-5 /
@@ -48,6 +49,7 @@ struct PanelRootView: View {
                 // Measure only the notices' natural width-dependent height;
                 // fitting the window must not compress and remeasure them.
                 .fixedSize(horizontal: false, vertical: true)
+                .background { NativePanelBackground() }
                 .onGeometryChange(for: CGFloat.self) { geometry in
                     geometry.size.height
                 } action: { height in
@@ -55,7 +57,7 @@ struct PanelRootView: View {
                     if topNoticeHeight != height { topNoticeHeight = height }
                 }
             }
-            panelContent
+            animatedPanelContent
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onChange(of: hasTopNotices, initial: true) { _, visible in
@@ -68,9 +70,9 @@ struct PanelRootView: View {
             openSettings()
         })
         .environment(\.historyBrowsingPreferences, appDelegate.composition?.historyBrowsingPreferences)
-        // The panel window is transparent; only rounded content corners
-        // remain transparent after the notices take their own layout space.
-        .background { NativePanelBackground() }
+        // The notice stack and animated browsing content share one static
+        // window clip. Notice rendering stays independent of the animation.
+        .clipShape(RoundedRectangle(cornerRadius: 12))
         .onChange(of: appDelegate.composition?.viewState.didLoseReadingPosition) { _, missing in
             readingPositionNoticeDismissed = false
             if missing == true {
@@ -82,6 +84,16 @@ struct PanelRootView: View {
                 NSApp.activate()
                 openSettings()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var animatedPanelContent: some View {
+        let content = panelContent.background { NativePanelBackground() }
+        if let motionPresentation {
+            content.modifier(AppMotionSurface(presentation: motionPresentation))
+        } else {
+            content
         }
     }
 
@@ -295,6 +307,7 @@ struct PanelRootView: View {
             Text(Self.pasteFailureMessage(failure))
                 .font(.callout)
                 .lineLimit(2)
+                .accessibilityIdentifier("clipy.paste.failure.message")
             Spacer(minLength: 8)
             Button {
                 appDelegate.dismissPasteFailure()
@@ -303,11 +316,14 @@ struct PanelRootView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(AppRecoveryCopy.text("Dismiss copy failure"))
+            .accessibilityIdentifier("clipy.paste.failure.dismiss")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
         .shadow(radius: 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("clipy.paste.failure.banner")
     }
 
     static func pasteFailureMessage(

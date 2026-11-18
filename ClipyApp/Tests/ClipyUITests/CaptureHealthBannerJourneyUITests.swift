@@ -52,6 +52,14 @@ final class CaptureHealthBannerJourneyUITests: XCTestCase {
         XCTAssertTrue(dismiss.waitForExistence(timeout: 5))
         XCTAssertTrue(dismiss.isHittable)
         XCTAssertEqual(dismiss.label, "Dismiss capture warning")
+        let search = app.textFields["clipy.search.field"]
+        XCTAssertTrue(search.exists)
+        XCTAssertLessThanOrEqual(banner.frame.maxY, search.frame.minY,
+                                 "The warning belongs above the search strip")
+        let visualEvidence = XCTAttachment(screenshot: banner.screenshot())
+        visualEvidence.name = "Capture warning layout"
+        visualEvidence.lifetime = .keepAlways
+        add(visualEvidence)
         dismiss.click()
 
         XCTAssertTrue(

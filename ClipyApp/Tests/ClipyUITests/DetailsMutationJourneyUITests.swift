@@ -191,6 +191,34 @@ final class DetailsMutationJourneyUITests: XCTestCase {
             message: "Details did not reload after its Escape dismissal."
         ) else { return }
 
+        let info = detailsRoot.descendants(matching: .any)["clipy.details.info.toggle"]
+        guard assertEventually({ info.exists }, in: app, message: "Details copy information is missing.") else { return }
+        if !info.isHittable {
+            let scroll = detailsRoot.scrollViews.firstMatch
+            guard scroll.exists else {
+                XCTFail("Details copy information has no scroll owner.")
+                return
+            }
+            scroll.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .scroll(byDeltaX: 0, deltaY: -140)
+        }
+        guard assertEventually({ info.isHittable }, in: app, message: "Details copy information is not reachable.") else { return }
+        info.click()
+        let copyCount = detailsRoot.descendants(matching: .any)["clipy.details.copy-count"]
+        guard assertEventually({ copyCount.exists && (copyCount.value as? String) == "1" },
+                               in: app, message: "Details did not show the target's first copy.") else { return }
+
+        let repeatedItem = NSPasteboardItem()
+        XCTAssertTrue(repeatedItem.setString(target, forType: .string))
+        let beforeRepeat = pasteboard.changeCount
+        pasteboard.clearContents()
+        let wroteRepeat = pasteboard.writeObjects([repeatedItem])
+        stagedCapture = (target, beforeRepeat, pasteboard.changeCount)
+        guard assertCondition(wroteRepeat, in: app, message: "Could not copy the target again.") else { return }
+        guard assertEventually({ copyCount.exists && (copyCount.value as? String) == "2" },
+                               in: app, timeout: 10,
+                               message: "Details did not update after a repeated capture while it remained open.") else { return }
+
         pinToggle.click()
         guard assertEventually(
             {

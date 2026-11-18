@@ -38,6 +38,7 @@ struct HistoryPreviewView: View {
     @State private var contentWidth: CGFloat = PanelGeometry.floatingPreviewWidth
     @State private var metadataHeight: CGFloat = 0
     @State private var fileHeaderHeight: CGFloat = 0
+    @State private var searchMatchHeight: CGFloat = 0
     @State private var imageFooterHeight: CGFloat = 0
     @State private var textNoticeHeight: CGFloat = 0
     @State private var loader: PreviewContentLoader
@@ -68,6 +69,11 @@ struct HistoryPreviewView: View {
         let retryGeneration: Int
         let maximumTextCharacters: Int
         let isTextLengthLimited: Bool
+    }
+
+    private struct RetentionCheck: Equatable {
+        let item: HistoryItemReference
+        let position: ChangePosition
     }
 
     /// Standalone entry point: PreviewPaneState owns the exact target.
@@ -155,12 +161,19 @@ struct HistoryPreviewView: View {
     }
 
     private var observedRow: HistoryRow? {
-        guard let targetItem else { return nil }
-        return viewState.rows.first { $0.item == targetItem }
+        guard let targetItem, let row = viewState.displayedRow(for: targetItem.id), row.item == targetItem else {
+            return nil
+        }
+        return row
+    }
+
+    private var retentionCheck: RetentionCheck? {
+        guard let targetItem, let position = viewState.retentionChangePosition else { return nil }
+        return RetentionCheck(item: targetItem, position: position)
     }
 
     private var bodyMaximumHeight: CGFloat? {
-        maximumHeight.map { max(0, $0 - metadataHeight - fileHeaderHeight) }
+        maximumHeight.map { max(0, $0 - metadataHeight - fileHeaderHeight - searchMatchHeight) }
     }
 
     private var flexibleHeight: CGFloat? {
@@ -169,6 +182,7 @@ struct HistoryPreviewView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            searchMatch
             if loader.requestedItem == targetItem, let file = loader.loadedFileReference {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
@@ -254,6 +268,10 @@ struct HistoryPreviewView: View {
             guard let request = pinRequest, !Task.isCancelled else { return }
             await performPin(request)
         }
+        .task(id: retentionCheck) {
+            guard let retentionCheck else { return }
+            await retirePreviewIfNeeded(retentionCheck)
+        }
         .onChange(of: targetItem) { _, target in
             if let informationItem, informationItem != target {
                 previewState.isInformationPresented = false
@@ -329,6 +347,22 @@ struct HistoryPreviewView: View {
         .accessibilityIdentifier("clipy.preview.root")
     }
 
+    private func retirePreviewIfNeeded(_ check: RetentionCheck) async {
+        do {
+            let row = try await viewState.detailRow(for: check.item.id, atLeast: check.position)
+            guard row.item != check.item else { return }
+        } catch HistoryFailure.notFound(_) {
+            // The committed retention affected this exact preview.
+        } catch {
+            return
+        }
+        guard !Task.isCancelled, loader.requestedItem == check.item else { return }
+        previewState.isInformationPresented = false
+        setFileConfirmationPresented(false)
+        informationItem = nil
+        loader.clear()
+    }
+
     private func setFileConfirmationPresented(_ presented: Bool) {
         fileConfirmationPresented = presented
         previewState.isFileConfirmationPresented = presented
@@ -353,6 +387,32 @@ struct HistoryPreviewView: View {
     }
 
     // MARK: - Content
+
+    /// Uses the same exact-reference row as the footer and copy controls.
+    /// Query changes retire the old rows immediately, including their excerpts.
+    @ViewBuilder
+    private var searchMatch: some View {
+        if viewState.hasAuthoritativeFirstPage, let row = observedRow, let match = row.search,
+           match.snippet != nil || !match.matchedRanges.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(PreviewCopy.text("Search match"))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(MatchHighlighting.highlighted(match.snippet ?? row.title, ranges: match.matchedRanges,
+                    prioritizesMatch: true))
+                    .font(.callout)
+                    .lineLimit(3)
+                    .accessibilityIdentifier("clipy.preview.search-match")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(.quaternary)
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { searchMatchHeight = $0 }
+            .onDisappear { searchMatchHeight = 0 }
+        }
+    }
 
     @ViewBuilder
     private var previewBody: some View {

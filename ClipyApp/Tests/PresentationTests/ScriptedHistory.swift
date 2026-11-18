@@ -74,6 +74,7 @@ actor ScriptedHistory: ClipboardHistory {
     /// Cursor-keyed one-shot browse script; a cursor without an entry answers
     /// an empty page.
     private let browseScript: [HistoryPageCursor: BrowseOutcome]
+    private var seekPages: [HistoryItemID: HistoryPage] = [:]
 
     /// Thrown by every `perform`; `nil` answers `performReceipt`.
     private var performFailure: HistoryFailure?
@@ -201,6 +202,10 @@ actor ScriptedHistory: ClipboardHistory {
         representations[request] = result
     }
 
+    func scriptSeek(to itemID: HistoryItemID, page: HistoryPage) {
+        seekPages[itemID] = page
+    }
+
     /// Whether the scripted browse for `cursor` has reached its deterministic
     /// suspension point.
     func isBrowsePaused(cursor: HistoryPageCursor) -> Bool {
@@ -228,6 +233,10 @@ actor ScriptedHistory: ClipboardHistory {
 
     func browse(_ request: HistoryBrowseRequest) async throws -> HistoryPage {
         browseRequests.append(request)
+        if let target = request.startAround {
+            guard let page = seekPages[target] else { throw HistoryFailure.notFound(target) }
+            return page
+        }
         if request.cursor == nil, let observedFirstPage { return observedFirstPage }
         guard let cursor = request.cursor,
               let outcome = browseScript[cursor]
@@ -642,9 +651,9 @@ func fixtureRow(
 
 /// One canned page over a named next-cursor token (docs/interface.md; cursor minting is package-only,
 /// docs/architecture.md).
-func fixturePage(rows: [HistoryRow], next: String?) -> HistoryPage {
+func fixturePage(rows: [HistoryRow], next: String?, position: UInt64 = 1) -> HistoryPage {
     HistoryPage(
-        position: ChangePosition(rawValue: 1),
+        position: ChangePosition(rawValue: position),
         rows: rows,
         next: next.map { HistoryPageCursor(payload: Data($0.utf8)) }
     )

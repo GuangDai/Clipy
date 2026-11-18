@@ -190,8 +190,12 @@ final class MultiItemDragJourneyUITests: XCTestCase {
             dy: desktopTop - destination.y - beforeDrag.midY
         ))
         dragStart.press(forDuration: 0.3, thenDragTo: dragEnd, withVelocity: .slow, thenHoldForDuration: 0.5)
-        let delivered = NSPredicate { _, _ in FileManager.default.fileExists(atPath: receivedURL.path) }
-        let delivery = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: delivered, object: nil)], timeout: 10)
+        let finished = NSPredicate { _, _ in
+            if FileManager.default.fileExists(atPath: receivedURL.path) { return true }
+            let source = try? String(contentsOf: traceURL, encoding: .utf8)
+            return source?.contains("session-ended operation=\(NSDragOperation.none.rawValue) ") == true
+        }
+        let delivery = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: finished, object: nil)], timeout: 10)
         let trace = (try? String(contentsOf: traceURL, encoding: .utf8)) ?? "no source trace"
         let receiverLogText = (try? String(contentsOf: receiverLogURL, encoding: .utf8)) ?? ""
         let diagnostics = """
@@ -212,6 +216,7 @@ final class MultiItemDragJourneyUITests: XCTestCase {
         XCTAssertTrue(trace.contains("hover-enter"), diagnostics)
         XCTAssertTrue(trace.contains("pressed-admitted"), diagnostics)
         XCTAssertEqual(delivery, .completed, diagnostics)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: receivedURL.path), diagnostics)
         let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: receivedURL)) as? [String: Any])
         let items = try XCTUnwrap(result["items"] as? [[String: Any]])
         XCTAssertEqual(items.count, 2)

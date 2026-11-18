@@ -55,6 +55,13 @@ struct HistoryDetailsLoadFence {
         isActive = true
     }
 
+    /// The user explicitly chose to reload a changed item. Its old reads
+    /// remain retired and any subsequent purge must still be reconciled.
+    mutating func resumeAfterRevisionPurge() {
+        isPurged = false
+        invalidateReads()
+    }
+
     mutating func purge(
         _ scope: HistorySurfacePurge.Scope,
         item: HistoryItemReference
@@ -149,12 +156,14 @@ struct HistoryDetailsView: View {
     private let viewState: HistoryViewState
     private let onReferenceAdvance:
         (@MainActor (HistoryItemReference, HistoryItemReference) -> Bool)?
+    private let onFinishWorkspace: (@MainActor () -> Void)?
     @State private var currentItem: HistoryItemReference
 
     @State private var phase: DetailsPhase = .loading
+    @State private var factsPosition: ChangePosition?
     @State private var basis: ContentBasis = .effective
     @State private var showsStaleNotice = false
-    @State private var needsRevisionConflictReload = false
+    @State private var shouldLoadLatestReference = false
     @State private var failureNotice: String?
     @State private var showsEditor = false
     @State private var showsRemoveConfirmation = false
@@ -170,9 +179,23 @@ struct HistoryDetailsView: View {
     @State private var representationRenderer = ContentPreview()
     @State private var loadFence = HistoryDetailsLoadFence()
 
-    init(viewState: HistoryViewState, item: HistoryItemReference) {
+    private struct FactsRequest: Equatable {
+        let item: HistoryItemReference
+        let position: ChangePosition
+    }
+
+    private var factsRequest: FactsRequest? {
+        guard !showsEditor, case .loaded(let details, _) = phase, details.item == currentItem,
+              let position = viewState.sourceCompletionPosition,
+              factsPosition.map({ position > $0 }) ?? true else { return nil }
+        return FactsRequest(item: details.item, position: position)
+    }
+
+    init(viewState: HistoryViewState, item: HistoryItemReference,
+         onFinishWorkspace: (@MainActor () -> Void)? = nil) {
         self.viewState = viewState
         self.onReferenceAdvance = nil
+        self.onFinishWorkspace = onFinishWorkspace
         self._currentItem = State(initialValue: item)
         self._loadFence = State(
             initialValue: HistoryDetailsLoadFence(
@@ -191,6 +214,7 @@ struct HistoryDetailsView: View {
     ) {
         self.viewState = viewState
         self.onReferenceAdvance = onReferenceAdvance
+        self.onFinishWorkspace = nil
         self._currentItem = State(initialValue: item)
         self._loadFence = State(
             initialValue: HistoryDetailsLoadFence(
@@ -201,6 +225,7 @@ struct HistoryDetailsView: View {
     }
 
     var body: some View {
+        let factsRequest = self.factsRequest
         VStack(spacing: 0) {
             if showsEditor, case .loaded(let details, _) = phase {
                 ReviseEditorView(
@@ -223,6 +248,20 @@ struct HistoryDetailsView: View {
                             PanelActionsCopy.text("This item is no longer in your clipboard history.", bundle: copyBundle)
                         )
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .changed:
+                    ContentUnavailableView {
+                        Label(
+                            PanelActionsCopy.text("Item Changed", bundle: copyBundle),
+                            systemImage: "arrow.triangle.2.circlepath"
+                        )
+                    } description: {
+                        Text(PanelActionsCopy.text("Load the latest content to continue viewing this item.", bundle: copyBundle))
+                    } actions: {
+                        Button(PanelActionsCopy.text("Reload Latest", bundle: copyBundle),
+                               action: reloadChangedContent)
+                        .accessibilityIdentifier("clipy.details.reload-latest")
+                    }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .failed(let failure):
                     ContentUnavailableView {
@@ -248,10 +287,22 @@ struct HistoryDetailsView: View {
         .accessibilityIdentifier("clipy.details.root")
         .navigationTitle(PanelActionsCopy.text("Details", bundle: copyBundle))
         .navigationBarBackButtonHidden(true)
+        .interactiveDismissDisabled(onFinishWorkspace != nil && showsEditor)
+        .toolbar {
+            if let onFinishWorkspace, !showsEditor {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(HistoryWorkspaceCopy.text("Done", bundle: copyBundle), action: onFinishWorkspace)
+                }
+            }
+        }
         .task {
             guard !Task.isCancelled else { return }
             loadFence.resume()
             await load()
+        }
+        .task(id: factsRequest) {
+            guard let factsRequest else { return }
+            await refreshFacts(factsRequest)
         }
         .confirmationDialog(
             PanelActionsCopy.text("Remove this item from your clipboard history?", bundle: copyBundle),
@@ -270,6 +321,7 @@ struct HistoryDetailsView: View {
             cancelRepresentationPreview()
             showsEditor = false
             phase = .loading
+            factsPosition = nil
         }
         .onChange(of: basis) { _, _ in
             cancelExport()
@@ -602,7 +654,8 @@ struct HistoryDetailsView: View {
 
     @MainActor
     private func startRepresentationPreview(_ request: HistoryRepresentationRequest) {
-        if previewRequest == request, representationPreview != nil || representationTask != nil {
+        if previewRequest == request,
+           representationTask != nil || (representationPreview != nil && representationPreview?.canRetry != true) {
             cancelRepresentationPreview()
             return
         }
@@ -631,6 +684,18 @@ struct HistoryDetailsView: View {
                 guard !Task.isCancelled, previewRequest == request,
                       reconcileSurfacePurge(viewState.surfacePurge), loadFence.owns(generation) else { return }
                 representationTask = nil
+                if let failure = error as? HistoryFailure {
+                    switch failure {
+                    case .staleContent:
+                        invalidateLoadedDetails(as: .changed)
+                        return
+                    case .notFound:
+                        invalidateLoadedDetails(as: .removed)
+                        return
+                    default:
+                        break
+                    }
+                }
                 representationFailure = (error as? HistoryFailure).map {
                     FailurePresentation.message(for: $0, bundle: copyBundle)
                 } ?? PanelActionsCopy.text("Clipy couldn't load this item.", bundle: copyBundle)
@@ -654,6 +719,16 @@ struct HistoryDetailsView: View {
         isExporting = false
     }
 
+    @MainActor
+    private func reloadChangedContent() {
+        guard case .changed = phase, loadFence.isActive else { return }
+        if loadFence.isPurged {
+            loadFence.resumeAfterRevisionPurge()
+        }
+        shouldLoadLatestReference = true
+        Task { await load() }
+    }
+
     /// Loads (or reloads) the detail snapshot. `.notFound` maps to the
     /// removed placeholder; every other typed failure maps to the
     /// user-facing `FailurePresentation` message (03b §10).
@@ -673,20 +748,19 @@ struct HistoryDetailsView: View {
         if presentingTransition {
             phase = .loading
         }
+        let positionAtStart = viewState.sourceCompletionPosition
         do {
             let details = try await viewState.details(for: currentItem.id)
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
-            // A failed explicit Revert reloads the authoritative latest base
-            // (03b §10). Ordinary reads still require the displayed reference.
-            // Keep this intent across a transient read failure so Retry can
-            // still recover the newer base instead of reporting it removed.
-            if needsRevisionConflictReload,
+            // Explicit recovery may adopt the latest reference. Keep that
+            // intent across a transient failure so Retry can finish it.
+            if shouldLoadLatestReference,
                !Task.isCancelled,
                loadFence.owns(generation) {
                 advanceDetailsReference(details.item)
                 generation = loadFence.generation
                 if details.item == currentItem {
-                    needsRevisionConflictReload = false
+                    shouldLoadLatestReference = false
                 }
             }
             guard loadFence.accepts(
@@ -698,7 +772,11 @@ struct HistoryDetailsView: View {
                 if !Task.isCancelled,
                    loadFence.owns(generation),
                    details.item != currentItem {
-                    phase = .removed
+                    if details.item.id == currentItem.id, details.item.contentVersion > currentItem.contentVersion {
+                        phase = .changed
+                    } else {
+                        phase = .failed(.persistence(.invariantViolation))
+                    }
                 }
                 return
             }
@@ -712,6 +790,7 @@ struct HistoryDetailsView: View {
                 expected: currentItem,
                 isCancelled: Task.isCancelled
             ) else { return }
+            factsPosition = positionAtStart
             phase = .loaded(details, content)
         } catch let failure as HistoryFailure {
             guard reconcileSurfacePurge(viewState.surfacePurge) else { return }
@@ -732,6 +811,49 @@ struct HistoryDetailsView: View {
         }
     }
 
+    @MainActor
+    private func refreshFacts(_ request: FactsRequest) async {
+        guard !Task.isCancelled, factsRequest == request,
+              reconcileSurfacePurge(viewState.surfacePurge), loadFence.isActive else { return }
+        let generation = loadFence.generation
+        do {
+            let row = try await viewState.detailRow(for: request.item.id, atLeast: request.position)
+            guard !Task.isCancelled, factsRequest == request,
+                  reconcileSurfacePurge(viewState.surfacePurge), loadFence.owns(generation),
+                  case .loaded(let details, let content) = phase else { return }
+            factsPosition = request.position
+            if row.item.contentVersion > details.item.contentVersion {
+                invalidateLoadedDetails(as: .changed)
+                return
+            }
+            guard row.item == details.item, row.copyCount >= details.occurrence.count else { return }
+            let occurrence = CopyOccurrenceSummary(
+                firstCopiedAt: details.occurrence.firstCopiedAt, lastCopiedAt: row.lastCopiedAt,
+                count: row.copyCount, firstSource: details.occurrence.firstSource, lastSource: row.lastSource
+            )
+            guard occurrence != details.occurrence || row.pinnedPosition != details.pinnedPosition else { return }
+            phase = .loaded(HistoryDetails(
+                item: details.item, title: details.title, canonical: details.canonical, effective: details.effective,
+                effectiveMatchesCanonical: details.effectiveMatchesCanonical, revisions: details.revisions,
+                occurrence: occurrence, pinnedPosition: row.pinnedPosition
+            ), content)
+        } catch {
+            guard !Task.isCancelled, factsRequest == request,
+                  reconcileSurfacePurge(viewState.surfacePurge), loadFence.owns(generation) else { return }
+            if let failure = error as? HistoryFailure, case .notFound = failure {
+                invalidateLoadedDetails(as: .removed)
+            }
+        }
+    }
+
+    @MainActor
+    private func invalidateLoadedDetails(as phase: DetailsPhase) {
+        loadFence.invalidateReads()
+        cancelRepresentationPreview()
+        cancelExport()
+        self.phase = phase
+    }
+
     /// Applies the panel owner's current purge synchronously. This is called
     /// both by SwiftUI observation and by the load's begin/completion path,
     /// so navigation teardown ordering cannot admit a late details payload.
@@ -739,18 +861,21 @@ struct HistoryDetailsView: View {
     private func reconcileSurfacePurge(
         _ purge: HistorySurfacePurge?
     ) -> Bool {
-        if loadFence.reconcile(purge, item: currentItem) != nil {
+        if let scope = loadFence.reconcile(purge, item: currentItem) {
             cancelExport()
             cancelRepresentationPreview()
             showsEditor = false
-            phase = .removed
+            if case .revision = scope {
+                phase = .changed
+            } else {
+                phase = .removed
+            }
         }
         return !loadFence.isPurged
     }
 
-    /// Pin state is re-read only after the write receipt. A typed write
-    /// failure leaves the currently loaded details in place and uses the
-    /// existing inline failure presentation.
+    /// The write receipt advances the live facts request without rebuilding
+    /// the loaded representation preview or an open Save As dialog.
     @MainActor
     private func togglePin(isPinned: Bool) async {
         guard loadFence.isActive, !loadFence.isPurged, !Task.isCancelled, !isTogglingPin else { return }
@@ -764,8 +889,6 @@ struct HistoryDetailsView: View {
             } else {
                 _ = try await viewState.pinAwaitingReceipt(reference.id)
             }
-            guard !Task.isCancelled, loadFence.owns(generation) else { return }
-            await load(presentingTransition: false)
         } catch let failure as HistoryFailure {
             guard loadFence.owns(generation),
                   currentItem == reference, !Task.isCancelled else { return }
@@ -811,7 +934,7 @@ struct HistoryDetailsView: View {
                   currentItem == reference, !Task.isCancelled else { return }
             if case .staleContent = failure {
                 showsStaleNotice = true
-                needsRevisionConflictReload = true
+                shouldLoadLatestReference = true
                 await load(presentingTransition: false)
             } else {
                 failureNotice = FailurePresentation.message(for: failure, bundle: copyBundle)
@@ -947,7 +1070,9 @@ private struct DetailsBody: View {
     }
 
     private var infoSection: some View {
-        DisclosureGroup(PanelActionsCopy.text("Info", bundle: copyBundle)) {
+        let countLabel = PanelActionsCopy.text("Copy Count", bundle: copyBundle)
+        let copyCount = DetailsFormat.count(details.occurrence.count, locale: locale)
+        return DisclosureGroup(PanelActionsCopy.text("Info", bundle: copyBundle)) {
             LabeledContent(
                 PanelActionsCopy.text("First Copied", bundle: copyBundle),
                 value: DetailsFormat.dateTime(
@@ -960,10 +1085,11 @@ private struct DetailsBody: View {
                     details.occurrence.lastCopiedAt, locale: locale, timeZone: timeZone
                 )
             )
-            LabeledContent(
-                PanelActionsCopy.text("Copy Count", bundle: copyBundle),
-                value: DetailsFormat.count(details.occurrence.count, locale: locale)
-            )
+            LabeledContent(countLabel, value: copyCount)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(countLabel)
+                .accessibilityValue(copyCount)
+                .accessibilityIdentifier("clipy.details.copy-count")
             LabeledContent(
                 PanelActionsCopy.text("Source", bundle: copyBundle),
                 value: details.occurrence.lastSource.map {
@@ -1093,7 +1219,32 @@ private struct RepresentationRow: View {
     let onPreview: () -> Void
     let onExport: () -> Void
 
+    private var previewAction: (name: String, symbol: String) {
+        if isLoading { return ("Cancel", "xmark") }
+        if preview?.canRetry == true { return ("Retry", "arrow.clockwise") }
+        return preview == nil ? ("Show Preview", "eye") : ("Hide Preview", "eye.fill")
+    }
+
+    private var previewStatus: String? {
+        switch preview {
+        case .some(.metadataOnly):
+            PanelActionsCopy.text("No preview is supported for this format.", bundle: copyBundle)
+        case .some(.failure(.resourceLimit)):
+            PanelActionsCopy.text("This representation is too large to preview.", bundle: copyBundle)
+        case .some(.failure(.malformedRepresentation)):
+            PanelActionsCopy.text("This representation could not be decoded.", bundle: copyBundle)
+        case .some(.failure(.renderer)):
+            PanelActionsCopy.text("The preview is busy. Try again.", bundle: copyBundle)
+        case .some(.failure(.cancelled)):
+            PanelActionsCopy.text("Preview unavailable", bundle: copyBundle)
+        default:
+            nil
+        }
+    }
+
     var body: some View {
+        let action = previewAction
+        let actionTitle = PanelActionsCopy.text(action.name, bundle: copyBundle)
         VStack(alignment: .leading, spacing: PanelTheme.spacingXSmall) {
             HStack(spacing: PanelTheme.spacingSmall) {
                 Image(systemName: typeSymbol(for: [representation.typeIdentifier]))
@@ -1128,16 +1279,14 @@ private struct RepresentationRow: View {
                         .accessibilityLabel(PanelActionsCopy.text("Hidden from effective content", bundle: copyBundle))
                 }
                 Button(action: onPreview) {
-                    Label(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle),
-                          systemImage: isLoading ? "xmark" : (preview == nil ? "eye" : "eye.fill"))
+                    Label(actionTitle, systemImage: action.symbol)
                         .frame(width: 24, height: 24)
                         .contentShape(Rectangle())
                 }
                 .foregroundStyle(preview == nil ? Color.secondary : Color.accentColor)
-                .help(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle))
+                .help(actionTitle)
                 .accessibilityIdentifier("clipy.details.show-preview." + representation.identity.accessibilitySuffix)
-                .accessibilityLabel(PanelActionsCopy.text(isLoading ? "Cancel" : (preview == nil ? "Show Preview" : "Hide Preview"), bundle: copyBundle)
-                    + ": " + representation.identity.accessibilityLabel)
+                .accessibilityLabel(actionTitle + ": " + representation.identity.accessibilityLabel)
                 Button(action: onExport) {
                     Label(PanelActionsCopy.text("Save As…", bundle: copyBundle), systemImage: "square.and.arrow.down")
                         .frame(width: 24, height: 24)
@@ -1198,14 +1347,13 @@ private struct RepresentationRow: View {
                     .containerRelativeFrame(.vertical) { length, _ in length * 0.6 }
                     .accessibilityIdentifier("clipy.details.reference-preview." + representation.identity.accessibilitySuffix)
             }
-            if preview == .metadataOnly {
-                Label(PanelActionsCopy.text("Preview unavailable", bundle: copyBundle), systemImage: "doc")
+            if let previewStatus {
+                Label(previewStatus, systemImage: "doc")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(
-                        PanelActionsCopy.format("Preview unavailable for %@", representation.typeIdentifier, bundle: copyBundle)
-                    )
+                    .accessibilityLabel(previewStatus)
+                    .accessibilityIdentifier("clipy.details.preview-status." + representation.identity.accessibilitySuffix)
             }
             DisclosureGroup(DetailsPresentationCopy.text("Format Details", bundle: copyBundle)) {
                 Text(verbatim: representation.typeIdentifier)
@@ -1347,6 +1495,7 @@ private enum DetailsPhase {
     case loading
     case loaded(HistoryDetails, DetailsContentPresentation)
     case removed
+    case changed
     // Retain the fact, so a language change can redraw its message without
     // restarting the load or disturbing an open editor's draft.
     case failed(HistoryFailure?)
@@ -1381,6 +1530,9 @@ enum DetailsRepresentationPresentation: Equatable, Sendable {
     case image(PreviewRaster)
     case reference(PreviewReference)
     case metadataOnly
+    case failure(PreviewFailure)
+
+    var canRetry: Bool { self == .failure(.renderer) }
 
     var text: PreviewText? {
         if case .text(let text) = self { return text }
@@ -1390,13 +1542,13 @@ enum DetailsRepresentationPresentation: Equatable, Sendable {
     var raster: PreviewRaster? {
         switch self {
         case .image(let raster): raster
-        case .text, .reference, .metadataOnly: nil
+        case .text, .reference, .metadataOnly, .failure: nil
         }
     }
 
     /// One explicit row preview uses the renderer's existing metadata limits
-    /// before reading bytes (V2-09 §5). Opaque and over-budget representations
-    /// stay metadata-only; Save As continues to read their complete bytes.
+    /// before reading bytes. Unsupported and over-budget data still allow
+    /// Save As to read their complete bytes from storage.
     static func load(
         _ request: HistoryRepresentationRequest,
         metadata: HistoryRepresentationMetadata,
@@ -1408,7 +1560,10 @@ enum DetailsRepresentationPresentation: Equatable, Sendable {
             PreviewRepresentationMetadata(
                 typeIdentifier: metadata.typeIdentifier, byteCount: metadata.byteCount
             )
-        ]).first, source.preflightFailure == nil else { return .metadataOnly }
+        ]).first else { return .metadataOnly }
+        if case .some(.failed(let failure)) = source.preflightFailure {
+            return .failure(failure)
+        }
         let raw = try await history.representation(request)
         try Task.checkCancellation()
         let presentation = await resolve(raw, source: source, renderer: renderer)
@@ -1429,7 +1584,8 @@ enum DetailsRepresentationPresentation: Equatable, Sendable {
         case .content(.text(let text)): return .text(text)
         case .content(.raster(let raster)): return .image(raster)
         case .content(.reference(let reference)): return .reference(reference)
-        default: return .metadataOnly
+        case .unavailable: return .metadataOnly
+        case .failed(let failure): return .failure(failure)
         }
     }
 }

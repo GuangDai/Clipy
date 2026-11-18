@@ -127,7 +127,6 @@ struct AppMotionSurface: ViewModifier {
         let duration = isActive ? presentation.duration : 0
         let awaitingStart = request != playbackTrigger
         content
-            .clipShape(RoundedRectangle(cornerRadius: 12))
             .keyframeAnimator(initialValue: Values(), trigger: playbackTrigger) { content, values in
                 content
                     .scaleEffect(CGFloat(isActive ? (awaitingStart ? AppMotionTiming.arrivalScale : values.scale) : 1))

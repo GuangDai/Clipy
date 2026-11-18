@@ -15,6 +15,40 @@ import Testing
 struct HistoryListPaginationHostedTests {
 
     @Test
+    func anUnrelatedCaptureKeepsADeepSearchAnchorAndFreshPagination() async throws {
+        let history = try await ComposedSupport.openMemoryHistory()
+        let base = Date(timeIntervalSinceReferenceDate: 700_317_000)
+        var matches: [HistoryItemReference] = []
+        for index in 0..<3 {
+            let receipt = try await history.perform(.capture(ComposedSupport.textCapture(
+                "reading anchor fixture \(index)", observedAt: base.addingTimeInterval(Double(index))
+            )))
+            matches.append(try #require(ComposedSupport.insertedReference(from: receipt, "search arrange")))
+        }
+
+        let state = HistoryViewState(history: history, pageLimit: 1)
+        defer { state.deactivate() }
+        state.searchText = "reading anchor fixture"
+        state.activate()
+        try #require(await ComposedSupport.waitFor { state.rows.map(\.item) == [matches[2]] })
+        state.loadNextPage()
+        try #require(await ComposedSupport.waitFor { state.rows.map(\.item) == [matches[2], matches[1]] })
+        state.recordReadingPosition(visibleRowIDs: [matches[1].id])
+
+        _ = try await history.perform(.capture(ComposedSupport.textCapture(
+            "unrelated clipboard value", observedAt: base.addingTimeInterval(4)
+        )))
+        let replacement = try await history.browse(HistoryBrowseRequest(kind: .recent, limit: 1))
+        try #require(await ComposedSupport.waitFor { state.sourceCompletionPosition == replacement.position })
+        #expect(state.rows.map(\.item) == [matches[1]])
+        #expect(state.readingItemID == matches[1].id)
+        #expect(state.hasPreviousPage)
+        state.loadNextPage()
+        try #require(await ComposedSupport.waitFor { state.rows.map(\.item) == [matches[1], matches[0]] })
+        #expect(!state.hasNextPage)
+    }
+
+    @Test
     func lastVisiblePinnedRowLoadsTheContinuationPage() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         let base = Date(timeIntervalSinceReferenceDate: 700_317_000)
@@ -40,6 +74,7 @@ struct HistoryListPaginationHostedTests {
 
         let viewState = HistoryViewState(history: history, pageLimit: 1)
         defer { viewState.deactivate() }
+        viewState.sortOrder = .automatic
         viewState.activate()
 
         let firstPageSettled = await ComposedSupport.waitFor {

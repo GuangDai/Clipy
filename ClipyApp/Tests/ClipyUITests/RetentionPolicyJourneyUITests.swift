@@ -1,11 +1,13 @@
 /// RetentionPolicyJourneyUITests.swift — running-app proofs for the V2-02
 /// Settings action. The R2 journey crosses a real General-pasteboard capture,
 /// configured-policy read, destructive confirmation, receipt-derived feedback,
-/// synchronous surface purge, and authoritative empty replacement. The R1
-/// journey distinguishes a strict enable from a direct looser edit, then
-/// reopens Settings to prove configured readback and the exact-value UI no-op.
+/// synchronous surface purge, and authoritative empty replacement. The age
+/// journey verifies persistent history after cancelling and confirming the
+/// same relaxation when an item is already expired.
 /// The DEBUG launch seam changes only the store path and capture-access posture.
 import AppKit
+import HistoryCore
+import HistoryStorage
 import XCTest
 
 final class RetentionPolicyJourneyUITests: XCTestCase {
@@ -110,7 +112,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         ) else { return }
         apply.click()
 
-        confirmStrictPolicy(
+        confirmPolicy(
             in: owningWindow,
             app: app,
             context: "storage tightening"
@@ -155,184 +157,123 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         )
     }
 
-    /// Enabling an absent age threshold is strict and must confirm. Raising
-    /// 30 days to 31 is looser and therefore commits without a sheet. A later
-    /// Settings appearance reads 31 back and offers no write for the exact
-    /// configured value (`hasPolicyChanges == false`).
     @MainActor
-    func testAgeTighteningThenLooseningReopensAsAnExactNoOp() throws {
-        let app = try launchApp(capturing: "clipy-retention-age-current")
+    func testRelaxingAgeConfirmsBeforeDeletingExpiredHistory() async throws {
+        let storeURL = try makeStoreURL()
+        let before = try await seedExpiredHistory(at: storeURL)
+        let app = launchApp(storeURL: storeURL, captureAccess: "denied")
         defer { app.terminate() }
 
-        let panel = app.descendants(matching: .any)["clipy.panel.root"]
-        let rows = historyRows(in: app)
-        assertRowCount(
-            1,
-            in: rows,
-            app: app,
-            context: "age journey initial capture"
+        let firstWindow = try XCTUnwrap(requestAgeChange(in: app))
+        let firstSheet = firstWindow.sheets.firstMatch
+        assertExists(firstSheet, timeout: 5, in: app, context: "relaxed age confirmation")
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { !firstSheet.exists },
+            diagnostic(app, context: "cancelled cleanup confirmation")
         )
-        openRetentionSettings(in: app)
+        app.terminate()
 
-        let ageEnabled = app.checkBoxes[
-            "clipy.settings.retention.age-enabled"
-        ]
-        let ageDays = app.textFields[
-            "clipy.settings.retention.age-days"
-        ]
-        let owningWindow = settingsWindow(
-            in: app,
-            owningToggle: "clipy.settings.retention.age-enabled"
-        )
-        let retentionScrollView = owningWindow.scrollViews.containing(
-            .checkBox, identifier: "clipy.settings.retention.age-enabled"
-        ).firstMatch
-        assertExists(ageEnabled, timeout: 5, in: app, context: "age toggle")
+        let cancelled = try await readAgeHistory(at: storeURL)
+        XCTAssertEqual(cancelled.age, before.age)
+        XCTAssertEqual(cancelled.usage, before.usage)
+        XCTAssertEqual(cancelled.items, before.items)
+
+        app.launch()
+        let panel = app.descendants(matching: .any)["clipy.panel.root"]
+        assertExists(panel, timeout: 20, in: app, context: "reopened after cancelling cleanup")
+        let secondWindow = try XCTUnwrap(requestAgeChange(in: app))
+        confirmPolicy(in: secondWindow, app: app, context: "relaxed age cleanup", checksAge: true)
         assertExists(
-            retentionScrollView,
-            timeout: 5,
+            app.staticTexts["Done. 1 item retired, 0 revisions pruned."],
+            timeout: 15,
             in: app,
-            context: "age policy scroll view"
+            context: "confirmed age retirement receipt"
         )
-        guard scrollUntilFullyVisible(
-            ageEnabled,
-            in: retentionScrollView,
-            app: app,
-            context: "age toggle below retained usage"
-        ) else { return }
-        XCTAssertFalse(ageDays.exists, diagnostic(app, context: "disabled age policy hides its field"))
-        ageEnabled.click()
-        assertExists(ageDays, timeout: 5, in: app, context: "enabled age field")
-        XCTAssertEqual(
-            ageDays.value as? String,
-            "30",
-            diagnostic(app, context: "default age draft")
+        let apply = app.buttons["clipy.settings.retention.apply"]
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { apply.exists && !apply.isEnabled },
+            diagnostic(app, context: "saved age limit has no pending change")
         )
+        app.terminate()
+
+        let applied = try await readAgeHistory(at: storeURL)
+        XCTAssertEqual(applied.age?.maxAge, Double(31 * 86_400))
+        XCTAssertEqual(applied.usage.position.rawValue, before.usage.position.rawValue + 1)
+        XCTAssertEqual(applied.items, before.items.filter { $0 == before.pinned })
+    }
+
+    @MainActor
+    private func requestAgeChange(in app: XCUIApplication) -> XCUIElement? {
+        openRetentionSettings(in: app)
+        let ageToggle = "clipy.settings.retention.age-enabled"
+        let ageDays = app.textFields["clipy.settings.retention.age-days"]
+        let window = settingsWindow(in: app, owningToggle: ageToggle)
+        let scrollView = window.scrollViews.containing(.checkBox, identifier: ageToggle).firstMatch
+        assertExists(ageDays, timeout: 10, in: app, context: "configured age limit")
+        XCTAssertTrue(
+            waitUntil(timeout: 5) { (ageDays.value as? String) == "30" && ageDays.isEnabled },
+            diagnostic(app, context: "persisted age limit before editing")
+        )
+        guard scrollUntilFullyVisible(ageDays, in: scrollView, app: app, context: "age limit") else {
+            return nil
+        }
+        replaceText(in: ageDays, with: "31")
 
         let apply = app.buttons["clipy.settings.retention.apply"]
-        assertExists(apply, timeout: 5, in: app, context: "policy Apply")
         XCTAssertTrue(
-            waitUntil(timeout: 5) { apply.isEnabled },
-            diagnostic(app, context: "enabled strict age policy")
+            waitUntil(timeout: 5) { apply.exists && apply.isEnabled },
+            diagnostic(app, context: "apply relaxed age limit")
         )
-        guard scrollUntilFullyVisible(
-            apply,
-            in: retentionScrollView,
-            app: app,
-            context: "strict age policy Apply"
-        ) else { return }
+        guard scrollUntilFullyVisible(apply, in: scrollView, app: app, context: "apply after age edit") else {
+            return nil
+        }
         apply.click()
+        return window
+    }
 
-        confirmStrictPolicy(
-            in: owningWindow,
-            app: app,
-            context: "age enable tightening"
-        )
+    @MainActor
+    private func seedExpiredHistory(
+        at url: URL
+    ) async throws -> (age: AgeRetention?, usage: HistoryUsage, items: [HistoryItemReference], pinned: HistoryItemReference) {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .persistent(storeURL: url)))
+        _ = try await history.perform(.setRetentionPolicies(.init(
+            age: AgeRetention(maxAge: 30 * 86_400), storage: nil, revisions: nil
+        )))
+        let now = Date()
+        func capture(_ text: String, ageDays: Double) async throws -> HistoryItemReference {
+            let receipt = try await history.perform(.capture(ClipboardCapture(
+                representations: [CapturedRepresentation(typeIdentifier: "public.utf8-plain-text", bytes: Data(text.utf8))],
+                origin: CopyOriginObservation(sourceApplication: nil, lineageHint: nil),
+                observedAt: now.addingTimeInterval(-ageDays * 86_400)
+            )))
+            let reference: HistoryItemReference?
+            if case .committed(let commit) = receipt, case .inserted(let item) = commit.outcome { reference = item }
+            else { reference = nil }
+            return try XCTUnwrap(reference)
+        }
 
-        let policyStatus = app.descendants(matching: .any)[
-            "clipy.settings.retention.policy-status"
-        ]
-        assertExists(
-            policyStatus,
-            timeout: 10,
-            in: app,
-            context: "strict age receipt status"
-        )
-        XCTAssertTrue(
-            app.staticTexts["Done."].exists,
-            diagnostic(app, context: "strict age zero-effect receipt")
-        )
+        let pinned = try await capture("clipy-retention-expired-pinned", ageDays: 40)
+        _ = try await history.perform(.placePinned(pinned.id, at: .first))
+        // Capture uses the observation's time to check age. The old item
+        // survives capture and becomes eligible when Settings applies again.
+        let expired = try await capture("clipy-retention-expired-unpinned", ageDays: 50)
+        let configuration = try await history.retentionConfiguration()
+        let usage = try await history.usage()
+        let page = try await history.browse(.init(kind: .recent, limit: 5))
+        XCTAssertEqual(page.rows.map(\.item), [pinned, expired])
+        return (configuration.policies.age, usage, page.rows.map(\.item), pinned)
+    }
 
-        guard scrollUntilFullyVisible(
-            ageDays,
-            in: retentionScrollView,
-            app: app,
-            context: "age field after strict receipt"
-        ) else { return }
-        replaceText(in: ageDays, with: "31")
-        XCTAssertTrue(
-            waitUntil(timeout: 5) { !policyStatus.exists && apply.isEnabled },
-            diagnostic(app, context: "new age edit clears success")
-        )
-        guard scrollUntilFullyVisible(
-            apply,
-            in: retentionScrollView,
-            app: app,
-            context: "looser age policy Apply"
-        ) else { return }
-        apply.click()
-
-        // A strict path would be waiting in the attached sheet and could not
-        // publish this status. Its return therefore proves the looser edit
-        // crossed the direct Apply branch without timing a negative wait.
-        assertExists(
-            policyStatus,
-            timeout: 10,
-            in: app,
-            context: "direct looser-age receipt status"
-        )
-        XCTAssertEqual(
-            owningWindow.sheets.count,
-            0,
-            diagnostic(app, context: "looser age must not open confirmation")
-        )
-        XCTAssertTrue(
-            app.staticTexts["Done."].exists,
-            diagnostic(app, context: "looser age zero-effect receipt")
-        )
-
-        app.typeKey("w", modifierFlags: .command)
-        XCTAssertTrue(
-            waitUntil(timeout: 5) { !ageDays.exists },
-            diagnostic(app, context: "close age Settings")
-        )
-        app.typeKey("c", modifierFlags: [.command, .shift])
-        assertExists(panel, timeout: 10, in: app, context: "panel before readback")
-        assertRowCount(
-            1,
-            in: rows,
-            app: app,
-            context: "current item survives both age-policy changes"
-        )
-        app.typeKey(",", modifierFlags: .command)
-        openRetentionTab(in: app)
-
-        let reopenedAgeEnabled = app.checkBoxes[
-            "clipy.settings.retention.age-enabled"
-        ]
-        let reopenedAgeDays = app.textFields[
-            "clipy.settings.retention.age-days"
-        ]
-        let reopenedApply = app.buttons["clipy.settings.retention.apply"]
-        assertExists(
-            reopenedAgeEnabled,
-            timeout: 5,
-            in: app,
-            context: "reopened age toggle"
-        )
-        assertExists(
-            reopenedAgeDays,
-            timeout: 5,
-            in: app,
-            context: "reopened age field"
-        )
-        assertExists(
-            reopenedApply,
-            timeout: 5,
-            in: app,
-            context: "reopened policy Apply"
-        )
-        XCTAssertTrue(
-            waitUntil(timeout: 10) {
-                (reopenedAgeDays.value as? String) == "31"
-                    && (reopenedAgeEnabled.value as? Int) == 1
-                    && !reopenedApply.isEnabled
-            },
-            diagnostic(
-                app,
-                context: "persisted 31-day readback and exact-value no-op"
-            )
-        )
+    @MainActor
+    private func readAgeHistory(
+        at url: URL
+    ) async throws -> (age: AgeRetention?, usage: HistoryUsage, items: [HistoryItemReference]) {
+        let history = try await SQLiteHistory.open(configuration: .init(persistence: .persistent(storeURL: url)))
+        let configuration = try await history.retentionConfiguration()
+        let usage = try await history.usage()
+        let page = try await history.browse(.init(kind: .recent, limit: 5))
+        return (configuration.policies.age, usage, page.rows.map(\.item))
     }
 
     /// The Batch 38 ceiling's last strictness dimension at running-app
@@ -452,7 +393,7 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         ) else { return }
         apply.click()
 
-        confirmStrictPolicy(
+        confirmPolicy(
             in: owningWindow,
             app: app,
             context: "revision-count enable tightening"
@@ -535,20 +476,26 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setString(value, forType: .string))
 
+        return launchApp(storeURL: try makeStoreURL())
+    }
+
+    private func makeStoreURL() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true
-        )
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         temporaryDirectory = directory
+        return directory.appendingPathComponent("history.store")
+    }
 
+    @MainActor
+    private func launchApp(storeURL: URL, captureAccess: String? = nil) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US", "-clipy.language", "system"]
         app.launchEnvironment["CLIPY_RUNNING_UI_TEST"] = "1"
-        app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = directory
-            .appendingPathComponent("history.store")
-            .path
+        app.launchEnvironment["CLIPY_UI_TEST_STORE_PATH"] = storeURL.path
+        if let captureAccess {
+            app.launchEnvironment["CLIPY_UI_TEST_CAPTURE_ACCESS"] = captureAccess
+        }
         app.launch()
 
         let panel = app.descendants(matching: .any)["clipy.panel.root"]
@@ -616,10 +563,11 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
     }
 
     @MainActor
-    private func confirmStrictPolicy(
+    private func confirmPolicy(
         in settingsWindow: XCUIElement,
         app: XCUIApplication,
-        context: String
+        context: String,
+        checksAge: Bool = false
     ) {
         // A global button-label query also sees the Touch Bar mirror on CI.
         let sheet = settingsWindow.sheets.firstMatch
@@ -633,15 +581,13 @@ final class RetentionPolicyJourneyUITests: XCTestCase {
         )
         XCTAssertEqual(
             confirm.label,
-            "Apply Stricter Limits",
+            "Apply Changes",
             diagnostic(app, context: "\(context) action copy")
         )
-        XCTAssertTrue(
-            sheet.staticTexts[
-                "Stricter limits can permanently remove items or revisions."
-            ].exists,
-            diagnostic(app, context: "\(context) disclosure")
-        )
+        let disclosure = checksAge
+            ? "Clipy will check for expired items now. Applying these limits may immediately and permanently remove items or revisions."
+            : "Applying these limits may immediately and permanently remove items or revisions."
+        XCTAssertTrue(sheet.staticTexts[disclosure].exists, diagnostic(app, context: "\(context) disclosure"))
         confirm.click()
     }
 

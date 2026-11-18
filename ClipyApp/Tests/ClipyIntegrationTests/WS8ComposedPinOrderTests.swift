@@ -134,6 +134,7 @@ struct WS8ComposedPinOrderTests {
         // observe loop: two pinned rows in public order, one unpinned row.
         let viewState = HistoryViewState(history: history)
         defer { viewState.deactivate() }
+        viewState.sortOrder = .automatic
         viewState.activate()
         let settled = await ComposedSupport.waitFor {
             viewState.pinnedRows.count == 2 && viewState.unpinnedRows.count == 1

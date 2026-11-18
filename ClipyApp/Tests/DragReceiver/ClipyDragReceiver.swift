@@ -179,8 +179,11 @@ private final class NativeClipboardDropView: NSView {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        let hitWindow = window.map {
+            NSWindow.windowNumber(at: $0.convertPoint(toScreen: event.locationInWindow), belowWindowWithWindowNumber: 0)
+        }
         FileHandle.standardError.write(Data(
-            "receiver: pointer entered buttons=\(NSEvent.pressedMouseButtons)\n".utf8
+            "receiver: pointer entered buttons=\(NSEvent.pressedMouseButtons) hit=\(hitWindow ?? -1) window=\(event.windowNumber) type-count=\(registeredDraggedTypes.count) active=\(NSApp.isActive)\n".utf8
         ))
         publishPointerReadiness(event)
     }
@@ -217,7 +220,9 @@ private final class NativeClipboardDropView: NSView {
     }
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        FileHandle.standardError.write(Data("receiver: dragging entered\n".utf8))
+        FileHandle.standardError.write(Data(
+            "receiver: dragging entered source-mask=\(sender.draggingSourceOperationMask.rawValue)\n".utf8
+        ))
         return .copy
     }
 
@@ -225,14 +230,20 @@ private final class NativeClipboardDropView: NSView {
     override func prepareForDragOperation(_ sender: any NSDraggingInfo) -> Bool { true }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        guard let items = sender.draggingPasteboard.pasteboardItems, !items.isEmpty else { return false }
+        guard let items = sender.draggingPasteboard.pasteboardItems, !items.isEmpty else {
+            FileHandle.standardError.write(Data("receiver: delivered drag had no items\n".utf8))
+            return false
+        }
         var received: [ReceivedItem] = []
         for item in items {
             var representations: [ReceivedRepresentation] = []
             for type in item.types {
                 // Missing promised data fails the actual drop; never report a
                 // partial gesture as a successful round trip.
-                guard let bytes = item.data(forType: type) else { return false }
+                guard let bytes = item.data(forType: type) else {
+                    FileHandle.standardError.write(Data("receiver: promised drag data unavailable\n".utf8))
+                    return false
+                }
                 representations.append(ReceivedRepresentation(typeIdentifier: type.rawValue, bytes: bytes))
             }
             received.append(ReceivedItem(representations: representations))

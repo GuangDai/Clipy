@@ -17,12 +17,8 @@
 /// values, with stored pin ordinals unique and exactly `0 ..< pinnedCount`
 /// (D12); (iii) persisted revisions retain the full append-only list with
 /// the correct active Revision ID, Effective Content (docs/architecture.md
-/// §2.6) being the active revision's complete snapshot; and (iv) a post-restart capture of the revised
-/// item's Canonical bytes coalesces into it (receipt `.coalesced` with the
-/// same History Item ID at the preserved Content Version) instead of
-/// inserting a duplicate row, proving candidacy was re-proven from durable
-/// state (revisions never rewrite the Canonical signature used by general
-/// deduplication, docs/architecture.md).
+/// §2.6) being the active revision's complete snapshot; and (iv) a post-restart
+/// capture of the revised item's original bytes remains separately available.
 import Foundation
 import HistoryCore
 import HistoryDomain
@@ -100,12 +96,12 @@ private static func revisedReference(
 /// pin all three and move C `.before` A, then replace A's Effective Content
 /// twice; reopen the store and assert position, rows, revision lineage, pin
 /// order, and Effective Content against the pre-restart receipts and
-/// scenario values, and prove retained Canonical candidacy by
-/// coalescing a fresh capture of A's Canonical bytes into A. Every receipt's
+/// scenario values. A fresh capture of A's original bytes creates its own
+/// item because the active revision differs. Every pre-restart receipt's
 /// Change Position is asserted against its scenario commit ordinal (1…10),
 /// so the post-restart singleton comparison is against the proven
 /// pre-restart commit count; observation times are fixed and monotone.
-@Test func restartReconstructsDurableStateAndRebuildsCompleteSignatureIndex() async throws {
+@Test func restartReconstructsDurableStateAndRetainsOriginalRecapture() async throws {
     let storeURL = WSSupport.tempStoreURL("ws14-restart-reconstruction")
     defer { WSSupport.removeStore(storeURL) }
     let history = try await WSSupport.openHistory(storeURL: storeURL)

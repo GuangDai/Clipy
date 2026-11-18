@@ -15,6 +15,46 @@ import Testing
 struct AppCaptureLaneTests {
 
     @Test @MainActor
+    func retentionCaptureRefreshesBothSurfacesWithoutAWholeSurfacePurge() async throws {
+        let history = try await SQLiteHistory.open(configuration: HistoryConfiguration(
+            persistence: .temporary, initialMaximumUnpinnedItems: 1
+        ))
+        let pinnedReceipt = try await history.perform(.capture(Self.capture("keep pinned", at: 1)))
+        let pinned = try #require(ComposedSupport.insertedReference(from: pinnedReceipt, "pin arrange"))
+        _ = try await history.perform(.placePinned(pinned.id, at: .first))
+        let victimReceipt = try await history.perform(.capture(Self.capture("retire me", at: 2)))
+        let victim = try #require(ComposedSupport.insertedReference(from: victimReceipt, "victim arrange"))
+
+        let pasteboard = ComposedSupport.makePasteboard()
+        let composition = AppComposition.makeForTesting(history: history, adapter: PasteboardAdapter(pasteboard: pasteboard))
+        defer {
+            composition.stop()
+            pasteboard.releaseGlobally()
+        }
+        let states = [composition.viewState, composition.historyWorkspaceViewState]
+        for state in states { state.activate() }
+        try #require(await ComposedSupport.waitFor {
+            states.allSatisfy { $0.displayedRows.map(\.item) == [victim, pinned] }
+        })
+
+        composition.submitCaptureForTesting(Self.capture("new entry", at: 3))
+        let capture = try #require(composition.activeCaptureForTesting)
+        await capture.value
+        try #require(await ComposedSupport.waitFor {
+            states.allSatisfy { state in
+                state.retentionChangePosition != nil && state.displayedRow(for: victim.id) == nil
+            }
+        })
+        for state in states {
+            #expect(state.surfacePurge == nil)
+            #expect(state.displayedRow(for: pinned.id)?.item == pinned)
+            #expect(state.displayedRows.map(\.title) == ["new entry", "keep pinned"])
+        }
+        let surviving = try await history.pastePayload(for: pinned.id)
+        #expect(surviving.representations.map(\.bytes) == [Data("keep pinned".utf8)])
+    }
+
+    @Test @MainActor
     func aCaptureSubmittedByTheCompletionHealthCallbackKeepsTheLaneSerialized() async throws {
         let base = try await ComposedSupport.openMemoryHistory()
         let history = FirstCaptureSuspendingHistory(base: base)

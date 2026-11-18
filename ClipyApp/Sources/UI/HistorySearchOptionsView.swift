@@ -63,7 +63,6 @@ struct HistorySearchOptionsView: View {
         }
         .padding(16)
         .frame(width: 360)
-        .accessibilityIdentifier("clipy.search.options")
         .onAppear {
             if !showsExpressionGuide { draft = viewState.searchFilters }
         }

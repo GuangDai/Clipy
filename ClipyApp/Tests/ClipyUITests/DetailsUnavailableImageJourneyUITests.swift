@@ -42,20 +42,17 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         assertVisibleText("public.png", in: details, app: app)
         assertVisibleText("4 bytes", in: details, app: app)
         assertNoRepresentationImage("public.png", in: details, app: app)
-        XCTAssertFalse(details.descendants(matching: .any).matching(
-            NSPredicate(format: "label == %@", "Preview unavailable for public.png")
-        ).firstMatch.exists, diagnostic(app, context: "metadata must not classify unread image bytes"))
+        let status = details.descendants(matching: .any)["clipy.details.preview-status.public.png"]
+        XCTAssertFalse(status.exists, diagnostic(app, context: "metadata must not classify unread image bytes"))
         clickPreview("public.png", in: details, app: app)
-        assertVisibleText("Preview unavailable for public.png", in: details, app: app)
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
         assertNoRepresentationImage("public.png", in: details, app: app)
         // The renderer result can be dismissed and explicitly requested again;
         // no retry changes the captured bytes or hides their metadata.
         clickPreview("public.png", in: details, app: app)
-        XCTAssertFalse(details.descendants(matching: .any).matching(
-            NSPredicate(format: "label == %@", "Preview unavailable for public.png")
-        ).firstMatch.exists)
+        XCTAssertFalse(status.exists)
         clickPreview("public.png", in: details, app: app)
-        assertVisibleText("Preview unavailable for public.png", in: details, app: app)
+        XCTAssertTrue(status.waitForExistence(timeout: 5))
         assertVisibleText("4 bytes", in: details, app: app)
         XCTAssertEqual(pasteboard.data(forType: .png), bytes)
     }
@@ -115,7 +112,8 @@ final class DetailsUnavailableImageJourneyUITests: XCTestCase {
         // A completed PNG decode cannot stand in for the still-unread TIFF.
         assertNoRepresentationImage("public.tiff", in: details, app: app)
         clickPreview("public.tiff", in: details, app: app)
-        assertVisibleText("Preview unavailable for public.tiff", in: details, app: app)
+        XCTAssertTrue(details.descendants(matching: .any)["clipy.details.preview-status.public.tiff"]
+            .waitForExistence(timeout: 5))
         assertNoRepresentationImage("public.tiff", in: details, app: app)
         XCTAssertEqual(pasteboard.data(forType: .png), png)
         XCTAssertEqual(pasteboard.data(forType: .tiff), tiff)

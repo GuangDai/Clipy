@@ -6,12 +6,8 @@
 ///
 /// - every control (count, age, storage, revision count/bytes) applies
 ///   through the public mutation intents;
-/// - loosening and disabling commit DIRECTLY with a zero-effect receipt —
-///   the draft layer proves no confirmation gates them
-///   (`RetentionSettingsDraftTests`), the running-app R1 journey proves the
-///   sheet stays closed (`RetentionPolicyJourneyUITests`), and this suite
-///   proves the committed values persist and read back exactly through the
-///   authoritative configured-policy read (DEC-RET-READ);
+/// - the committed values persist and read back exactly through the
+///   configured-policy read; the fresh test entries satisfy every limit;
 /// - re-applying the persisted value is a true no-op: `.unchanged`, no
 ///   History Commit, no `ChangePosition` advance (02 §8/§12; V2-02
 ///   §4.4/§5.6).
@@ -55,8 +51,7 @@ struct ComposedRetentionLooseningTests {
         // Policy controls (a set replaces the whole policy value, exactly
         // like the draft's Apply): enable age at 30 days, loosen it to 45,
         // enable storage, loosen it, enable both revision thresholds,
-        // loosen the count, then disable age. Every step commits directly
-        // with a zero-effect receipt.
+        // loosen the count, then disable age. Each commit leaves items intact.
         let ageEnabled = try await viewState.applyRetentionPolicies(
             HistoryRetentionPolicies(
                 age: AgeRetention(maxAge: 2_592_000),
@@ -171,14 +166,12 @@ struct ComposedRetentionLooseningTests {
     }
 
     @Test @MainActor
-    func revisionBytesLoosenAndEveryDisableCommitDirectlyWithExactReadback() async throws {
+    func revisionBytesLoosenAndEveryDisableCommitWithExactReadback() async throws {
         let history = try await ComposedSupport.openMemoryHistory()
         let viewState = HistoryViewState(history: history)
 
-        // The Batch 39 ceiling's remaining cells: a revision-bytes loosen
-        // and the storage/revision-count/revision-bytes disables — each a
-        // direct commit with a zero-effect receipt, an exact authoritative
-        // readback, and a final equal re-apply that advances nothing.
+        // Relax revision bytes and disable the other limits. The fresh entries
+        // survive each commit, and reapplying the final values is a no-op.
         for (index, name) in ["alpha", "bravo"].enumerated() {
             _ = try await history.perform(.capture(ComposedSupport.textCapture(
                 "clipy-composed-disable-\(name)",

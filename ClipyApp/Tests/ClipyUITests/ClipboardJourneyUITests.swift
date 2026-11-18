@@ -302,11 +302,11 @@ final class ClipboardJourneyUITests: XCTestCase {
         ) else { return }
         apply.click()
 
-        let destructiveApply = app.buttons["Apply Stricter Limits"]
+        let destructiveApply = app.buttons["Apply Changes"]
         XCTAssertTrue(destructiveApply.waitForExistence(timeout: 5))
         XCTAssertTrue(
             app.staticTexts[
-                "Stricter limits can permanently remove items or revisions."
+                "Clipy will check for expired items now. Applying these limits may immediately and permanently remove items or revisions."
             ].exists
         )
         app.typeKey(.escape, modifierFlags: [])

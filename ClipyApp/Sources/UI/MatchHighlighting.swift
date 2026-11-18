@@ -19,10 +19,13 @@ enum MatchHighlighting {
     ///   - ranges: UTF-16 ranges into `text`; out-of-bounds, zero-length,
     ///     surrogate-splitting, and overlapping (after sorting) ranges are
     ///     ignored.
+    ///   - prioritizesMatch: Keep the first valid hit near the start for a
+    ///     line-limited view. The highlight remains scalar-exact.
     static func highlighted(
         _ text: String,
         ranges: [UTF16TextRange],
-        foreground: Color = .accentColor
+        foreground: Color? = .accentColor,
+        prioritizesMatch: Bool = false
     ) -> AttributedString {
         let bounds: [(start: Int, end: Int)] = ranges.compactMap { range in
             guard range.location >= 0, range.length > 0 else { return nil }
@@ -56,10 +59,20 @@ enum MatchHighlighting {
             }
             .sorted { $0.lowerBound < $1.lowerBound }
 
-        guard !matched.isEmpty else { return AttributedString(text) }
+        guard let firstMatch = matched.first else { return AttributedString(text) }
 
         var result = AttributedString()
         var cursor = text.startIndex
+        if prioritizesMatch {
+            cursor = text.indices.last(where: { $0 <= firstMatch.lowerBound }) ?? text.startIndex
+            for _ in 0..<12 {
+                guard cursor != text.startIndex else { break }
+                let preceding = text.index(before: cursor)
+                guard !text[preceding].isNewline else { break }
+                cursor = preceding
+            }
+            if cursor != text.startIndex { result.append(AttributedString("…")) }
+        }
         for range in matched {
             // Skip overlaps (the range starts inside an already-emitted
             // segment) and zero-length matches — neither has pixels to mark.

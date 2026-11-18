@@ -45,7 +45,7 @@ struct FilteredSearchAnnouncementTests {
         let metadataRows = [
             row(1, type: "public.png", pinned: 0, copyCount: 2),
         ] + Array(rows.dropFirst())
-        await history.emitObservedPage(fixturePage(rows: metadataRows, next: "more"))
+        await history.emitObservedPage(fixturePage(rows: metadataRows, next: "more", position: 2))
         try #require(await pollUntil { state.rows == metadataRows })
         #expect(announcements.count == 1)
 

@@ -14,10 +14,11 @@
 "settings.retention.apply" = "应用";
 "settings.retention.apply-note" = "更改会立即应用于新项目和已有项目。";
 "settings.retention.budget-unsatisfiable" = "当前历史记录无法满足此存储限额。";
-"settings.retention.confirm-apply" = "应用更严格的限制";
+"settings.retention.confirm-apply" = "应用更改";
 "settings.retention.confirm-cancel" = "取消";
-"settings.retention.confirm-message" = "更严格的限制可能会永久移除项目或修订版本。";
-"settings.retention.confirm-title" = "应用更严格的保留限制？";
+"settings.retention.confirm-message" = "应用这些限制可能会立即永久删除项目或修订版本。";
+"settings.retention.confirm-age-message" = "Clipy 会立即检查项目是否过期。应用这些限制可能会立即永久删除项目或修订版本。";
+"settings.retention.confirm-title" = "应用保留设置更改？";
 "settings.retention.count-save-failure" = "无法保存此设置。";
 "Done. %@, %@." = "已完成。%1$@，%2$@。";
 "settings.retention.feedback.clear-failure" = "无法清空历史记录。";

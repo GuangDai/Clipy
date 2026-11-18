@@ -128,9 +128,10 @@ internal enum ContentProjector {
     ///   representation, in the content's normalized type-identifier order,
     ///   joined by `\n` and truncated to
     ///   `limits.maximumStoredSearchBodyUTF8Bytes`. Whitespace-only texts
-    ///   contribute nothing. A reference owning the title instead contributes
-    ///   its original address and non-empty decoded path under the same join
-    ///   and byte budget. The body may be empty (image-only/opaque content).
+    ///   contribute nothing. Reference metadata contributes the original
+    ///   address and non-empty decoded path under the same join and byte
+    ///   budget. A single item with a text title adds only reference text
+    ///   that is not already searchable. The body may be empty.
     /// - Effective type identifiers: the unique union across all constituent
     ///   items, globally sorted by Unicode scalar order (05 §15; V2-09 §11).
     ///   Normalized content orders representations by item first, so its flat
@@ -191,18 +192,25 @@ internal enum ContentProjector {
             }
         }
         let isCollection = (content.representations.last?.pasteboardItemIndex ?? 0) > 0
-        if title == nil || isCollection {
+        let omitDuplicateReferenceText = title != nil && !isCollection
+        if title == nil || remainingSearchBodyBytes > 0 {
             // Reference metadata is local to a constituent item. A file URL
             // on a later item must remain searchable without becoming paste text.
-            let grouped = Dictionary(grouping: content.representations, by: \.pasteboardItemIndex)
-            for index in grouped.keys.sorted() {
-                guard let reference = referenceProjection(in: EffectiveContent(
-                    representations: grouped[index] ?? []
-                )) else { continue }
+            let groups: [[ContentRepresentation]]
+            if isCollection {
+                let grouped = Dictionary(grouping: content.representations, by: \.pasteboardItemIndex)
+                groups = grouped.keys.sorted().compactMap { grouped[$0] }
+            } else {
+                groups = [content.representations]
+            }
+            for representations in groups {
+                guard let reference = referenceProjection(in: representations) else { continue }
                 if title == nil { title = reference.title }
-                var parts = [reference.address]
-                if !reference.path.isEmpty { parts.append(reference.path) }
-                for part in parts {
+                for part in [reference.address, reference.path] where !part.isEmpty {
+                    // A URL frequently arrives twice, once as text and once
+                    // as a system reference. Avoid adding it (or a decoded
+                    // path already present in the address) a second time.
+                    if omitDuplicateReferenceText, alreadySearchable(part, in: searchBody) { continue }
                     if hasSearchBodyPart {
                         guard appendNormalizedUTF8Prefix(
                             "\n", to: &searchBody, remainingByteCount: &remainingSearchBodyBytes
@@ -235,19 +243,17 @@ internal enum ContentProjector {
 
     private static let maximumReferenceSourceBytes = 16 * 1_024
 
-    /// Called only after plain text failed to supply a title. The first exact
-    /// reference owns this attempt; invalid/oversized input never advances to
-    /// another candidate. Known images retain their existing opaque projection.
-    /// The tuple contains fields, not a joined search body, so title-only reads
-    /// perform no body normalization or assembly.
+    /// The first exact reference owns the attempt. Its bytes are checked even
+    /// when plain text already owns the title. Known images retain their
+    /// existing opaque reference policy.
     private static func referenceProjection(
-        in content: EffectiveContent
+        in representations: [ContentRepresentation]
     ) -> (title: String, address: String, path: String)? {
-        guard !content.representations.contains(where: {
-            imageTypeIdentifiers.contains($0.typeIdentifier)
-        }), let representation = content.representations.first(where: {
+        guard let representation = representations.first(where: {
             let identifier = ClipboardFormatIdentifier(rawValue: $0.typeIdentifier)
             return identifier == .url || identifier == .fileURL
+        }), !representations.contains(where: {
+            imageTypeIdentifiers.contains($0.typeIdentifier)
         }) else { return nil }
 
         guard representation.bytes.count <= maximumReferenceSourceBytes,
@@ -288,6 +294,13 @@ internal enum ContentProjector {
             address: address,
             path: path
         )
+    }
+
+    private static func alreadySearchable(_ referenceText: String, in body: String) -> Bool {
+        let normalized = referenceText.utf8.contains(0x0D)
+            ? referenceText.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+            : referenceText
+        return body.range(of: normalized, options: .literal) != nil
     }
 
     // MARK: Textual eligibility and decoding (§15)

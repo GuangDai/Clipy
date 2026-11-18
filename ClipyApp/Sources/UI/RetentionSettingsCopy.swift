@@ -156,15 +156,19 @@ internal enum RetentionSettingsCopy {
     ) }
     internal static var confirmPoliciesTitle: String { plain(
         "settings.retention.confirm-title",
-        "Apply stricter retention limits?"
+        "Apply retention changes?"
     ) }
     internal static var confirmPoliciesApply: String { plain(
         "settings.retention.confirm-apply",
-        "Apply Stricter Limits"
+        "Apply Changes"
     ) }
     internal static var confirmPoliciesMessage: String { plain(
         "settings.retention.confirm-message",
-        "Stricter limits can permanently remove items or revisions."
+        "Applying these limits may immediately and permanently remove items or revisions."
+    ) }
+    internal static var confirmPoliciesAgeMessage: String { plain(
+        "settings.retention.confirm-age-message",
+        "Clipy will check for expired items now. Applying these limits may immediately and permanently remove items or revisions."
     ) }
     internal static var confirmCancel: String { plain(
         "settings.retention.confirm-cancel",
